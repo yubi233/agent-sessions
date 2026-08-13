@@ -1,0 +1,109 @@
+{
+  "suite": "protocol-crypto",
+  "suite_version": 1,
+  "status": "planned",
+  "plan_id": "PROTO-CRYPTO",
+  "description": "工程工具链、OpenAPI/JSON Schema 生成无漂移、跨语言 E2EE golden vectors。本 suite 拥有 P0-TOOL/SCHEMA/CRYPTO 与 SEC-02..04。P0-DEPLOY-01 归 RELIABILITY-RELEASE。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Protocol/Security",
+  "environment": {
+    "protocol": "packages/protocol",
+    "crypto": "packages/crypto",
+    "generators": "not-configured"
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": false,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "P0-TOOL-01",
+      "title": "工具链、lockfile 与 task check 可复现",
+      "status": "planned",
+      "phase": "P0",
+      "category": "工程基线",
+      "priority": "P0",
+      "test_layer": "static",
+      "precondition": "新机器已按 README 安装锁定版本的 Go、pnpm、Flutter、JDK、Docker、Task。",
+      "steps": ["运行 task check", "核对 go.mod、pnpm-lock.yaml、pubspec.lock 与生成器版本"],
+      "expected": "格式、类型、schema 和生成物漂移可被发现；日志无密钥。",
+      "cleanup": ["不删除用户数据或未授权卷"],
+      "evidence": ["e2e-verify/reports/<ts>/PROTO-CRYPTO/toolchain.json"]
+    },
+    {
+      "id": "P0-SCHEMA-01",
+      "title": "三端解析同一 envelope、错误和事件 fixture",
+      "status": "planned",
+      "phase": "P0",
+      "category": "协议",
+      "priority": "P0",
+      "test_layer": "static + contract",
+      "precondition": "OpenAPI 3.1 与 JSON Schema Draft 2020-12 已提交，生成器配置已锁定。",
+      "steps": ["运行 task generate", "用 Go/TS/Dart 解析同一组 golden fixtures", "提交未知 payload_version 与协议版本不匹配"],
+      "expected": "生成物无漂移；未知版本与未知事件有稳定错误，禁止手改生成文件。",
+      "cleanup": ["丢弃未提交的生成物试跑"],
+      "evidence": ["e2e-verify/reports/<ts>/PROTO-CRYPTO/schema.json"]
+    },
+    {
+      "id": "P0-CRYPTO-01",
+      "title": "三语言互解加密向量",
+      "status": "planned",
+      "phase": "P0",
+      "category": "密码学",
+      "priority": "P0",
+      "test_layer": "unit + contract",
+      "precondition": "Ed25519、X25519、AES-256-GCM、HKDF-SHA256 向量已冻结。",
+      "steps": ["Go/TS/Dart 互解正常向量", "篡改 ciphertext、错误 AAD、错误 key id、重复 nonce"],
+      "expected": "合法向量互解成功；篡改与错误 AAD 失败；Relay 测试库与日志无正文或密钥。",
+      "cleanup": ["清除测试密钥材料"],
+      "evidence": ["e2e-verify/reports/<ts>/PROTO-CRYPTO/crypto.json"]
+    },
+    {
+      "id": "SEC-02",
+      "title": "设备撤销后停止新 DEK 包装",
+      "status": "planned",
+      "phase": "P0",
+      "category": "密钥生命周期",
+      "priority": "P0",
+      "test_layer": "unit + contract",
+      "precondition": "已有项目/会话 DEK 与两台已授权设备。",
+      "steps": ["撤销第二台设备", "尝试为其生成新 key wrap", "用旧包装解密历史事件"],
+      "expected": "新包装被拒绝；历史密文仍可用已有包装验证语义，但不向撤销设备分发新包装。",
+      "cleanup": ["销毁测试 DEK 与包装"],
+      "evidence": ["e2e-verify/reports/<ts>/PROTO-CRYPTO/sec-02.json"]
+    },
+    {
+      "id": "SEC-03",
+      "title": "恢复码错误次数受限",
+      "status": "planned",
+      "phase": "P0",
+      "category": "恢复码",
+      "priority": "P1",
+      "test_layer": "unit + contract",
+      "precondition": "账号已生成恢复码哈希。",
+      "steps": ["连续提交错误恢复码直到上限", "再提交正确恢复码"],
+      "expected": "超限后拒绝并进入冷却或锁定；不在日志中写出恢复码明文。",
+      "cleanup": ["重置测试账号恢复状态"],
+      "evidence": ["e2e-verify/reports/<ts>/PROTO-CRYPTO/sec-03.json"]
+    },
+    {
+      "id": "SEC-04",
+      "title": "Web 存储不含长期解密密钥",
+      "status": "planned",
+      "phase": "P0",
+      "category": "客户端密钥",
+      "priority": "P1",
+      "test_layer": "contract",
+      "precondition": "Web 设备完成配对并解密一条事件。",
+      "steps": ["检查 IndexedDB/localStorage/Service Worker", "刷新后尝试离线解密新事件"],
+      "expected": "仅有受限密钥包装与短期缓存；解密正文不落盘。",
+      "cleanup": ["清理测试浏览器存储"],
+      "evidence": ["e2e-verify/reports/<ts>/PROTO-CRYPTO/sec-04.json"]
+    }
+  ]
+}

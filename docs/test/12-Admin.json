@@ -1,0 +1,107 @@
+{
+  "suite": "admin",
+  "suite_version": 1,
+  "status": "planned",
+  "plan_id": "ADMIN",
+  "description": "Admin 运维元数据、脱敏与 headed 只读。服务器权限仍由 Relay 定义。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Vue Admin",
+  "environment": {
+    "admin": "not-configured"
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": true,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "ADMIN-01",
+      "title": "只显示运维元数据",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Admin",
+      "priority": "P0",
+      "test_layer": "component + headed E2E",
+      "precondition": "有设备与会话。",
+      "steps": ["打开设备/Terminal/健康页"],
+      "expected": "无消息、文件、diff、附件、工具参数。",
+      "cleanup": ["清理浏览器 profile"],
+      "evidence": ["e2e-verify/reports/<ts>/ADMIN/admin-01.json"]
+    },
+    {
+      "id": "ADMIN-02",
+      "title": "字段白名单与 redaction",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Admin",
+      "priority": "P0",
+      "test_layer": "component + integration",
+      "precondition": "Relay 返回白名单 DTO。",
+      "steps": ["扫描 UI 与网络响应字段"],
+      "expected": "敏感字段三层缺失。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADMIN/admin-02.json"]
+    },
+    {
+      "id": "ADMIN-03",
+      "title": "在线与版本可观测",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Admin",
+      "priority": "P1",
+      "test_layer": "component",
+      "precondition": "presence fixture。",
+      "steps": ["查看在线、版本、连接错误"],
+      "expected": "指标缺失时隐藏而非编造。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADMIN/admin-03.json"]
+    },
+    {
+      "id": "ADMIN-04",
+      "title": "脱敏审计分页",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Admin",
+      "priority": "P1",
+      "test_layer": "component",
+      "precondition": "审计 fixture。",
+      "steps": ["分页", "搜索"],
+      "expected": "无 token/正文。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADMIN/admin-04.json"]
+    },
+    {
+      "id": "ADMIN-05",
+      "title": "无配对/撤销写入口",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Admin",
+      "priority": "P0",
+      "test_layer": "headed E2E",
+      "precondition": "owner 配对状态可读。",
+      "steps": ["寻找批准/撤销/恢复码控件", "直接打写 API"],
+      "expected": "无写入口；API 拒绝。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADMIN/admin-05.json"]
+    },
+    {
+      "id": "E2E-ADMIN-01",
+      "title": "headed 运维只读旅程",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Admin",
+      "priority": "P0",
+      "test_layer": "headed E2E",
+      "precondition": "Playwright headed。",
+      "steps": ["完整运维页", "空/错误/键盘"],
+      "expected": "real_browser=true, headless=false。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/traces/admin/E2E-ADMIN-01/"]
+    }
+  ]
+}

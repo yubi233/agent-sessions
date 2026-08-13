@@ -1,0 +1,80 @@
+{
+  "suite": "adapter-codex",
+  "suite_version": 1,
+  "status": "planned",
+  "plan_id": "ADAPTER-CODEX",
+  "description": "Codex app-server JSON-RPC fixture 与授权 live smoke。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Codex Adapter",
+  "environment": {
+    "codex": "not-installed",
+    "live_authorized": false
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": false,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "ADPT-CODEX-01",
+      "title": "JSON-RPC transport 与取消",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Codex",
+      "priority": "P0",
+      "test_layer": "contract",
+      "precondition": "stdio fixture。",
+      "steps": ["request id", "cancel", "未知方法"],
+      "expected": "错误分类稳定；无文本 scraping。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CODEX/01.json"]
+    },
+    {
+      "id": "ADPT-CODEX-02",
+      "title": "thread 映射",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Codex",
+      "priority": "P0",
+      "test_layer": "contract",
+      "precondition": "golden thread fixture。",
+      "steps": ["start/resume/send/abort"],
+      "expected": "handle 仅本机加密持久化。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CODEX/02.json"]
+    },
+    {
+      "id": "ADPT-CODEX-03",
+      "title": "审批与 skills 能力",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Codex",
+      "priority": "P1",
+      "test_layer": "contract",
+      "precondition": "审批 fixture。",
+      "steps": ["审批", "skills", "model/effort"],
+      "expected": "未证明能力为 unsupported。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CODEX/03.json"]
+    },
+    {
+      "id": "ADPT-CODEX-04",
+      "title": "授权 live smoke",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Codex",
+      "priority": "P1",
+      "test_layer": "authorized upstream",
+      "precondition": "用户授权。",
+      "steps": ["最小隔离 workspace 请求", "abort"],
+      "expected": "无授权则 blocked。",
+      "cleanup": ["结束子进程"],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CODEX/04.json"]
+    }
+  ]
+}

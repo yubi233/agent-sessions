@@ -1,0 +1,107 @@
+{
+  "suite": "web",
+  "suite_version": 1,
+  "status": "planned",
+  "plan_id": "WEB",
+  "description": "Vue Web 只读页面、SSE cursor、PWA 与 headed 浏览器。写权限仍由 Relay 测试定义。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Vue Web App",
+  "environment": {
+    "web": "not-configured"
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": true,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "WEB-01",
+      "title": "只读列表与详情",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Web",
+      "priority": "P0",
+      "test_layer": "component + headed E2E",
+      "precondition": "fixture 会话。",
+      "steps": ["打开项目/会话", "检查无写控件"],
+      "expected": "可看消息与状态；无 prompt/审批入口。",
+      "cleanup": ["清理浏览器存储"],
+      "evidence": ["e2e-verify/reports/<ts>/WEB/web-01.json"]
+    },
+    {
+      "id": "WEB-02",
+      "title": "SSE cursor 刷新恢复",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Web",
+      "priority": "P0",
+      "test_layer": "headed E2E",
+      "precondition": "有序事件 fixture。",
+      "steps": ["刷新", "断线重连"],
+      "expected": "不重复渲染；解密正文不进 SW。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/WEB/web-02.json"]
+    },
+    {
+      "id": "WEB-03",
+      "title": "只读 Git DiffView",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Web",
+      "priority": "P1",
+      "test_layer": "component + headed E2E",
+      "precondition": "Git fixtures。",
+      "steps": ["文件树", "unified/split", "stale"],
+      "expected": "可渲染或安全降级。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/WEB/web-03.json"]
+    },
+    {
+      "id": "WEB-04",
+      "title": "PWA 不缓存明文",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Web",
+      "priority": "P1",
+      "test_layer": "integration",
+      "precondition": "PWA 启用。",
+      "steps": ["检查 SW cache", "logout"],
+      "expected": "仅静态资源、密文与最小索引。",
+      "cleanup": ["unregister SW"],
+      "evidence": ["e2e-verify/reports/<ts>/WEB/web-04.json"]
+    },
+    {
+      "id": "WEB-05",
+      "title": "headed 只读旅程",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Web",
+      "priority": "P0",
+      "test_layer": "headed E2E",
+      "precondition": "Playwright headed。",
+      "steps": ["加载/空/错误/重试/响应式"],
+      "expected": "real_browser=true, headless=false。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/traces/web/WEB-05/"]
+    },
+    {
+      "id": "E2E-WEB-01",
+      "title": "跨层只读回归",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Web",
+      "priority": "P0",
+      "test_layer": "headed E2E",
+      "precondition": "mock Relay 可运行。",
+      "steps": ["完整只读旅程", "尝试构造写请求"],
+      "expected": "UI 无写入口；网络层写请求失败。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/WEB/e2e-web-01.json"]
+    }
+  ]
+}

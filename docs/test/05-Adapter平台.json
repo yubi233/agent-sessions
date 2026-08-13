@@ -1,0 +1,93 @@
+{
+  "suite": "adapter-platform",
+  "suite_version": 1,
+  "status": "planned",
+  "plan_id": "ADAPTER-PLATFORM",
+  "description": "统一 SPI、canonical mapper、能力三态与 mock 垂直切片。各 Provider 的 ADPT-<name>-* 不在此定义。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Provider Adapter Platform",
+  "environment": {
+    "mock_adapter": "not-configured"
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": false,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "ADPT-01",
+      "title": "SPI 与能力矩阵合同",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Adapter",
+      "priority": "P0",
+      "test_layer": "contract",
+      "precondition": "mock runtime 已注册。",
+      "steps": ["Detect", "Capabilities", "未知能力默认"],
+      "expected": "每项 native/emulated/unsupported；未知为 unsupported。",
+      "cleanup": ["停止 mock"],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-PLATFORM/adpt-01.json"]
+    },
+    {
+      "id": "MODE-01",
+      "title": "Plan 状态机",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Plan",
+      "priority": "P0",
+      "test_layer": "contract",
+      "precondition": "mock 声明 plan native 或 emulated。",
+      "steps": ["draft", "awaiting_approval", "approve/reject"],
+      "expected": "拒绝不执行写工具；非法转换被拒。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-PLATFORM/mode-01.json"]
+    },
+    {
+      "id": "MODE-02",
+      "title": "Goal 暂停恢复清理",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Goal",
+      "priority": "P1",
+      "test_layer": "contract",
+      "precondition": "mock 声明 goal。",
+      "steps": ["create", "pause", "resume", "cleanup", "重复动作"],
+      "expected": "幂等；不支持时 unsupported。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-PLATFORM/mode-02.json"]
+    },
+    {
+      "id": "MODE-03",
+      "title": "高风险 Skill 需确认",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Skill",
+      "priority": "P1",
+      "test_layer": "contract",
+      "precondition": "catalog 含高风险 skill。",
+      "steps": ["invoke", "拒绝确认"],
+      "expected": "无 Provider 调用。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-PLATFORM/mode-03.json"]
+    },
+    {
+      "id": "MODE-04",
+      "title": "Resume 六种唤醒结果",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Resume",
+      "priority": "P0",
+      "test_layer": "contract",
+      "precondition": "mock 可注入六种结果。",
+      "steps": ["分别 Resume"],
+      "expected": "不把失败伪装成 resumed。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-PLATFORM/mode-04.json"]
+    }
+  ]
+}

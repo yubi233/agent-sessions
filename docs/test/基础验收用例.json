@@ -1,0 +1,568 @@
+{
+  "suite": "agent-sessions-foundation",
+  "suite_version": 1,
+  "status": "planned",
+  "description": "Agent Sessions 跨项目关键验收用例。覆盖 Relay、Daemon、Provider Adapter、Android、Web 和 Admin 的高风险用户旅程；当前只登记可追溯契约，尚未绑定运行环境或执行。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Test / Release",
+  "owner_plan": "FOUNDATION-ACCEPTANCE",
+  "environment": {
+    "relay": "not-configured",
+    "web": "not-configured",
+    "admin": "not-configured",
+    "android": "emulator-or-device-not-configured",
+    "database": "test-postgresql-not-configured",
+    "redis": "test-redis-not-configured"
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": false,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": false,
+    "local_test": false,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "PAIR-01",
+      "title": "首个 Android 设备完成 owner 配对",
+      "status": "planned",
+      "phase": "P1",
+      "category": "认证与配对",
+      "priority": "P0",
+      "owner_plan": "RELAY-IDENTITY",
+      "test_layer": "Relay integration + Android integration",
+      "route_api": ["auth.login", "pairing.bootstrap", "devices.owner"],
+      "precondition": "Relay 已启动且没有 owner 设备。",
+      "steps": ["提交账号登录请求", "Android 生成设备密钥和二维码", "完成 bootstrap 配对并确认设备身份"],
+      "expected": "账号建立，Android 被标记为 owner，服务器只保存身份公钥和密钥包装元数据。",
+      "observable_state": {
+        "client": ["Android 显示 owner 已建立", "设备列表显示唯一 owner"],
+        "events": ["设备批准或配对完成事件带设备 ID，不带会话正文"],
+        "persistence": ["设备身份公钥和 key-wrap 元数据已保存", "不存在消息明文或私钥"]
+      },
+      "cleanup": ["删除隔离测试账号及关联设备记录", "清除模拟器/测试机生成的设备密钥与会话"],
+      "evidence": ["e2e-verify/reports/pairing-<date>.json", "e2e-verify/traces/pairing/PAIR-01/", "脱敏数据库断言结果"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "PAIR-02",
+      "title": "owner 批准第二台 Terminal",
+      "status": "planned",
+      "phase": "P1",
+      "category": "认证与配对",
+      "priority": "P0",
+      "owner_plan": "RELAY-IDENTITY",
+      "test_layer": "Relay integration + Daemon integration + Android integration",
+      "route_api": ["pairing.request", "pairing.approve", "terminal.connect"],
+      "precondition": "已有 owner Android，PC Daemon 显示待批准二维码。",
+      "steps": ["PC 发起配对请求", "Android 扫描并批准", "PC 建立 Terminal WebSocket"],
+      "expected": "Terminal 出现在设备列表并显示在线，未授权设备不能订阅会话或项目。",
+      "observable_state": {
+        "client": ["Android 显示已批准 Terminal 及在线状态", "未授权设备显示配对或授权失败"],
+        "events": ["Terminal hello 和 presence 绑定已批准设备身份"],
+        "persistence": ["Terminal 与设备关联唯一且可审计", "未授权设备没有项目或会话订阅授权"]
+      },
+      "cleanup": ["撤销测试 Terminal", "停止测试 Daemon 并清理其隔离 SQLite 与 Keychain 项"],
+      "evidence": ["e2e-verify/reports/pairing-<date>.json", "e2e-verify/traces/pairing/PAIR-02/", "脱敏 Terminal 连接记录"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "PAIR-03",
+      "title": "撤销设备后停止新密钥分发",
+      "status": "planned",
+      "phase": "P1",
+      "category": "认证与配对",
+      "priority": "P1",
+      "owner_plan": "RELAY-IDENTITY",
+      "test_layer": "Relay integration + Android integration",
+      "route_api": ["devices.revoke", "device-key-wrap.request", "events.connect"],
+      "precondition": "账号已绑定 Android、Web 和至少一台 PC。",
+      "steps": ["owner 撤销 Web 设备", "Web 尝试重新连接并请求新会话密钥"],
+      "expected": "连接被拒绝，撤销设备无法获得新的项目或会话 DEK 包装。",
+      "observable_state": {
+        "client": ["owner 设备显示撤销成功", "被撤销 Web 设备显示不可恢复的授权失败"],
+        "events": ["撤销后连接被关闭或拒绝", "没有新的 key-wrap 投递给撤销设备"],
+        "persistence": ["撤销时间、操作者和原因已审计", "历史密文不因撤销而被改写"]
+      },
+      "cleanup": ["清除测试账号、设备和 key-wrap 元数据", "清理测试浏览器存储"],
+      "evidence": ["e2e-verify/reports/pairing-<date>.json", "e2e-verify/traces/pairing/PAIR-03/", "脱敏撤销审计记录"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "TERM-01",
+      "title": "一个 Relay 连接多台 PC Terminal",
+      "status": "planned",
+      "phase": "P1",
+      "category": "Terminal",
+      "priority": "P0",
+      "owner_plan": "RELAY-REALTIME",
+      "test_layer": "Relay integration + Daemon integration",
+      "route_api": ["terminal.connect", "terminal.presence", "terminals.list"],
+      "precondition": "两台不同平台 PC 已完成配对。",
+      "steps": ["启动两台 Daemon", "打开 Terminal 列表", "分别查看平台、版本和能力"],
+      "expected": "两个 Terminal 有独立身份、心跳和能力状态，互不覆盖。",
+      "observable_state": {
+        "client": ["Terminal 列表有两条不同记录", "每条记录显示独立平台、版本、能力和在线状态"],
+        "events": ["两条独立心跳和 presence 更新"],
+        "persistence": ["每个 Terminal 保存独立 device_id、terminal_id 和最后在线信息"]
+      },
+      "cleanup": ["停止两台测试 Daemon", "撤销或删除测试 Terminal 记录和本地测试状态"],
+      "evidence": ["e2e-verify/reports/relay-<date>.json", "e2e-verify/traces/relay/TERM-01/", "脱敏 presence 状态快照"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "SESS-01",
+      "title": "创建会话并接收有序事件",
+      "status": "planned",
+      "phase": "P1",
+      "category": "会话",
+      "priority": "P0",
+      "owner_plan": "RELAY-REALTIME",
+      "test_layer": "Relay integration + Android integration",
+      "route_api": ["sessions.create", "commands.submit", "events.subscribe"],
+      "precondition": "Terminal 已登记 Workspace，mock Adapter 可用。",
+      "steps": ["Android 选择项目和运行时", "提交创建会话命令", "订阅会话事件流"],
+      "expected": "命令先返回 accepted，随后收到单调递增 event_seq 的 turn、消息和终态事件。",
+      "observable_state": {
+        "client": ["会话从 pending 进入 running 或终态", "事件按 event_seq 渲染且没有跳号或逆序"],
+        "events": ["command.accepted", "command.updated", "TurnStarted", "MessageCompleted", "TurnEnded"],
+        "persistence": ["Command 关联唯一 idempotency_key", "SessionEvent 有单调 event_seq 和密文 payload"]
+      },
+      "cleanup": ["终止并删除测试会话", "删除测试 Workspace、mock Adapter 状态和相关事件夹具"],
+      "evidence": ["e2e-verify/reports/relay-<date>.json", "e2e-verify/traces/relay/SESS-01/", "脱敏事件序列导出"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "SESS-02",
+      "title": "断线后按游标恢复会话",
+      "status": "planned",
+      "phase": "P1",
+      "category": "同步与重连",
+      "priority": "P0",
+      "owner_plan": "RELAY-REALTIME",
+      "test_layer": "Relay integration + Android integration",
+      "route_api": ["events.sse", "events.websocket", "sessions.snapshot"],
+      "precondition": "会话正在产生多个事件。",
+      "steps": ["断开 Android WebSocket", "在断线期间产生事件", "携带 Last-Event-ID 重新连接"],
+      "expected": "客户端只补齐缺失事件，不重复渲染已确认事件。",
+      "observable_state": {
+        "client": ["断线指示后恢复在线", "每个 event_seq 仅渲染一次，cursor 前进到最后事件"],
+        "events": ["重连请求包含 last_event_id 或 after cursor", "服务端仅重放缺口序列"],
+        "persistence": ["本地密文缓存保存最后确认 cursor", "Relay 事件历史可按 cursor 查询"]
+      },
+      "cleanup": ["终止并删除测试会话", "清理 Android 测试缓存、WebSocket 连接和事件夹具"],
+      "evidence": ["e2e-verify/reports/relay-<date>.json", "e2e-verify/traces/relay/SESS-02/", "重连前后 cursor 断言"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "CTRL-01",
+      "title": "只有 Android 可发送会话写命令",
+      "status": "planned",
+      "phase": "P1",
+      "category": "控制权",
+      "priority": "P0",
+      "owner_plan": "RELAY-REALTIME",
+      "test_layer": "Relay authorization integration + Android/Web/Admin integration",
+      "route_api": ["commands.submit", "commands.permission.respond", "control-lease.validate"],
+      "precondition": "Android、Web、Admin 都已连接同一会话。",
+      "steps": ["Android 发送 prompt", "Web 尝试发送 prompt", "Admin 尝试响应会话权限请求"],
+      "expected": "Android 命令被接受，Web 和 Admin 返回只读或 capability unsupported。",
+      "observable_state": {
+        "client": ["Android 显示 accepted 和后续命令状态", "Web/Admin 不渲染写控件或显示只读失败"],
+        "events": ["只有 Android 产生 command.accepted", "拒绝请求不产生 Provider 动作"],
+        "persistence": ["被拒绝命令有授权失败审计", "没有由 Web/Admin 产生的可执行 Command"]
+      },
+      "cleanup": ["终止测试会话", "清除三端测试身份、会话缓存和命令记录"],
+      "evidence": ["e2e-verify/reports/control-<date>.json", "e2e-verify/traces/control/CTRL-01/", "脱敏授权审计记录"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "CTRL-02",
+      "title": "旧实例和旧 epoch 命令被拒绝",
+      "status": "planned",
+      "phase": "P1",
+      "category": "控制权",
+      "priority": "P0",
+      "owner_plan": "RELAY-REALTIME",
+      "test_layer": "Relay transaction integration",
+      "route_api": ["commands.submit", "control-lease.acquire", "control-lease.validate"],
+      "precondition": "会话已恢复并产生新的 instance_id 与 lease_epoch。",
+      "steps": ["使用旧 instance 和 epoch 提交 abort", "查询命令结果"],
+      "expected": "命令返回 LEASE_CONFLICT 或 TARGET_INSTANCE_STALE，当前实例不受影响。",
+      "observable_state": {
+        "client": ["当前实例仍保持原状态", "旧命令显示明确的冲突或过期错误"],
+        "events": ["拒绝事件带当前或被围栏的目标信息，不触发 Abort"],
+        "persistence": ["PostgreSQL 中当前 ControlLease epoch 未变化", "旧 Command 标记 rejected 且不关联新的 Provider 动作"]
+      },
+      "cleanup": ["释放测试 lease", "终止并删除测试会话、实例和命令记录"],
+      "evidence": ["e2e-verify/reports/relay-<date>.json", "e2e-verify/traces/relay/CTRL-02/", "脱敏 lease/command 事务断言"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "GIT-01",
+      "title": "读取项目 Git 变更统计",
+      "status": "planned",
+      "phase": "P2",
+      "category": "Git diff",
+      "priority": "P0",
+      "owner_plan": "DAEMON-GIT",
+      "test_layer": "Daemon integration + Android integration",
+      "route_api": ["git.status", "git.listChanges", "git.snapshot"],
+      "precondition": "Workspace 是已确认的 Git 根目录，存在 staged 和 unstaged 修改。",
+      "steps": ["Android 打开项目 Git 变更", "切换 staged/unstaged 视图"],
+      "expected": "显示文件路径、状态、增加/删除行数和 snapshot_token；服务器没有保存 diff 明文。",
+      "observable_state": {
+        "client": ["Android 显示 staged/unstaged 文件统计和 snapshot_token 对应状态", "无 diff 内容时显示空状态"],
+        "events": ["加密 Git RPC 请求和响应关联同一 snapshot_token"],
+        "persistence": ["Daemon 只在本地处理 Git 输出", "Relay 不保存 diff 明文或文件正文"]
+      },
+      "cleanup": ["删除临时 Git 仓库和测试 Workspace 登记", "清理 Android 缓存及 Relay 加密 RPC 记录"],
+      "evidence": ["e2e-verify/reports/daemon-<date>.json", "e2e-verify/mobile/GIT-01/", "脱敏数据库和日志扫描"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "GIT-02",
+      "title": "查看文件 unified 和 split diff",
+      "status": "planned",
+      "phase": "P2",
+      "category": "Git diff",
+      "priority": "P0",
+      "owner_plan": "DAEMON-GIT",
+      "test_layer": "Daemon integration + Android integration",
+      "route_api": ["git.diffFile", "git.diffAll", "git.snapshot"],
+      "precondition": "项目包含文本修改、重命名和二进制文件。",
+      "steps": ["选择文件", "切换 unified/split", "打开二进制文件"],
+      "expected": "文本 diff 正确高亮，重命名显示旧路径和新路径，二进制显示不可预览提示。",
+      "observable_state": {
+        "client": ["unified 与 split 视图渲染同一逻辑变更", "rename 显示旧路径和新路径", "binary 显示不可预览而非文件内容"],
+        "events": ["响应携带稳定 snapshot_token 和文件类型元数据"],
+        "persistence": ["diff 只作为端到端加密响应流转，不写入 Relay 明文存储"]
+      },
+      "cleanup": ["删除临时 Git 仓库、测试文件和 Workspace 登记", "清理 Android DiffView 缓存"],
+      "evidence": ["e2e-verify/reports/daemon-<date>.json", "e2e-verify/mobile/GIT-02/", "临时仓库 fixture 清单"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "GIT-03",
+      "title": "阻止 Workspace 外部路径访问",
+      "status": "planned",
+      "phase": "P2",
+      "category": "安全",
+      "priority": "P0",
+      "owner_plan": "DAEMON-GIT",
+      "test_layer": "Daemon security integration",
+      "route_api": ["git.diffFile", "workspace.validate", "workspace.realpath"],
+      "precondition": "Daemon 已登记一个 Workspace。",
+      "steps": ["请求 .. 路径", "请求符号链接指向仓库外的文件", "请求非 Git 根目录"],
+      "expected": "所有请求被拒绝，不执行 shell 拼接，也不泄露外部文件内容。",
+      "observable_state": {
+        "client": ["每个非法请求显示统一安全错误，不显示目标文件内容"],
+        "events": ["Daemon 返回路径验证失败，不产生 Git 子进程成功事件"],
+        "persistence": ["安全审计仅保存脱敏路径类别和错误码", "没有仓库外文件内容写入缓存或 Relay"]
+      },
+      "cleanup": ["删除临时仓库、外部目标文件和测试符号链接", "清理 Daemon 审计和测试 Workspace 登记"],
+      "evidence": ["e2e-verify/reports/daemon-<date>.json", "e2e-verify/traces/daemon/GIT-03/", "路径安全与 shell 调用断言"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "ADPT-01",
+      "title": "四类运行时返回能力矩阵",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Provider Adapter",
+      "priority": "P0",
+      "owner_plan": "ADAPTER-PLATFORM",
+      "test_layer": "Provider contract",
+      "route_api": ["daemon.providers.detect", "daemon.providers.capabilities", "sessions.capabilities"],
+      "precondition": "四类运行时分别安装或使用受控 fixture。",
+      "steps": ["Daemon 探测运行时版本", "请求 capabilities", "打开 Android 会话设置"],
+      "expected": "每个能力标记 native、emulated 或 unsupported；客户端不展示未支持入口。",
+      "observable_state": {
+        "client": ["Android 只显示当前 Provider 已支持的操作", "未支持能力有明确禁用原因或不渲染"],
+        "events": ["每个 Adapter 上报版本和能力矩阵"],
+        "persistence": ["能力快照与 Provider 版本关联", "未知版本默认 unsupported"]
+      },
+      "cleanup": ["停止受控 Provider fixture 或测试进程", "清理 Daemon 的版本探测缓存和测试会话"],
+      "evidence": ["e2e-verify/reports/provider-capabilities-<date>.json", "apps/daemon/adapters/<provider>/fixtures/", "能力矩阵 golden trace"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "MODE-01",
+      "title": "Plan 模式审批后继续执行",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Plan",
+      "priority": "P0",
+      "owner_plan": "ADAPTER-PLATFORM",
+      "test_layer": "Provider contract + Android integration",
+      "route_api": ["session.mode.set", "plan.action", "commands.submit"],
+      "precondition": "目标 Adapter 声明 plan 为 native 或 emulated。",
+      "steps": ["Android 进入 plan", "Agent 提交计划", "Android 批准计划", "Agent 继续执行"],
+      "expected": "Plan 状态按 draft、awaiting_approval、approved、executing、completed 变化，拒绝时不执行写操作。",
+      "observable_state": {
+        "client": ["Plan 状态机按合法顺序展示", "拒绝时没有继续执行入口或写工具结果"],
+        "events": ["PlanChanged 包含 canonical 状态转换", "批准前没有执行事件"],
+        "persistence": ["Plan 与命令幂等键关联", "非法状态转换被拒绝并审计"]
+      },
+      "cleanup": ["终止测试会话和 Provider fixture", "删除测试 Plan、命令和本地缓存"],
+      "evidence": ["e2e-verify/reports/provider-plan-<date>.json", "e2e-verify/mobile/MODE-01/", "Plan 状态机 trace"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "MODE-02",
+      "title": "Goal 可以暂停、恢复和清理",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Goal",
+      "priority": "P1",
+      "owner_plan": "ADAPTER-PLATFORM",
+      "test_layer": "Provider contract + Android integration",
+      "route_api": ["goal.create", "goal.action", "commands.submit"],
+      "precondition": "目标 Adapter 声明 goal 能力。",
+      "steps": ["创建 goal", "暂停 goal", "恢复 goal", "清理 goal"],
+      "expected": "每次动作都有幂等命令结果和 canonical GoalChanged 事件；不支持时明确返回 unsupported。",
+      "observable_state": {
+        "client": ["Goal 列表显示创建、暂停、恢复和清理后的状态", "不支持时显示 unsupported"],
+        "events": ["每次合法动作产生唯一 GoalChanged", "重复动作返回原 canonical 结果"],
+        "persistence": ["Goal 状态与命令幂等键关联", "已清理 Goal 不再出现在活跃集合"]
+      },
+      "cleanup": ["清理所有测试 Goal 和关联命令", "终止测试 Provider fixture 与会话"],
+      "evidence": ["e2e-verify/reports/provider-goal-<date>.json", "e2e-verify/mobile/MODE-02/", "Goal 事件 trace"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "MODE-03",
+      "title": "高风险 Skill 需要 Android 确认",
+      "status": "planned",
+      "phase": "P3",
+      "category": "Skill",
+      "priority": "P1",
+      "owner_plan": "ADAPTER-PLATFORM",
+      "test_layer": "Provider contract + Android integration",
+      "route_api": ["skills.catalog", "skills.invoke", "permission.respond"],
+      "precondition": "Skill catalog 包含高风险 skill。",
+      "steps": ["打开 skill 参数表单", "提交调用", "拒绝本地确认"],
+      "expected": "拒绝后不调用 Provider；低风险 skill 按能力矩阵直接或按配置确认。",
+      "observable_state": {
+        "client": ["高风险 Skill 显示风险确认", "拒绝后显示已取消且不显示工具结果"],
+        "events": ["Skill 调用在确认前处于等待状态", "拒绝产生 PermissionDecision 而非 Provider ToolCall"],
+        "persistence": ["风险级别和拒绝决定可审计", "不存在拒绝后的 Provider 调用记录"]
+      },
+      "cleanup": ["清理 Skill fixture、参数和拒绝决定", "终止测试会话与 Provider 进程"],
+      "evidence": ["e2e-verify/reports/provider-skill-<date>.json", "e2e-verify/mobile/MODE-03/", "脱敏权限决策 trace"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "SEC-01",
+      "title": "数据库和日志不包含会话明文",
+      "status": "planned",
+      "phase": "P1",
+      "category": "端到端加密",
+      "priority": "P0",
+      "owner_plan": "RELAY-REALTIME",
+      "test_layer": "Relay security integration",
+      "route_api": ["relay.event.store", "relay.command.store", "relay.audit-log"],
+      "precondition": "完成一次包含消息、工具参数和 diff 的会话。",
+      "steps": ["导出测试数据库", "搜索消息和工具文本", "检查 Relay 日志"],
+      "expected": "只存在密文或白名单元数据；日志经过脱敏，不包含 token、密钥或正文。",
+      "observable_state": {
+        "client": ["用户可见会话仍可由授权设备解密显示"],
+        "events": ["Relay 仅处理密文 envelope 和允许元数据"],
+        "persistence": ["测试明文探针不出现在 PostgreSQL、Redis 持久化导出或 Relay 日志", "无 token、私钥或完整正文"]
+      },
+      "cleanup": ["销毁包含明文探针的测试账号、数据库备份和日志副本", "清理测试设备本地缓存"],
+      "evidence": ["e2e-verify/reports/security-<date>.json", "e2e-verify/traces/security/SEC-01/", "脱敏明文扫描摘要"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "ADMIN-01",
+      "title": "管理台只显示运维元数据",
+      "status": "planned",
+      "phase": "P4",
+      "category": "管理平台",
+      "priority": "P0",
+      "owner_plan": "ADMIN",
+      "test_layer": "Vue component + headed browser E2E",
+      "route_api": ["admin.devices.list", "admin.terminals.list", "admin.audit.list"],
+      "precondition": "账号有设备、Terminal、项目和会话。",
+      "steps": ["打开 Admin", "查看设备、Terminal、版本、健康和错误页面"],
+      "expected": "可查看运维元数据，但无法看到消息、文件、diff、附件或工具参数。",
+      "observable_state": {
+        "client": ["Admin 显示设备、版本、健康、流量和脱敏错误", "会话正文、文件、diff、附件和工具参数均不可见"],
+        "events": ["Admin 只订阅允许的运维元数据更新"],
+        "persistence": ["浏览器缓存不包含解密会话正文", "管理端查询日志不请求受保护内容字段"]
+      },
+      "cleanup": ["退出 Admin 测试会话", "清理浏览器 profile、PWA 缓存和测试账号"],
+      "evidence": ["e2e-verify/reports/admin-<date>.json", "e2e-verify/traces/admin/ADMIN-01/", "headed 浏览器截图和网络字段断言"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    },
+    {
+      "id": "SYNC-01",
+      "title": "重复命令返回原结果",
+      "status": "planned",
+      "phase": "P1",
+      "category": "幂等性",
+      "priority": "P0",
+      "owner_plan": "RELAY-REALTIME",
+      "test_layer": "Relay transaction integration",
+      "route_api": ["commands.submit", "commands.get", "outbox.dispatch"],
+      "precondition": "准备一个可执行的 start 或 abort 命令。",
+      "steps": ["使用相同 idempotency key 提交命令两次", "查询两个响应"],
+      "expected": "第二次返回第一次的 canonical command result，不产生第二个 Provider 动作。",
+      "observable_state": {
+        "client": ["两次请求显示同一 command_id 和 canonical 状态"],
+        "events": ["仅一条 command.accepted 和一组后续会话事件"],
+        "persistence": ["Command 表对 idempotency_key 唯一", "outbox 仅有一次可执行投递"]
+      },
+      "cleanup": ["终止并删除测试会话", "清除测试 Command、outbox、mock Provider 调用计数和事件记录"],
+      "evidence": ["e2e-verify/reports/relay-<date>.json", "e2e-verify/traces/relay/SYNC-01/", "命令和 outbox 唯一性断言"],
+      "verification_profile": {
+        "report_kind": "full_gate",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": false,
+        "local_test": false,
+        "headless": false
+      }
+    }
+  ]
+}
