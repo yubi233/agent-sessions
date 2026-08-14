@@ -14,7 +14,7 @@
       "owned_ids": ["P0-TOOL-01", "P0-SCHEMA-01", "P0-CRYPTO-01", "SEC-02", "SEC-03", "SEC-04"],
       "consumed_ids": [],
       "dependencies": [],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "拥有 P0-TOOL/SCHEMA/CRYPTO 以及密码学、篡改、AAD、密钥撤销和轮换安全回归；P0-DEPLOY-01 例外归 RELIABILITY-RELEASE。"
     },

@@ -1,0 +1,8 @@
+{
+  "protocol_version": 99,
+  "message_type": "event",
+  "message_id": "msg-1",
+  "trace_id": "tr-1",
+  "payload_version": 1,
+  "payload": {}
+}

@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-08-14T03-10-43-118Z",
+  "plan_id": "PROTO-CRYPTO",
+  "suite": "p0-web-relay-recording",
+  "status": "passed",
+  "real_browser": true,
+  "real_model": false,
+  "real_upstream": false,
+  "fixture_data": true,
+  "local_test": true,
+  "headless": false,
+  "command": "node e2e-verify/record.mjs",
+  "browser": "system-chrome",
+  "artifacts": [
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screencasts/2026-08-14T03-10-37-958Z/manifest.json",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screencasts/2026-08-14T03-10-37-958Z/demo.mp4"
+  ],
+  "failure_class": null,
+  "remaining_risk": "录屏复用已通过的 P0 Web 状态回归；不覆盖 P1 账户和会话功能。"
+}

@@ -1,0 +1,97 @@
+[
+  {
+    "name": "ok-roundtrip",
+    "dek_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "key_id": "key-1",
+    "nonce_hex": "0102030405060708090a0b0c",
+    "plaintext": "canonical-plaintext",
+    "aad": {
+      "entity_id": "sess-golden",
+      "event_type": "message.delta",
+      "protocol_version": 1,
+      "event_seq": 7,
+      "key_id": ""
+    },
+    "expect_ok": true,
+    "envelope": {
+      "alg": "v1-aes256gcm-hkdfsha256",
+      "key_id": "key-1",
+      "nonce": "AQIDBAUGBwgJCgsM",
+      "ciphertext": "mpGdxm5zP29C2wpbk00tn1jdxYGoA8N4So0jVPdrYs/z0qU",
+      "aad_hash": "44966ae89846c291d96e79b0f1524b3f479c6069d295221268271eac67022f03",
+      "payload_version": 1
+    }
+  },
+  {
+    "name": "tamper-ciphertext",
+    "dek_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "key_id": "key-1",
+    "nonce_hex": "0102030405060708090a0b0c",
+    "plaintext": "canonical-plaintext",
+    "aad": {
+      "entity_id": "sess-golden",
+      "event_type": "message.delta",
+      "protocol_version": 1,
+      "event_seq": 7,
+      "key_id": ""
+    },
+    "expect_ok": false,
+    "tamper_field": "ciphertext",
+    "envelope": {
+      "alg": "v1-aes256gcm-hkdfsha256",
+      "key_id": "key-1",
+      "nonce": "AQIDBAUGBwgJCgsM",
+      "ciphertext": "mpGdxm5zP29C2wpbk00tn1jdxYGoA8N4So0jVPdrYs/z0qU",
+      "aad_hash": "44966ae89846c291d96e79b0f1524b3f479c6069d295221268271eac67022f03",
+      "payload_version": 1
+    }
+  },
+  {
+    "name": "wrong-aad",
+    "dek_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "key_id": "key-1",
+    "nonce_hex": "0102030405060708090a0b0c",
+    "plaintext": "canonical-plaintext",
+    "aad": {
+      "entity_id": "sess-golden",
+      "event_type": "message.delta",
+      "protocol_version": 1,
+      "event_seq": 7,
+      "key_id": ""
+    },
+    "expect_ok": false,
+    "tamper_field": "aad",
+    "envelope": {
+      "alg": "v1-aes256gcm-hkdfsha256",
+      "key_id": "key-1",
+      "nonce": "AQIDBAUGBwgJCgsM",
+      "ciphertext": "mpGdxm5zP29C2wpbk00tn1jdxYGoA8N4So0jVPdrYs/z0qU",
+      "aad_hash": "44966ae89846c291d96e79b0f1524b3f479c6069d295221268271eac67022f03",
+      "payload_version": 1
+    }
+  },
+  {
+    "name": "wrong-key-id",
+    "dek_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "key_id": "key-1",
+    "nonce_hex": "0102030405060708090a0b0c",
+    "plaintext": "canonical-plaintext",
+    "aad": {
+      "entity_id": "sess-golden",
+      "event_type": "message.delta",
+      "protocol_version": 1,
+      "event_seq": 7,
+      "key_id": ""
+    },
+    "expect_ok": false,
+    "tamper_field": "key_id",
+    "envelope": {
+      "alg": "v1-aes256gcm-hkdfsha256",
+      "key_id": "key-1",
+      "nonce": "AQIDBAUGBwgJCgsM",
+      "ciphertext": "mpGdxm5zP29C2wpbk00tn1jdxYGoA8N4So0jVPdrYs/z0qU",
+      "aad_hash": "44966ae89846c291d96e79b0f1524b3f479c6069d295221268271eac67022f03",
+      "payload_version": 1
+    }
+  }
+]

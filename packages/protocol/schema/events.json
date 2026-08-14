@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-sessions.local/schema/events.json",
+  "title": "SessionEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_type", "event_seq", "session_id"],
+  "properties": {
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "session.lifecycle",
+        "turn.started",
+        "message.delta",
+        "message.completed",
+        "tool.call",
+        "tool.result",
+        "permission.request",
+        "permission.decision",
+        "user.question",
+        "plan.changed",
+        "goal.changed",
+        "skill.catalog_changed",
+        "usage.updated",
+        "file.changed",
+        "git.snapshot",
+        "command.updated",
+        "delegation.changed"
+      ]
+    },
+    "event_seq": { "type": "integer", "minimum": 1 },
+    "session_id": { "type": "string" },
+    "instance_id": { "type": "string" },
+    "ciphertext": { "type": "object" }
+  }
+}

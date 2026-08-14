@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "message_type": "event",
+  "message_id": "msg-1",
+  "trace_id": "tr-1",
+  "scope": {"session_id": "sess-1"},
+  "issued_by_device": "dev-1",
+  "lease_epoch": 3,
+  "payload_version": 1,
+  "payload": {"event_type": "message.delta", "event_seq": 2}
+}

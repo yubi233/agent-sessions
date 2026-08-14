@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-sessions.local/schema/envelope.json",
+  "title": "ProtocolEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "message_type",
+    "message_id",
+    "trace_id",
+    "payload_version",
+    "payload"
+  ],
+  "properties": {
+    "protocol_version": { "type": "integer", "const": 1 },
+    "message_type": {
+      "type": "string",
+      "enum": ["command", "event", "presence", "ack", "hello", "challenge"]
+    },
+    "message_id": { "type": "string", "minLength": 1 },
+    "trace_id": { "type": "string", "minLength": 1 },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": { "type": "string" },
+        "workspace_id": { "type": "string" },
+        "session_id": { "type": "string" }
+      }
+    },
+    "issued_by_device": { "type": "string" },
+    "lease_epoch": { "type": "integer", "minimum": 0 },
+    "idempotency_key": { "type": "string" },
+    "deadline_unix_ms": { "type": "integer" },
+    "payload_version": { "type": "integer", "minimum": 1 },
+    "payload": { "type": "object" }
+  }
+}

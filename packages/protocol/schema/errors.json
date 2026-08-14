@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-sessions.local/schema/errors.json",
+  "title": "ErrorCode",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "enum": [
+        "UNAUTHENTICATED",
+        "DEVICE_REVOKED",
+        "OWNER_REQUIRED",
+        "TOKEN_REUSED",
+        "PAIRING_EXPIRED",
+        "READ_ONLY_DEVICE",
+        "SCOPE_DENIED",
+        "LEASE_CONFLICT",
+        "TARGET_INSTANCE_STALE",
+        "IDEMPOTENCY_CONFLICT",
+        "PROTOCOL_VERSION_MISMATCH",
+        "UNKNOWN_PAYLOAD_VERSION",
+        "UNKNOWN_EVENT",
+        "CAPABILITY_UNSUPPORTED",
+        "WORKSPACE_MOVED",
+        "TERMINAL_OFFLINE",
+        "LOCAL_STATE_MISSING",
+        "PAYLOAD_TOO_LARGE",
+        "DEADLINE_EXCEEDED",
+        "INVALID_REQUEST"
+      ]
+    },
+    "message": { "type": "string" },
+    "details": { "type": "object", "additionalProperties": true }
+  }
+}

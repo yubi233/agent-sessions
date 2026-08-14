@@ -1,0 +1,667 @@
+openapi: 3.1.0
+info:
+  title: Agent Sessions Internal API
+  version: 1.0.0-draft
+  description: 仅官方客户端使用的内部版本化 API。服务器只处理密文与白名单元数据。
+servers:
+  - url: http://127.0.0.1:8787
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: 进程存活
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: SQLite 可读写
+      responses:
+        "200":
+          description: ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: not ready
+  /v1/version:
+    get:
+      operationId: getVersion
+      responses:
+        "200":
+          description: version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Version"
+  /v1/auth/register:
+    post:
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Account"
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: tokens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+  /v1/auth/refresh:
+    post:
+      operationId: refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "204":
+          description: logged out
+  /v1/devices:
+    get:
+      operationId: listDevices
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Device"
+  /v1/devices/{id}:
+    delete:
+      operationId: revokeDevice
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: revoked
+  /v1/pairing/bootstrap:
+    post:
+      operationId: bootstrapOwner
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapRequest"
+      responses:
+        "201":
+          description: owner device
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+  /v1/pairing/requests:
+    post:
+      operationId: createPairing
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingCreateRequest"
+      responses:
+        "201":
+          description: pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingRequest"
+  /v1/pairing/requests/{id}:
+    get:
+      operationId: getPairing
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: pairing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingRequest"
+  /v1/pairing/requests/{id}/approve:
+    post:
+      operationId: approvePairing
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+  /v1/pairing/requests/{id}/cancel:
+    post:
+      operationId: cancelPairing
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: cancelled
+  /v1/terminals:
+    get:
+      operationId: listTerminals
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: terminals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Terminal"
+  /v1/projects:
+    get:
+      operationId: listProjects
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+  /v1/workspaces:
+    get:
+      operationId: listWorkspaces
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: workspaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Workspace"
+  /v1/sessions:
+    get:
+      operationId: listSessions
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        "200":
+          description: sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+  /v1/sessions/{id}/snapshot:
+    get:
+      operationId: getSessionSnapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: after_seq
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSnapshot"
+  /v1/sessions/{id}/commands:
+    post:
+      operationId: submitSessionCommand
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitCommandRequest"
+      responses:
+        "202":
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+  /v1/commands/{id}:
+    get:
+      operationId: getCommand
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+  /v1/workspaces/{id}/git/status:
+    post:
+      operationId: gitStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EncryptedRPC"
+      responses:
+        "202":
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: capabilities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CapabilityItem"
+  /v1/admin/overview:
+    get:
+      operationId: adminOverview
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: metadata only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOverview"
+  /v1/events:
+    get:
+      operationId: streamEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE stream
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Health:
+      type: object
+      required: [status, store]
+      properties:
+        status:
+          type: string
+        store:
+          type: string
+        detail:
+          type: string
+    Version:
+      type: object
+      required: [protocol_version, service]
+      properties:
+        protocol_version:
+          type: integer
+        service:
+          type: string
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+        device_role:
+          type: string
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, expires_in]
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+        device_id:
+          type: string
+    Account:
+      type: object
+      required: [id, email]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+    BootstrapRequest:
+      type: object
+      required: [display_name, identity_public_key, encryption_public_key]
+      properties:
+        display_name:
+          type: string
+        identity_public_key:
+          type: string
+        encryption_public_key:
+          type: string
+        platform:
+          type: string
+    PairingCreateRequest:
+      type: object
+      required: [role, display_name, identity_public_key, encryption_public_key]
+      properties:
+        role:
+          type: string
+          enum: [android, terminal, web, admin]
+        display_name:
+          type: string
+        identity_public_key:
+          type: string
+        encryption_public_key:
+          type: string
+        platform:
+          type: string
+    PairingRequest:
+      type: object
+      required: [id, status, role]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, cancelled, expired]
+        role:
+          type: string
+        display_name:
+          type: string
+        expires_at:
+          type: string
+    Device:
+      type: object
+      required: [id, role, status]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [android_owner, android, terminal, web, admin]
+        status:
+          type: string
+          enum: [active, revoked]
+        display_name:
+          type: string
+        platform:
+          type: string
+        last_seen_unix_ms:
+          type: integer
+    Terminal:
+      type: object
+      required: [id, device_id, status]
+      properties:
+        id:
+          type: string
+        device_id:
+          type: string
+        hostname:
+          type: string
+        platform:
+          type: string
+        status:
+          type: string
+        last_seen_unix_ms:
+          type: integer
+    Project:
+      type: object
+      required: [id, fingerprint]
+      properties:
+        id:
+          type: string
+        fingerprint:
+          type: string
+        encrypted_name:
+          type: object
+    Workspace:
+      type: object
+      required: [id, project_id, terminal_id]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        terminal_id:
+          type: string
+        branch:
+          type: string
+        status:
+          type: string
+    Session:
+      type: object
+      required: [id, workspace_id, status]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        status:
+          type: string
+        last_seq:
+          type: integer
+        provider:
+          type: string
+    SessionSnapshot:
+      type: object
+      required: [session, events]
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/CipherEvent"
+    CipherEvent:
+      type: object
+      required: [event_seq, event_type, envelope]
+      properties:
+        event_seq:
+          type: integer
+        event_type:
+          type: string
+        envelope:
+          type: object
+    SubmitCommandRequest:
+      type: object
+      required: [kind, idempotency_key]
+      properties:
+        kind:
+          type: string
+        idempotency_key:
+          type: string
+        lease_epoch:
+          type: integer
+        target_instance_id:
+          type: string
+        ciphertext:
+          type: object
+    Command:
+      type: object
+      required: [id, kind, status, idempotency_key]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        idempotency_key:
+          type: string
+        lease_epoch:
+          type: integer
+    EncryptedRPC:
+      type: object
+      required: [ciphertext]
+      properties:
+        ciphertext:
+          type: object
+    CapabilityItem:
+      type: object
+      required: [name, state]
+      properties:
+        name:
+          type: string
+        state:
+          type: string
+          enum: [native, emulated, unsupported]
+        reason:
+          type: string
+    AdminOverview:
+      type: object
+      required: [devices, terminals, sessions]
+      properties:
+        devices:
+          type: integer
+        terminals:
+          type: integer
+        sessions:
+          type: integer
+        online_devices:
+          type: integer
+        store:
+          type: string

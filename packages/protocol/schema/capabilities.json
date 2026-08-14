@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-sessions.local/schema/capabilities.json",
+  "title": "CapabilityMatrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "version", "items"],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["mock", "claude", "codex", "opencode", "openclaw"]
+    },
+    "version": { "type": "string" },
+    "items": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["state"],
+        "properties": {
+          "state": { "type": "string", "enum": ["native", "emulated", "unsupported"] },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

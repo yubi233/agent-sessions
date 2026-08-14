@@ -1,0 +1,102 @@
+version: "3"
+
+vars:
+  GOPATH:
+    sh: go env GOPATH
+  REPORT_DIR: e2e-verify/reports
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  check:
+    desc: 静态检查、格式、schema、生成物与文档注册表
+    cmds:
+      - test -z "$(gofmt -l apps internal packages)"
+      - python3 tools/docs_verify.py
+      - test -f packages/protocol/schema/openapi.yaml
+      - test -f packages/crypto/testdata/vectors.json
+      - task: generate
+      - pnpm typecheck
+
+  generate:
+    desc: 从 OpenAPI/JSON Schema 生成 Go、TypeScript 与 Dart 边界并检查无漂移
+    cmds:
+      - python3 -c "import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path('packages/protocol/schema').glob('*.json')]"
+      - ./tools/generate_protocol.sh
+      - git diff --exit-code -- packages/protocol/generated packages/protocol-ts/src/openapi.ts apps/mobile/lib/protocol/generated.dart
+
+  test:protocol:
+    desc: 协议 envelope 与错误码
+    cmds:
+      - go test ./packages/protocol -count=1
+
+  test:crypto:
+    desc: 跨语言加密向量
+    cmds:
+      - go test ./packages/crypto -count=1
+      - pnpm --filter @agent-sessions/crypto test
+
+  test:relay:
+    desc: Relay 身份、会话、lease、SSE/WS
+    cmds:
+      - go test ./apps/relay/... ./internal/relay/... ./internal/store/... ./internal/authz/... -count=1
+
+  test:daemon:
+    desc: Daemon 生命周期、路径安全、Git
+    cmds:
+      - go test ./apps/daemon/... ./internal/daemon/... ./internal/gitread/... ./internal/adapter/... -count=1
+
+  test:contract:
+    desc: Adapter SPI 与四类 fixture contract
+    cmds:
+      - go test ./internal/adapter/... -count=1
+
+  test:
+    desc: 单元与集成回归
+    cmds:
+      - task: test:protocol
+      - task: test:crypto
+      - task: test:relay
+      - task: test:daemon
+      - pnpm -r --if-present test
+
+  test:e2e:
+    desc: headed Web/Admin 浏览器回归
+    cmds:
+      - pnpm --filter @agent-sessions/e2e-verify test:e2e
+
+  test:record:
+    desc: headed 录屏演示，必须在回归清单通过后执行
+    cmds:
+      - node e2e-verify/record.mjs
+
+  test:android:
+    desc: Flutter 分析与 widget 测试
+    cmds:
+      - flutter test --machine
+    dir: apps/mobile
+
+  docs:verify:
+    cmds:
+      - python3 tools/docs_verify.py
+
+  compose:up:
+    desc: 启动本机 Relay（SQLite，不依赖 Docker）
+    cmds:
+      - ./tools/relayctl.sh up
+
+  compose:down:
+    desc: 停止本轮 Relay
+    cmds:
+      - ./tools/relayctl.sh down
+
+  toolchain:
+    desc: 输出锁定工具版本
+    cmds:
+      - go version
+      - node -v
+      - pnpm -v
+      - flutter --version
+      - python3 --version

@@ -1,0 +1,14 @@
+{
+  "name": "@agent-sessions/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "types": "./src/openapi.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.10.1",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,48 @@
+# 构建与依赖
+/bin/
+/dist/
+**/dist/
+/node_modules/
+**/.vite/
+**/.turbo/
+**/coverage/
+*.exe
+*.test
+*.out
+
+# 本地数据与密钥，禁止入库
+.env
+.env.local
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+data/
+tmp/
+.task/
+
+# IDE 与系统
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# 测试产物中的临时帧可重建，保留报告目录结构
+e2e-verify/screencasts/*/frames/
+e2e-verify/traces/**/trace.zip
+playwright-report/
+test-results/
+
+# Flutter
+apps/mobile/.dart_tool/
+apps/mobile/build/
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+apps/mobile/.metadata
+
+# 前端构建产物
+apps/web/dist/
+apps/admin-web/dist/
+
+# 生成器缓存
+packages/protocol/generated/.cache/

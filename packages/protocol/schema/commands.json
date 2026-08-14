@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-sessions.local/schema/commands.json",
+  "title": "Command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["command_id", "kind", "status", "idempotency_key"],
+  "properties": {
+    "command_id": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "session.start",
+        "session.resume",
+        "session.send",
+        "session.abort",
+        "session.stop",
+        "session.delete",
+        "permission.respond",
+        "mode.set",
+        "plan.action",
+        "goal.action",
+        "skill.invoke",
+        "git.status",
+        "git.changes",
+        "git.diff",
+        "delegation.create"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["accepted", "running", "succeeded", "failed", "cancelled", "rejected", "expired"]
+    },
+    "idempotency_key": { "type": "string" },
+    "lease_epoch": { "type": "integer" },
+    "target_instance_id": { "type": "string" },
+    "ciphertext": { "type": "object" }
+  }
+}

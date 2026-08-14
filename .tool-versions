@@ -1,0 +1,5 @@
+go 1.26.3
+nodejs 24.15.0
+pnpm 11.9.0
+flutter 3.44.4
+task 3.52.0

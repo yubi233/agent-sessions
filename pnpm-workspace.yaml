@@ -1,0 +1,8 @@
+packages:
+  - apps/web
+  - apps/admin-web
+  - packages/crypto-ts
+  - packages/protocol-ts
+  - e2e-verify
+allowBuilds:
+  esbuild: true

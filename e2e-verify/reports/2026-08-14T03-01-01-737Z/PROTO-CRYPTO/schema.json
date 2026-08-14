@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-08-14T03-01-01-737Z",
+  "plan_id": "PROTO-CRYPTO",
+  "suite": "p0-schema",
+  "status": "passed",
+  "real_browser": false,
+  "real_model": false,
+  "real_upstream": false,
+  "fixture_data": true,
+  "local_test": true,
+  "headless": false,
+  "command": "task generate && go test ./packages/protocol",
+  "browser": "n/a",
+  "artifacts": [],
+  "failure_class": null,
+  "remaining_risk": "",
+  "schema_parse": "ok",
+  "protocol_test": "ok"
+}

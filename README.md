@@ -20,6 +20,6 @@
 - Vue3 + TypeScript：管理平台和只读简易 Web App。
 - Flutter + Dart：Android 完整编码会话控制端。Flutter 不能使用 TypeScript；若要求所有客户端都使用 TypeScript，必须把 Android 技术栈改为 React Native。
 - 支持 Claude、Codex、OpenCode、OpenClaw，按统一能力模型对原生能力进行声明和降级。
-- 单租户自托管、PostgreSQL + Redis、REST + SSE + WebSocket、端到端加密。
+- 单租户自托管、SQLite 权威存储、REST + SSE + WebSocket、端到端加密。
 
 首版只读 Git diff，不支持远程开机、Git 写操作、语音、社交、付费和 Happy 协议兼容。

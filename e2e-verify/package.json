@@ -1,0 +1,13 @@
+{
+  "name": "@agent-sessions/e2e-verify",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "node run.mjs",
+    "record": "node record.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}

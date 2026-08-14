@@ -1,7 +1,7 @@
 {
   "suite": "protocol-crypto",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "PROTO-CRYPTO",
   "description": "工程工具链、OpenAPI/JSON Schema 生成无漂移、跨语言 E2EE golden vectors。本 suite 拥有 P0-TOOL/SCHEMA/CRYPTO 与 SEC-02..04。P0-DEPLOY-01 归 RELIABILITY-RELEASE。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -24,7 +24,7 @@
     {
       "id": "P0-TOOL-01",
       "title": "工具链、lockfile 与 task check 可复现",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "工程基线",
       "priority": "P0",
@@ -38,7 +38,7 @@
     {
       "id": "P0-SCHEMA-01",
       "title": "三端解析同一 envelope、错误和事件 fixture",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "协议",
       "priority": "P0",
@@ -52,7 +52,7 @@
     {
       "id": "P0-CRYPTO-01",
       "title": "三语言互解加密向量",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "密码学",
       "priority": "P0",
