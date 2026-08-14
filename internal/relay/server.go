@@ -2,15 +2,22 @@ package relay
 
 import (
 	"database/sql"
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yubi233/agent-sessions/internal/domain"
+	"github.com/yubi233/agent-sessions/internal/httpapi"
+	"github.com/yubi233/agent-sessions/internal/store"
 )
 
-// NewServer 创建 Relay 的 HTTP 边界。业务端点在后续 P1 工作包中挂载，
-// 健康检查保持无鉴权，供本地启动、浏览器 smoke 与部署探针复用。
-func NewServer(db *sql.DB) *gin.Engine {
+// NewServer 创建 Relay 的 HTTP 边界，装配健康检查与 /v1 业务路由。
+// 健康检查无鉴权；业务 API 以设备令牌和中间件保护。
+func NewServer(db *sql.DB, logger *slog.Logger) *gin.Engine {
 	router := gin.New()
+	if logger == nil {
+		logger = slog.Default()
+	}
 	router.Use(gin.Logger(), gin.Recovery())
 
 	health := router.Group("/")
@@ -25,6 +32,15 @@ func NewServer(db *sql.DB) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
+
+	// 装配 P1 业务路由。
+	repo := store.NewRepository(db)
+	auth := domain.NewAuthService(repo)
+	pairing := domain.NewPairingService(repo)
+	sessions := domain.NewSessionService(repo)
+	presence := domain.NewPresenceHub(0)
+	api := httpapi.New(auth, pairing, sessions, repo)
+	api.RegisterRoutes(router, logger, presence)
 	return router
 }
 

@@ -144,6 +144,23 @@ var migrations = []string{
 		action TEXT NOT NULL,
 		metadata_json TEXT NOT NULL
 	);`,
+	// 设备 DEK 包装：服务器只存密文包装与元数据，不存会话正文或明文密钥。
+	`CREATE TABLE IF NOT EXISTS device_key_wraps (
+		dek_id TEXT NOT NULL,
+		recipient_device_id TEXT NOT NULL,
+		sender_device_id TEXT NOT NULL,
+		wrapped_dek BLOB NOT NULL,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY(dek_id, recipient_device_id)
+	);`,
+	// 恢复码只存哈希，错误次数受限于冷却窗口。
+	`CREATE TABLE IF NOT EXISTS recovery_codes (
+		account_id TEXT PRIMARY KEY,
+		code_hash TEXT NOT NULL,
+		failed_attempts INTEGER NOT NULL DEFAULT 0,
+		locked_until INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL
+	);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

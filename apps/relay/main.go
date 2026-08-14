@@ -32,7 +32,7 @@ func main() {
 	defer db.Close()
 
 	logger.Info("relay listening", "address", *address, "database", *databasePath)
-	if err := relay.NewServer(db).Run(*address); err != nil {
+	if err := relay.NewServer(db, logger).Run(*address); err != nil {
 		logger.Error("relay stopped", "error", err)
 		os.Exit(1)
 	}

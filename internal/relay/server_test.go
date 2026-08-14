@@ -15,7 +15,7 @@ func TestHealthAndReadiness(t *testing.T) {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	router := NewServer(db)
+	router := NewServer(db, nil)
 
 	for _, path := range []string{"/healthz", "/readyz"} {
 		response := httptest.NewRecorder()
@@ -32,7 +32,7 @@ func TestReadinessAllowsLocalWebOrigin(t *testing.T) {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	router := NewServer(db)
+	router := NewServer(db, nil)
 	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	request.Header.Set("Origin", "http://127.0.0.1:15173")
 	response := httptest.NewRecorder()

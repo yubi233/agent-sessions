@@ -1,7 +1,7 @@
 {
   "suite": "relay-realtime",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "RELAY-REALTIME",
   "description": "Gin REST、SSE、WebSocket、Session、ControlLease、outbox 与密文扫描。SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -23,296 +23,412 @@
     {
       "id": "HTTP-01",
       "title": "REST 绑定、鉴权与错误映射",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "HTTP",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "认证中间件可用。",
-      "steps": ["提交 malformed JSON", "未知字段", "错误 token", "跨 scope 路径"],
+      "steps": [
+        "提交 malformed JSON",
+        "未知字段",
+        "错误 token",
+        "跨 scope 路径"
+      ],
       "expected": "稳定错误码；scope 从认证上下文推导。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/http-01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/http-01.json"
+      ]
     },
     {
       "id": "HTTP-02",
       "title": "异步命令先返回 accepted",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "HTTP",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "mock Terminal 已注册。",
-      "steps": ["POST session command", "查询 command 状态"],
+      "steps": [
+        "POST session command",
+        "查询 command 状态"
+      ],
       "expected": "立即 accepted，随后 command.updated。",
-      "cleanup": ["删除测试会话"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/http-02.json"]
+      "cleanup": [
+        "删除测试会话"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/http-02.json"
+      ]
     },
     {
       "id": "HTTP-03",
       "title": "Git 路由只转发密文 RPC",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "HTTP",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "mock Daemon 实现加密 Git RPC。",
-      "steps": ["POST git/status", "检查 Relay 存储与日志"],
+      "steps": [
+        "POST git/status",
+        "检查 Relay 存储与日志"
+      ],
       "expected": "Relay 不解析或缓存 diff 明文。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/http-03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/http-03.json"
+      ]
     },
     {
       "id": "SSE-01",
       "title": "SSE 按 Last-Event-ID 恢复",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "SSE",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "账号有可恢复事件。",
-      "steps": ["连接 SSE", "断开", "带 Last-Event-ID 重连"],
+      "steps": [
+        "连接 SSE",
+        "断开",
+        "带 Last-Event-ID 重连"
+      ],
       "expected": "只补齐缺口；presence 不写入历史。",
-      "cleanup": ["关闭 SSE"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sse-01.json"]
+      "cleanup": [
+        "关闭 SSE"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sse-01.json"
+      ]
     },
     {
       "id": "SSE-02",
       "title": "慢客户端被断开",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "SSE",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "可注入慢读客户端。",
-      "steps": ["积压超过 backlog", "观察断开与心跳"],
+      "steps": [
+        "积压超过 backlog",
+        "观察断开与心跳"
+      ],
       "expected": "慢客户端断开；其他订阅不受影响。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sse-02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sse-02.json"
+      ]
     },
     {
       "id": "WS-01",
       "title": "WebSocket hello 与版本协商",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "WebSocket",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "设备已认证。",
-      "steps": ["首帧 challenge/hello", "提交不匹配 protocol_version"],
+      "steps": [
+        "首帧 challenge/hello",
+        "提交不匹配 protocol_version"
+      ],
       "expected": "协商成功或稳定拒绝；不信任客户端目标前缀。",
-      "cleanup": ["关闭连接"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/ws-01.json"]
+      "cleanup": [
+        "关闭连接"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/ws-01.json"
+      ]
     },
     {
       "id": "WS-02",
       "title": "心跳与断线",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "WebSocket",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "Terminal 已连接。",
-      "steps": ["停止心跳", "等待超时"],
+      "steps": [
+        "停止心跳",
+        "等待超时"
+      ],
       "expected": "连接关闭；presence 可重建。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/ws-02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/ws-02.json"
+      ]
     },
     {
       "id": "TERM-01",
       "title": "多 Terminal 独立在线",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "Terminal",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "两台 mock Terminal 已配对。",
-      "steps": ["同时注册", "查看列表与心跳"],
+      "steps": [
+        "同时注册",
+        "查看列表与心跳"
+      ],
       "expected": "身份、心跳、能力互不覆盖。",
-      "cleanup": ["停止 mock Terminal"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/term-01.json"]
+      "cleanup": [
+        "停止 mock Terminal"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/term-01.json"
+      ]
     },
     {
       "id": "TERM-02",
       "title": "Terminal 重连保持同一身份",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "Terminal",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "Terminal 已注册。",
-      "steps": ["断开", "用同一设备身份重连"],
+      "steps": [
+        "断开",
+        "用同一设备身份重连"
+      ],
       "expected": "terminal_id 不变；旧连接 fencing。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/term-02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/term-02.json"
+      ]
     },
     {
       "id": "SESS-01",
       "title": "创建会话并接收有序事件",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "会话",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "mock adapter 可用。",
-      "steps": ["start session", "订阅事件"],
+      "steps": [
+        "start session",
+        "订阅事件"
+      ],
       "expected": "accepted 后 event_seq 单调。",
-      "cleanup": ["删除测试会话"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sess-01.json"]
+      "cleanup": [
+        "删除测试会话"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-01.json"
+      ]
     },
     {
       "id": "SESS-02",
       "title": "断线后按游标恢复",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "会话",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "会话正在产生事件。",
-      "steps": ["断开", "带 after_seq 重连"],
+      "steps": [
+        "断开",
+        "带 after_seq 重连"
+      ],
       "expected": "只补齐缺失事件。",
-      "cleanup": ["删除测试会话"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sess-02.json"]
+      "cleanup": [
+        "删除测试会话"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-02.json"
+      ]
     },
     {
       "id": "SESS-03",
       "title": "终止与删除会话",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "会话",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "会话 running。",
-      "steps": ["stop", "delete"],
+      "steps": [
+        "stop",
+        "delete"
+      ],
       "expected": "状态机合法；删除后快照不可读或明确 gone。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sess-03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-03.json"
+      ]
     },
     {
       "id": "SESS-04",
       "title": "唤醒结果分类",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "会话",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "mock 可注入六种 wake outcome。",
-      "steps": ["分别触发 resumed 至 terminal_offline"],
+      "steps": [
+        "分别触发 resumed 至 terminal_offline"
+      ],
       "expected": "客户端收到明确结果，不伪造 resumed。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sess-04.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-04.json"
+      ]
     },
     {
       "id": "CTRL-01",
       "title": "非 Android 写命令被拒绝",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "控制权",
       "priority": "P0",
       "test_layer": "Relay authorization",
       "precondition": "Web/Admin token 可用。",
-      "steps": ["Web/Admin 提交 prompt"],
+      "steps": [
+        "Web/Admin 提交 prompt"
+      ],
       "expected": "只读错误；无 Provider 动作。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-01.json"
+      ]
     },
     {
       "id": "CTRL-02",
       "title": "旧 instance 与旧 epoch 被 fencing",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "控制权",
       "priority": "P0",
       "test_layer": "Relay transaction",
       "precondition": "会话已换新 epoch。",
-      "steps": ["用旧 epoch 提交 abort"],
+      "steps": [
+        "用旧 epoch 提交 abort"
+      ],
       "expected": "LEASE_CONFLICT 或 TARGET_INSTANCE_STALE。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-02.json"
+      ]
     },
     {
       "id": "CTRL-03",
       "title": "撤销设备写命令被拒绝",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "控制权",
       "priority": "P1",
       "test_layer": "Relay authorization",
       "precondition": "原 controller 刚被撤销。",
-      "steps": ["用旧 token 提交命令"],
+      "steps": [
+        "用旧 token 提交命令"
+      ],
       "expected": "DEVICE_REVOKED；lease 不交给撤销设备。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-03.json"
+      ]
     },
     {
       "id": "SYNC-01",
       "title": "重复幂等键返回原结果",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "幂等",
       "priority": "P0",
       "test_layer": "Relay transaction",
       "precondition": "可执行 start/abort。",
-      "steps": ["相同 idempotency_key 提交两次"],
+      "steps": [
+        "相同 idempotency_key 提交两次"
+      ],
       "expected": "同一 command_id；仅一次 Provider 动作。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sync-01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sync-01.json"
+      ]
     },
     {
       "id": "SYNC-02",
       "title": "outbox 与 Relay 重启恢复",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "outbox",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "有未投递 outbox。",
-      "steps": ["重启 Relay", "观察 worker 重放"],
+      "steps": [
+        "重启 Relay",
+        "观察 worker 重放"
+      ],
       "expected": "事件不丢、不重复投递给 Provider。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sync-02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sync-02.json"
+      ]
     },
     {
       "id": "RELAY-LEASE-01",
       "title": "PostgreSQL 是 lease 权威",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "lease",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "Redis hint 与 PG lease 可被分别破坏。",
-      "steps": ["清空 Redis lease hint", "提交合法 Android 命令"],
+      "steps": [
+        "清空 Redis lease hint",
+        "提交合法 Android 命令"
+      ],
       "expected": "命令仍按 PG epoch 接受；Redis 不能单独批准。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/lease-01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/lease-01.json"
+      ]
     },
     {
       "id": "RELAY-LEASE-02",
       "title": "lease 竞争只保留一个写端",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "lease",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "两台 Android 同账号（第二台非 owner 写端）。",
-      "steps": ["并发抢 lease"],
+      "steps": [
+        "并发抢 lease"
+      ],
       "expected": "仅当前 epoch 持有者可写。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/lease-02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/lease-02.json"
+      ]
     },
     {
       "id": "SEC-01",
       "title": "数据库和日志不含会话明文",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "加密边界",
       "priority": "P0",
       "test_layer": "Relay security",
       "precondition": "完成含消息、工具参数、diff 探针的会话。",
-      "steps": ["导出测试库", "扫描日志"],
+      "steps": [
+        "导出测试库",
+        "扫描日志"
+      ],
       "expected": "仅密文与白名单元数据。",
-      "cleanup": ["销毁探针数据"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-REALTIME/sec-01.json"]
+      "cleanup": [
+        "销毁探针数据"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sec-01.json"
+      ]
     }
   ]
 }

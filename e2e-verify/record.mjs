@@ -16,11 +16,18 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCREENCAST_DIR = join(dirname(fileURLToPath(import.meta.url)), "screencasts");
 
 // demoScript 描述本次录屏要展示的用户可见流程（步骤 + 停留）。
-// P0 演示 Vue 页面中的加载、就绪和重试三个可见状态；后续阶段在此扩展为完整用户旅程。
+// 先展示 Relay 就绪，再展示 P1 只读登录与设备列表。
 const demoScript = [
   { name: "打开 Relay 状态页", action: async (page, base) => page.goto(base, { waitUntil: "domcontentloaded" }), dwell: 500 },
   { name: "等待 Relay 就绪", action: async (page) => page.getByTestId("relay-ready").waitFor({ state: "visible" }), dwell: 800 },
   { name: "点击重新检查", action: async (page) => page.getByTestId("refresh-health").click(), dwell: 800 },
+  { name: "填写只读登录邮箱", action: async (page) => page.getByTestId("login-email").fill("demo@example.dev"), dwell: 400 },
+  { name: "填写密码", action: async (page) => page.getByTestId("login-password").fill("demo-pass-123"), dwell: 400 },
+  { name: "点击登录并查看只读设备", action: async (page) => {
+      await page.getByTestId("login-submit").click();
+      await page.getByTestId("auth-ok").waitFor({ state: "visible" });
+    }, dwell: 900 },
+  { name: "展示只读设备列表", action: async (page) => page.getByTestId("device-list").waitFor({ state: "visible" }), dwell: 900 },
 ];
 
 function parseArgs(argv) {
@@ -45,6 +52,16 @@ async function main() {
   const frames = [];
 
   try {
+    // 预置录屏演示账号（bootstrap owner），保证登录流程可重复演示。
+    const reg = await fetch(`${relay.base}/v1/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "demo@example.dev", password: "demo-pass-123" }),
+    });
+    if (!reg.ok) {
+      throw new Error(`seed demo account failed: ${reg.status} ${await reg.text()}`);
+    }
+
     const page = await browser.newPage();
     const cdp = await page.context().newCDPSession(page);
 

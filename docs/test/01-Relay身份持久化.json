@@ -1,7 +1,7 @@
 {
   "suite": "relay-identity",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "RELAY-IDENTITY",
   "description": "账号、token、配对、设备撤销、Goose 迁移与 Redis 可重建状态。消费 SEC-02/SEC-03，不重新定义密码学根因。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -24,142 +24,213 @@
     {
       "id": "AUTH-01",
       "title": "登录、刷新轮换与 logout",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "认证",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "隔离测试库已迁移，存在测试账号。",
-      "steps": ["邮箱密码登录", "使用 refresh 轮换", "logout", "重放旧 refresh"],
+      "steps": [
+        "邮箱密码登录",
+        "使用 refresh 轮换",
+        "logout",
+        "重放旧 refresh"
+      ],
       "expected": "access 为短期 opaque token；refresh 只存哈希；reuse 撤销 family。",
-      "cleanup": ["删除测试账号与 token family"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/auth.json"]
+      "cleanup": [
+        "删除测试账号与 token family"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/auth.json"
+      ]
     },
     {
       "id": "PAIR-01",
       "title": "首个 Android 完成 owner 配对",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "配对",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "Relay 已启动且没有 owner 设备。",
-      "steps": ["登录", "Android bootstrap 设备密钥", "确认 owner"],
+      "steps": [
+        "登录",
+        "Android bootstrap 设备密钥",
+        "确认 owner"
+      ],
       "expected": "Android 标记为 owner；服务器只保存公钥与包装元数据。",
-      "cleanup": ["删除隔离账号与设备"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-01.json"]
+      "cleanup": [
+        "删除隔离账号与设备"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-01.json"
+      ]
     },
     {
       "id": "PAIR-02",
       "title": "owner 批准第二台 Terminal",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "配对",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "已有 owner Android。",
-      "steps": ["PC 发起配对请求", "owner 批准", "查询设备列表"],
+      "steps": [
+        "PC 发起配对请求",
+        "owner 批准",
+        "查询设备列表"
+      ],
       "expected": "Terminal 关联已批准设备；未授权设备不能订阅。",
-      "cleanup": ["撤销测试 Terminal"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-02.json"]
+      "cleanup": [
+        "撤销测试 Terminal"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-02.json"
+      ]
     },
     {
       "id": "PAIR-03",
       "title": "撤销设备后停止新密钥分发",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "配对",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "账号已绑定 Android 与 Web。",
-      "steps": ["owner 撤销 Web", "Web 请求新 DEK 包装"],
+      "steps": [
+        "owner 撤销 Web",
+        "Web 请求新 DEK 包装"
+      ],
       "expected": "连接拒绝；无新 key-wrap；历史密文不改写。",
-      "cleanup": ["清除测试设备"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-03.json"]
+      "cleanup": [
+        "清除测试设备"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-03.json"
+      ]
     },
     {
       "id": "PAIR-04",
       "title": "过期二维码与重复批准",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "配对",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "存在待批准与已过期配对请求。",
-      "steps": ["批准过期请求", "对同一请求重复批准"],
+      "steps": [
+        "批准过期请求",
+        "对同一请求重复批准"
+      ],
       "expected": "过期返回 PAIRING_EXPIRED；重复批准幂等返回原结果。",
-      "cleanup": ["取消未完成请求"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-04.json"]
+      "cleanup": [
+        "取消未完成请求"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/pair-04.json"
+      ]
     },
     {
       "id": "RELAY-DB-01",
       "title": "空库迁移成功",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "迁移",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "空 PostgreSQL 测试库。",
-      "steps": ["运行 Goose up", "核对表与约束"],
+      "steps": [
+        "运行 Goose up",
+        "核对表与约束"
+      ],
       "expected": "账号/设备/配对等基础表存在；密文列无明文默认值。",
-      "cleanup": ["销毁测试库"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/db-01.json"]
+      "cleanup": [
+        "销毁测试库"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/db-01.json"
+      ]
     },
     {
       "id": "RELAY-DB-02",
       "title": "上一版本库升级成功",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "迁移",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "已恢复上一发布 schema 的测试库。",
-      "steps": ["运行 additive migration", "核对双读旧列"],
+      "steps": [
+        "运行 additive migration",
+        "核对双读旧列"
+      ],
       "expected": "升级成功；旧列仍可读；无 destructive down。",
-      "cleanup": ["销毁测试库"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/db-02.json"]
+      "cleanup": [
+        "销毁测试库"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/db-02.json"
+      ]
     },
     {
       "id": "RELAY-DB-03",
       "title": "并发写不产生重复业务键",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "迁移",
       "priority": "P1",
       "test_layer": "Relay integration",
       "precondition": "已迁移测试库。",
-      "steps": ["并发插入同一配对或设备唯一键"],
+      "steps": [
+        "并发插入同一配对或设备唯一键"
+      ],
       "expected": "唯一约束生效；失败方得到稳定错误。",
-      "cleanup": ["清空测试行"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/db-03.json"]
+      "cleanup": [
+        "清空测试行"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/db-03.json"
+      ]
     },
     {
       "id": "MIG-01",
       "title": "迁移命名与兼容窗口",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "迁移",
       "priority": "P1",
       "test_layer": "static + integration",
       "precondition": "deploy/migrations 有至少一次 expand 变更。",
-      "steps": ["检查命名规则", "验证无未演练的 drop column"],
+      "steps": [
+        "检查命名规则",
+        "验证无未演练的 drop column"
+      ],
       "expected": "仅 additive；删除/重命名必须有双写窗口记录。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/mig-01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/mig-01.json"
+      ]
     },
     {
       "id": "RELAY-REDIS-01",
       "title": "Redis 清空后可由 DB 重建 presence",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P1",
       "category": "Redis",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "设备在线且 Redis 有 presence。",
-      "steps": ["FLUSHDB 测试 Redis", "等待心跳或重连"],
+      "steps": [
+        "FLUSHDB 测试 Redis",
+        "等待心跳或重连"
+      ],
       "expected": "PostgreSQL 真相不变；presence 可重建；无业务数据丢失。",
-      "cleanup": ["停止测试连接"],
-      "evidence": ["e2e-verify/reports/<ts>/RELAY-IDENTITY/redis-01.json"]
+      "cleanup": [
+        "停止测试连接"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/redis-01.json"
+      ]
     }
   ]
 }

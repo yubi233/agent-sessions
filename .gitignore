@@ -46,3 +46,5 @@ apps/admin-web/dist/
 
 # 生成器缓存
 packages/protocol/generated/.cache/
+**/node_modules/.bin/
+**/node_modules/.tmp/
