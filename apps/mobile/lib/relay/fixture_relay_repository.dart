@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import 'relay_repository.dart';
@@ -11,9 +14,22 @@ class FixtureRelayRepository implements RelayRepository {
   final List<Device> _devices = [];
   final Map<String, PairingRequest> _pairings = {};
   final Map<String, _FixtureSessionState> _sessions = {};
+  final Map<String, _FixtureAttachmentState> _attachments = {};
   var _pairingSequence = 0;
   var _sessionSequence = 0;
   var _commandSequence = 0;
+  var _failNextAttachmentChunk = false;
+  int? _failAttachmentChunkAtIndex;
+
+  /// 供 ATTACH-01 注入一次可恢复失败；下一次相同幂等键重试必须能够继续。
+  void failNextAttachmentChunk() => _failNextAttachmentChunk = true;
+
+  /// 可见 fixture 在首块确认后让指定块失败，用于同时展示上传进度与重试入口。
+  void failAttachmentChunkAtIndex(int chunkIndex) {
+    _failAttachmentChunkAtIndex = chunkIndex;
+  }
+
+  int get submittedCommandCount => _commandSequence;
 
   @override
   Future<AuthTokens> register(LoginCredentials credentials) async {
@@ -230,7 +246,10 @@ class FixtureRelayRepository implements RelayRepository {
       workspaceName: input.workspaceId.trim(),
       updatedAt: _clock(),
     );
-    final state = _FixtureSessionState(session: session);
+    final state = _FixtureSessionState(
+      session: session,
+      controls: _fixtureControlsForProvider(session.provider),
+    );
     state.append(
       eventType: 'session.created',
       payload: const {
@@ -296,6 +315,12 @@ class FixtureRelayRepository implements RelayRepository {
         _appendPermissionDecision(state, input);
       case SessionCommandKind.questionAnswer:
         _appendQuestionAnswer(state, input);
+      case SessionCommandKind.planApprove:
+        _appendPlanApproval(state);
+      case SessionCommandKind.goalToggle:
+        _appendGoalToggle(state);
+      case SessionCommandKind.skillInvoke:
+        _appendSkillInvocation(state, input);
     }
     _commandSequence += 1;
     final receipt = SessionCommandReceipt(
@@ -307,6 +332,127 @@ class FixtureRelayRepository implements RelayRepository {
     );
     state.commandReceipts[input.idempotencyKey] = receipt;
     return receipt;
+  }
+
+  @override
+  Future<CapabilityMatrix> getCapabilities() async => CapabilityMatrix(
+    providers: [
+      _fixtureProvider(
+        'codex',
+        native: const {
+          'plan',
+          'goal',
+          'skill_catalog',
+          'invoke_skill',
+          'model_select',
+          'effort_select',
+          'attachments',
+        },
+      ),
+      _fixtureProvider(
+        'claude',
+        native: const {'skill_catalog', 'model_select'},
+        emulated: const {'plan', 'goal'},
+      ),
+      _fixtureProvider('opencode'),
+      _fixtureProvider('openclaw', native: const {'skill_catalog'}),
+    ],
+  );
+
+  @override
+  Future<SessionControlState> getSessionControls(String sessionId) async =>
+      _sessionState(sessionId).controls;
+
+  @override
+  Future<AttachmentReceipt> uploadAttachmentChunk(
+    AttachmentChunkUploadInput input,
+  ) async {
+    input.validate();
+    _requireFixtureOwner();
+    final session = _sessionState(input.sessionId);
+    _ensureFixtureLease(session, input.leaseEpoch);
+    if (_failNextAttachmentChunk ||
+        _failAttachmentChunkAtIndex == input.chunkIndex) {
+      _failNextAttachmentChunk = false;
+      _failAttachmentChunkAtIndex = null;
+      throw const RelayFailure(
+        RelayFailureKind.unavailable,
+        'fixture 在上传附件块时临时断开，请重试。',
+      );
+    }
+
+    final existing = _attachments[input.attachmentId];
+    final attachment = existing ?? _FixtureAttachmentState.fromInput(input);
+    if (existing == null) {
+      _attachments[input.attachmentId] = attachment;
+    } else if (!attachment.matches(input) || attachment.completed) {
+      throw const RelayFailure(RelayFailureKind.protocol, '附件上传元数据与首次请求不一致。');
+    }
+
+    final previous = attachment.chunks[input.chunkIndex];
+    if (previous != null) {
+      if (previous.idempotencyKey == input.idempotencyKey &&
+          _sameBytes(previous.ciphertext, input.ciphertext)) {
+        return AttachmentReceipt(
+          attachmentId: input.attachmentId,
+          chunkIndex: input.chunkIndex,
+          status: 'pending',
+          idempotent: true,
+        );
+      }
+      throw const RelayFailure(RelayFailureKind.protocol, '附件块幂等键或内容冲突。');
+    }
+    if (attachment.chunks.length != input.chunkIndex) {
+      throw const RelayFailure(RelayFailureKind.validation, '附件密文块必须按顺序上传。');
+    }
+    attachment.chunks[input.chunkIndex] = _FixtureAttachmentChunk(
+      idempotencyKey: input.idempotencyKey,
+      ciphertext: Uint8List.fromList(input.ciphertext),
+    );
+    return AttachmentReceipt(
+      attachmentId: input.attachmentId,
+      chunkIndex: input.chunkIndex,
+      status: 'pending',
+      idempotent: false,
+    );
+  }
+
+  @override
+  Future<AttachmentReceipt> completeAttachment(
+    AttachmentCompleteInput input,
+  ) async {
+    input.validate();
+    _requireFixtureOwner();
+    final session = _sessionState(input.sessionId);
+    _ensureFixtureLease(session, input.leaseEpoch);
+    final attachment = _attachments[input.attachmentId];
+    if (attachment == null || attachment.sessionId != input.sessionId) {
+      throw const RelayFailure(RelayFailureKind.protocol, '找不到要完成的附件。');
+    }
+    if (attachment.completed) {
+      if (attachment.completeIdempotencyKey == input.idempotencyKey) {
+        return AttachmentReceipt(
+          attachmentId: input.attachmentId,
+          chunkIndex: -1,
+          status: 'completed',
+          idempotent: true,
+        );
+      }
+      throw const RelayFailure(RelayFailureKind.protocol, '附件已经由另一完成请求收口。');
+    }
+    if (attachment.totalChunks != input.totalChunks ||
+        attachment.chunks.length != attachment.totalChunks) {
+      throw const RelayFailure(RelayFailureKind.validation, '附件仍有未上传的密文块。');
+    }
+    attachment
+      ..completed = true
+      ..completeIdempotencyKey = input.idempotencyKey;
+    return AttachmentReceipt(
+      attachmentId: input.attachmentId,
+      chunkIndex: -1,
+      status: 'completed',
+      idempotent: false,
+    );
   }
 
   _FixtureSessionState _sessionState(String sessionId) =>
@@ -436,6 +582,71 @@ class FixtureRelayRepository implements RelayRepository {
     );
   }
 
+  void _appendPlanApproval(_FixtureSessionState state) {
+    final plan = state.controls.plan;
+    if (plan == null || plan.phase != PlanPhase.awaitingApproval) {
+      throw const RelayFailure(RelayFailureKind.validation, '当前没有待确认的 Plan。');
+    }
+    state.controls = state.controls.copyWith(
+      plan: plan.copyWith(phase: PlanPhase.active),
+    );
+    state.append(
+      eventType: 'plan.approved',
+      payload: const {
+        'kind': 'system_notice',
+        'label': 'Plan 已确认',
+        'text': 'fixture Plan 已进入执行状态。',
+      },
+      now: _clock(),
+    );
+  }
+
+  void _appendGoalToggle(_FixtureSessionState state) {
+    final goal = state.controls.goal;
+    if (goal == null || goal.phase == GoalPhase.completed) {
+      throw const RelayFailure(RelayFailureKind.validation, '当前 Goal 不能切换状态。');
+    }
+    final next = goal.phase == GoalPhase.active
+        ? GoalPhase.paused
+        : GoalPhase.active;
+    state.controls = state.controls.copyWith(goal: goal.copyWith(phase: next));
+    state.append(
+      eventType: 'goal.changed',
+      payload: {
+        'kind': 'system_notice',
+        'label': next == GoalPhase.paused ? 'Goal 已暂停' : 'Goal 已恢复',
+        'text': 'fixture Goal 状态已更新。',
+      },
+      now: _clock(),
+    );
+  }
+
+  void _appendSkillInvocation(
+    _FixtureSessionState state,
+    SessionCommandInput input,
+  ) {
+    final payload = input.ciphertext?['fixture_payload'];
+    final skillID = payload is Map && payload['skill_id'] is String
+        ? payload['skill_id'] as String
+        : '';
+    final skill = state.controls.skills.where((item) => item.id == skillID);
+    if (skill.isEmpty) {
+      throw const RelayFailure(
+        RelayFailureKind.validation,
+        'fixture Skill 标识无效。',
+      );
+    }
+    state.append(
+      eventType: 'skill.invoked',
+      payload: {
+        'kind': 'system_notice',
+        'label': 'Skill 已确认',
+        'text': '${skill.first.title} 已进入 fixture 控制队列。',
+      },
+      now: _clock(),
+    );
+  }
+
   String _fixtureRequestId(Map<String, dynamic>? ciphertext, String prefix) {
     final fixturePayload = ciphertext?['fixture_payload'];
     final requestId =
@@ -446,6 +657,12 @@ class FixtureRelayRepository implements RelayRepository {
       throw const RelayFailure(RelayFailureKind.validation, 'fixture 请求标识无效。');
     }
     return requestId;
+  }
+
+  void _ensureFixtureLease(_FixtureSessionState session, int leaseEpoch) {
+    if (leaseEpoch != session.leaseEpoch || leaseEpoch <= 0) {
+      throw const RelayFailure(RelayFailureKind.forbidden, '会话控制权已更新，请重新获取。');
+    }
   }
 
   AuthTokens _newTokens({String? deviceId}) => AuthTokens(
@@ -465,11 +682,80 @@ class FixtureRelayRepository implements RelayRepository {
   }
 }
 
+ProviderCapabilityProfile _fixtureProvider(
+  String kind, {
+  Set<String> native = const {},
+  Set<String> emulated = const {},
+}) {
+  const names = [
+    'plan',
+    'goal',
+    'skill_catalog',
+    'invoke_skill',
+    'model_select',
+    'effort_select',
+    'attachments',
+  ];
+  return ProviderCapabilityProfile(
+    kind: kind,
+    version: 'fixture-1.0',
+    available: true,
+    capabilities: names
+        .map(
+          (name) => CapabilityEntry(
+            name: name,
+            availability: native.contains(name)
+                ? CapabilityAvailability.native
+                : emulated.contains(name)
+                ? CapabilityAvailability.emulated
+                : CapabilityAvailability.unsupported,
+            reason: native.contains(name) || emulated.contains(name)
+                ? null
+                : 'fixture Provider 未声明此能力。',
+          ),
+        )
+        .toList(growable: false),
+  );
+}
+
+SessionControlState _fixtureControlsForProvider(String provider) =>
+    SessionControlState(
+      model: provider == 'claude' ? 'Claude fixture' : 'Codex fixture',
+      effort: '高',
+      plan: const SessionPlanSummary(
+        title: '检查并收口会话控制',
+        summary: '先验证 capability，再执行可逆的 fixture 操作。',
+        phase: PlanPhase.awaitingApproval,
+      ),
+      goal: const SessionGoalSummary(
+        title: '保持移动端控制链路可回归',
+        progressLabel: '2 / 3',
+        phase: GoalPhase.active,
+      ),
+      skills: const [
+        SessionSkillDescriptor(
+          id: 'fixture-review-skill',
+          title: '检查会话控制',
+          summary: '会读取 fixture 状态并生成本地摘要。',
+          risk: SkillRisk.high,
+        ),
+      ],
+    );
+
+bool _sameBytes(Uint8List left, Uint8List right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
 /// fixture 内部状态只保存无敏感演示 payload；真实 Relay 仍只保存 event envelope。
 class _FixtureSessionState {
-  _FixtureSessionState({required this.session});
+  _FixtureSessionState({required this.session, required this.controls});
 
   MobileSession session;
+  SessionControlState controls;
   int leaseEpoch = 0;
   final List<RelaySessionEvent> events = [];
   final Map<String, SessionCommandReceipt> commandReceipts = {};
@@ -498,4 +784,54 @@ class _FixtureSessionState {
   }) {
     session = session.copyWith(status: status, updatedAt: now);
   }
+}
+
+/// fixture 内部只保存无敏感的密文 bytes，用于验证上传顺序和幂等，而非模拟真实文件内容。
+class _FixtureAttachmentState {
+  _FixtureAttachmentState({
+    required this.sessionId,
+    required this.mimeType,
+    required this.byteSize,
+    required this.compression,
+    required this.metadataCiphertext,
+    required this.totalChunks,
+  });
+
+  factory _FixtureAttachmentState.fromInput(AttachmentChunkUploadInput input) =>
+      _FixtureAttachmentState(
+        sessionId: input.sessionId,
+        mimeType: input.mimeType,
+        byteSize: input.byteSize,
+        compression: input.compression,
+        metadataCiphertext: Uint8List.fromList(input.metadataCiphertext),
+        totalChunks: input.totalChunks,
+      );
+
+  final String sessionId;
+  final String mimeType;
+  final int byteSize;
+  final String compression;
+  final Uint8List metadataCiphertext;
+  final int totalChunks;
+  final Map<int, _FixtureAttachmentChunk> chunks = {};
+  bool completed = false;
+  String? completeIdempotencyKey;
+
+  bool matches(AttachmentChunkUploadInput input) =>
+      sessionId == input.sessionId &&
+      mimeType == input.mimeType &&
+      byteSize == input.byteSize &&
+      compression == input.compression &&
+      totalChunks == input.totalChunks &&
+      _sameBytes(metadataCiphertext, input.metadataCiphertext);
+}
+
+class _FixtureAttachmentChunk {
+  const _FixtureAttachmentChunk({
+    required this.idempotencyKey,
+    required this.ciphertext,
+  });
+
+  final String idempotencyKey;
+  final Uint8List ciphertext;
 }

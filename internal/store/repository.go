@@ -98,6 +98,15 @@ type Repository interface {
 	LeaseBySession(ctx context.Context, sessionID string) (LeaseRow, error)
 	ReleaseLease(ctx context.Context, sessionID string) error
 
+	// 附件：Relay 只存密文 chunk 与最小白名单元数据，不读取文件名或正文。
+	CreateAttachment(ctx context.Context, a AttachmentRow) error
+	AttachmentByID(ctx context.Context, id string) (AttachmentRow, error)
+	CreateAttachmentChunk(ctx context.Context, c AttachmentChunkRow) error
+	AttachmentChunkByIndex(ctx context.Context, attachmentID string, chunkIndex int) (AttachmentChunkRow, error)
+	AttachmentChunkByIdempotency(ctx context.Context, attachmentID, idempotencyKey string) (AttachmentChunkRow, error)
+	CountAttachmentChunks(ctx context.Context, attachmentID string) (int, error)
+	CompleteAttachment(ctx context.Context, attachmentID, idempotencyKey string) (bool, error)
+
 	// Outbox
 	EnqueueOutbox(ctx context.Context, o OutboxRow) error
 	ClaimOutbox(ctx context.Context, id int64) (OutboxRow, error)
@@ -258,6 +267,31 @@ type LeaseRow struct {
 	DeviceID   string
 	Epoch      int64
 	InstanceID string
+}
+
+// AttachmentRow 是附件的最小元数据。display name 位于 MetadataCiphertext，服务端不会解析。
+type AttachmentRow struct {
+	ID                     string
+	SessionID              string
+	AccountID              string
+	MimeType               string
+	ByteSize               int64
+	Compression            string
+	TotalChunks            int
+	MetadataCiphertext     []byte
+	CreatedByDeviceID      string
+	LeaseEpoch             int64
+	Status                 string
+	CompleteIdempotencyKey string
+}
+
+// AttachmentChunkRow 仅保存单个密文块和哈希，用于顺序、重复提交与冲突检查。
+type AttachmentChunkRow struct {
+	AttachmentID     string
+	ChunkIndex       int
+	IdempotencyKey   string
+	Ciphertext       []byte
+	CiphertextSHA256 string
 }
 
 // OutboxRow 是 outbox 表的行投影。

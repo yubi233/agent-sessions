@@ -641,6 +641,86 @@ func (r *sqliteRepo) ReleaseLease(ctx context.Context, sessionID string) error {
 	return err
 }
 
+func (r *sqliteRepo) CreateAttachment(ctx context.Context, a AttachmentRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO attachments(id,session_id,account_id,mime_type,byte_size,compression,total_chunks,metadata_ciphertext,created_by_device_id,lease_epoch,status,complete_idempotency_key)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.ID, a.SessionID, a.AccountID, a.MimeType, a.ByteSize, a.Compression,
+		a.TotalChunks, a.MetadataCiphertext, a.CreatedByDeviceID, a.LeaseEpoch,
+		a.Status, nullableString(a.CompleteIdempotencyKey))
+	return err
+}
+
+func (r *sqliteRepo) AttachmentByID(ctx context.Context, id string) (AttachmentRow, error) {
+	var a AttachmentRow
+	var complete sql.NullString
+	err := r.db.QueryRowContext(ctx,
+		`SELECT id,session_id,account_id,mime_type,byte_size,compression,total_chunks,metadata_ciphertext,created_by_device_id,lease_epoch,status,complete_idempotency_key
+		 FROM attachments WHERE id=?`, id).
+		Scan(&a.ID, &a.SessionID, &a.AccountID, &a.MimeType, &a.ByteSize,
+			&a.Compression, &a.TotalChunks, &a.MetadataCiphertext, &a.CreatedByDeviceID,
+			&a.LeaseEpoch, &a.Status, &complete)
+	if err != nil {
+		return AttachmentRow{}, err
+	}
+	a.CompleteIdempotencyKey = complete.String
+	return a, nil
+}
+
+func (r *sqliteRepo) CreateAttachmentChunk(ctx context.Context, c AttachmentChunkRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO attachment_chunks(attachment_id,chunk_index,idempotency_key,ciphertext,ciphertext_sha256)
+		 VALUES(?,?,?,?,?)`,
+		c.AttachmentID, c.ChunkIndex, c.IdempotencyKey, c.Ciphertext, c.CiphertextSHA256)
+	return err
+}
+
+func (r *sqliteRepo) AttachmentChunkByIndex(ctx context.Context, attachmentID string, chunkIndex int) (AttachmentChunkRow, error) {
+	return scanAttachmentChunk(r.db.QueryRowContext(ctx,
+		`SELECT attachment_id,chunk_index,idempotency_key,ciphertext,ciphertext_sha256
+		 FROM attachment_chunks WHERE attachment_id=? AND chunk_index=?`, attachmentID, chunkIndex))
+}
+
+func (r *sqliteRepo) AttachmentChunkByIdempotency(ctx context.Context, attachmentID, idempotencyKey string) (AttachmentChunkRow, error) {
+	return scanAttachmentChunk(r.db.QueryRowContext(ctx,
+		`SELECT attachment_id,chunk_index,idempotency_key,ciphertext,ciphertext_sha256
+		 FROM attachment_chunks WHERE attachment_id=? AND idempotency_key=?`, attachmentID, idempotencyKey))
+}
+
+func scanAttachmentChunk(row *sql.Row) (AttachmentChunkRow, error) {
+	var c AttachmentChunkRow
+	if err := row.Scan(&c.AttachmentID, &c.ChunkIndex, &c.IdempotencyKey, &c.Ciphertext, &c.CiphertextSHA256); err != nil {
+		return AttachmentChunkRow{}, err
+	}
+	return c, nil
+}
+
+func (r *sqliteRepo) CountAttachmentChunks(ctx context.Context, attachmentID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM attachment_chunks WHERE attachment_id=?`, attachmentID).Scan(&count)
+	return count, err
+}
+
+func (r *sqliteRepo) CompleteAttachment(ctx context.Context, attachmentID, idempotencyKey string) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE attachments
+		 SET status='completed', complete_idempotency_key=?
+		 WHERE id=? AND status='pending'`, idempotencyKey, attachmentID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func (r *sqliteRepo) EnqueueOutbox(ctx context.Context, o OutboxRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO outbox(kind,payload_json,status,attempts) VALUES(?,?,?,?)`,

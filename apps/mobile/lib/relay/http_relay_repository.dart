@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
+import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import 'relay_repository.dart';
@@ -257,6 +260,76 @@ class HttpRelayRepository implements RelayRepository {
       },
     );
     return SessionCommandReceipt.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<CapabilityMatrix> getCapabilities() async {
+    final response = await _authenticatedSend('GET', '/v1/capabilities');
+    return CapabilityMatrix.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<SessionControlState> getSessionControls(String sessionId) async {
+    if (sessionId.trim().isEmpty) {
+      throw const RelayFailure.validation('会话标识无效。');
+    }
+    // Plan/Goal/Skill 的正文在端到端加密事件中。当前 HTTP snapshot 保持 opaque envelope，
+    // 没有可安全解密的本地事件时只能返回空态，绝不能从 Relay 元数据伪造内容。
+    return const SessionControlState.empty();
+  }
+
+  @override
+  Future<AttachmentReceipt> uploadAttachmentChunk(
+    AttachmentChunkUploadInput input,
+  ) async {
+    input.validate();
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/attachments/chunks',
+      // localName 不属于公开 wire contract；只有密文、白名单元数据和 fencing 会离开设备。
+      data: {
+        'attachment_id': input.attachmentId,
+        'session_id': input.sessionId,
+        'mime_type': input.mimeType,
+        'byte_size': input.byteSize,
+        'compression': input.compression,
+        'metadata_ciphertext': base64Encode(input.metadataCiphertext),
+        'chunk_index': input.chunkIndex,
+        'total_chunks': input.totalChunks,
+        'ciphertext': base64Encode(input.ciphertext),
+        'idempotency_key': input.idempotencyKey,
+        'lease_epoch': input.leaseEpoch,
+      },
+    );
+    final receipt = AttachmentReceipt.fromRelayJson(_asMap(response.data));
+    if (receipt.attachmentId != input.attachmentId ||
+        receipt.chunkIndex != input.chunkIndex) {
+      throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了另一附件块的回执。');
+    }
+    return receipt;
+  }
+
+  @override
+  Future<AttachmentReceipt> completeAttachment(
+    AttachmentCompleteInput input,
+  ) async {
+    input.validate();
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/attachments/${input.attachmentId}/complete',
+      data: {
+        'session_id': input.sessionId,
+        'total_chunks': input.totalChunks,
+        'idempotency_key': input.idempotencyKey,
+        'lease_epoch': input.leaseEpoch,
+      },
+    );
+    final receipt = AttachmentReceipt.fromRelayJson(_asMap(response.data));
+    if (receipt.attachmentId != input.attachmentId ||
+        receipt.status != 'completed') {
+      throw const RelayFailure(RelayFailureKind.protocol, 'Relay 未确认附件完成状态。');
+    }
+    return receipt;
   }
 
   Future<Response<dynamic>> _authenticatedSend(

@@ -1,13 +1,18 @@
+import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/local_visual_fixture.dart';
 import 'app/local_runtime_environment.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
+import 'domain/control_models.dart';
+import 'relay/fixture_relay_repository.dart';
 import 'storage/encrypted_cache.dart';
 import 'storage/runtime_encrypted_cache.dart';
 import 'storage/secure_token_store.dart';
@@ -66,6 +71,15 @@ Future<void> main() async {
             localVisualFixture?.scenario ?? LocalVisualScenario.none,
         localVisualPairingRequestId: localVisualFixture?.pairingRequestId,
         localVisualSessionId: localVisualFixture?.sessionId,
+        localVisualFrameDirectory: _useLocalFixtureMode && kDebugMode
+            ? localVisualFrameDirectoryFromRuntime
+            : '',
+        localVisualFrameCount: _useLocalFixtureMode && kDebugMode
+            ? localVisualFrameCountFromRuntime
+            : 0,
+        localVisualFrameIntervalMs: _useLocalFixtureMode && kDebugMode
+            ? localVisualFrameIntervalMsFromRuntime
+            : 0,
       ),
     ),
   );
@@ -77,6 +91,9 @@ class AgentSessionsApp extends ConsumerWidget {
     this.localVisualScenario = LocalVisualScenario.none,
     this.localVisualPairingRequestId,
     this.localVisualSessionId,
+    this.localVisualFrameDirectory = '',
+    this.localVisualFrameCount = 0,
+    this.localVisualFrameIntervalMs = 0,
     super.key,
   });
 
@@ -85,6 +102,9 @@ class AgentSessionsApp extends ConsumerWidget {
   final LocalVisualScenario localVisualScenario;
   final String? localVisualPairingRequestId;
   final String? localVisualSessionId;
+  final String localVisualFrameDirectory;
+  final int localVisualFrameCount;
+  final int localVisualFrameIntervalMs;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => MaterialApp.router(
@@ -102,15 +122,90 @@ class AgentSessionsApp extends ConsumerWidget {
           defaultTargetPlatform != TargetPlatform.macOS) {
         return child ?? const SizedBox.shrink();
       }
-      final canvas = MacBookPhoneCanvas(child: child);
-      return _LocalVisualScenarioCoordinator(
+      final coordinated = _LocalVisualScenarioCoordinator(
         scenario: localVisualScenario,
         pairingRequestId: localVisualPairingRequestId,
         sessionId: localVisualSessionId,
-        child: canvas,
+        child: child,
       );
+      // CoreGraphics 失败时，debug fixture 可从已经显示的 Flutter render tree 取帧；
+      // 此 hook 不进入 release/Android/Web，也不会截取宿主桌面或访问真实会话内容。
+      final captured =
+          localVisualFrameDirectory.isNotEmpty &&
+              localVisualFrameCount > 0 &&
+              localVisualFrameIntervalMs > 0
+          ? _LocalVisualFrameRecorder(
+              directory: localVisualFrameDirectory,
+              frameCount: localVisualFrameCount,
+              frameIntervalMs: localVisualFrameIntervalMs,
+              child: coordinated,
+            )
+          : coordinated;
+      return MacBookPhoneCanvas(child: captured);
     },
   );
+}
+
+/// macOS Screen Recording 只在当前环境出现异常时使用的 debug fallback：窗口仍由 runner 真实启动并观察，
+/// PNG 只来自当前 Flutter render tree。输出目录只能由本地 runner 提供，无法由 UI 或 Relay 输入影响。
+class _LocalVisualFrameRecorder extends StatefulWidget {
+  const _LocalVisualFrameRecorder({
+    required this.directory,
+    required this.frameCount,
+    required this.frameIntervalMs,
+    required this.child,
+  });
+
+  final String directory;
+  final int frameCount;
+  final int frameIntervalMs;
+  final Widget child;
+
+  @override
+  State<_LocalVisualFrameRecorder> createState() =>
+      _LocalVisualFrameRecorderState();
+}
+
+class _LocalVisualFrameRecorderState extends State<_LocalVisualFrameRecorder> {
+  final _boundaryKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_captureAfterScenarioSettles());
+    });
+  }
+
+  Future<void> _captureAfterScenarioSettles() async {
+    // Coordinator 需要完成认证、选会话和 lease；固定等待只存在于 deterministic visual fixture。
+    await Future<void>.delayed(const Duration(milliseconds: 1400));
+    for (var index = 0; index < widget.frameCount; index += 1) {
+      if (!mounted) return;
+      final boundary = _boundaryKey.currentContext?.findRenderObject();
+      if (boundary is! RenderRepaintBoundary) return;
+      final image = await boundary.toImage(pixelRatio: 1);
+      try {
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        if (bytes == null) return;
+        await writeLocalVisualFrame(
+          '${widget.directory}/frame-${(index + 1).toString().padLeft(4, '0')}.png',
+          bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+        );
+      } finally {
+        image.dispose();
+      }
+      if (index + 1 < widget.frameCount) {
+        await Future<void>.delayed(
+          Duration(milliseconds: widget.frameIntervalMs),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      RepaintBoundary(key: _boundaryKey, child: widget.child);
 }
 
 /// 本地 pairing 视觉场景复用真实 AppController 和路由，等 owner 初始化完成后再读取 fixture 请求。
@@ -175,12 +270,47 @@ class _LocalVisualScenarioCoordinatorState
         continue;
       }
       await sessions.selectSession(sessionId);
-      if (widget.scenario == LocalVisualScenario.sessionDetail &&
-          app.canManageDevices) {
+      final needsLease = switch (widget.scenario) {
+        LocalVisualScenario.sessionDetail ||
+        LocalVisualScenario.sessionCapability ||
+        LocalVisualScenario.sessionSkillConfirmation ||
+        LocalVisualScenario.sessionAttachments => true,
+        _ => false,
+      };
+      if (needsLease && app.canManageDevices) {
         await sessions.acquireSelectedLease(
           deviceId: app.currentDevice?.id,
           canWrite: app.canManageDevices,
         );
+      }
+      if (widget.scenario == LocalVisualScenario.sessionSkillConfirmation) {
+        final skills = sessions.controls.skills.where(
+          (item) => item.risk == SkillRisk.high,
+        );
+        if (skills.isNotEmpty) {
+          sessions.requestSkillConfirmation(
+            skills.first,
+            canWrite: app.canManageDevices,
+          );
+        }
+      }
+      if (widget.scenario == LocalVisualScenario.sessionAttachments) {
+        // fixture 只将预制密文草稿交给真实控制器；没有任何本地明文文件选择或上传捷径。
+        final drafts = LocalVisualFixture.attachmentDrafts();
+        for (final draft in drafts) {
+          sessions.addAttachmentDraft(draft);
+        }
+        final relay = ref.read(relayRepositoryProvider);
+        if (relay is FixtureRelayRepository) {
+          relay.failAttachmentChunkAtIndex(1);
+          await sessions.uploadAttachment(
+            attachmentId: drafts.first.id,
+            deviceId: app.currentDevice?.id,
+            canWrite: app.canManageDevices,
+          );
+          // chip 本身保留失败与重试原因，清理全局错误可让移动窗口同时看见全部附件状态。
+          sessions.clearError();
+        }
       }
       if (!mounted) return;
       final router = ref.read(appRouterProvider);

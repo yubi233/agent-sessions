@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   buildMacosScreenshotManifest,
   captureMacosWindowFrameSeries,
+  FLUTTER_RENDER_BOUNDARY_FALLBACK,
   parsePngDimensions,
+  waitForFlutterRenderFrameSeries,
 } from "./macos-screenshot.mjs";
 
 function pngHeader(width, height) {
@@ -32,8 +37,12 @@ test("截图 manifest 只保留 fixture 元数据、哈希和窗口尺寸", () =
       "VISUAL-MOBILE-03",
       "VISUAL-MOBILE-04",
       "VISUAL-MOBILE-05",
+      "VISUAL-MOBILE-06",
+      "VISUAL-MOBILE-07",
+      "VISUAL-MOBILE-08",
     ],
     artifacts: [{
+      captureMode: FLUTTER_RENDER_BOUNDARY_FALLBACK,
       filename: "visual-mobile-01-login.png",
       height: 997,
       path: "/private/tmp/ignored-from-manifest.png",
@@ -52,6 +61,8 @@ test("截图 manifest 只保留 fixture 元数据、哈希和窗口尺寸", () =
   assert.equal("path" in manifest.screenshots[0], false);
   assert.equal(JSON.stringify(manifest).includes("ignored-from-manifest"), false);
   assert.equal(manifest.screenshots[0].scenario_id, "VISUAL-MOBILE-01");
+  assert.equal(manifest.capture_mode, FLUTTER_RENDER_BOUNDARY_FALLBACK);
+  assert.equal(manifest.screenshots[0].capture_mode, FLUTTER_RENDER_BOUNDARY_FALLBACK);
 });
 
 test("5fps 连续截图按场景写入稳定帧序列", async () => {
@@ -89,4 +100,33 @@ test("5fps 连续截图按场景写入稳定帧序列", async () => {
   assert.match(captures[0].outputPath, /visual-owner\/frame-0001\.png$/);
   assert.match(captures.at(-1).outputPath, /visual-owner\/frame-0005\.png$/);
   assert.deepEqual(waits, [200, 200, 200, 200]);
+});
+
+test("Flutter render boundary fallback 只接受完整的预登记 PNG 帧序列", async () => {
+  const root = mkdtempSync(join(tmpdir(), "flutter-render-boundary-"));
+  const sourceDirectory = join(root, "sandbox-source");
+  const outputDirectory = join(root, "e2e-evidence");
+  mkdirSync(sourceDirectory, { recursive: true });
+  for (let index = 0; index < 5; index += 1) {
+    writeFileSync(
+      join(sourceDirectory, `frame-${String(index + 1).padStart(4, "0")}.png`),
+      pngHeader(480, 960),
+    );
+  }
+
+  const frames = await waitForFlutterRenderFrameSeries({
+    outputDirectory,
+    sourceDirectory,
+    scenarioId: "VISUAL-MOBILE-08",
+    frameCount: 5,
+    timeoutMs: 100,
+    pollIntervalMs: 1,
+  });
+
+  assert.equal(frames.length, 5);
+  assert.equal(frames.at(-1).captureMode, FLUTTER_RENDER_BOUNDARY_FALLBACK);
+  assert.equal(frames.at(-1).width, 480);
+  assert.equal(frames.at(-1).height, 960);
+  assert.equal(frames.every((frame) => frame.sha256.length === 64), true);
+  assert.equal(existsSync(join(outputDirectory, "frame-0005.png")), true);
 });

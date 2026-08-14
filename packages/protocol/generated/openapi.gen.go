@@ -12,6 +12,69 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for AttachmentChunkUploadRequestCompression.
+const (
+	Gzip AttachmentChunkUploadRequestCompression = "gzip"
+	None AttachmentChunkUploadRequestCompression = "none"
+)
+
+// Valid indicates whether the value is a known member of the AttachmentChunkUploadRequestCompression enum.
+func (e AttachmentChunkUploadRequestCompression) Valid() bool {
+	switch e {
+	case Gzip:
+		return true
+	case None:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AttachmentChunkUploadRequestMimeType.
+const (
+	Imagejpeg    AttachmentChunkUploadRequestMimeType = "image/jpeg"
+	Imagepng     AttachmentChunkUploadRequestMimeType = "image/png"
+	Imagewebp    AttachmentChunkUploadRequestMimeType = "image/webp"
+	Textmarkdown AttachmentChunkUploadRequestMimeType = "text/markdown"
+	Textplain    AttachmentChunkUploadRequestMimeType = "text/plain"
+)
+
+// Valid indicates whether the value is a known member of the AttachmentChunkUploadRequestMimeType enum.
+func (e AttachmentChunkUploadRequestMimeType) Valid() bool {
+	switch e {
+	case Imagejpeg:
+		return true
+	case Imagepng:
+		return true
+	case Imagewebp:
+		return true
+	case Textmarkdown:
+		return true
+	case Textplain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AttachmentReceiptStatus.
+const (
+	AttachmentReceiptStatusCompleted AttachmentReceiptStatus = "completed"
+	AttachmentReceiptStatusPending   AttachmentReceiptStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the AttachmentReceiptStatus enum.
+func (e AttachmentReceiptStatus) Valid() bool {
+	switch e {
+	case AttachmentReceiptStatusCompleted:
+		return true
+	case AttachmentReceiptStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CapabilityItemStatus.
 const (
 	Emulated    CapabilityItemStatus = "emulated"
@@ -119,27 +182,67 @@ func (e PairingCreateRequestRole) Valid() bool {
 
 // Defines values for PairingRequestStatus.
 const (
-	Approved  PairingRequestStatus = "approved"
-	Cancelled PairingRequestStatus = "cancelled"
-	Expired   PairingRequestStatus = "expired"
-	Pending   PairingRequestStatus = "pending"
+	PairingRequestStatusApproved  PairingRequestStatus = "approved"
+	PairingRequestStatusCancelled PairingRequestStatus = "cancelled"
+	PairingRequestStatusExpired   PairingRequestStatus = "expired"
+	PairingRequestStatusPending   PairingRequestStatus = "pending"
 )
 
 // Valid indicates whether the value is a known member of the PairingRequestStatus enum.
 func (e PairingRequestStatus) Valid() bool {
 	switch e {
-	case Approved:
+	case PairingRequestStatusApproved:
 		return true
-	case Cancelled:
+	case PairingRequestStatusCancelled:
 		return true
-	case Expired:
+	case PairingRequestStatusExpired:
 		return true
-	case Pending:
+	case PairingRequestStatusPending:
 		return true
 	default:
 		return false
 	}
 }
+
+// AttachmentChunkUploadRequest 不包含 filename 或明文内容；metadata_ciphertext 与 ciphertext 均为客户端加密后的 base64 字节串。
+type AttachmentChunkUploadRequest struct {
+	AttachmentId       string                                  `json:"attachment_id"`
+	ByteSize           int64                                   `json:"byte_size"`
+	ChunkIndex         int                                     `json:"chunk_index"`
+	Ciphertext         []byte                                  `json:"ciphertext"`
+	Compression        AttachmentChunkUploadRequestCompression `json:"compression"`
+	IdempotencyKey     string                                  `json:"idempotency_key"`
+	LeaseEpoch         int64                                   `json:"lease_epoch"`
+	MetadataCiphertext []byte                                  `json:"metadata_ciphertext"`
+	MimeType           AttachmentChunkUploadRequestMimeType    `json:"mime_type"`
+	SessionId          string                                  `json:"session_id"`
+	TotalChunks        int                                     `json:"total_chunks"`
+}
+
+// AttachmentChunkUploadRequestCompression defines model for AttachmentChunkUploadRequest.Compression.
+type AttachmentChunkUploadRequestCompression string
+
+// AttachmentChunkUploadRequestMimeType defines model for AttachmentChunkUploadRequest.MimeType.
+type AttachmentChunkUploadRequestMimeType string
+
+// AttachmentCompleteRequest defines model for AttachmentCompleteRequest.
+type AttachmentCompleteRequest struct {
+	IdempotencyKey string `json:"idempotency_key"`
+	LeaseEpoch     int64  `json:"lease_epoch"`
+	SessionId      string `json:"session_id"`
+	TotalChunks    int    `json:"total_chunks"`
+}
+
+// AttachmentReceipt defines model for AttachmentReceipt.
+type AttachmentReceipt struct {
+	AttachmentId string                  `json:"attachment_id"`
+	ChunkIndex   int                     `json:"chunk_index"`
+	Idempotent   bool                    `json:"idempotent"`
+	Status       AttachmentReceiptStatus `json:"status"`
+}
+
+// AttachmentReceiptStatus defines model for AttachmentReceipt.Status.
+type AttachmentReceiptStatus string
 
 // BootstrapRequest defines model for BootstrapRequest.
 type BootstrapRequest struct {
@@ -408,6 +511,9 @@ type Conflict = ErrorResponse
 // Forbidden defines model for Forbidden.
 type Forbidden = ErrorResponse
 
+// PayloadTooLarge defines model for PayloadTooLarge.
+type PayloadTooLarge = ErrorResponse
+
 // TooManyRequests defines model for TooManyRequests.
 type TooManyRequests = ErrorResponse
 
@@ -424,6 +530,12 @@ type StreamEventsParams struct {
 type GetSessionSnapshotParams struct {
 	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
 }
+
+// UploadAttachmentChunkJSONRequestBody defines body for UploadAttachmentChunk for application/json ContentType.
+type UploadAttachmentChunkJSONRequestBody = AttachmentChunkUploadRequest
+
+// CompleteAttachmentJSONRequestBody defines body for CompleteAttachment for application/json ContentType.
+type CompleteAttachmentJSONRequestBody = AttachmentCompleteRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
@@ -463,6 +575,12 @@ type ServerInterface interface {
 	// GetReadyz SQLite 可读写
 	// (GET /readyz)
 	GetReadyz(c *gin.Context)
+
+	// (POST /v1/attachments/chunks)
+	UploadAttachmentChunk(c *gin.Context)
+
+	// (POST /v1/attachments/{id}/complete)
+	CompleteAttachment(c *gin.Context, id string)
 
 	// (POST /v1/auth/login)
 	Login(c *gin.Context)
@@ -573,6 +691,44 @@ func (siw *ServerInterfaceWrapper) GetReadyz(c *gin.Context) {
 	}
 
 	siw.Handler.GetReadyz(c)
+}
+
+// UploadAttachmentChunk operation middleware
+func (siw *ServerInterfaceWrapper) UploadAttachmentChunk(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UploadAttachmentChunk(c)
+}
+
+// CompleteAttachment operation middleware
+func (siw *ServerInterfaceWrapper) CompleteAttachment(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CompleteAttachment(c, id)
 }
 
 // Login operation middleware
@@ -1094,6 +1250,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/sessions/:id/snapshot", wrapper.GetSessionSnapshot)
 	router.POST(options.BaseURL+"/v1/sessions/:id/commands", wrapper.SubmitSessionCommand)
 	router.GET(options.BaseURL+"/v1/commands/:id", wrapper.GetCommand)
+	router.POST(options.BaseURL+"/v1/attachments/chunks", wrapper.UploadAttachmentChunk)
+	router.POST(options.BaseURL+"/v1/attachments/:id/complete", wrapper.CompleteAttachment)
 	router.GET(options.BaseURL+"/v1/capabilities", wrapper.GetCapabilities)
 	router.GET(options.BaseURL+"/v1/events", wrapper.StreamEvents)
 }

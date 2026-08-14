@@ -1,4 +1,5 @@
 import 'package:agent_sessions_mobile/app/local_visual_fixture.dart';
+import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -65,6 +66,46 @@ void main() {
       );
       expect(snapshot.events, isNotEmpty);
       expect(snapshot.session.status, MobileSessionStatus.streaming);
+    });
+
+    test('P3 能力场景使用同一会话链路，并固定覆盖 native/emulated/unsupported', () async {
+      final fixture = await LocalVisualFixture.create('session-capability');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionCapability);
+      final matrix = await fixture.relay.getCapabilities();
+      final provider = matrix.provider('claude');
+      expect(
+        provider.capability('model_select').availability,
+        CapabilityAvailability.native,
+      );
+      expect(
+        provider.capability('plan').availability,
+        CapabilityAvailability.emulated,
+      );
+      expect(
+        provider.capability('attachments').availability,
+        CapabilityAvailability.unsupported,
+      );
+    });
+
+    test('P3 Skill 与附件场景预置的显示内容均为 deterministic fixture', () async {
+      final skill = await LocalVisualFixture.create(
+        'session-skill-confirmation',
+      );
+      final attachment = await LocalVisualFixture.create('session-attachments');
+      final drafts = LocalVisualFixture.attachmentDrafts();
+
+      expect(skill!.scenario, LocalVisualScenario.sessionSkillConfirmation);
+      expect(attachment!.scenario, LocalVisualScenario.sessionAttachments);
+      expect(
+        drafts.take(2).every((draft) {
+          draft.validate();
+          return true;
+        }),
+        isTrue,
+      );
+      expect(() => drafts.last.validate(), throwsA(isA<Exception>()));
     });
   });
 }

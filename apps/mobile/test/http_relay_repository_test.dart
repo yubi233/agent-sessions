@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/http_relay_repository.dart';
@@ -264,6 +265,130 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('能力矩阵严格解析三态，未知状态降级为 unsupported', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/capabilities');
+        expect(options.method, 'GET');
+        expect(options.data, isNull);
+        return _jsonResponse({
+          'providers': [
+            {
+              'kind': 'codex',
+              'version': 'fixture-1',
+              'available': true,
+              'capabilities': [
+                {'name': 'plan', 'status': 'native'},
+                {'name': 'goal', 'status': 'emulated'},
+                {'name': 'attachments', 'status': 'future-state'},
+              ],
+            },
+          ],
+        });
+      });
+
+      final matrix = await _authenticatedRepository(adapter).getCapabilities();
+
+      expect(
+        matrix.provider('codex').capability('plan').availability,
+        CapabilityAvailability.native,
+      );
+      expect(
+        matrix.provider('codex').capability('goal').availability,
+        CapabilityAvailability.emulated,
+      );
+      expect(
+        matrix.provider('codex').capability('attachments').availability,
+        CapabilityAvailability.unsupported,
+      );
+    });
+
+    test('附件 DTO 以 base64 发送密文，不携带 device_id、filename 或本地显示名', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/attachments/chunks');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'attachment_id': 'attachment_1',
+          'session_id': 'session_1',
+          'mime_type': 'text/markdown',
+          'byte_size': 32,
+          'compression': 'none',
+          'metadata_ciphertext': 'AQID',
+          'chunk_index': 0,
+          'total_chunks': 1,
+          'ciphertext': 'BAUG',
+          'idempotency_key': 'attachment-chunk-1',
+          'lease_epoch': 7,
+        });
+        final wire = options.data as Map;
+        expect(wire.containsKey('device_id'), isFalse);
+        expect(wire.containsKey('filename'), isFalse);
+        expect(wire.containsKey('local_name'), isFalse);
+        return _jsonResponse({
+          'attachment_id': 'attachment_1',
+          'chunk_index': 0,
+          'status': 'pending',
+          'idempotent': false,
+        }, statusCode: 201);
+      });
+      final repository = _authenticatedRepository(adapter);
+      final receipt = await repository.uploadAttachmentChunk(
+        AttachmentChunkUploadInput(
+          attachmentId: 'attachment_1',
+          sessionId: 'session_1',
+          mimeType: 'text/markdown',
+          byteSize: 32,
+          compression: 'none',
+          metadataCiphertext: Uint8List.fromList([1, 2, 3]),
+          chunkIndex: 0,
+          totalChunks: 1,
+          ciphertext: Uint8List.fromList([4, 5, 6]),
+          idempotencyKey: 'attachment-chunk-1',
+          leaseEpoch: 7,
+          deviceId: 'android-owner-local-boundary',
+        ),
+      );
+
+      expect(receipt.status, 'pending');
+      expect(receipt.idempotent, isFalse);
+    });
+
+    test('附件 complete 使用 path id 和独立幂等键，不回传本地字段', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/attachments/attachment_1/complete');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'session_id': 'session_1',
+          'total_chunks': 1,
+          'idempotency_key': 'attachment-complete-1',
+          'lease_epoch': 7,
+        });
+        expect((options.data as Map).containsKey('device_id'), isFalse);
+        expect((options.data as Map).containsKey('filename'), isFalse);
+        return _jsonResponse({
+          'attachment_id': 'attachment_1',
+          'chunk_index': -1,
+          'status': 'completed',
+          'idempotent': true,
+        });
+      });
+
+      final receipt = await _authenticatedRepository(adapter)
+          .completeAttachment(
+            const AttachmentCompleteInput(
+              attachmentId: 'attachment_1',
+              sessionId: 'session_1',
+              totalChunks: 1,
+              idempotencyKey: 'attachment-complete-1',
+              leaseEpoch: 7,
+              deviceId: 'android-owner-local-boundary',
+            ),
+          );
+
+      expect(receipt.status, 'completed');
+      expect(receipt.chunkIndex, -1);
+      expect(receipt.idempotent, isTrue);
     });
   });
 }

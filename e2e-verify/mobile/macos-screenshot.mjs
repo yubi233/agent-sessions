@@ -1,10 +1,19 @@
 // macOS Flutter 可见窗口截图：只允许本轮已定位的窗口，产物固定写入测试证据目录。
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+export const FLUTTER_RENDER_BOUNDARY_FALLBACK = "flutter-render-boundary-fallback";
+const MACOS_WINDOW_CAPTURE = "macos-window";
 
 function execFileResult(file, args, options = {}) {
   return new Promise((resolveResult) => {
@@ -39,6 +48,24 @@ export function parsePngDimensions(bytes) {
   return { height, width };
 }
 
+/// 无论帧来自 CoreGraphics 还是 Flutter render tree，都统一校验 PNG、尺寸、文件大小与 SHA-256。
+export function inspectMacosScreenshotFile({ outputPath, captureMode = MACOS_WINDOW_CAPTURE }) {
+  const bytes = readFileSync(outputPath);
+  const dimensions = parsePngDimensions(bytes);
+  const sizeBytes = statSync(outputPath).size;
+  if (sizeBytes <= 0) {
+    throw new Error("macOS 窗口截图为空。 ");
+  }
+  return {
+    captureMode,
+    filename: basename(outputPath),
+    ...dimensions,
+    path: outputPath,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    size_bytes: sizeBytes,
+  };
+}
+
 /// 将窗口截图限制为明确的 CoreGraphics 窗口 ID，避免截取整个桌面或其他应用。
 export async function captureMacosWindowScreenshot({
   windowId,
@@ -57,19 +84,7 @@ export async function captureMacosWindowScreenshot({
   if (result.code !== 0) {
     throw new Error("macOS screencapture 未能保存窗口截图。请检查 Screen Recording 权限。");
   }
-  const bytes = readFileSync(outputPath);
-  const dimensions = parsePngDimensions(bytes);
-  const sizeBytes = statSync(outputPath).size;
-  if (sizeBytes <= 0) {
-    throw new Error("macOS 窗口截图为空。 ");
-  }
-  return {
-    filename: basename(outputPath),
-    ...dimensions,
-    path: outputPath,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    size_bytes: sizeBytes,
-  };
+  return inspectMacosScreenshotFile({ outputPath });
 }
 
 /// 在稳定的本地 fixture 场景内按固定帧率抓取窗口，避免把视觉证据绑定到单一测试回调时刻。
@@ -117,6 +132,86 @@ export async function captureMacosWindowFrameSeries({
   return frames;
 }
 
+/// Screen Recording 被系统拒绝时，等待已观测的可见 Flutter 窗口主动写出的 RepaintBoundary 帧。
+/// 该 fallback 只接受 runner 预先声明的目录、稳定文件名和完整帧数，不能用半成品或桌面截图通过 gate。
+export async function waitForFlutterRenderFrameSeries({
+  outputDirectory,
+  sourceDirectory = outputDirectory,
+  scenarioId,
+  frameCount = 5,
+  timeoutMs = 15_000,
+  pollIntervalMs = 50,
+  waitForNextPoll = wait,
+  now = Date.now,
+}) {
+  if (typeof outputDirectory !== "string" || outputDirectory.length === 0) {
+    throw new Error("Flutter 渲染帧目录无效。 ");
+  }
+  if (typeof sourceDirectory !== "string" || sourceDirectory.length === 0) {
+    throw new Error("Flutter sandbox 渲染帧目录无效。 ");
+  }
+  if (typeof scenarioId !== "string" || scenarioId.trim().length === 0) {
+    throw new Error("截图场景标识无效。 ");
+  }
+  if (!Number.isInteger(frameCount) || frameCount <= 0) {
+    throw new Error("Flutter 渲染帧数量必须是正整数。 ");
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
+    throw new Error("Flutter 渲染帧等待参数无效。 ");
+  }
+
+  const startedAt = now();
+  let lastError = null;
+  while (now() - startedAt <= timeoutMs) {
+    try {
+      const frames = [];
+      for (let index = 0; index < frameCount; index += 1) {
+        const filename = `frame-${String(index + 1).padStart(4, "0")}.png`;
+        const sourcePath = join(
+          sourceDirectory,
+          filename,
+        );
+        const outputPath = join(
+          outputDirectory,
+          filename,
+        );
+        if (!existsSync(sourcePath)) {
+          throw new Error("Flutter 渲染帧尚未写完。 ");
+        }
+        const sourceArtifact = inspectMacosScreenshotFile({
+          outputPath: sourcePath,
+          captureMode: FLUTTER_RENDER_BOUNDARY_FALLBACK,
+        });
+        let artifact = sourceArtifact;
+        // App Sandbox 内的临时文件不是可交付证据；只在完整校验后复制到本轮 e2e 目录。
+        if (sourcePath !== outputPath) {
+          mkdirSync(outputDirectory, { recursive: true });
+          copyFileSync(sourcePath, outputPath);
+          artifact = inspectMacosScreenshotFile({
+            outputPath,
+            captureMode: FLUTTER_RENDER_BOUNDARY_FALLBACK,
+          });
+          if (artifact.sha256 !== sourceArtifact.sha256) {
+            throw new Error("Flutter 渲染帧复制校验失败。 ");
+          }
+        }
+        frames.push({
+          ...artifact,
+          scenarioId,
+          frameIndex: index + 1,
+          capturedOffsetMs: Math.max(0, Math.round(statSync(sourcePath).mtimeMs - startedAt)),
+        });
+      }
+      return frames;
+    } catch (error) {
+      lastError = error;
+      await waitForNextPoll(pollIntervalMs);
+    }
+  }
+  const detail = lastError instanceof Error ? lastError.message : "未知写帧错误。";
+  throw new Error(`Flutter 渲染帧未在限定时间内完成：${detail}`);
+}
+
 /// 截图 manifest 只保存 fixture 场景、帧序列、窗口尺寸与哈希，不保存窗口文字或应用日志。
 export function buildMacosScreenshotManifest({
   timestamp,
@@ -146,6 +241,7 @@ export function buildMacosScreenshotManifest({
       selected_frame: selectedFrame.filename,
       selected_frame_index: selectedFrame.frameIndex ?? frames.length,
       frames: frames.map((artifact) => ({
+        capture_mode: artifact.captureMode ?? MACOS_WINDOW_CAPTURE,
         filename: artifact.filename,
         frame_index: artifact.frameIndex ?? null,
         captured_offset_ms: artifact.capturedOffsetMs ?? null,
@@ -156,11 +252,17 @@ export function buildMacosScreenshotManifest({
       })),
     };
   });
+  const captureModes = [
+    ...new Set(
+      artifacts.map((artifact) => artifact.captureMode ?? MACOS_WINDOW_CAPTURE),
+    ),
+  ];
   return {
     schema_version: 2,
     timestamp,
     suite: "mobile-macos-local-gate",
-    capture_mode: "macos-window",
+    capture_mode: captureModes.length === 1 ? captureModes[0] : "mixed",
+    capture_modes: captureModes,
     fixture_data: true,
     declared_scenarios: declaredScenarioIds,
     frame_rate_fps: frameRateFps,
@@ -171,6 +273,7 @@ export function buildMacosScreenshotManifest({
     screenshots: frameSets.map((frameSet) => {
       const selectedFrame = frameSet.frames.at(-1);
       return {
+        capture_mode: selectedFrame.capture_mode ?? MACOS_WINDOW_CAPTURE,
         scenario_id: frameSet.scenario_id,
         filename: frameSet.selected_frame,
         frame_index: frameSet.selected_frame_index,

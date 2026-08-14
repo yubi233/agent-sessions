@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   MACOS_APP_PROCESS,
+  MACOS_APP_BUNDLE_IDENTIFIER,
   MACOS_MOBILE_CONTENT_SIZE,
   flutterMacosBuildArgs,
   flutterMacosArgs,
@@ -16,6 +17,7 @@ import {
   isMacosPortraitMobileWindow,
   listMacosIntegrationTests,
   macosDebugAppExecutable,
+  macosSandboxVisualFrameDirectory,
   macosWindowObserverArgs,
   macosPortraitWindowMode,
   parseMacosWindowCount,
@@ -31,8 +33,10 @@ import {
   classifyFlutterFailure,
   MACOS_SCREENSHOT_SCENARIOS,
   parseArgs,
+  recordMacosVisualScenario,
   summarizeFlutterFailure,
 } from "./run-macos.mjs";
+import { FLUTTER_RENDER_BOUNDARY_FALLBACK } from "./macos-screenshot.mjs";
 
 function mobileFixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), "macos-runner-"));
@@ -95,7 +99,7 @@ test("macOS gate 拒绝 headless 和外部设备参数", () => {
   assert.throws(() => parseArgs(["--device-id", "android-device"]), /固定使用 macOS/);
 });
 
-test("P2 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
+test("P2/P3 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
   assert.deepEqual(
     MACOS_SCREENSHOT_SCENARIOS.map((scenario) => scenario.id),
     [
@@ -105,6 +109,9 @@ test("P2 会话截图场景在 runner 中固定登记，避免录制前临时添
       "VISUAL-MOBILE-03",
       "VISUAL-MOBILE-04",
       "VISUAL-MOBILE-05",
+      "VISUAL-MOBILE-06",
+      "VISUAL-MOBILE-07",
+      "VISUAL-MOBILE-08",
     ],
   );
 });
@@ -129,6 +136,11 @@ test("桌面窗口观测器只接受固定应用进程名、结构化窗口元�
   assert.equal(parseMacosWindowCount("unexpected"), 0);
   assert.deepEqual(macosWindowObserverArgs(), ["--process-name", MACOS_APP_PROCESS]);
   assert.throws(() => macosWindowObserverArgs("untrusted-process"), /只允许/);
+  assert.equal(
+    macosSandboxVisualFrameDirectory("agent-sessions-visual-run", "/fixture/home"),
+    `/fixture/home/Library/Containers/${MACOS_APP_BUNDLE_IDENTIFIER}/Data/tmp/agent-sessions-visual-run`,
+  );
+  assert.throws(() => macosSandboxVisualFrameDirectory("../outside"), /目录名无效/);
 });
 
 test("macOS integration 由 Flutter 生命周期关闭宿主，runner 不发送成功路径的 SIGTERM", () => {
@@ -190,6 +202,90 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
     runProcess: (received) => received,
   });
   assert.equal(login.env.LOCAL_VISUAL_SCENARIO, "");
+
+  const renderFrames = runMacosPrebuiltApp({
+    appPath: prebuilt.flutter,
+    cwd: "/fixture/mobile",
+    localVisualScenario: "session-attachments",
+    localVisualFrameDirectoryName: "agent-sessions-visual-mobile-08",
+    localVisualFrameCount: 5,
+    localVisualFrameIntervalMs: 200,
+    runProcess: (received) => received,
+  });
+  assert.equal(renderFrames.env.LOCAL_VISUAL_FRAME_DIRECTORY, "agent-sessions-visual-mobile-08");
+  assert.equal(renderFrames.env.LOCAL_VISUAL_FRAME_COUNT, "5");
+  assert.equal(renderFrames.env.LOCAL_VISUAL_FRAME_INTERVAL_MS, "200");
+  assert.throws(
+    () => runMacosPrebuiltApp({
+      appPath: prebuilt.flutter,
+      cwd: "/fixture/mobile",
+      localVisualFrameCount: 5,
+      runProcess: (received) => received,
+    }),
+    /未设置截图目录/,
+  );
+});
+
+test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter 渲染帧", async () => {
+  const scenario = {
+    id: "VISUAL-MOBILE-08",
+    directory: "visual-mobile-08-attachment-composer",
+    localVisualScenario: "session-attachments",
+  };
+  let receivedLaunch = null;
+  let fallbackInput = null;
+  const expectedFrames = Array.from({ length: 5 }, (_, index) => ({
+    captureMode: FLUTTER_RENDER_BOUNDARY_FALLBACK,
+    filename: `frame-${String(index + 1).padStart(4, "0")}.png`,
+    frameIndex: index + 1,
+    scenarioId: scenario.id,
+  }));
+
+  const result = await recordMacosVisualScenario({
+    scenario,
+    screenshotDirectory: "/fixture/screenshots",
+    appPath: "/fixture/app",
+    observeWindow: async () => ({ count: 1, windows: [] }),
+    waitForStableFrame: async () => {},
+    captureFrames: async () => {
+      throw new Error("Screen Recording denied");
+    },
+    waitForFlutterRenderFrames: async (input) => {
+      fallbackInput = input;
+      return expectedFrames;
+    },
+    runPrebuiltApp: async (input) => {
+      receivedLaunch = input;
+      const captureArtifacts = await input.onWindowObserved({ id: 41 });
+      return {
+        code: null,
+        signal: "SIGTERM",
+        timedOut: false,
+        gracefulExitRequested: true,
+        window: {
+          captureArtifacts,
+          captureError: null,
+          observed: true,
+          portraitMobileWindowObserved: true,
+        },
+      };
+    },
+  });
+
+  assert.match(receivedLaunch.localVisualFrameDirectoryName, /^agent-sessions-visual-/);
+  assert.equal(receivedLaunch.localVisualFrameCount, 5);
+  assert.equal(receivedLaunch.localVisualFrameIntervalMs, 200);
+  assert.match(
+    receivedLaunch.localVisualFrameDirectoryName,
+    /visual-mobile-08-attachment-composer$/,
+  );
+  assert.equal(fallbackInput.frameCount, 5);
+  assert.equal(fallbackInput.timeoutMs, 15_000);
+  assert.match(
+    fallbackInput.sourceDirectory,
+    new RegExp(`Library/Containers/${MACOS_APP_BUNDLE_IDENTIFIER}/Data/tmp/`),
+  );
+  assert.deepEqual(result.frames, expectedFrames);
 });
 
 test("macOS Flutter 失败摘要只保留有限的测试框架信号", () => {

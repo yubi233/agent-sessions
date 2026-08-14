@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // MacBook 本地 Flutter gate：真实窗口负责可见验收，长期 widget/契约套件负责业务断言。
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { baseReport, writeReport } from "../lib/report.mjs";
@@ -11,6 +11,7 @@ import {
   createMacosWindowObserver,
   hasFlutterTestSuccessOutput,
   macosDebugAppExecutable,
+  macosSandboxVisualFrameDirectory,
   resolveMacosWidgetTests,
   runMacosFlutterBuild,
   runMacosFlutterWidgetTests,
@@ -18,6 +19,7 @@ import {
 } from "./macos.mjs";
 import {
   captureMacosWindowFrameSeries,
+  waitForFlutterRenderFrameSeries,
   writeMacosScreenshotManifest,
 } from "./macos-screenshot.mjs";
 
@@ -28,6 +30,7 @@ const DEFAULT_CASES = [...new Set(MACOS_INTEGRATION_TESTS.flatMap((entry) => ent
 const SCREENSHOT_FRAME_RATE_FPS = 5;
 const SCREENSHOT_FRAME_DURATION_MS = 1_000;
 const SCREENSHOT_SCENARIO_SETTLE_MS = 800;
+const FLUTTER_RENDER_FRAME_TIMEOUT_MS = 15_000;
 export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
   Object.freeze({
     id: "VISUAL-MOBILE-01",
@@ -59,6 +62,21 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-05-session-readonly",
     localVisualScenario: "session-readonly",
   }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-06",
+    directory: "visual-mobile-06-capability-panel",
+    localVisualScenario: "session-capability",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-07",
+    directory: "visual-mobile-07-skill-confirmation",
+    localVisualScenario: "session-skill-confirmation",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-08",
+    directory: "visual-mobile-08-attachment-composer",
+    localVisualScenario: "session-attachments",
+  }),
 ]);
 
 function wait(milliseconds) {
@@ -73,24 +91,48 @@ export async function recordMacosVisualScenario({
   observeWindow,
   runPrebuiltApp = runMacosPrebuiltApp,
   captureFrames = captureMacosWindowFrameSeries,
+  waitForFlutterRenderFrames = waitForFlutterRenderFrameSeries,
   waitForStableFrame = wait,
 }) {
+  const outputDirectory = join(screenshotDirectory, scenario.directory);
+  const sandboxDirectoryName = [
+    "agent-sessions-visual",
+    basename(dirname(screenshotDirectory)),
+    scenario.directory,
+  ].join("-");
+  const sandboxFrameDirectory = macosSandboxVisualFrameDirectory(
+    sandboxDirectoryName,
+  );
   const smoke = await runPrebuiltApp({
     appPath,
     cwd: MOBILE_ROOT,
     observeWindow,
     localVisualScenario: scenario.localVisualScenario,
+    localVisualFrameDirectoryName: sandboxDirectoryName,
+    localVisualFrameCount: SCREENSHOT_FRAME_RATE_FPS,
+    localVisualFrameIntervalMs: Math.round(1_000 / SCREENSHOT_FRAME_RATE_FPS),
     // onWindowObserved 会等待稳定并采完帧；随后才开始受控退出，保证不会截到退出中的窗口。
     stopAfterWindowMs: 400,
     onWindowObserved: async (window) => {
       await waitForStableFrame(SCREENSHOT_SCENARIO_SETTLE_MS);
-      return captureFrames({
-        windowId: window.id,
-        outputDirectory: join(screenshotDirectory, scenario.directory),
-        scenarioId: scenario.id,
-        fps: SCREENSHOT_FRAME_RATE_FPS,
-        durationMs: SCREENSHOT_FRAME_DURATION_MS,
-      });
+      try {
+        return await captureFrames({
+          windowId: window.id,
+          outputDirectory,
+          scenarioId: scenario.id,
+          fps: SCREENSHOT_FRAME_RATE_FPS,
+          durationMs: SCREENSHOT_FRAME_DURATION_MS,
+        });
+      } catch {
+        // 当前 macOS 已观察到真实窗口，但 Screen Recording 可能被系统拒绝；此时只等同一 app 的 render tree 帧。
+        return waitForFlutterRenderFrames({
+          outputDirectory,
+          sourceDirectory: sandboxFrameDirectory,
+          scenarioId: scenario.id,
+          frameCount: SCREENSHOT_FRAME_RATE_FPS,
+          timeoutMs: FLUTTER_RENDER_FRAME_TIMEOUT_MS,
+        });
+      }
     },
   });
 
@@ -443,6 +485,9 @@ async function main() {
           observed_window_mode: smoke.window.portraitMobileWindowMode,
           screenshot_capture_error: smoke.window.captureError,
           screenshot_count: smoke.window.captureArtifacts.length,
+          screenshot_capture_modes: [
+            ...new Set(smoke.window.captureArtifacts.map((artifact) => artifact.captureMode)),
+          ],
           maximum_window_count: smoke.window.maximumWindowCount,
           window_observation_attempts: smoke.window.observationAttempts,
           window_observer_errors: smoke.window.observerErrors,
@@ -451,6 +496,7 @@ async function main() {
         visual_scenario_runs: visualScenarioRuns.map(({ scenario, smoke: scenarioSmoke, frames }) => ({
           id: scenario.id,
           frame_count: frames.length,
+          capture_modes: [...new Set(frames.map((frame) => frame.captureMode))],
           exit_code: scenarioSmoke.code,
           signal: scenarioSmoke.signal,
           timed_out: scenarioSmoke.timedOut,

@@ -55,6 +55,14 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusConflict, protocol.NewError(protocol.ErrTargetInstanceStale, "target instance stale")
 	case errors.Is(err, domain.ErrSessionNotFound), errors.Is(err, domain.ErrWorkspaceNotFound):
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "session not found")
+	case errors.Is(err, domain.ErrAttachmentNotFound):
+		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "attachment not found")
+	case errors.Is(err, domain.ErrAttachmentConflict), errors.Is(err, domain.ErrAttachmentAlreadyClosed):
+		return http.StatusConflict, protocol.NewError(protocol.ErrIdempotencyConflict, "attachment upload conflict")
+	case errors.Is(err, domain.ErrAttachmentIncomplete):
+		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "attachment upload incomplete")
+	case errors.Is(err, domain.ErrAttachmentInvalid), errors.Is(err, domain.ErrAttachmentChunkOrder):
+		return http.StatusBadRequest, protocol.NewError(protocol.ErrInvalidRequest, "invalid attachment upload")
 	default:
 		return http.StatusInternalServerError, protocol.NewError(protocol.ErrInvalidRequest, "internal error")
 	}

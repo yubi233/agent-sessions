@@ -1,3 +1,4 @@
+import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 
@@ -51,4 +52,18 @@ abstract interface class RelayRepository {
     String sessionId,
     SessionCommandInput input,
   );
+
+  /// Relay capability matrix 是会话控制入口的唯一依据；未知能力由客户端按 unsupported 展示。
+  Future<CapabilityMatrix> getCapabilities();
+
+  /// Plan/Goal/Skill 摘要只来自本地已解密事件或 deterministic fixture；Relay 不返回明文控制内容。
+  Future<SessionControlState> getSessionControls(String sessionId);
+
+  /// 仅上传客户端已经加密的附件块。显示名不会进入本层的公开契约。
+  Future<AttachmentReceipt> uploadAttachmentChunk(
+    AttachmentChunkUploadInput input,
+  );
+
+  /// 完成操作有独立幂等键，避免上传重试造成重复完成事件。
+  Future<AttachmentReceipt> completeAttachment(AttachmentCompleteInput input);
 }

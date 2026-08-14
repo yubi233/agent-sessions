@@ -167,6 +167,32 @@ var migrations = []string{
 		 WHERE identity_public_key <> '';`,
 	// refresh family 必须保存签发时的角色，轮换时不能依赖设备查找而把 Admin/Web 降权或误提权。
 	`ALTER TABLE token_families ADD COLUMN role TEXT NOT NULL DEFAULT 'web';`,
+	// 附件正文、文件名和解密信息均不进入 Relay；仅保留密文块、白名单 MIME/大小和会话归属。
+	`CREATE TABLE IF NOT EXISTS attachments (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		account_id TEXT NOT NULL,
+		mime_type TEXT NOT NULL,
+		byte_size INTEGER NOT NULL,
+		compression TEXT NOT NULL,
+		total_chunks INTEGER NOT NULL,
+		metadata_ciphertext BLOB NOT NULL,
+		created_by_device_id TEXT NOT NULL,
+		lease_epoch INTEGER NOT NULL,
+		status TEXT NOT NULL,
+		complete_idempotency_key TEXT,
+		FOREIGN KEY(session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE TABLE IF NOT EXISTS attachment_chunks (
+		attachment_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL,
+		idempotency_key TEXT NOT NULL,
+		ciphertext BLOB NOT NULL,
+		ciphertext_sha256 TEXT NOT NULL,
+		PRIMARY KEY(attachment_id, chunk_index),
+		UNIQUE(attachment_id, idempotency_key),
+		FOREIGN KEY(attachment_id) REFERENCES attachments(id)
+	);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

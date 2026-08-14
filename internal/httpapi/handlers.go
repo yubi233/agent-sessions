@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -49,6 +50,9 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.POST("/sessions/:id/commands", a.RequireWrite(), a.handleSubmitCommand)
 		auth.GET("/commands/:id", a.handleGetCommand)
 		auth.POST("/sessions/:id/lease", a.RequireWrite(), a.handleAcquireLease)
+		// 附件写入和会话命令共用 Android 写身份与 fencing；Relay 只接收密文块。
+		auth.POST("/attachments/chunks", a.RequireWrite(), a.handleUploadAttachmentChunk)
+		auth.POST("/attachments/:id/complete", a.RequireWrite(), a.handleCompleteAttachment)
 		auth.GET("/capabilities", a.handleCapabilities)
 		auth.POST("/workspaces", a.RequireWrite(), a.handleCreateWorkspace)
 		auth.GET("/workspaces", a.handleListWorkspaces)
@@ -459,6 +463,111 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 	c.JSON(http.StatusAccepted, newCommandView(cmd))
 }
 
+// attachmentChunkRequest 是附件上传 wire DTO。没有 filename 或正文，所有可识别元数据都必须位于 metadata_ciphertext。
+type attachmentChunkRequest struct {
+	AttachmentID       string `json:"attachment_id"`
+	SessionID          string `json:"session_id"`
+	MimeType           string `json:"mime_type"`
+	ByteSize           int64  `json:"byte_size"`
+	Compression        string `json:"compression"`
+	MetadataCiphertext []byte `json:"metadata_ciphertext"`
+	ChunkIndex         int    `json:"chunk_index"`
+	TotalChunks        int    `json:"total_chunks"`
+	Ciphertext         []byte `json:"ciphertext"`
+	IdempotencyKey     string `json:"idempotency_key"`
+	LeaseEpoch         int64  `json:"lease_epoch"`
+}
+
+const (
+	// 最大 chunk 为 512 KiB、metadata 为 16 KiB；预留 base64 编码和 JSON 字段开销后，
+	// 768 KiB 足以承载合法请求，同时避免解码器先把任意大的 base64 字符串留在内存中。
+	maxAttachmentChunkRequestBytes int64 = 768 * 1024
+	// complete 没有密文，单独使用较小上限，避免 path/body 型接口成为大请求入口。
+	maxAttachmentCompleteRequestBytes int64 = 32 * 1024
+)
+
+// handleUploadAttachmentChunk 从认证上下文写入设备/账号边界，绝不采信客户端声称的 device_id。
+func (a *API) handleUploadAttachmentChunk(c *gin.Context) {
+	var req attachmentChunkRequest
+	if err := decodeStrictAttachmentJSON(c, &req, maxAttachmentChunkRequestBytes); err != nil {
+		writeAttachmentDecodeError(c, err, "malformed attachment upload")
+		return
+	}
+	subj := subject(c)
+	receipt, err := a.Attachments.UploadChunk(c.Request.Context(), domain.AttachmentChunkInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		AttachmentID: req.AttachmentID, SessionID: req.SessionID,
+		MimeType: req.MimeType, ByteSize: req.ByteSize, Compression: req.Compression,
+		MetadataCiphertext: req.MetadataCiphertext, ChunkIndex: req.ChunkIndex,
+		TotalChunks: req.TotalChunks, Ciphertext: req.Ciphertext,
+		IdempotencyKey: req.IdempotencyKey, LeaseEpoch: req.LeaseEpoch,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, newAttachmentReceiptView(receipt))
+}
+
+// attachmentCompleteRequest 仅允许收口已完整到达的密文块，完成本身也必须具有独立幂等键。
+type attachmentCompleteRequest struct {
+	SessionID      string `json:"session_id"`
+	TotalChunks    int    `json:"total_chunks"`
+	IdempotencyKey string `json:"idempotency_key"`
+	LeaseEpoch     int64  `json:"lease_epoch"`
+}
+
+// handleCompleteAttachment 用 path attachment id 避免 body 与资源路径出现双重、可被混淆的身份字段。
+func (a *API) handleCompleteAttachment(c *gin.Context) {
+	var req attachmentCompleteRequest
+	if err := decodeStrictAttachmentJSON(c, &req, maxAttachmentCompleteRequestBytes); err != nil {
+		writeAttachmentDecodeError(c, err, "malformed attachment completion")
+		return
+	}
+	subj := subject(c)
+	receipt, err := a.Attachments.Complete(c.Request.Context(), domain.AttachmentCompleteInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		AttachmentID: c.Param("id"), SessionID: req.SessionID,
+		TotalChunks: req.TotalChunks, IdempotencyKey: req.IdempotencyKey,
+		LeaseEpoch: req.LeaseEpoch,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newAttachmentReceiptView(receipt))
+}
+
+// decodeStrictAttachmentJSON 禁止未知字段，特别是 filename/明文摘要等不能进入 Relay 的字段。
+// 其他历史 API 保持兼容绑定；附件链路从首次发布起即固定为最小密文契约。
+func decodeStrictAttachmentJSON(c *gin.Context, destination any, maxBytes int64) error {
+	// 必须在 JSON/base64 解码前截断 body，不能只在领域层校验解码后的 []byte。
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+// writeAttachmentDecodeError 为 body 超限保留稳定的 413/PAYLOAD_TOO_LARGE 契约，其他格式错误仍为 400。
+func writeAttachmentDecodeError(c *gin.Context, err error, malformedMessage string) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge,
+			protocol.NewError(protocol.ErrPayloadTooLarge, "attachment request too large"))
+		return
+	}
+	writeError(c, protocol.NewError(protocol.ErrInvalidRequest, malformedMessage))
+}
+
 func (a *API) handleGetCommand(c *gin.Context) {
 	cmd, err := a.Sessions.GetCommand(c.Request.Context(), c.Param("id"))
 	if err != nil {
@@ -670,6 +779,23 @@ type commandView struct {
 	Status         string `json:"status"`
 	IdempotencyKey string `json:"idempotency_key"`
 	LeaseEpoch     int64  `json:"lease_epoch,omitempty"`
+}
+
+// attachmentReceiptView 不回显 ciphertext、metadata_ciphertext 或客户端显示名，避免响应链路扩大可见范围。
+type attachmentReceiptView struct {
+	AttachmentID string `json:"attachment_id"`
+	ChunkIndex   int    `json:"chunk_index"`
+	Status       string `json:"status"`
+	Idempotent   bool   `json:"idempotent"`
+}
+
+func newAttachmentReceiptView(receipt domain.AttachmentReceipt) attachmentReceiptView {
+	return attachmentReceiptView{
+		AttachmentID: receipt.AttachmentID,
+		ChunkIndex:   receipt.ChunkIndex,
+		Status:       receipt.Status,
+		Idempotent:   receipt.Idempotent,
+	}
 }
 
 func newCommandView(command store.CommandRow) commandView {

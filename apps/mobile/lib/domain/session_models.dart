@@ -195,7 +195,11 @@ enum SessionCommandKind {
   abort('session.abort'),
   permissionApprove('permission.approve'),
   permissionReject('permission.reject'),
-  questionAnswer('question.answer');
+  questionAnswer('question.answer'),
+  // P3 控制面命令仍经同一 lease/idempotency 链路，避免绕过 Android 写端授权。
+  planApprove('plan.approve'),
+  goalToggle('goal.toggle'),
+  skillInvoke('skill.invoke');
 
   const SessionCommandKind(this.wireValue);
 

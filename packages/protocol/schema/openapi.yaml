@@ -515,6 +515,76 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/attachments/chunks:
+    post:
+      operationId: uploadAttachmentChunk
+      description: 仅 Android 写控制端可按序上传附件密文块。Relay 不接收文件名或附件正文，只存白名单 MIME/大小、密文元数据与密文块；请求体上限为 768 KiB。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachmentChunkUploadRequest"
+      responses:
+        "201":
+          description: chunk accepted or idempotently replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentReceipt"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+  /v1/attachments/{id}/complete:
+    post:
+      operationId: completeAttachment
+      description: 仅 Android 写控制端可幂等完成已完整上传的附件；path id 是唯一附件标识；请求体上限为 32 KiB。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachmentCompleteRequest"
+      responses:
+        "200":
+          description: attachment completed or idempotently replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentReceipt"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "404":
+          description: attachment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/capabilities:
     get:
       operationId: getCapabilities
@@ -586,6 +656,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     TooManyRequests:
       description: 恢复码失败次数超过冷却阈值。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    PayloadTooLarge:
+      description: 请求体超过该接口允许的安全上限。
       content:
         application/json:
           schema:
@@ -939,6 +1015,77 @@ components:
           type: integer
           format: int64
           minimum: 1
+    AttachmentChunkUploadRequest:
+      type: object
+      description: 不包含 filename 或明文内容；metadata_ciphertext 与 ciphertext 均为客户端加密后的 base64 字节串。
+      required: [attachment_id, session_id, mime_type, byte_size, compression, metadata_ciphertext, chunk_index, total_chunks, ciphertext, idempotency_key, lease_epoch]
+      properties:
+        attachment_id:
+          type: string
+          maxLength: 128
+        session_id:
+          type: string
+        mime_type:
+          type: string
+          enum: [image/png, image/jpeg, image/webp, text/plain, text/markdown]
+        byte_size:
+          type: integer
+          format: int64
+          minimum: 1
+        compression:
+          type: string
+          enum: [none, gzip]
+        metadata_ciphertext:
+          type: string
+          format: byte
+          maxLength: 21848
+        chunk_index:
+          type: integer
+          minimum: 0
+        total_chunks:
+          type: integer
+          minimum: 1
+          maximum: 64
+        ciphertext:
+          type: string
+          format: byte
+          maxLength: 699052
+        idempotency_key:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+    AttachmentCompleteRequest:
+      type: object
+      required: [session_id, total_chunks, idempotency_key, lease_epoch]
+      properties:
+        session_id:
+          type: string
+        total_chunks:
+          type: integer
+          minimum: 1
+          maximum: 64
+        idempotency_key:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+    AttachmentReceipt:
+      type: object
+      required: [attachment_id, chunk_index, status, idempotent]
+      properties:
+        attachment_id:
+          type: string
+        chunk_index:
+          type: integer
+          minimum: -1
+        status:
+          type: string
+          enum: [pending, completed]
+        idempotent:
+          type: boolean
     CapabilityItem:
       type: object
       required: [name, status]

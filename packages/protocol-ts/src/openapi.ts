@@ -387,6 +387,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/attachments/chunks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅 Android 写控制端可按序上传附件密文块。Relay 不接收文件名或附件正文，只存白名单 MIME/大小、密文元数据与密文块；请求体上限为 768 KiB。 */
+        post: operations["uploadAttachmentChunk"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/attachments/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅 Android 写控制端可幂等完成已完整上传的附件；path id 是唯一附件标识；请求体上限为 32 KiB。 */
+        post: operations["completeAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/capabilities": {
         parameters: {
             query?: never;
@@ -600,6 +634,40 @@ export interface components {
             /** Format: int64 */
             lease_epoch?: number;
         };
+        /** @description 不包含 filename 或明文内容；metadata_ciphertext 与 ciphertext 均为客户端加密后的 base64 字节串。 */
+        AttachmentChunkUploadRequest: {
+            attachment_id: string;
+            session_id: string;
+            /** @enum {string} */
+            mime_type: "image/png" | "image/jpeg" | "image/webp" | "text/plain" | "text/markdown";
+            /** Format: int64 */
+            byte_size: number;
+            /** @enum {string} */
+            compression: "none" | "gzip";
+            /** Format: byte */
+            metadata_ciphertext: string;
+            chunk_index: number;
+            total_chunks: number;
+            /** Format: byte */
+            ciphertext: string;
+            idempotency_key: string;
+            /** Format: int64 */
+            lease_epoch: number;
+        };
+        AttachmentCompleteRequest: {
+            session_id: string;
+            total_chunks: number;
+            idempotency_key: string;
+            /** Format: int64 */
+            lease_epoch: number;
+        };
+        AttachmentReceipt: {
+            attachment_id: string;
+            chunk_index: number;
+            /** @enum {string} */
+            status: "pending" | "completed";
+            idempotent: boolean;
+        };
         CapabilityItem: {
             name: string;
             /** @enum {string} */
@@ -655,6 +723,15 @@ export interface components {
         };
         /** @description 恢复码失败次数超过冷却阈值。 */
         TooManyRequests: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description 请求体超过该接口允许的安全上限。 */
+        PayloadTooLarge: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1279,6 +1356,75 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    uploadAttachmentChunk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachmentChunkUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description chunk accepted or idempotently replayed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
+        };
+    };
+    completeAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttachmentCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description attachment completed or idempotently replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description attachment not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
         };
     };
     getCapabilities: {

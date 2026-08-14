@@ -1,7 +1,7 @@
 // MacBook Flutter 本地 gate 的可复用底层：只启动 macOS 桌面应用，不接入 Android、AVD 或真实上游。
 import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +9,7 @@ const MAX_CAPTURE_BYTES = 1_000_000;
 const CHILD_ENV_SENSITIVE_KEY = /(api.?key|authorization|cookie|password|secret|token|private.?key|access.?key|refresh.?token)/i;
 
 export const MACOS_APP_PROCESS = "agent_sessions_mobile";
+export const MACOS_APP_BUNDLE_IDENTIFIER = "com.agentsessions.agentSessionsMobile";
 export const MACOS_MOBILE_CONTENT_SIZE = Object.freeze({ height: 960, width: 480 });
 const MACOS_DEBUG_APP_EXECUTABLE = join(
   "build",
@@ -130,6 +131,25 @@ export function flutterMacosBuildArgs() {
 // 构建产物路径由 Flutter macOS debug 约定和固定产品名组成，不接受外部传入的进程或 bundle 路径。
 export function macosDebugAppExecutable(mobileRoot) {
   return resolve(mobileRoot, MACOS_DEBUG_APP_EXECUTABLE);
+}
+
+/// 沙箱 App 只允许写自己的 Data/tmp；runner 用固定 bundle id 读取再复制到交付目录。
+export function macosSandboxVisualFrameDirectory(
+  directoryName,
+  homeDirectory = homedir(),
+) {
+  if (typeof directoryName !== "string" || !/^[A-Za-z0-9_-]{1,120}$/.test(directoryName)) {
+    throw new Error("macOS Flutter sandbox 截图目录名无效。 ");
+  }
+  return join(
+    homeDirectory,
+    "Library",
+    "Containers",
+    MACOS_APP_BUNDLE_IDENTIFIER,
+    "Data",
+    "tmp",
+    directoryName,
+  );
 }
 
 // widget/契约回归不绑定桌面 device；可见用户界面证据由单独的 flutter run 场景提供。
@@ -600,15 +620,37 @@ export function runMacosPrebuiltApp({
   observeWindow = unavailableWindowObserver,
   onWindowObserved = null,
   localVisualScenario = null,
+  localVisualFrameDirectoryName = null,
+  localVisualFrameCount = 0,
+  localVisualFrameIntervalMs = 0,
   stopAfterWindowMs = 1_000,
   env = process.env,
   runProcess = runMacosFlutterProcess,
 }) {
+  const hasFrameRecorder = localVisualFrameDirectoryName != null;
+  if (
+    hasFrameRecorder &&
+    (typeof localVisualFrameDirectoryName !== "string"
+      || !/^[A-Za-z0-9_-]{1,120}$/.test(localVisualFrameDirectoryName)
+      || !Number.isInteger(localVisualFrameCount)
+      || localVisualFrameCount <= 0
+      || !Number.isInteger(localVisualFrameIntervalMs)
+      || localVisualFrameIntervalMs <= 0)
+  ) {
+    throw new Error("Flutter 渲染截图参数无效。 ");
+  }
+  if (!hasFrameRecorder && (localVisualFrameCount !== 0 || localVisualFrameIntervalMs !== 0)) {
+    throw new Error("未设置截图目录时不能启动 Flutter 渲染截图。 ");
+  }
   const fixtureEnv = {
     ...env,
     LOCAL_FIXTURE_MODE: "true",
     // 空值会覆盖宿主机残留场景，避免登录场景意外继承上一轮 pairing fixture。
     LOCAL_VISUAL_SCENARIO: localVisualScenario ?? "",
+    // 仅 debug fixture 启用；目录与帧率均由本地 runner 固定传入，不能来自 UI 或 Relay。
+    LOCAL_VISUAL_FRAME_DIRECTORY: localVisualFrameDirectoryName ?? "",
+    LOCAL_VISUAL_FRAME_COUNT: hasFrameRecorder ? String(localVisualFrameCount) : "",
+    LOCAL_VISUAL_FRAME_INTERVAL_MS: hasFrameRecorder ? String(localVisualFrameIntervalMs) : "",
   };
   return runProcess({
     flutter: appPath,

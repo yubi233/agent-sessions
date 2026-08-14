@@ -103,9 +103,14 @@ func (e *testEnv) provisionAdditionalAccount(t *testing.T, email string) authPai
 
 // 创建一个会话所需的最小环境：先建 project/workspace，再建 session。
 func (e *testEnv) createSession(t *testing.T, token, accountID string) (sessionID, workspaceID string) {
+	return e.createSessionForProject(t, token, accountID, "proj_test")
+}
+
+// createSessionForProject 允许多账号 scope 用例使用独立 project 主键，避免 fixture 假冲突掩盖授权断言。
+func (e *testEnv) createSessionForProject(t *testing.T, token, accountID, projectID string) (sessionID, workspaceID string) {
 	t.Helper()
 	ws := e.do(t, http.MethodPost, "/v1/workspaces", map[string]any{
-		"project_id": "proj_test", "canonical_root": "/tmp/ws", "status": "active",
+		"project_id": projectID, "canonical_root": "/tmp/" + projectID, "status": "active",
 	}, token)
 	if ws.Code != http.StatusOK && ws.Code != http.StatusCreated {
 		t.Fatalf("create workspace status=%d body=%s", ws.Code, ws.Body.String())

@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
@@ -30,7 +31,13 @@ class SessionController extends ChangeNotifier {
   String? _selectedSessionId;
   List<SessionTimelineEvent> _timeline = const [];
   SessionLease? _selectedLease;
+  CapabilityMatrix _capabilities = CapabilityMatrix.empty;
+  SessionControlState _controls = const SessionControlState.empty();
+  SkillConfirmation? _skillConfirmation;
+  List<AttachmentTransfer> _attachments = const [];
+  List<AttachmentRejection> _attachmentRejections = const [];
   bool _isDetailLoading = false;
+  bool _isCapabilitiesLoading = false;
   final Set<String> _pendingActionKeys = {};
   final Set<String> _resolvedRequestKeys = {};
   final Map<String, String> _idempotencyKeys = {};
@@ -46,7 +53,17 @@ class SessionController extends ChangeNotifier {
   String? get selectedSessionId => _selectedSessionId;
   MobileSession? get selectedSession => _sessionById(_selectedSessionId);
   SessionLease? get selectedLease => _selectedLease;
+  CapabilityMatrix get capabilities => _capabilities;
+  ProviderCapabilityProfile get selectedProviderCapabilities =>
+      _capabilities.provider(selectedSession?.provider ?? 'unknown');
+  SessionControlState get controls => _controls;
+  SkillConfirmation? get skillConfirmation => _skillConfirmation;
+  List<AttachmentTransfer> get attachments =>
+      List<AttachmentTransfer>.unmodifiable(_attachments);
+  List<AttachmentRejection> get attachmentRejections =>
+      List<AttachmentRejection>.unmodifiable(_attachmentRejections);
   bool get isDetailLoading => _isDetailLoading;
+  bool get isCapabilitiesLoading => _isCapabilitiesLoading;
   bool get isBusy => _pendingActionKeys.isNotEmpty;
   String? get errorMessage => _errorMessage;
   bool get hasSelectedLease =>
@@ -59,8 +76,29 @@ class SessionController extends ChangeNotifier {
   Future<void> initialize() async {
     if (_initializing || _phase == SessionListPhase.ready) return;
     _initializing = true;
-    await refreshSessions();
-    _initializing = false;
+    try {
+      await Future.wait([refreshSessions(), refreshCapabilities()]);
+    } finally {
+      _initializing = false;
+    }
+  }
+
+  /// capability 失败时采取 fail-closed：已有会话仍可读，但所有 P3 写入口保持禁用。
+  Future<void> refreshCapabilities() async {
+    _isCapabilitiesLoading = true;
+    notifyListeners();
+    try {
+      _capabilities = await _relay.getCapabilities();
+    } on RelayFailure catch (failure) {
+      _capabilities = CapabilityMatrix.empty;
+      _errorMessage = failure.message;
+    } catch (_) {
+      _capabilities = CapabilityMatrix.empty;
+      _errorMessage = '能力矩阵暂时不可用，控制入口已安全禁用。';
+    } finally {
+      _isCapabilitiesLoading = false;
+      notifyListeners();
+    }
   }
 
   Future<void> refreshSessions() async {
@@ -247,6 +285,280 @@ class SessionController extends ChangeNotifier {
   bool isRequestResolved(String type, String requestId) =>
       _resolvedRequestKeys.contains('$type:$requestId');
 
+  /// 按 Provider capability、认证角色和当前 lease 依次收口写入口；调用方直接把返回原因呈现给用户。
+  String? controlBlockedReason(
+    String capability, {
+    required bool canWrite,
+    bool requiresLease = true,
+  }) {
+    final declared = selectedProviderCapabilities.capability(capability);
+    if (!declared.isSupported) {
+      return declared.reason ?? '$capability 当前不可用。';
+    }
+    if (!canWrite) return '当前登录是只读状态';
+    if (_selectedSessionId == null) return '请选择一个会话';
+    if (requiresLease && !hasSelectedLease) return '等待获取会话控制权';
+    return null;
+  }
+
+  /// 高风险 Skill 先进入本地确认态；这里没有任何 Relay 写入，拒绝也不会产生 Provider 命令。
+  void requestSkillConfirmation(
+    SessionSkillDescriptor skill, {
+    required bool canWrite,
+  }) {
+    final blocked = controlBlockedReason('invoke_skill', canWrite: canWrite);
+    if (blocked != null) {
+      _setError(blocked);
+      return;
+    }
+    _skillConfirmation = SkillConfirmation(skill: skill);
+    notifyListeners();
+  }
+
+  void rejectSkillConfirmation() {
+    if (_skillConfirmation == null) return;
+    _skillConfirmation = null;
+    notifyListeners();
+  }
+
+  Future<void> confirmSkill({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final confirmation = _skillConfirmation;
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('invoke_skill', canWrite: canWrite);
+    if (confirmation == null || sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'skill:$sessionId:${confirmation.skill.id}',
+      kind: SessionCommandKind.skillInvoke,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'skill_id': confirmation.skill.id},
+      },
+      onAccepted: () => _skillConfirmation = null,
+    );
+  }
+
+  Future<void> approvePlan({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final plan = _controls.plan;
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('plan', canWrite: canWrite);
+    if (plan == null ||
+        plan.phase != PlanPhase.awaitingApproval ||
+        sessionId == null ||
+        blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'plan:$sessionId:approve',
+      kind: SessionCommandKind.planApprove,
+      deviceId: deviceId!,
+      ciphertext: const {
+        'fixture_payload': {'action': 'approve'},
+      },
+      onAccepted: () => _controls = _controls.copyWith(
+        plan: plan.copyWith(phase: PlanPhase.active),
+      ),
+    );
+  }
+
+  Future<void> toggleGoal({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final goal = _controls.goal;
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('goal', canWrite: canWrite);
+    if (goal == null ||
+        goal.phase == GoalPhase.completed ||
+        sessionId == null ||
+        blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    final next = goal.phase == GoalPhase.active
+        ? GoalPhase.paused
+        : GoalPhase.active;
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'goal:$sessionId:${next.wireValue}',
+      kind: SessionCommandKind.goalToggle,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'phase': next.wireValue},
+      },
+      onAccepted: () =>
+          _controls = _controls.copyWith(goal: goal.copyWith(phase: next)),
+    );
+  }
+
+  /// 添加前的 MIME/大小/密文块预检在本机完成。拒绝项仅显示在内存 composer，不会发出 HTTP 请求。
+  bool addAttachmentDraft(AttachmentDraft draft) {
+    try {
+      draft.validate();
+    } on RelayFailure catch (failure) {
+      _attachmentRejections = [
+        ..._attachmentRejections,
+        AttachmentRejection(
+          localName: draft.localName,
+          reason: failure.message,
+        ),
+      ];
+      notifyListeners();
+      return false;
+    }
+    _attachments = [
+      ..._attachments.where((item) => item.draft.id != draft.id),
+      AttachmentTransfer(draft: draft, phase: AttachmentTransferPhase.queued),
+    ];
+    notifyListeners();
+    return true;
+  }
+
+  void removeAttachment(String attachmentId) {
+    _attachments = _attachments
+        .where((item) => item.draft.id != attachmentId)
+        .toList(growable: false);
+    notifyListeners();
+  }
+
+  void dismissAttachmentRejection(String localName) {
+    _attachmentRejections = _attachmentRejections
+        .where((item) => item.localName != localName)
+        .toList(growable: false);
+    notifyListeners();
+  }
+
+  /// 一个 attachment 在同一 session 内顺序上传。每块和 complete 都复用稳定幂等键，失败后从已确认块继续。
+  Future<void> uploadAttachment({
+    required String attachmentId,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('attachments', canWrite: canWrite);
+    final transfer = _attachmentByID(attachmentId);
+    if (sessionId == null || transfer == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    final actionKey = 'attachment:$sessionId:$attachmentId';
+    if (_pendingActionKeys.contains(actionKey) ||
+        transfer.phase == AttachmentTransferPhase.completed) {
+      return;
+    }
+    final lease = _selectedLease;
+    if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
+      _setError('请先获取此会话的控制权。');
+      return;
+    }
+
+    _errorMessage = null;
+    _pendingActionKeys.add(actionKey);
+    _replaceAttachment(
+      attachmentId,
+      transfer.copyWith(
+        phase: AttachmentTransferPhase.uploading,
+        clearError: true,
+      ),
+    );
+    notifyListeners();
+    try {
+      var completedChunks = transfer.completedChunks;
+      for (
+        var index = completedChunks;
+        index < transfer.draft.totalChunks;
+        index += 1
+      ) {
+        await _relay.uploadAttachmentChunk(
+          AttachmentChunkUploadInput(
+            attachmentId: transfer.draft.id,
+            sessionId: sessionId,
+            mimeType: transfer.draft.mimeType,
+            byteSize: transfer.draft.byteSize,
+            compression: transfer.draft.compression,
+            metadataCiphertext: transfer.draft.metadataCiphertext,
+            chunkIndex: index,
+            totalChunks: transfer.draft.totalChunks,
+            ciphertext: transfer.draft.ciphertextChunks[index],
+            idempotencyKey: _idempotencyKeyFor(
+              'attachment:$sessionId:$attachmentId:chunk:$index',
+            ),
+            leaseEpoch: lease.epoch,
+            deviceId: deviceId!,
+          ),
+        );
+        completedChunks = index + 1;
+        _replaceAttachment(
+          attachmentId,
+          transfer.copyWith(
+            phase: AttachmentTransferPhase.uploading,
+            completedChunks: completedChunks,
+            clearError: true,
+          ),
+        );
+        notifyListeners();
+      }
+      await _relay.completeAttachment(
+        AttachmentCompleteInput(
+          attachmentId: transfer.draft.id,
+          sessionId: sessionId,
+          totalChunks: transfer.draft.totalChunks,
+          idempotencyKey: _idempotencyKeyFor(
+            'attachment:$sessionId:$attachmentId:complete',
+          ),
+          leaseEpoch: lease.epoch,
+          deviceId: deviceId!,
+        ),
+      );
+      _replaceAttachment(
+        attachmentId,
+        transfer.copyWith(
+          phase: AttachmentTransferPhase.completed,
+          completedChunks: transfer.draft.totalChunks,
+          clearError: true,
+        ),
+      );
+    } on RelayFailure catch (failure) {
+      final current = _attachmentByID(attachmentId) ?? transfer;
+      _replaceAttachment(
+        attachmentId,
+        current.copyWith(
+          phase: AttachmentTransferPhase.failed,
+          errorMessage: failure.message,
+        ),
+      );
+      _errorMessage = failure.message;
+    } catch (_) {
+      const message = '附件上传未完成，请稍后重试。';
+      final current = _attachmentByID(attachmentId) ?? transfer;
+      _replaceAttachment(
+        attachmentId,
+        current.copyWith(
+          phase: AttachmentTransferPhase.failed,
+          errorMessage: message,
+        ),
+      );
+      _errorMessage = message;
+    } finally {
+      _pendingActionKeys.remove(actionKey);
+      notifyListeners();
+    }
+  }
+
+  bool isAttachmentPending(String attachmentId) =>
+      _pendingActionKeys.any((key) => key.endsWith(':$attachmentId'));
+
   String? composerBlockedReason({required bool canWrite}) {
     if (!canWrite) return '当前登录是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
@@ -269,11 +581,16 @@ class SessionController extends ChangeNotifier {
     _selectedSessionId = sessionId;
     _selectedLease = null;
     _resolvedRequestKeys.clear();
+    _skillConfirmation = null;
+    _attachments = const [];
+    _attachmentRejections = const [];
+    _controls = const SessionControlState.empty();
     _isDetailLoading = true;
     notifyListeners();
     try {
       final snapshot = await _relay.getSessionSnapshot(sessionId);
       _mergeSnapshot(snapshot);
+      _controls = await _relay.getSessionControls(sessionId);
     } on RelayFailure catch (failure) {
       _errorMessage = failure.message;
     } catch (_) {
@@ -322,6 +639,19 @@ class SessionController extends ChangeNotifier {
     ];
     _timeline = snapshot.events
         .map(SessionTimelineEvent.fromRelayEvent)
+        .toList(growable: false);
+  }
+
+  AttachmentTransfer? _attachmentByID(String attachmentId) {
+    for (final transfer in _attachments) {
+      if (transfer.draft.id == attachmentId) return transfer;
+    }
+    return null;
+  }
+
+  void _replaceAttachment(String attachmentId, AttachmentTransfer next) {
+    _attachments = _attachments
+        .map((item) => item.draft.id == attachmentId ? next : item)
         .toList(growable: false);
   }
 
@@ -385,6 +715,10 @@ class SessionController extends ChangeNotifier {
     _selectedLease = null;
     _timeline = const [];
     _resolvedRequestKeys.clear();
+    _controls = const SessionControlState.empty();
+    _skillConfirmation = null;
+    _attachments = const [];
+    _attachmentRejections = const [];
   }
 
   void _setError(String message) {

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../app/providers.dart';
+import '../domain/control_models.dart';
 import '../domain/session_models.dart';
 import '../state/app_controller.dart';
 import '../state/session_controller.dart';
@@ -350,20 +351,45 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             constraints: const BoxConstraints(maxWidth: 480),
             child: Column(
               children: [
-                _SessionStatusStrip(
-                  session: session,
-                  hasLease: sessions.hasSelectedLease,
-                  canWrite: app.canManageDevices,
-                ),
-                if (sessions.errorMessage != null)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: _InlineError(
-                      key: const Key('session-detail-error-message'),
-                      message: sessions.errorMessage!,
-                      onRetry: sessions.clearError,
+                // 顶部控制面和 composer 都可能随 capability/附件状态增长；将顶部限制为可滚动区域，
+                // 保证 480x960 与键盘压缩后的窗口仍保留时间线和输入入口，不发生纵向溢出。
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: SingleChildScrollView(
+                    key: const Key('session-detail-controls-scroll'),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _SessionStatusStrip(
+                          session: session,
+                          hasLease: sessions.hasSelectedLease,
+                          canWrite: app.canManageDevices,
+                        ),
+                        _SessionControlPanel(
+                          sessions: sessions,
+                          canWrite: app.canManageDevices,
+                          deviceId: app.currentDevice?.id,
+                        ),
+                        if (sessions.skillConfirmation != null)
+                          _SkillConfirmationCard(
+                            confirmation: sessions.skillConfirmation!,
+                            sessions: sessions,
+                            canWrite: app.canManageDevices,
+                            deviceId: app.currentDevice?.id,
+                          ),
+                        if (sessions.errorMessage != null)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: _InlineError(
+                              key: const Key('session-detail-error-message'),
+                              message: sessions.errorMessage!,
+                              onRetry: sessions.clearError,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
+                ),
                 Expanded(
                   child: sessions.isDetailLoading && session == null
                       ? const Center(child: CircularProgressIndicator())
@@ -384,6 +410,337 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// P3 控制面保持为紧凑、可扫描的 Happy 风格状态条；所有可执行图标都受 capability + role + lease 同一门控。
+class _SessionControlPanel extends StatelessWidget {
+  const _SessionControlPanel({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+  });
+
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = sessions.selectedProviderCapabilities;
+    final controls = sessions.controls;
+    final plan = controls.plan;
+    final goal = controls.goal;
+    final skill = controls.skills.where((item) => item.risk == SkillRisk.high);
+    final planBlocked = sessions.controlBlockedReason(
+      'plan',
+      canWrite: canWrite,
+    );
+    final goalBlocked = sessions.controlBlockedReason(
+      'goal',
+      canWrite: canWrite,
+    );
+    final skillBlocked = sessions.controlBlockedReason(
+      'invoke_skill',
+      canWrite: canWrite,
+    );
+    return Container(
+      key: const Key('session-capability-panel'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.tune_outlined, size: 17),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  provider.kind,
+                  key: const Key('session-capability-provider'),
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ),
+              Text(
+                controls.model ?? '等待模型事件',
+                key: const Key('session-control-model'),
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                controls.effort ?? '--',
+                key: const Key('session-control-effort'),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            key: const Key('session-capability-states'),
+            spacing: 10,
+            runSpacing: 5,
+            children: [
+              for (final name in const [
+                'model_select',
+                'effort_select',
+                'plan',
+                'goal',
+                'invoke_skill',
+                'attachments',
+              ])
+                _CapabilityStateLabel(entry: provider.capability(name)),
+            ],
+          ),
+          const Divider(height: 17),
+          _ControlSummaryRow(
+            key: const Key('session-plan-summary'),
+            icon: Icons.account_tree_outlined,
+            title: plan?.title ?? 'Plan',
+            subtitle: plan == null
+                ? '等待已解密 Plan 事件'
+                : '${plan.phase.label} · ${plan.summary}',
+            action: IconButton(
+              key: const Key('session-plan-approve-button'),
+              tooltip: '确认 Plan',
+              onPressed:
+                  plan?.phase == PlanPhase.awaitingApproval &&
+                      planBlocked == null &&
+                      !sessions.isBusy
+                  ? () => sessions.approvePlan(
+                      deviceId: deviceId,
+                      canWrite: canWrite,
+                    )
+                  : null,
+              icon: const Icon(Icons.check_circle_outline),
+            ),
+          ),
+          const SizedBox(height: 3),
+          _ControlSummaryRow(
+            key: const Key('session-goal-summary'),
+            icon: Icons.flag_outlined,
+            title: goal?.title ?? 'Goal',
+            subtitle: goal == null
+                ? '等待已解密 Goal 事件'
+                : '${goal.phase.label} · ${goal.progressLabel}',
+            action: IconButton(
+              key: const Key('session-goal-toggle-button'),
+              tooltip: goal?.phase == GoalPhase.active ? '暂停 Goal' : '恢复 Goal',
+              onPressed:
+                  goal != null &&
+                      goal.phase != GoalPhase.completed &&
+                      goalBlocked == null &&
+                      !sessions.isBusy
+                  ? () => sessions.toggleGoal(
+                      deviceId: deviceId,
+                      canWrite: canWrite,
+                    )
+                  : null,
+              icon: Icon(
+                goal?.phase == GoalPhase.active
+                    ? Icons.pause_circle_outline
+                    : Icons.play_circle_outline,
+              ),
+            ),
+          ),
+          if (skill.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            _ControlSummaryRow(
+              key: const Key('session-skill-summary'),
+              icon: Icons.security_outlined,
+              title: skill.first.title,
+              subtitle:
+                  '${skill.first.risk.label} Skill · ${skill.first.summary}',
+              action: IconButton(
+                key: const Key('session-skill-open-button'),
+                tooltip: '确认高风险 Skill',
+                onPressed: skillBlocked == null && !sessions.isBusy
+                    ? () => sessions.requestSkillConfirmation(
+                        skill.first,
+                        canWrite: canWrite,
+                      )
+                    : null,
+                icon: const Icon(Icons.warning_amber_outlined),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CapabilityStateLabel extends StatelessWidget {
+  const _CapabilityStateLabel({required this.entry});
+
+  final CapabilityEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final presentation = switch (entry.availability) {
+      CapabilityAvailability.native => (
+        Icons.check_circle_outline,
+        const Color(0xff86e0bf),
+      ),
+      CapabilityAvailability.emulated => (
+        Icons.auto_awesome_outlined,
+        const Color(0xffffbe5c),
+      ),
+      CapabilityAvailability.unsupported => (
+        Icons.block_outlined,
+        const Color(0xffa4a4af),
+      ),
+    };
+    return Semantics(
+      label:
+          '${entry.name} ${entry.availability.label}${entry.reason == null ? '' : '，${entry.reason}'}',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(presentation.$1, size: 13, color: presentation.$2),
+          const SizedBox(width: 4),
+          Text(
+            '${entry.name} ${entry.availability.label}',
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: presentation.$2),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ControlSummaryRow extends StatelessWidget {
+  const _ControlSummaryRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.action,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget action;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, size: 17),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ],
+        ),
+      ),
+      action,
+    ],
+  );
+}
+
+/// 确认卡是会话详情的一部分，而非 Provider 结果。拒绝只清空本地状态，确认才进入带 lease 的命令链路。
+class _SkillConfirmationCard extends StatelessWidget {
+  const _SkillConfirmationCard({
+    required this.confirmation,
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+  });
+
+  final SkillConfirmation confirmation;
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+
+  @override
+  Widget build(BuildContext context) {
+    final blocked = sessions.controlBlockedReason(
+      'invoke_skill',
+      canWrite: canWrite,
+    );
+    return Container(
+      key: const Key('skill-confirmation-card'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        border: Border.all(color: const Color(0xffffbe5c)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Icon(Icons.warning_amber_outlined, color: Color(0xffffbe5c)),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  confirmation.skill.title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  confirmation.skill.summary,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                if (blocked != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      blocked,
+                      key: const Key('skill-confirmation-blocked-reason'),
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: const Key('skill-confirmation-reject-button'),
+            tooltip: '拒绝 Skill',
+            onPressed: sessions.isBusy
+                ? null
+                : sessions.rejectSkillConfirmation,
+            icon: const Icon(Icons.close),
+          ),
+          IconButton(
+            key: const Key('skill-confirmation-approve-button'),
+            tooltip: '确认 Skill',
+            onPressed: blocked == null && !sessions.isBusy
+                ? () => sessions.confirmSkill(
+                    deviceId: deviceId,
+                    canWrite: canWrite,
+                  )
+                : null,
+            icon: const Icon(Icons.check),
+          ),
+        ],
       ),
     );
   }
@@ -901,6 +1258,16 @@ class _SessionComposerState extends State<_SessionComposer> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (widget.sessions.attachments.isNotEmpty ||
+                widget.sessions.attachmentRejections.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _AttachmentQueue(
+                  sessions: widget.sessions,
+                  canWrite: widget.canWrite,
+                  deviceId: widget.deviceId,
+                ),
+              ),
             if (blocked != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -919,6 +1286,19 @@ class _SessionComposerState extends State<_SessionComposer> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  IconButton(
+                    key: const Key('session-attachment-add-button'),
+                    tooltip:
+                        widget.sessions.controlBlockedReason(
+                          'attachments',
+                          canWrite: widget.canWrite,
+                        ) ??
+                        '等待会话附件密钥',
+                    // 文件选择后的 session DEK 密封必须由安全密钥链路提供；当前没有 DEK 时 fail-closed，
+                    // 不允许把未加密文件或显示名偷塞进 Relay。fixture 场景通过 controller 预置密文 draft。
+                    onPressed: null,
+                    icon: const Icon(Icons.attach_file),
+                  ),
                   Expanded(
                     child: TextField(
                       key: const Key('session-composer-input'),
@@ -968,6 +1348,216 @@ class _SessionComposerState extends State<_SessionComposer> {
   Future<void> _stop() => widget.sessions.stopStreaming(
     deviceId: widget.deviceId,
     canWrite: widget.canWrite,
+  );
+}
+
+/// 附件队列只绘制内存中的 localName 和最小进度；密文、元数据和原始文件不会被放入 Widget 文本或日志。
+class _AttachmentQueue extends StatelessWidget {
+  const _AttachmentQueue({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+  });
+
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+
+  @override
+  Widget build(BuildContext context) {
+    final blocked = sessions.controlBlockedReason(
+      'attachments',
+      canWrite: canWrite,
+    );
+    return Semantics(
+      label: '附件上传队列',
+      child: Wrap(
+        key: const Key('session-attachment-queue'),
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final transfer in sessions.attachments)
+            _AttachmentChip(
+              transfer: transfer,
+              pending: sessions.isAttachmentPending(transfer.draft.id),
+              uploadEnabled: blocked == null,
+              onUpload: () => sessions.uploadAttachment(
+                attachmentId: transfer.draft.id,
+                deviceId: deviceId,
+                canWrite: canWrite,
+              ),
+              onRemove: () => sessions.removeAttachment(transfer.draft.id),
+            ),
+          for (final rejection in sessions.attachmentRejections)
+            _AttachmentRejectedChip(
+              rejection: rejection,
+              onDismiss: () =>
+                  sessions.dismissAttachmentRejection(rejection.localName),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AttachmentChip extends StatelessWidget {
+  const _AttachmentChip({
+    required this.transfer,
+    required this.pending,
+    required this.uploadEnabled,
+    required this.onUpload,
+    required this.onRemove,
+  });
+
+  final AttachmentTransfer transfer;
+  final bool pending;
+  final bool uploadEnabled;
+  final VoidCallback onUpload;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final presentation = switch (transfer.phase) {
+      AttachmentTransferPhase.queued => ('待上传', Icons.schedule_outlined),
+      AttachmentTransferPhase.uploading => ('上传中', Icons.cloud_upload_outlined),
+      AttachmentTransferPhase.failed => ('需重试', Icons.error_outline),
+      AttachmentTransferPhase.completed => ('已完成', Icons.check_circle_outline),
+    };
+    final canUpload =
+        uploadEnabled &&
+        !pending &&
+        transfer.phase != AttachmentTransferPhase.completed;
+    return Container(
+      key: Key('attachment-chip-${transfer.draft.id}'),
+      constraints: const BoxConstraints(minWidth: 172, maxWidth: 218),
+      padding: const EdgeInsets.fromLTRB(8, 5, 2, 5),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            transfer.draft.isImage
+                ? Icons.image_outlined
+                : Icons.article_outlined,
+            size: 18,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  transfer.draft.localName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                Text(
+                  '${presentation.$1} · ${transfer.completedChunks}/${transfer.draft.totalChunks}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                if (transfer.phase == AttachmentTransferPhase.uploading)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: LinearProgressIndicator(value: transfer.progress),
+                  ),
+                if (transfer.errorMessage != null)
+                  Text(
+                    transfer.errorMessage!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: Key('attachment-upload-${transfer.draft.id}'),
+            tooltip: transfer.phase == AttachmentTransferPhase.failed
+                ? '重试附件上传'
+                : '上传附件',
+            onPressed: canUpload ? onUpload : null,
+            icon: pending
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    transfer.phase == AttachmentTransferPhase.failed
+                        ? Icons.refresh
+                        : presentation.$2,
+                    size: 18,
+                  ),
+          ),
+          IconButton(
+            key: Key('attachment-remove-${transfer.draft.id}'),
+            tooltip: '移除附件',
+            onPressed: pending ? null : onRemove,
+            icon: const Icon(Icons.close, size: 18),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AttachmentRejectedChip extends StatelessWidget {
+  const _AttachmentRejectedChip({
+    required this.rejection,
+    required this.onDismiss,
+  });
+
+  final AttachmentRejection rejection;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: Key('attachment-rejected-${rejection.localName}'),
+    constraints: const BoxConstraints(minWidth: 172, maxWidth: 228),
+    padding: const EdgeInsets.fromLTRB(8, 5, 2, 5),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.errorContainer,
+      border: Border.all(color: Theme.of(context).colorScheme.error),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.block_outlined, size: 18),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                rejection.localName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text(
+                rejection.reason,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: '关闭附件拒绝提示',
+          onPressed: onDismiss,
+          icon: const Icon(Icons.close, size: 18),
+        ),
+      ],
+    ),
   );
 }
 

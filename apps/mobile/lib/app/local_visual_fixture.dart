@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../relay/fixture_relay_repository.dart';
@@ -12,6 +15,9 @@ enum LocalVisualScenario {
   sessionList,
   sessionDetail,
   sessionReadOnly,
+  sessionCapability,
+  sessionSkillConfirmation,
+  sessionAttachments,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(String value) =>
@@ -21,6 +27,10 @@ LocalVisualScenario localVisualScenarioFromEnvironment(String value) =>
       'session-list' => LocalVisualScenario.sessionList,
       'session-detail' => LocalVisualScenario.sessionDetail,
       'session-readonly' => LocalVisualScenario.sessionReadOnly,
+      'session-capability' => LocalVisualScenario.sessionCapability,
+      'session-skill-confirmation' =>
+        LocalVisualScenario.sessionSkillConfirmation,
+      'session-attachments' => LocalVisualScenario.sessionAttachments,
       _ => LocalVisualScenario.none,
     };
 
@@ -124,7 +134,10 @@ class LocalVisualFixture {
     final needsSession = switch (scenario) {
       LocalVisualScenario.sessionList ||
       LocalVisualScenario.sessionDetail ||
-      LocalVisualScenario.sessionReadOnly => true,
+      LocalVisualScenario.sessionReadOnly ||
+      LocalVisualScenario.sessionCapability ||
+      LocalVisualScenario.sessionSkillConfirmation ||
+      LocalVisualScenario.sessionAttachments => true,
       _ => false,
     };
     if (!needsSession) return null;
@@ -132,7 +145,10 @@ class LocalVisualFixture {
     final primary = await relay.createSession(
       CreateMobileSessionInput(
         workspaceId: 'fixture-mobile-workspace',
-        provider: 'codex',
+        // 能力场景故意使用 mixed profile，确保画面同时覆盖 native/emulated/unsupported 三态。
+        provider: scenario == LocalVisualScenario.sessionCapability
+            ? 'claude'
+            : 'codex',
         deviceId: ownerDeviceId,
       ),
     );
@@ -161,4 +177,43 @@ class LocalVisualFixture {
     }
     return primary.id;
   }
+
+  /// P3 附件视觉场景仅生成已加密的固定 bytes。localName 只留在内存 chip，不会进入 Relay 请求。
+  static List<AttachmentDraft> attachmentDrafts() => [
+    AttachmentDraft(
+      id: 'visual-image-attachment',
+      localName: 'fixture-image.png',
+      mimeType: 'image/png',
+      byteSize: 480,
+      compression: 'none',
+      metadataCiphertext: Uint8List.fromList([11, 12, 13]),
+      ciphertextChunks: [
+        Uint8List.fromList([21, 22]),
+        Uint8List.fromList([23, 24]),
+      ],
+    ),
+    AttachmentDraft(
+      id: 'visual-text-attachment',
+      localName: 'fixture-note.md',
+      mimeType: 'text/markdown',
+      byteSize: 96,
+      compression: 'none',
+      metadataCiphertext: Uint8List.fromList([31, 32, 33]),
+      ciphertextChunks: [
+        Uint8List.fromList([41, 42]),
+      ],
+    ),
+    // 这项仅用于预检拒绝状态，绝不会上传或持久化。
+    AttachmentDraft(
+      id: 'visual-rejected-attachment',
+      localName: 'fixture-unsupported.bin',
+      mimeType: 'application/octet-stream',
+      byteSize: 64,
+      compression: 'none',
+      metadataCiphertext: Uint8List.fromList([51, 52, 53]),
+      ciphertextChunks: [
+        Uint8List.fromList([61, 62]),
+      ],
+    ),
+  ];
 }

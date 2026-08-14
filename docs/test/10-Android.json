@@ -76,20 +76,29 @@
     {
       "id": "MOBILE-03",
       "title": "Plan/Goal/Skill 与能力入口",
-      "status": "planned",
-      "phase": "P4",
+      "status": "completed",
+      "phase": "v0.1/P3",
       "category": "Android",
       "priority": "P1",
-      "test_layer": "widget + integration",
-      "precondition": "capability fixtures。",
+      "test_layer": "Dart unit + Flutter widget + HTTP DTO + Flutter macOS visible fixture",
+      "consumes": ["MODE-01", "MODE-02", "MODE-03"],
+      "precondition": "capability fixtures 已声明 native/emulated/unsupported；MacBook 可见 Flutter macOS 窗口；不依赖 Android AVD、真实 Provider 或真实上游。",
       "steps": [
-        "unsupported 入口",
-        "高风险 skill 拒绝"
+        "读取 provider capability matrix，验证未知和 unsupported 入口禁用并说明原因",
+        "在会话详情查看 model/effort、Plan 和 Goal 摘要，验证 native/emulated 语义可见",
+        "打开高风险 Skill 确认卡并拒绝，验证未提交 Provider/会话写命令；确认后验证同一操作处理期间不可重复提交",
+        "在 480x960 可见 macOS 窗口采集能力、Skill 确认 fixture PNG"
       ],
-      "expected": "不伪造 Provider 写操作。",
-      "cleanup": [],
+      "expected": "客户端只消费 capability payload；未知/unsupported/只读/lease 缺失均不伪造 Provider 写操作，风险拒绝不会生成会话命令。",
+      "cleanup": [
+        "清理 capability fixture、Plan/Goal/Skill 本地状态和 pending action"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ANDROID/mobile-03.json"
+        "apps/mobile/test/capability_controller_test.dart",
+        "apps/mobile/test/capability_screens_test.dart",
+        "apps/mobile/test/http_relay_repository_test.dart",
+        "e2e-verify/reports/2026-08-14T20-16-34-116Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T20-16-34-116Z/MOBILE/manifest.json"
       ]
     },
     {
@@ -115,23 +124,28 @@
     {
       "id": "ATTACH-01",
       "title": "附件 MIME 与大小限制",
-      "status": "planned",
-      "phase": "P4",
+      "status": "completed",
+      "phase": "v0.1/P3",
       "category": "附件",
       "priority": "P1",
-      "test_layer": "integration",
-      "precondition": "允许图片/文本 fixture 与超限文件。",
+      "test_layer": "Dart unit + Relay integration + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "允许图片/文本 fixture、错误 MIME、超限字节和可注入一次失败的 chunk 上传。",
       "steps": [
-        "合法上传",
-        "超限",
-        "错误 MIME"
+        "选择合法图片和文本 attachment draft，验证本地 MIME、大小、chunk 数和 composer chip",
+        "选择超限或错误 MIME draft，验证不创建任何上传命令并显示拒绝原因",
+        "上传 fixture 密文 chunk，模拟一次可恢复失败后重试，并以幂等 complete 收口",
+        "在 480x960 可见 macOS 窗口采集附件 composer fixture PNG"
       ],
-      "expected": "超限拒绝；重试不重复完成。",
+      "expected": "超限/MIME 拒绝不向 Relay 写数据；chunk 与 complete 均按会话、owner、lease 和 idempotency 约束，重试不重复完成；Relay 不解析附件正文。",
       "cleanup": [
-        "删除测试附件"
+        "删除隔离 SQLite 的 attachment metadata/chunk 与 Flutter fixture draft"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ANDROID/attach-01.json"
+        "apps/mobile/test/attachment_controller_test.dart",
+        "apps/mobile/test/capability_screens_test.dart",
+        "internal/relay/p3_attachment_contract_test.go",
+        "e2e-verify/reports/2026-08-14T20-16-34-116Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T20-16-34-116Z/MOBILE/manifest.json"
       ]
     },
     {
