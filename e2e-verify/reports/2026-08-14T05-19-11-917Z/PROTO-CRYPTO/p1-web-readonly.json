@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-08-14T05-19-11-917Z",
+  "plan_id": "PROTO-CRYPTO",
+  "suite": "p1-web-readonly",
+  "status": "passed",
+  "real_browser": true,
+  "real_model": false,
+  "real_upstream": false,
+  "fixture_data": false,
+  "local_test": true,
+  "headless": false,
+  "command": "node e2e-verify/run.mjs --suite p1-web-readonly",
+  "browser": "system-chrome",
+  "artifacts": [],
+  "failure_class": null,
+  "remaining_risk": "",
+  "relay_base": "http://127.0.0.1:8787"
+}

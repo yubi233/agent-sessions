@@ -92,6 +92,31 @@ tasks:
     cmds:
       - ./tools/relayctl.sh down
 
+  test:deploy:
+    desc: 灾备与安全门禁（备份/恢复/完整性/明文泄漏扫描）
+    cmds:
+      - go test ./internal/deploy/... ./internal/securityscan/... -count=1
+      - go run ./apps/deployctl scan -root .
+      - go run ./apps/deployctl integrity -db ./data/relay.db
+
+  deploy:backup:
+    desc: 备份 SQLite 权威库
+    cmds:
+      - go run ./apps/deployctl backup -src ./data/relay.db -dst ./data/backups/relay-{{.NOW}}.db
+    vars:
+      NOW:
+        sh: date +%Y%m%dT%H%M%S
+
+  deploy:restore:
+    desc: 从备份恢复并校验完整性
+    cmds:
+      - go run ./apps/deployctl restore -backup {{.CLI_ARGS}} -to ./data/relay-restored.db
+
+  deploy:scan:
+    desc: 明文泄漏扫描门禁
+    cmds:
+      - go run ./apps/deployctl scan -root .
+
   toolchain:
     desc: 输出锁定工具版本
     cmds:

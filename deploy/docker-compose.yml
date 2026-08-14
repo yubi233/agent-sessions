@@ -1,0 +1,26 @@
+# 本地单租户部署（Relay + SQLite）。
+# 权威存储为 SQLite 文件（ADR-008），presence/限流为进程内可重建状态，无需 Redis/PostgreSQL。
+# 生产部署使用同一镜像与健康检查；真实域名/Caddy TLS/备份目标需单独授权。
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: agent-sessions/relay:local
+    container_name: agent-sessions-relay
+    environment:
+      AGENT_SESSIONS_RELAY_ADDR: 0.0.0.0:8787
+      AGENT_SESSIONS_SQLITE_PATH: /data/relay.db
+      AGENT_SESSIONS_LOG_LEVEL: info
+    ports:
+      - "8787:8787"
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  relay-data:

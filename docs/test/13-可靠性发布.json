@@ -1,7 +1,7 @@
 {
   "suite": "reliability-release",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "RELIABILITY-RELEASE",
   "description": "Compose、备份恢复、升级回滚、性能与跨层 full gate。真实 Provider gate 仍由各 ADAPTER_* 授权。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -29,10 +29,18 @@
       "priority": "P0",
       "test_layer": "local integration",
       "precondition": "Docker 可用。",
-      "steps": ["task compose:up", "检查 Relay/Postgres/Redis", "task compose:down"],
+      "steps": [
+        "task compose:up",
+        "检查 Relay/Postgres/Redis",
+        "task compose:down"
+      ],
       "expected": "健康检查可区分组件；down 不删未授权卷。",
-      "cleanup": ["停止本轮容器"],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/p0-deploy-01.json"]
+      "cleanup": [
+        "停止本轮容器"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/p0-deploy-01.json"
+      ]
     },
     {
       "id": "DEPLOY-01",
@@ -43,122 +51,179 @@
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "镜像与 .env.example。",
-      "steps": ["全新 up", "readyz"],
+      "steps": [
+        "全新 up",
+        "readyz"
+      ],
       "expected": "单租户栈可重复拉起。",
-      "cleanup": ["compose down"],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-01.json"]
+      "cleanup": [
+        "compose down"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-01.json"
+      ]
     },
     {
       "id": "DEPLOY-02",
       "title": "备份",
-      "status": "planned",
+      "status": "passed",
       "phase": "P5",
       "category": "灾备",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "有密文事件的测试库。",
-      "steps": ["pg_dump", "检查产物不含明文"],
+      "steps": [
+        "pg_dump",
+        "检查产物不含明文"
+      ],
       "expected": "备份可校验且脱敏。",
-      "cleanup": ["删除测试备份"],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-02.json"]
+      "cleanup": [
+        "删除测试备份"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-02.json"
+      ]
     },
     {
       "id": "DEPLOY-03",
       "title": "恢复演练",
-      "status": "planned",
+      "status": "passed",
       "phase": "P5",
       "category": "灾备",
       "priority": "P0",
       "test_layer": "recovery",
       "precondition": "DEPLOY-02 产物。",
-      "steps": ["恢复到隔离库", "校验 event_seq、撤销、密文"],
+      "steps": [
+        "恢复到隔离库",
+        "校验 event_seq、撤销、密文"
+      ],
       "expected": "RPO/RTO 来自演练；生产数据未触碰。",
-      "cleanup": ["销毁恢复环境"],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-03.json"]
+      "cleanup": [
+        "销毁恢复环境"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-03.json"
+      ]
     },
     {
       "id": "DEPLOY-04",
       "title": "发布产物与 SBOM",
-      "status": "planned",
+      "status": "blocked",
       "phase": "P5",
       "category": "发布",
       "priority": "P1",
       "test_layer": "release",
       "precondition": "可构建二进制；签名证书未授权则跳过签名。",
-      "steps": ["构建", "checksum", "SBOM"],
+      "steps": [
+        "构建",
+        "checksum",
+        "SBOM"
+      ],
       "expected": "产物可校验；无会话正文或凭据；未授权签名标 blocked。",
-      "cleanup": ["保留上一产物"],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-04.json"]
+      "cleanup": [
+        "保留上一产物"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-04.json"
+      ]
     },
     {
       "id": "SYNC-04",
       "title": "升级后 cursor 与 outbox 仍可恢复",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P5",
       "category": "升级",
       "priority": "P0",
       "test_layer": "release gate",
       "precondition": "兼容窗口内的新旧 Relay。",
-      "steps": ["升级", "重连", "回滚应用"],
+      "steps": [
+        "升级",
+        "重连",
+        "回滚应用"
+      ],
       "expected": "事件不丢；不回退 PG epoch。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/sync-04.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/sync-04.json"
+      ]
     },
     {
       "id": "PERF-01",
       "title": "多会话背压",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P5",
       "category": "性能",
       "priority": "P1",
       "test_layer": "load",
       "precondition": "隔离负载配置。",
-      "steps": ["多 Terminal/Session", "记录 p95"],
+      "steps": [
+        "多 Terminal/Session",
+        "记录 p95"
+      ],
       "expected": "有指标；慢客户端断开不拖垮全体。",
-      "cleanup": ["停止负载"],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-01.json"]
+      "cleanup": [
+        "停止负载"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-01.json"
+      ]
     },
     {
       "id": "PERF-02",
       "title": "大消息与大 diff",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P5",
       "category": "性能",
       "priority": "P1",
       "test_layer": "load",
       "precondition": "上限配置已知。",
-      "steps": ["超限消息", "大 diff"],
+      "steps": [
+        "超限消息",
+        "大 diff"
+      ],
       "expected": "拒绝或分页，不 OOM。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-02.json"
+      ]
     },
     {
       "id": "PERF-03",
       "title": "lease 竞争负载",
-      "status": "planned",
+      "status": "passed",
       "phase": "P5",
       "category": "性能",
       "priority": "P1",
       "test_layer": "load",
       "precondition": "可并发提交。",
-      "steps": ["并发写命令"],
+      "steps": [
+        "并发写命令"
+      ],
       "expected": "仅一个 epoch 成功；无双写 Provider。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-03.json"
+      ]
     },
     {
       "id": "E2E-RELAY-01",
       "title": "mock 纵向 full gate",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P5",
       "category": "跨层",
       "priority": "P0",
       "test_layer": "integration + optional headed",
       "precondition": "P1-P4 mock 栈可启动。",
-      "steps": ["login-pair-terminal-session-abort-cursor-git"],
+      "steps": [
+        "login-pair-terminal-session-abort-cursor-git"
+      ],
       "expected": "跨层证据齐全；真实 Provider 不在此冒充通过。",
-      "cleanup": ["停止本轮服务"],
-      "evidence": ["e2e-verify/reports/<ts>/RELIABILITY-RELEASE/e2e-relay-01.json"]
+      "cleanup": [
+        "停止本轮服务"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/e2e-relay-01.json"
+      ]
     }
   ]
 }
