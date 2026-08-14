@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yubi233/agent-sessions/internal/adapterreg"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/store"
 )
@@ -15,15 +16,16 @@ const subjectKey = "auth_subject"
 
 // API 聚合领域服务与仓储，供 handler 调用。
 type API struct {
-	Auth     *domain.AuthService
-	Pairing  *domain.PairingService
-	Sessions *domain.SessionService
-	Repo     store.Repository
+	Auth         *domain.AuthService
+	Pairing      *domain.PairingService
+	Sessions     *domain.SessionService
+	Capabilities *adapterreg.Registry
+	Repo         store.Repository
 }
 
 // New 构造 HTTP API 聚合。
 func New(auth *domain.AuthService, pairing *domain.PairingService, sessions *domain.SessionService, repo store.Repository) *API {
-	return &API{Auth: auth, Pairing: pairing, Sessions: sessions, Repo: repo}
+	return &API{Auth: auth, Pairing: pairing, Sessions: sessions, Capabilities: adapterreg.New(), Repo: repo}
 }
 
 // RequireAuth 是鉴权中间件：解析 Bearer token，校验有效期与设备状态，

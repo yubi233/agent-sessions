@@ -1,7 +1,7 @@
 {
   "suite": "adapter-openclaw",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "ADAPTER-OPENCLAW",
   "description": "OpenClaw Gateway challenge、device auth 与 scoped RPC fixture。凭据不得离开 Daemon。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -23,58 +23,81 @@
     {
       "id": "ADPT-OPENCLAW-01",
       "title": "challenge 与 device auth",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "OpenClaw",
       "priority": "P0",
       "test_layer": "contract",
       "precondition": "Gateway fixture。",
-      "steps": ["challenge", "失败 challenge", "token 生命周期"],
+      "steps": [
+        "challenge",
+        "失败 challenge",
+        "token 生命周期"
+      ],
       "expected": "失败不弱化为已授权；凭据不进 Relay。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/01.json"
+      ]
     },
     {
       "id": "ADPT-OPENCLAW-02",
       "title": "chat 事件映射",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P3",
       "category": "OpenClaw",
       "priority": "P0",
       "test_layer": "contract",
       "precondition": "chat fixture。",
-      "steps": ["delta/thinking/tool/final/error/abort"],
+      "steps": [
+        "delta/thinking/tool/final/error/abort"
+      ],
       "expected": "私有 payload 不进公共 schema。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/02.json"
+      ]
     },
     {
       "id": "ADPT-OPENCLAW-03",
       "title": "skills 与 RPC allowlist",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P3",
       "category": "OpenClaw",
       "priority": "P1",
       "test_layer": "contract",
       "precondition": "allowlist fixture。",
-      "steps": ["合法 RPC", "未允许方法"],
+      "steps": [
+        "合法 RPC",
+        "未允许方法"
+      ],
       "expected": "未允许方法拒绝。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/03.json"
+      ]
     },
     {
       "id": "ADPT-OPENCLAW-04",
       "title": "授权 live smoke",
-      "status": "planned",
+      "status": "blocked",
       "phase": "P3",
       "category": "OpenClaw",
       "priority": "P1",
       "test_layer": "authorized upstream",
       "precondition": "用户授权。",
-      "steps": ["受限 scope 连接", "最小请求", "撤销本地会话"],
+      "steps": [
+        "受限 scope 连接",
+        "最小请求",
+        "撤销本地会话"
+      ],
       "expected": "无授权则 blocked。",
-      "cleanup": ["revoke local device/session"],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/04.json"]
+      "cleanup": [
+        "revoke local device/session"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCLAW/04.json"
+      ]
     }
   ]
 }

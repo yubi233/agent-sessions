@@ -1,7 +1,7 @@
 {
   "suite": "adapter-claude",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "ADAPTER-CLAUDE",
   "description": "Claude fixture contract 与授权 live smoke。无凭据时 ADPT-CLAUDE-04 必须 blocked。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -23,58 +23,79 @@
     {
       "id": "ADPT-CLAUDE-01",
       "title": "Detect 与版本矩阵",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "Claude",
       "priority": "P0",
       "test_layer": "contract",
       "precondition": "版本矩阵文件存在。",
-      "steps": ["未安装", "已知版本", "未知版本"],
+      "steps": [
+        "未安装",
+        "已知版本",
+        "未知版本"
+      ],
       "expected": "未知版本只给安全能力子集。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CLAUDE/01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-CLAUDE/01.json"
+      ]
     },
     {
       "id": "ADPT-CLAUDE-02",
       "title": "start/resume/send/abort fixture",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P3",
       "category": "Claude",
       "priority": "P0",
       "test_layer": "contract",
       "precondition": "stream-json/SDK golden trace。",
-      "steps": ["映射 turn/tool/final/error"],
+      "steps": [
+        "映射 turn/tool/final/error"
+      ],
       "expected": "私有字段不进公共协议。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CLAUDE/02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-CLAUDE/02.json"
+      ]
     },
     {
       "id": "ADPT-CLAUDE-03",
       "title": "permission/plan/goal/skill 能力",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P3",
       "category": "Claude",
       "priority": "P1",
       "test_layer": "contract",
       "precondition": "能力探测 fixture。",
-      "steps": ["逐项探测"],
+      "steps": [
+        "逐项探测"
+      ],
       "expected": "未验证能力不得标 native。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CLAUDE/03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-CLAUDE/03.json"
+      ]
     },
     {
       "id": "ADPT-CLAUDE-04",
       "title": "授权 live smoke",
-      "status": "planned",
+      "status": "blocked",
       "phase": "P3",
       "category": "Claude",
       "priority": "P1",
       "test_layer": "authorized upstream",
       "precondition": "用户授权、凭据、额度与停止点已记录。",
-      "steps": ["单隔离 workspace 最小请求", "中止进程"],
+      "steps": [
+        "单隔离 workspace 最小请求",
+        "中止进程"
+      ],
       "expected": "有脱敏报告；无授权则 blocked，不用 fixture 冒充。",
-      "cleanup": ["停止 Claude 子进程"],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-CLAUDE/04.json"]
+      "cleanup": [
+        "停止 Claude 子进程"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-CLAUDE/04.json"
+      ]
     }
   ]
 }

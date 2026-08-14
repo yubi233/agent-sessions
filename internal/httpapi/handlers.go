@@ -41,6 +41,7 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.POST("/sessions/:id/commands", a.RequireWrite(), a.handleSubmitCommand)
 		auth.GET("/commands/:id", a.handleGetCommand)
 		auth.POST("/sessions/:id/lease", a.RequireWrite(), a.handleAcquireLease)
+		auth.GET("/capabilities", a.handleCapabilities)
 		auth.POST("/workspaces", a.handleCreateWorkspace)
 		auth.GET("/workspaces", a.handleListWorkspaces)
 
@@ -319,6 +320,16 @@ func (a *API) handleGetCommand(c *gin.Context) {
 		return
 	}
 	writeOK(c, cmd)
+}
+
+// handleCapabilities 返回四类 Provider 的能力矩阵（客户端据此渲染入口）。
+func (a *API) handleCapabilities(c *gin.Context) {
+	providers, err := a.Capabilities.List(c.Request.Context())
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, gin.H{"providers": providers})
 }
 
 // handleAcquireLease 抢占写控制权并返回新 epoch。

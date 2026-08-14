@@ -1,7 +1,7 @@
 {
   "suite": "adapter-opencode",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "ADAPTER-OPENCODE",
   "description": "OpenCode 本地 API/WS/SSE fixture 与授权 live smoke。恢复不足必须明确降级。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -23,58 +23,79 @@
     {
       "id": "ADPT-OPENCODE-01",
       "title": "本地服务发现与传输",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "OpenCode",
       "priority": "P0",
       "test_layer": "contract",
       "precondition": "连接 fixture。",
-      "steps": ["detect", "HTTP/SSE/WS 取消"],
+      "steps": [
+        "detect",
+        "HTTP/SSE/WS 取消"
+      ],
       "expected": "版本与 endpoint 可记录。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCODE/01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/01.json"
+      ]
     },
     {
       "id": "ADPT-OPENCODE-02",
       "title": "session 映射与恢复语义",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P3",
       "category": "OpenCode",
       "priority": "P0",
       "test_layer": "contract",
       "precondition": "session fixture。",
-      "steps": ["create/resume/send/abort", "注入不可恢复"],
+      "steps": [
+        "create/resume/send/abort",
+        "注入不可恢复"
+      ],
       "expected": "restarted_with_context 或 unsupported，不伪造 resumed。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCODE/02.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/02.json"
+      ]
     },
     {
       "id": "ADPT-OPENCODE-03",
       "title": "交互能力探测",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P3",
       "category": "OpenCode",
       "priority": "P1",
       "test_layer": "contract",
       "precondition": "能力 fixture。",
-      "steps": ["permission/plan/goal/skill/model"],
+      "steps": [
+        "permission/plan/goal/skill/model"
+      ],
       "expected": "三态明确。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCODE/03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/03.json"
+      ]
     },
     {
       "id": "ADPT-OPENCODE-04",
       "title": "授权 live smoke",
-      "status": "planned",
+      "status": "blocked",
       "phase": "P3",
       "category": "OpenCode",
       "priority": "P1",
       "test_layer": "authorized upstream",
       "precondition": "用户授权。",
-      "steps": ["临时 repo 最小交互", "cleanup"],
+      "steps": [
+        "临时 repo 最小交互",
+        "cleanup"
+      ],
       "expected": "无授权则 blocked。",
-      "cleanup": ["停止本地 OpenCode 测试实例"],
-      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04.json"]
+      "cleanup": [
+        "停止本地 OpenCode 测试实例"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04.json"
+      ]
     }
   ]
 }
