@@ -1,7 +1,7 @@
 {
   "suite": "daemon-core",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "DAEMON-CORE",
   "description": "Daemon 安装、SQLite/Keychain、Terminal 重连 outbox 与 Workspace 路径安全。消费 TERM-02，拥有 SYNC-03。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -23,72 +23,108 @@
     {
       "id": "DAEMON-BOOT-01",
       "title": "CLI 与服务安装启动停止",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "生命周期",
       "priority": "P0",
       "test_layer": "Daemon unit + platform smoke",
       "precondition": "隔离测试用户与假 service manager。",
-      "steps": ["login/pair/status/doctor", "service install/start/stop", "重复启动"],
+      "steps": [
+        "login/pair/status/doctor",
+        "service install/start/stop",
+        "重复启动"
+      ],
       "expected": "单实例；退出回收子进程；损坏 SQLite 给出明确提示。",
-      "cleanup": ["卸载测试服务", "删除隔离 SQLite"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-CORE/boot-01.json"]
+      "cleanup": [
+        "卸载测试服务",
+        "删除隔离 SQLite"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-CORE/boot-01.json"
+      ]
     },
     {
       "id": "DAEMON-BOOT-02",
       "title": "Keychain 与配置分离",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P2",
       "category": "本地状态",
       "priority": "P1",
       "test_layer": "Daemon unit",
       "precondition": "测试 keyring backend。",
-      "steps": ["写入 refresh token 与设备包装", "读取 TOML"],
+      "steps": [
+        "写入 refresh token 与设备包装",
+        "读取 TOML"
+      ],
       "expected": "密钥不写 TOML；仅 Keychain/测试 backend 有包装。",
-      "cleanup": ["删除测试 keyring 项"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-CORE/boot-02.json"]
+      "cleanup": [
+        "删除测试 keyring 项"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-CORE/boot-02.json"
+      ]
     },
     {
       "id": "SYNC-03",
       "title": "离线 outbox 重放不重复远端命令",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "重连",
       "priority": "P0",
       "test_layer": "Daemon integration",
       "precondition": "fake Relay 可记录收到的命令。",
-      "steps": ["离线排队", "重连", "再次重连"],
+      "steps": [
+        "离线排队",
+        "重连",
+        "再次重连"
+      ],
       "expected": "每条命令只投递一次；有上限 jitter。",
-      "cleanup": ["清空本地 outbox"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-CORE/sync-03.json"]
+      "cleanup": [
+        "清空本地 outbox"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-CORE/sync-03.json"
+      ]
     },
     {
       "id": "WORKSPACE-01",
       "title": "项目必须本机确认且路径不可逃逸",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "Workspace",
       "priority": "P0",
       "test_layer": "Daemon unit + fuzz",
       "precondition": "扫描目录含候选 Git 根与恶意路径。",
-      "steps": ["扫描不自动授权", "确认一个根", "请求 ..、symlink、非 Git、跨盘"],
+      "steps": [
+        "扫描不自动授权",
+        "确认一个根",
+        "请求 ..、symlink、非 Git、跨盘"
+      ],
       "expected": "未确认目录不可见；越界拒绝；moved 需重新确认。",
-      "cleanup": ["删除临时目录与登记"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-CORE/workspace-01.json"]
+      "cleanup": [
+        "删除临时目录与登记"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-CORE/workspace-01.json"
+      ]
     },
     {
       "id": "DAEMON-PROC-01",
       "title": "外部进程禁止 shell 拼接",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "进程",
       "priority": "P1",
       "test_layer": "Daemon unit",
       "precondition": "可注入命令参数。",
-      "steps": ["提交含 ; 与 $() 的路径或参数"],
+      "steps": [
+        "提交含 ; 与 $() 的路径或参数"
+      ],
       "expected": "参数数组执行；无 shell；超时与输出上限生效。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-CORE/proc-01.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-CORE/proc-01.json"
+      ]
     }
   ]
 }

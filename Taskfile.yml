@@ -46,7 +46,7 @@ tasks:
   test:daemon:
     desc: Daemon 生命周期、路径安全、Git
     cmds:
-      - go test ./apps/daemon/... ./internal/daemon/... ./internal/gitread/... ./internal/adapter/... -count=1
+      - go test ./apps/daemon/... ./internal/daemon/... ./internal/gitread/... ./internal/adapter/... ./internal/workspacesafe/... -count=1
 
   test:contract:
     desc: Adapter SPI 与四类 fixture contract

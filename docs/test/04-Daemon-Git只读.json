@@ -1,7 +1,7 @@
 {
   "suite": "daemon-git",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "DAEMON-GIT",
   "description": "Git 只读 RPC、snapshot_token 与路径安全。消费 WORKSPACE-01。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -23,86 +23,130 @@
     {
       "id": "GIT-01",
       "title": "porcelain v2 状态与变更列表",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "Git",
       "priority": "P0",
       "test_layer": "Daemon unit + integration",
       "precondition": "临时仓库含 staged/unstaged。",
-      "steps": ["status", "listChanges", "切换 staged/unstaged"],
+      "steps": [
+        "status",
+        "listChanges",
+        "切换 staged/unstaged"
+      ],
       "expected": "结构化路径、状态、行数与 snapshot_token。",
-      "cleanup": ["删除临时仓库"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-GIT/git-01.json"]
+      "cleanup": [
+        "删除临时仓库"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-GIT/git-01.json"
+      ]
     },
     {
       "id": "GIT-02",
       "title": "文件级与全量 diff",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "Git",
       "priority": "P0",
       "test_layer": "Daemon integration",
       "precondition": "临时仓库有文本 diff。",
-      "steps": ["diffFile", "diffAll", "分页"],
+      "steps": [
+        "diffFile",
+        "diffAll",
+        "分页"
+      ],
       "expected": "hunk/行号完整；超限返回提示；Relay 侧无明文缓存要求由消费方验证。",
-      "cleanup": ["删除临时仓库"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-GIT/git-02.json"]
+      "cleanup": [
+        "删除临时仓库"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-GIT/git-02.json"
+      ]
     },
     {
       "id": "GIT-03",
       "title": "路径穿越与非仓库拒绝",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "安全",
       "priority": "P0",
       "test_layer": "Daemon security",
       "precondition": "已确认 Workspace。",
-      "steps": ["..", "仓外 symlink", "非 Git 根"],
+      "steps": [
+        "..",
+        "仓外 symlink",
+        "非 Git 根"
+      ],
       "expected": "拒绝且不泄露外部文件；无 shell。",
-      "cleanup": ["删除临时文件与链接"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-GIT/git-03.json"]
+      "cleanup": [
+        "删除临时文件与链接"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-GIT/git-03.json"
+      ]
     },
     {
       "id": "GIT-04",
       "title": "rename/binary/submodule/LFS",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "P2",
       "category": "Git",
       "priority": "P1",
       "test_layer": "Daemon integration",
       "precondition": "对应 fixture 仓库。",
-      "steps": ["分别读取四类文件"],
+      "steps": [
+        "分别读取四类文件"
+      ],
       "expected": "明确受限状态，不把二进制当文本。",
-      "cleanup": ["删除临时仓库"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-GIT/git-04.json"]
+      "cleanup": [
+        "删除临时仓库"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-GIT/git-04.json"
+      ]
     },
     {
       "id": "GIT-05",
       "title": "snapshot 漂移",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "Git",
       "priority": "P0",
       "test_layer": "Daemon integration",
       "precondition": "已发 snapshot_token。",
-      "steps": ["修改工作区", "用旧 token 分页"],
+      "steps": [
+        "修改工作区",
+        "用旧 token 分页"
+      ],
       "expected": "SNAPSHOT_STALE，可重试。",
-      "cleanup": ["删除临时仓库"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-GIT/git-05.json"]
+      "cleanup": [
+        "删除临时仓库"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-GIT/git-05.json"
+      ]
     },
     {
       "id": "GIT-06",
       "title": "超大 diff 保护",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "Git",
       "priority": "P1",
       "test_layer": "Daemon integration",
       "precondition": "超大文本变更 fixture。",
-      "steps": ["diffAll", "检查字节上限与压缩"],
+      "steps": [
+        "diffAll",
+        "检查字节上限与压缩"
+      ],
       "expected": "截断或分页提示；超时取消。",
-      "cleanup": ["删除临时仓库"],
-      "evidence": ["e2e-verify/reports/<ts>/DAEMON-GIT/git-06.json"]
+      "cleanup": [
+        "删除临时仓库"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/DAEMON-GIT/git-06.json"
+      ]
     }
   ]
 }
