@@ -102,6 +102,11 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-13-delegation-restricted",
     localVisualScenario: "session-delegation-restricted",
   }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-14",
+    directory: "visual-mobile-14-lifecycle-recovery",
+    localVisualScenario: "session-lifecycle-recovery",
+  }),
 ]);
 
 function wait(milliseconds) {

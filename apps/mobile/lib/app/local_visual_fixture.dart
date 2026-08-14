@@ -6,6 +6,7 @@ import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../git/git_diff_repository.dart';
 import '../relay/fixture_relay_repository.dart';
+import '../state/lifecycle_recovery_controller.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
 
@@ -25,29 +26,31 @@ enum LocalVisualScenario {
   sessionDelegationProposed,
   sessionDelegationApproved,
   sessionDelegationRestricted,
+  sessionLifecycleRecovery,
 }
 
-LocalVisualScenario localVisualScenarioFromEnvironment(String value) =>
-    switch (value) {
-      'owner-ready' => LocalVisualScenario.ownerReady,
-      'pairing-pending' => LocalVisualScenario.pairingPending,
-      'session-list' => LocalVisualScenario.sessionList,
-      'session-detail' => LocalVisualScenario.sessionDetail,
-      'session-readonly' => LocalVisualScenario.sessionReadOnly,
-      'session-capability' => LocalVisualScenario.sessionCapability,
-      'session-skill-confirmation' =>
-        LocalVisualScenario.sessionSkillConfirmation,
-      'session-attachments' => LocalVisualScenario.sessionAttachments,
-      'session-git-main' => LocalVisualScenario.sessionGitMain,
-      'session-git-restricted' => LocalVisualScenario.sessionGitRestricted,
-      'session-delegation-proposed' =>
-        LocalVisualScenario.sessionDelegationProposed,
-      'session-delegation-approved' =>
-        LocalVisualScenario.sessionDelegationApproved,
-      'session-delegation-restricted' =>
-        LocalVisualScenario.sessionDelegationRestricted,
-      _ => LocalVisualScenario.none,
-    };
+LocalVisualScenario localVisualScenarioFromEnvironment(
+  String value,
+) => switch (value) {
+  'owner-ready' => LocalVisualScenario.ownerReady,
+  'pairing-pending' => LocalVisualScenario.pairingPending,
+  'session-list' => LocalVisualScenario.sessionList,
+  'session-detail' => LocalVisualScenario.sessionDetail,
+  'session-readonly' => LocalVisualScenario.sessionReadOnly,
+  'session-capability' => LocalVisualScenario.sessionCapability,
+  'session-skill-confirmation' => LocalVisualScenario.sessionSkillConfirmation,
+  'session-attachments' => LocalVisualScenario.sessionAttachments,
+  'session-git-main' => LocalVisualScenario.sessionGitMain,
+  'session-git-restricted' => LocalVisualScenario.sessionGitRestricted,
+  'session-delegation-proposed' =>
+    LocalVisualScenario.sessionDelegationProposed,
+  'session-delegation-approved' =>
+    LocalVisualScenario.sessionDelegationApproved,
+  'session-delegation-restricted' =>
+    LocalVisualScenario.sessionDelegationRestricted,
+  'session-lifecycle-recovery' => LocalVisualScenario.sessionLifecycleRecovery,
+  _ => LocalVisualScenario.none,
+};
 
 class LocalVisualFixture {
   const LocalVisualFixture({
@@ -69,6 +72,27 @@ class LocalVisualFixture {
   final InMemoryEncryptedCacheStore cache;
   final String? pairingRequestId;
   final String? sessionId;
+
+  /// P6 仅在 deterministic fixture 下模拟前后台与网络变化。
+  /// 生产运行由 RuntimeRecoveryBinding 提供平台信号，绝不能把此 helper 接入真实 Relay。
+  Future<void> stageLifecycleRecovery(
+    SessionRecoveryController recovery,
+  ) async {
+    final currentSessionId = sessionId;
+    if (scenario != LocalVisualScenario.sessionLifecycleRecovery ||
+        currentSessionId == null) {
+      return;
+    }
+    await recovery.reportAppVisibility(MobileAppVisibility.background);
+    await recovery.reportNetworkAvailability(MobileNetworkAvailability.offline);
+    relay.setNetworkAvailable(false);
+    await relay.appendOfflineRecoveryEvent(currentSessionId);
+    // 下一次 snapshot 故意包含 cursor 边界事件，验证客户端按 sequence 去重。
+    relay.repeatCursorEventOnNextSnapshot();
+    relay.setNetworkAvailable(true);
+    await recovery.reportNetworkAvailability(MobileNetworkAvailability.online);
+    await recovery.reportAppVisibility(MobileAppVisibility.foreground);
+  }
 
   /// 将 owner 身份预写入纯内存依赖，使真实路由能在正常运行时自然落到目标页面。
   static Future<LocalVisualFixture?> create(String scenarioValue) async {
@@ -165,7 +189,8 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionGitRestricted ||
       LocalVisualScenario.sessionDelegationProposed ||
       LocalVisualScenario.sessionDelegationApproved ||
-      LocalVisualScenario.sessionDelegationRestricted => true,
+      LocalVisualScenario.sessionDelegationRestricted ||
+      LocalVisualScenario.sessionLifecycleRecovery => true,
       _ => false,
     };
     if (!needsSession) return null;

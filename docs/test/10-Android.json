@@ -34,12 +34,8 @@
         "重启本地应用并检查受控认证状态；同时由 Dart/Relay 回归验证密文 envelope 和事务边界"
       ],
       "expected": "认证、配对、撤销和恢复状态在 UI 中可见；macOS 本地验收不写成 Android Keystore/Drift 原生通过，Android 原生验证留待后续。",
-      "cleanup": [
-        "关闭本轮启动的 Flutter macOS 子进程并清理 fixture 状态"
-      ],
-      "evidence": [
-        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
-      ]
+      "cleanup": ["关闭本轮启动的 Flutter macOS 子进程并清理 fixture 状态"],
+      "evidence": ["e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"]
     },
     {
       "id": "MOBILE-02",
@@ -189,25 +185,30 @@
     {
       "id": "MOBILE-06",
       "title": "前后台与网络切换后按 cursor 恢复且不重放写命令",
-      "status": "planned",
+      "status": "completed",
       "phase": "v0.1/W6",
       "category": "生命周期与通知",
       "priority": "P0",
-      "test_layer": "Dart unit + Android integration",
-      "precondition": "存在已确认 event cursor、唯一 idempotency_key 和一条待处理本地通知。",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture（Android AVD/真机后续执行，不阻塞本轮 gate）",
+      "precondition": "存在已确认 event cursor、唯一 idempotency_key、一条待处理应用内通知和可注入的前后台/网络状态；本轮使用 deterministic fixture Relay。",
       "steps": [
-        "让应用进入后台并断开网络",
-        "在后台期间产生 fixture 事件",
-        "切换网络、回到前台并恢复连接",
-        "观察应用内降级通知和会话事件"
+        "让 Flutter 运行时进入后台并将 fixture Relay 切为离线",
+        "在后台期间向当前 fixture 会话追加新事件，并记录当前 command 计数与 cursor",
+        "恢复前台和网络，等待控制器仅以 after_seq 拉取增量 snapshot",
+        "观察应用内降级通知、去重后的会话事件、失效 lease 的重新获取入口和未变化的 command 计数",
+        "在 480x960 可见 macOS 窗口采集已登记的 5fps fixture PNG；P6 full gate 后执行专用 5fps fixture 录屏"
       ],
-      "expected": "只补齐 cursor 之后的事件；相同 idempotency_key 不会再次发送；无 UnifiedPush distributor 时显示应用内通知而不丢失事件。",
+      "expected": "只补齐 cursor 之后的事件并按 sequence 去重；恢复流程不自动重放任何写命令，已有 idempotency_key 只供显式用户重试复用；无 UnifiedPush distributor 时显示应用内通知而不丢失事件。MacBook 可见窗口结果不写成 Android 原生/真机或真实系统推送通过。",
       "cleanup": [
-        "清理模拟器应用数据、通知和测试 Relay"
+        "清理本轮 Flutter fixture、通知队列、cursor 与测试 Relay；关闭本轮启动的 macOS debug App"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ANDROID/mobile-06.json",
-        "e2e-verify/screencasts/<ts>/android-v01/manifest.json"
+        "apps/mobile/test/lifecycle_recovery_controller_test.dart",
+        "apps/mobile/test/lifecycle_recovery_screens_test.dart",
+        "e2e-verify/reports/2026-08-14T23-15-43-950Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T23-15-43-950Z/MOBILE/manifest.json",
+        "e2e-verify/reports/2026-08-14T23-17-55-302Z/MOBILE/mobile-p6-macos-recording.json",
+        "e2e-verify/screencasts/2026-08-14T23-17-55-302Z/MOBILE/manifest.json"
       ]
     }
   ]

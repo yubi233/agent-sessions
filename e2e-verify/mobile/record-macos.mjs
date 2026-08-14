@@ -1,0 +1,431 @@
+#!/usr/bin/env node
+// P6 Flutter 录屏入口：只在已通过的可见 macOS full gate 后，复用同一真实窗口与 fixture 场景生成 5fps MP4。
+import { execFile } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { baseReport, writeReport } from "../lib/report.mjs";
+import {
+  createMacosWindowObserver,
+  macosDebugAppExecutable,
+  runMacosFlutterBuild,
+} from "./macos.mjs";
+import {
+  MACOS_SCREENSHOT_SCENARIOS,
+  recordMacosVisualScenario,
+} from "./run-macos.mjs";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const MOBILE_ROOT = join(ROOT, "apps", "mobile");
+const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
+export const FLUTTER_RECORDING_FPS = 5;
+export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
+  "VISUAL-MOBILE-11",
+  "VISUAL-MOBILE-12",
+  "VISUAL-MOBILE-14",
+]);
+
+class RecordingError extends Error {
+  constructor(message, { failureClass = "test_harness_defect" } = {}) {
+    super(message);
+    this.failureClass = failureClass;
+  }
+}
+
+function safeError(error) {
+  return String(error instanceof Error ? error.message : error)
+    .replace(/(bearer\s+)[^\s"']+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:token|password|secret)=)[^&#\s"']+/gi, "$1[REDACTED]")
+    .slice(0, 500);
+}
+
+function positiveInteger(value, flag) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new RecordingError(`${flag} 必须是正整数。`);
+  }
+  return parsed;
+}
+
+export function parseRecordingArgs(argv) {
+  const args = { gateReport: null, help: false, fps: FLUTTER_RECORDING_FPS };
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--help" || value === "-h") args.help = true;
+    else if (value === "--gate-report") args.gateReport = argv[++index] || "";
+    else if (value === "--fps")
+      args.fps = positiveInteger(argv[++index], "--fps");
+    else if (value === "--headless") {
+      throw new RecordingError(
+        "Flutter 录屏拒绝 --headless，必须采集可见 macOS 窗口。",
+        {
+          failureClass: "test_harness_defect",
+        },
+      );
+    } else {
+      throw new RecordingError(`未知参数：${value}`);
+    }
+  }
+  if (!args.help && (!args.gateReport || args.gateReport.trim().length === 0)) {
+    throw new RecordingError(
+      "录屏必须通过 --gate-report 指向本轮已通过的 macOS full gate 报告。",
+      {
+        failureClass: "checkpoint_mismatch",
+      },
+    );
+  }
+  if (args.fps !== FLUTTER_RECORDING_FPS) {
+    throw new RecordingError(
+      `P6 Flutter 录屏固定为 ${FLUTTER_RECORDING_FPS}fps。`,
+    );
+  }
+  return args;
+}
+
+export function recordingUsage() {
+  return [
+    "用法：node e2e-verify/mobile/record-macos.mjs --gate-report <MOBILE/mobile-01-macos.json>",
+    "  --gate-report <path>  本轮已通过的 macOS Flutter full gate 报告",
+    "  --fps 5               固定 5fps；其他值会拒绝",
+    "  --headless            明确拒绝；录屏必须观察可见 macOS 窗口",
+  ].join("\n");
+}
+
+export function selectRecordingScenarios(
+  scenarios = MACOS_SCREENSHOT_SCENARIOS,
+) {
+  const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+  return FLUTTER_RECORDING_SCENARIO_IDS.map((id) => {
+    const scenario = byId.get(id);
+    if (scenario == null) {
+      throw new RecordingError(`录屏场景未在 macOS 截图清单登记：${id}`);
+    }
+    return scenario;
+  });
+}
+
+export function validatePassedGateReport(report) {
+  if (report == null || typeof report !== "object") {
+    throw new RecordingError("full gate 报告不是有效 JSON 对象。", {
+      failureClass: "checkpoint_mismatch",
+    });
+  }
+  if (report.status !== "passed") {
+    throw new RecordingError("full gate 尚未通过，不能开始录屏。", {
+      failureClass: "checkpoint_mismatch",
+    });
+  }
+  if (report.headless !== false || report.visible_desktop_app !== true) {
+    throw new RecordingError(
+      "full gate 未证明可见 macOS Flutter 窗口，不能作为录屏前置。",
+      {
+        failureClass: "checkpoint_mismatch",
+      },
+    );
+  }
+  const visualRuns = Array.isArray(report.visual_scenario_runs)
+    ? report.visual_scenario_runs
+    : [];
+  const lifecycleRun = visualRuns.find((run) => run?.id === "VISUAL-MOBILE-14");
+  if (lifecycleRun?.frame_count !== FLUTTER_RECORDING_FPS) {
+    throw new RecordingError(
+      "full gate 未完成 VISUAL-MOBILE-14 的 5fps 截图证据。",
+      {
+        failureClass: "checkpoint_mismatch",
+      },
+    );
+  }
+  return report;
+}
+
+function loadPassedGateReport(gateReportPath) {
+  const resolvedPath = resolve(gateReportPath);
+  if (!existsSync(resolvedPath)) {
+    throw new RecordingError(`找不到 full gate 报告：${resolvedPath}`, {
+      failureClass: "checkpoint_mismatch",
+    });
+  }
+  try {
+    return {
+      path: resolvedPath,
+      report: validatePassedGateReport(
+        JSON.parse(readFileSync(resolvedPath, "utf-8")),
+      ),
+    };
+  } catch (error) {
+    if (error instanceof RecordingError) throw error;
+    throw new RecordingError("full gate 报告无法解析。", {
+      failureClass: "checkpoint_mismatch",
+    });
+  }
+}
+
+function execFileResult(file, args, options = {}) {
+  return new Promise((resolveResult) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      resolveResult({
+        code: typeof error?.code === "number" ? error.code : error ? null : 0,
+        stderr: String(stderr || ""),
+        stdout: String(stdout || ""),
+      });
+    });
+  });
+}
+
+async function encodeMp4({ frameDirectory, outputPath, fps }) {
+  const result = await execFileResult(
+    "ffmpeg",
+    [
+      "-framerate",
+      String(fps),
+      "-i",
+      join(frameDirectory, "frame-%04d.png"),
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-y",
+      outputPath,
+    ],
+    { timeout: 60_000, maxBuffer: 64_000 },
+  );
+  if (
+    result.code !== 0 ||
+    !existsSync(outputPath) ||
+    statSync(outputPath).size <= 0
+  ) {
+    throw new RecordingError("ffmpeg 未能生成完整 Flutter 录屏 MP4。", {
+      failureClass: "environment_or_startup_failure",
+    });
+  }
+}
+
+async function inspectMp4({ path, fps }) {
+  const result = await execFileResult(
+    "ffprobe",
+    [
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=avg_frame_rate,nb_frames,width,height",
+      "-of",
+      "json",
+      path,
+    ],
+    { timeout: 20_000, maxBuffer: 32_000 },
+  );
+  if (result.code !== 0) {
+    throw new RecordingError("ffprobe 无法校验 Flutter 录屏 MP4。", {
+      failureClass: "environment_or_startup_failure",
+    });
+  }
+  const stream = JSON.parse(result.stdout).streams?.[0];
+  const [numerator, denominator] = String(stream?.avg_frame_rate || "0/1")
+    .split("/")
+    .map(Number);
+  const frameRate = denominator > 0 ? numerator / denominator : 0;
+  if (!Number.isFinite(frameRate) || Math.abs(frameRate - fps) > 0.01) {
+    throw new RecordingError(`Flutter 录屏帧率不是 ${fps}fps。`, {
+      failureClass: "test_harness_defect",
+    });
+  }
+  const frameCount = Number(stream?.nb_frames);
+  if (!Number.isInteger(frameCount) || frameCount !== fps) {
+    throw new RecordingError(`Flutter 录屏帧数不是预期的 ${fps} 帧。`, {
+      failureClass: "test_harness_defect",
+    });
+  }
+  return {
+    frame_count: frameCount,
+    frame_rate_fps: frameRate,
+    height: Number(stream.height),
+    path,
+    size_bytes: statSync(path).size,
+    width: Number(stream.width),
+  };
+}
+
+async function main() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const startedAt = Date.now();
+  const outputDirectory = join(SCREENCAST_ROOT, timestamp, "MOBILE");
+  const frameDirectory = join(outputDirectory, "frames");
+  const artifacts = [];
+  const completedScenarios = [];
+  let status = "failed";
+  let failureClass = "test_harness_defect";
+  let remainingRisk = "";
+  let args = null;
+  let gateReport = null;
+  let windowObserver = null;
+
+  try {
+    args = parseRecordingArgs(process.argv.slice(2));
+    if (args.help) {
+      process.stdout.write(`${recordingUsage()}\n`);
+      return;
+    }
+    if (process.platform !== "darwin") {
+      throw new RecordingError("Flutter macOS 录屏只能在 macOS 主机执行。", {
+        failureClass: "environment_or_startup_failure",
+      });
+    }
+    gateReport = loadPassedGateReport(args.gateReport);
+    mkdirSync(frameDirectory, { recursive: true });
+    windowObserver = await createMacosWindowObserver();
+    if ((await windowObserver.observe()).count > 0) {
+      throw new RecordingError(
+        "检测到已有 Agent Sessions macOS 窗口，拒绝将用户实例录入测试证据。",
+        {
+          failureClass: "environment_or_startup_failure",
+        },
+      );
+    }
+    // 录屏重建固定 debug App，确保帧来自当前工作区源码；全量业务断言由 gate report 提供。
+    const build = await runMacosFlutterBuild({ cwd: MOBILE_ROOT });
+    if (build.code !== 0 || build.timedOut) {
+      throw new RecordingError("Flutter macOS debug App 构建未完成。", {
+        failureClass: "environment_or_startup_failure",
+      });
+    }
+    const appPath = macosDebugAppExecutable(MOBILE_ROOT);
+    if (!existsSync(appPath)) {
+      throw new RecordingError("构建后找不到 Flutter macOS debug App。", {
+        failureClass: "environment_or_startup_failure",
+      });
+    }
+
+    for (const scenario of selectRecordingScenarios()) {
+      process.stdout.write(
+        `[flutter-record] 采集 ${scenario.id} 的 5fps 可见窗口帧\n`,
+      );
+      const visualRun = await recordMacosVisualScenario({
+        scenario,
+        screenshotDirectory: frameDirectory,
+        appPath,
+        observeWindow: () => windowObserver.observe(),
+      });
+      const scenarioFrameDirectory = join(frameDirectory, scenario.directory);
+      const mp4Path = join(outputDirectory, `${scenario.directory}.mp4`);
+      await encodeMp4({
+        frameDirectory: scenarioFrameDirectory,
+        outputPath: mp4Path,
+        fps: args.fps,
+      });
+      const video = await inspectMp4({ path: mp4Path, fps: args.fps });
+      artifacts.push(mp4Path, ...visualRun.frames.map((frame) => frame.path));
+      completedScenarios.push({
+        capture_modes: [
+          ...new Set(visualRun.frames.map((frame) => frame.captureMode)),
+        ],
+        frames: visualRun.frames.map((frame) => ({
+          captured_offset_ms: frame.capturedOffsetMs,
+          filename: frame.filename,
+          frame_index: frame.frameIndex,
+          height: frame.height,
+          sha256: frame.sha256,
+          width: frame.width,
+        })),
+        id: scenario.id,
+        observed_window_frame: visualRun.smoke.window.portraitMobileWindow,
+        observed_window_mode: visualRun.smoke.window.portraitMobileWindowMode,
+        video,
+      });
+    }
+    status = "passed";
+    failureClass = null;
+    remainingRisk =
+      "录屏使用 deterministic fixture 和可见 macOS 窗口，不代表真实 Provider、UnifiedPush distributor 或 Android AVD/真机验证。";
+  } catch (error) {
+    failureClass =
+      error instanceof RecordingError
+        ? error.failureClass
+        : "test_harness_defect";
+    remainingRisk = safeError(error);
+  } finally {
+    windowObserver?.dispose();
+    if (args?.help) return;
+    const manifestPath = join(outputDirectory, "manifest.json");
+    if (completedScenarios.length > 0) {
+      mkdirSync(outputDirectory, { recursive: true });
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(
+          {
+            command:
+              "node e2e-verify/mobile/record-macos.mjs --gate-report <passed-mobile-gate-report>",
+            completed_scenarios: completedScenarios,
+            fixture_revision: "local-deterministic-fixture",
+            fps: FLUTTER_RECORDING_FPS,
+            full_gate_report: gateReport?.path ?? null,
+            headless: false,
+            host_platform: "macos",
+            recording_scenarios: FLUTTER_RECORDING_SCENARIO_IDS,
+            timestamp,
+            validation: {
+              fixture_data: true,
+              local_test: true,
+              real_browser: false,
+              real_model: false,
+              real_upstream: false,
+              visible_desktop_app: true,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      artifacts.unshift(manifestPath);
+    }
+    const reportPath = writeReport({
+      planId: "MOBILE",
+      name: "mobile-p6-macos-recording",
+      report: {
+        timestamp,
+        ...baseReport({
+          suite: "mobile-p6-macos-fixture-recording",
+          status,
+          real_browser: false,
+          real_model: false,
+          real_upstream: false,
+          fixture_data: true,
+          local_test: true,
+          headless: false,
+          browser: "n/a",
+          command:
+            "node e2e-verify/mobile/record-macos.mjs --gate-report <passed-mobile-gate-report>",
+          artifacts,
+          failure_class: failureClass,
+          remaining_risk: remainingRisk,
+        }),
+        duration_ms: Date.now() - startedAt,
+        full_gate_report: gateReport?.path ?? null,
+        gate_kind: "flutter_macos_fixture_recording",
+        host_platform: "macos",
+        recording_fps: FLUTTER_RECORDING_FPS,
+        recording_scenario_ids: FLUTTER_RECORDING_SCENARIO_IDS,
+        visible_desktop_app: completedScenarios.length > 0,
+      },
+    });
+    process.stdout.write(`[flutter-record] ${status} -> ${reportPath}\n`);
+    if (status !== "passed") process.exitCode = 1;
+  }
+}
+
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`[flutter-record] ${safeError(error)}\n`);
+    process.exitCode = 1;
+  });
+}

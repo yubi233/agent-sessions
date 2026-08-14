@@ -12,6 +12,7 @@ import '../git/git_diff_repository.dart';
 import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
+import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
@@ -73,6 +74,16 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
   unawaited(controller.initialize());
   return controller;
 });
+
+/// 生命周期适配层只消费该 controller；它通过 SessionController 的只读 cursor 恢复接口补齐事件，
+/// 不拥有 token、lease 或任何待发送命令，避免前后台恢复意外重放写入。
+final sessionRecoveryControllerProvider =
+    ChangeNotifierProvider<SessionRecoveryController>((ref) {
+      final controller = SessionRecoveryController(
+        sessions: ref.read(sessionControllerProvider),
+      );
+      return controller;
+    });
 
 /// Delegation 图与会话正文独立拉取，父会话切换时不会把上一页的 child 节点短暂画到当前页面。
 final delegationControllerProvider =

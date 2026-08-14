@@ -148,6 +148,22 @@ class SessionSnapshot {
   final List<RelaySessionEvent> events;
 }
 
+/// 一次只读 cursor 恢复的脱敏结果。
+/// 它只携带序号和新增数量，供应用内通知与诊断使用，不能承载事件正文或密文。
+class SessionCursorRecovery {
+  const SessionCursorRecovery({
+    required this.sessionId,
+    required this.requestedAfterSequence,
+    required this.recoveredCursor,
+    required this.addedEventCount,
+  });
+
+  final String sessionId;
+  final int requestedAfterSequence;
+  final int recoveredCursor;
+  final int addedEventCount;
+}
+
 /// 只允许 Relay 返回正 fencing epoch；0 不能降级成“当前 lease”。
 class SessionLease {
   const SessionLease({required this.sessionId, required this.epoch});

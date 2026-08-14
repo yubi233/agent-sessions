@@ -3,6 +3,8 @@ import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/git/git_diff_repository.dart';
+import 'package:agent_sessions_mobile/state/lifecycle_recovery_controller.dart';
+import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -162,6 +164,28 @@ void main() {
             .capability('delegate_cross_provider')
             .isSupported,
         isFalse,
+      );
+    });
+
+    test('P6 生命周期场景通过真实 fixture cursor 恢复产生脱敏应用内通知', () async {
+      final fixture = await LocalVisualFixture.create(
+        'session-lifecycle-recovery',
+      );
+
+      expect(fixture, isNotNull);
+      final sessions = SessionController(relay: fixture!.relay);
+      await sessions.initialize();
+      await sessions.selectSession(fixture.sessionId!);
+      final cursorBefore = sessions.selectedCursor;
+      final recovery = SessionRecoveryController(sessions: sessions);
+
+      await fixture.stageLifecycleRecovery(recovery);
+
+      expect(sessions.selectedCursor, cursorBefore + 1);
+      expect(recovery.latestNotice?.eventCount, 1);
+      expect(
+        fixture.relay.snapshotAfterSequencesFor(fixture.sessionId!).last,
+        cursorBefore,
       );
     });
   });

@@ -11,8 +11,10 @@ import 'app/local_visual_fixture.dart';
 import 'app/local_runtime_environment.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
+import 'app/runtime_recovery_binding.dart';
 import 'domain/control_models.dart';
 import 'relay/fixture_relay_repository.dart';
+import 'state/lifecycle_recovery_controller.dart';
 import 'storage/encrypted_cache.dart';
 import 'storage/runtime_encrypted_cache.dart';
 import 'storage/secure_token_store.dart';
@@ -75,6 +77,7 @@ Future<void> main() async {
             localVisualFixture?.scenario ?? LocalVisualScenario.none,
         localVisualPairingRequestId: localVisualFixture?.pairingRequestId,
         localVisualSessionId: localVisualFixture?.sessionId,
+        localVisualRecovery: localVisualFixture?.stageLifecycleRecovery,
         localVisualFrameDirectory: _useLocalFixtureMode && kDebugMode
             ? localVisualFrameDirectoryFromRuntime
             : '',
@@ -95,6 +98,7 @@ class AgentSessionsApp extends ConsumerWidget {
     this.localVisualScenario = LocalVisualScenario.none,
     this.localVisualPairingRequestId,
     this.localVisualSessionId,
+    this.localVisualRecovery,
     this.localVisualFrameDirectory = '',
     this.localVisualFrameCount = 0,
     this.localVisualFrameIntervalMs = 0,
@@ -106,6 +110,7 @@ class AgentSessionsApp extends ConsumerWidget {
   final LocalVisualScenario localVisualScenario;
   final String? localVisualPairingRequestId;
   final String? localVisualSessionId;
+  final Future<void> Function(SessionRecoveryController)? localVisualRecovery;
   final String localVisualFrameDirectory;
   final int localVisualFrameCount;
   final int localVisualFrameIntervalMs;
@@ -120,17 +125,20 @@ class AgentSessionsApp extends ConsumerWidget {
     // 本地和 Android 均固定深色移动控制面，保证会话状态颜色不会随宿主系统切换而歧义化。
     themeMode: ThemeMode.dark,
     builder: (context, child) {
-      if (child == null ||
-          !useMacBookPhoneCanvas ||
+      if (child == null) return const SizedBox.shrink();
+      // 生命周期观察必须在 Android、macOS 和 widget harness 都存在；MacBook 画布仅影响可见尺寸。
+      final runtimeBoundChild = RuntimeRecoveryBinding(child: child);
+      if (!useMacBookPhoneCanvas ||
           kIsWeb ||
           defaultTargetPlatform != TargetPlatform.macOS) {
-        return child ?? const SizedBox.shrink();
+        return runtimeBoundChild;
       }
       final coordinated = _LocalVisualScenarioCoordinator(
         scenario: localVisualScenario,
         pairingRequestId: localVisualPairingRequestId,
         sessionId: localVisualSessionId,
-        child: child,
+        localVisualRecovery: localVisualRecovery,
+        child: runtimeBoundChild,
       );
       // CoreGraphics 失败时，debug fixture 可从已经显示的 Flutter render tree 取帧；
       // 此 hook 不进入 release/Android/Web，也不会截取宿主桌面或访问真实会话内容。
@@ -218,12 +226,14 @@ class _LocalVisualScenarioCoordinator extends ConsumerStatefulWidget {
     required this.scenario,
     required this.pairingRequestId,
     required this.sessionId,
+    required this.localVisualRecovery,
     required this.child,
   });
 
   final LocalVisualScenario scenario;
   final String? pairingRequestId;
   final String? sessionId;
+  final Future<void> Function(SessionRecoveryController)? localVisualRecovery;
   final Widget child;
 
   @override
@@ -320,6 +330,12 @@ class _LocalVisualScenarioCoordinatorState
           // chip 本身保留失败与重试原因，清理全局错误可让移动窗口同时看见全部附件状态。
           sessions.clearError();
         }
+      }
+      // P6 fixture 在初始 snapshot 已建立 cursor 后再模拟后台、离线和恢复，
+      // 让可见窗口走真实 controller 的 after_seq 合并，而不是静态渲染恢复提示。
+      final localVisualRecovery = widget.localVisualRecovery;
+      if (localVisualRecovery != null) {
+        await localVisualRecovery(ref.read(sessionRecoveryControllerProvider));
       }
       if (!mounted) return;
       final router = ref.read(appRouterProvider);

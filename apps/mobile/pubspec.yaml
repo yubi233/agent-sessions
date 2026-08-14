@@ -36,6 +36,7 @@ hooks:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
+  connectivity_plus: ^5.0.2
   cryptography: ^2.9.0
   dio: ^5.9.0
   drift: ^2.32.0

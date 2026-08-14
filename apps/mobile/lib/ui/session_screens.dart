@@ -10,6 +10,7 @@ import '../domain/delegation_models.dart';
 import '../domain/session_models.dart';
 import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
+import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
 
 /// Happy 风格会话首页：优先呈现会话工作流，同时将 owner 安全入口保留在轻量控制区。
@@ -316,6 +317,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     final app = ref.watch(appControllerProvider);
     final sessions = ref.watch(sessionControllerProvider);
     final delegations = ref.watch(delegationControllerProvider);
+    final recovery = ref.watch(sessionRecoveryControllerProvider);
     final session = sessions.selectedSession;
     return Scaffold(
       key: const Key('session-detail-screen'),
@@ -382,6 +384,10 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                           session: session,
                           hasLease: sessions.hasSelectedLease,
                           canWrite: app.canManageDevices,
+                        ),
+                        _SessionRecoveryStrip(
+                          controller: recovery,
+                          sessionId: widget.sessionId,
                         ),
                         _DelegationPanel(
                           controller: delegations,
@@ -2228,6 +2234,134 @@ class _SessionStatusStrip extends StatelessWidget {
     );
   }
 }
+
+/// 生命周期恢复状态只展示脱敏计数和连接阶段；不把通知正文、密文或 Relay 错误原文画入界面。
+class _SessionRecoveryStrip extends StatelessWidget {
+  const _SessionRecoveryStrip({
+    required this.controller,
+    required this.sessionId,
+  });
+
+  final SessionRecoveryController controller;
+  final String sessionId;
+
+  @override
+  Widget build(BuildContext context) {
+    final notice = controller.latestNotice;
+    final isCurrentNotice = notice?.sessionId == sessionId;
+    final shouldShow =
+        controller.phase != SessionRecoveryPhase.idle || isCurrentNotice;
+    if (!shouldShow) return const SizedBox.shrink();
+    final presentation = _recoveryPresentation(controller.phase, context);
+    return Container(
+      key: const Key('session-recovery-banner'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: presentation.color.withValues(alpha: 0.1),
+        border: Border.all(color: presentation.color.withValues(alpha: 0.45)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(presentation.icon, size: 18, color: presentation.color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  presentation.label,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: presentation.color),
+                ),
+                if (controller.message != null)
+                  Text(
+                    controller.message!,
+                    key: const Key('session-recovery-message'),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                if (isCurrentNotice)
+                  Text(
+                    '应用内通知：本会话新增 ${notice!.eventCount} 条事件',
+                    key: const Key('session-recovery-notice'),
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+              ],
+            ),
+          ),
+          if (controller.phase == SessionRecoveryPhase.unavailable)
+            IconButton(
+              key: const Key('session-recovery-retry'),
+              tooltip: '重试恢复',
+              onPressed: controller.isRecovering
+                  ? null
+                  : () => controller.retryRecovery(),
+              icon: const Icon(Icons.refresh, size: 18),
+            ),
+          if (isCurrentNotice)
+            IconButton(
+              key: const Key('session-recovery-notice-dismiss'),
+              tooltip: '关闭通知',
+              onPressed: () => controller.dismissNotice(notice!.id),
+              icon: const Icon(Icons.close, size: 18),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecoveryPresentation {
+  const _RecoveryPresentation({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final IconData icon;
+  final Color color;
+}
+
+_RecoveryPresentation _recoveryPresentation(
+  SessionRecoveryPhase phase,
+  BuildContext context,
+) => switch (phase) {
+  SessionRecoveryPhase.paused => const _RecoveryPresentation(
+    label: '后台暂停',
+    icon: Icons.pause_circle_outline,
+    color: Color(0xfff0c674),
+  ),
+  SessionRecoveryPhase.waitingForNetwork => const _RecoveryPresentation(
+    label: '等待网络',
+    icon: Icons.cloud_off_outlined,
+    color: Color(0xfff0c674),
+  ),
+  SessionRecoveryPhase.recovering => _RecoveryPresentation(
+    label: '正在恢复',
+    icon: Icons.sync,
+    color: Theme.of(context).colorScheme.secondary,
+  ),
+  SessionRecoveryPhase.recovered => const _RecoveryPresentation(
+    label: '恢复完成',
+    icon: Icons.cloud_done_outlined,
+    color: Color(0xff86e0bf),
+  ),
+  SessionRecoveryPhase.unavailable => _RecoveryPresentation(
+    label: '恢复未完成',
+    icon: Icons.error_outline,
+    color: Theme.of(context).colorScheme.error,
+  ),
+  SessionRecoveryPhase.idle => _RecoveryPresentation(
+    label: '恢复状态',
+    icon: Icons.sync_disabled_outlined,
+    color: Theme.of(context).colorScheme.onSurfaceVariant,
+  ),
+};
 
 class _InlineError extends StatelessWidget {
   const _InlineError({required this.message, required this.onRetry, super.key});

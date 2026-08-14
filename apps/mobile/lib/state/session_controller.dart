@@ -41,8 +41,12 @@ class SessionController extends ChangeNotifier {
   final Set<String> _pendingActionKeys = {};
   final Set<String> _resolvedRequestKeys = {};
   final Map<String, String> _idempotencyKeys = {};
+  // cursor 只在内存保存为会话序号；生命周期恢复不接触消息正文、密文或待发送内容。
+  final Map<String, int> _sessionCursors = {};
   String? _errorMessage;
   int _idempotencyCounter = 0;
+  int _selectionGeneration = 0;
+  int _runtimeLeaseGeneration = 0;
   bool _initializing = false;
 
   SessionListPhase get phase => _phase;
@@ -74,6 +78,7 @@ class SessionController extends ChangeNotifier {
   bool get isStreaming =>
       selectedSession?.status == MobileSessionStatus.streaming;
   bool get isEmpty => _phase == SessionListPhase.ready && _sessions.isEmpty;
+  int get selectedCursor => _cursorFor(_selectedSessionId);
 
   /// 仅在首次消费 provider 时拉取列表，避免页面 rebuild 时重复请求 Relay。
   Future<void> initialize() async {
@@ -167,13 +172,67 @@ class SessionController extends ChangeNotifier {
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
       return;
     }
+    final runtimeLeaseGeneration = _runtimeLeaseGeneration;
     await _runAction<void>('lease:$sessionId', () async {
       final lease = await _relay.acquireSessionLease(sessionId);
       if (lease.sessionId != sessionId || lease.epoch <= 0) {
         throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了无效控制权。');
       }
+      // 后台/离线后才返回的旧 lease 不能重新解锁 composer；用户必须显式获取新的 fencing epoch。
+      if (runtimeLeaseGeneration != _runtimeLeaseGeneration ||
+          _selectedSessionId != sessionId) {
+        return;
+      }
       _selectedLease = lease;
     });
+  }
+
+  /// 前后台或网络变化时本地 lease 立即失效。
+  /// 已提交到 Relay 的写请求不会被这里重放；恢复阶段只会读取增量 snapshot。
+  void invalidateSelectedLeaseForRuntimePause() {
+    _runtimeLeaseGeneration += 1;
+    if (_selectedLease == null && _skillConfirmation == null) return;
+    _selectedLease = null;
+    _skillConfirmation = null;
+    notifyListeners();
+  }
+
+  /// 以当前已确认 cursor 拉取选中会话的增量事件。
+  /// 该方法绝不调用 create/send/abort/确认/附件等写接口，生命周期恢复只能走只读路径。
+  Future<SessionCursorRecovery?> recoverSelectedSessionFromCursor() async {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return null;
+    final selectionGeneration = _selectionGeneration;
+    final requestedAfterSequence = _cursorFor(sessionId);
+    final existingSequences = _timeline.map((event) => event.sequence).toSet();
+    final snapshot = await _relay.getSessionSnapshot(
+      sessionId,
+      afterSequence: requestedAfterSequence,
+    );
+    // 用户已切换会话时丢弃迟到的恢复响应，不能把上一会话事件画到当前页面。
+    if (_selectedSessionId != sessionId ||
+        _selectionGeneration != selectionGeneration) {
+      return null;
+    }
+    final addedEventCount = snapshot.events
+        .where((event) => !existingSequences.contains(event.sequence))
+        .length;
+    _mergeSnapshot(snapshot, appendTimeline: true);
+    final controls = await _relay.getSessionControls(sessionId);
+    // 控制项读取也可能比路由切换更晚返回。此时不能向恢复控制器报告旧会话成功，
+    // 否则应用内通知会指向已经离开的会话。
+    if (_selectedSessionId != sessionId ||
+        _selectionGeneration != selectionGeneration) {
+      return null;
+    }
+    _controls = controls;
+    notifyListeners();
+    return SessionCursorRecovery(
+      sessionId: sessionId,
+      requestedAfterSequence: requestedAfterSequence,
+      recoveredCursor: _cursorFor(sessionId),
+      addedEventCount: addedEventCount,
+    );
   }
 
   Future<void> sendMessage({
@@ -580,9 +639,13 @@ class SessionController extends ChangeNotifier {
       _setError('找不到所选会话。');
       return;
     }
+    final selectionGeneration = ++_selectionGeneration;
     _errorMessage = null;
     _selectedSessionId = sessionId;
     _selectedLease = null;
+    // 在读取新会话前先清空上一会话 timeline。否则首次 snapshot 的 cursor 推导会误用旧序号，
+    // 并可能遗漏新会话恢复事件或短暂展示错误的会话内容。
+    _timeline = const [];
     _resolvedRequestKeys.clear();
     _skillConfirmation = null;
     _attachments = const [];
@@ -592,15 +655,32 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
     try {
       final snapshot = await _relay.getSessionSnapshot(sessionId);
+      if (_selectedSessionId != sessionId ||
+          _selectionGeneration != selectionGeneration) {
+        return;
+      }
       _mergeSnapshot(snapshot);
-      _controls = await _relay.getSessionControls(sessionId);
+      final controls = await _relay.getSessionControls(sessionId);
+      if (_selectedSessionId == sessionId &&
+          _selectionGeneration == selectionGeneration) {
+        _controls = controls;
+      }
     } on RelayFailure catch (failure) {
-      _errorMessage = failure.message;
+      if (_selectedSessionId == sessionId &&
+          _selectionGeneration == selectionGeneration) {
+        _errorMessage = failure.message;
+      }
     } catch (_) {
-      _errorMessage = '会话内容暂时不可用，请稍后重试。';
+      if (_selectedSessionId == sessionId &&
+          _selectionGeneration == selectionGeneration) {
+        _errorMessage = '会话内容暂时不可用，请稍后重试。';
+      }
     } finally {
-      _isDetailLoading = false;
-      notifyListeners();
+      if (_selectedSessionId == sessionId &&
+          _selectionGeneration == selectionGeneration) {
+        _isDetailLoading = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -631,18 +711,51 @@ class SessionController extends ChangeNotifier {
       await _relay.submitSessionCommand(sessionId, command);
       onAccepted?.call();
       final snapshot = await _relay.getSessionSnapshot(sessionId);
-      _mergeSnapshot(snapshot);
+      if (_selectedSessionId == sessionId) _mergeSnapshot(snapshot);
     });
   }
 
-  void _mergeSnapshot(SessionSnapshot snapshot) {
+  void _mergeSnapshot(SessionSnapshot snapshot, {bool appendTimeline = false}) {
     _sessions = [
       snapshot.session,
       ..._sessions.where((item) => item.id != snapshot.session.id),
     ];
-    _timeline = snapshot.events
+    final incoming = snapshot.events
         .map(SessionTimelineEvent.fromRelayEvent)
         .toList(growable: false);
+    final priorCursor = _cursorFor(snapshot.session.id);
+    final highestIncoming = incoming.fold<int>(
+      priorCursor,
+      (highest, event) => event.sequence > highest ? event.sequence : highest,
+    );
+    _sessionCursors[snapshot.session.id] = highestIncoming;
+    if (_selectedSessionId != snapshot.session.id) return;
+    if (!appendTimeline) {
+      _timeline = incoming;
+      return;
+    }
+    // Relay 的 after_seq 语义应当排除已确认事件；客户端仍按 sequence 去重并排序，
+    // 防止网络重连、代理重试或重复投递把同一时间线节点展示两次。
+    final merged =
+        <int, SessionTimelineEvent>{
+            for (final event in _timeline) event.sequence: event,
+            for (final event in incoming) event.sequence: event,
+          }.values.toList()
+          ..sort((left, right) => left.sequence.compareTo(right.sequence));
+    _timeline = List<SessionTimelineEvent>.unmodifiable(merged);
+  }
+
+  int _cursorFor(String? sessionId) {
+    if (sessionId == null) return 0;
+    final known = _sessionCursors[sessionId];
+    if (known != null) return known;
+    var highest = 0;
+    if (_selectedSessionId == sessionId) {
+      for (final event in _timeline) {
+        if (event.sequence > highest) highest = event.sequence;
+      }
+    }
+    return highest;
   }
 
   AttachmentTransfer? _attachmentByID(String attachmentId) {
@@ -714,6 +827,7 @@ class SessionController extends ChangeNotifier {
   }
 
   void _clearSelection() {
+    _selectionGeneration += 1;
     _selectedSessionId = null;
     _selectedLease = null;
     _timeline = const [];

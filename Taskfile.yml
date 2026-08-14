@@ -80,11 +80,17 @@ tasks:
     dir: apps/mobile
 
   test:flutter:local:
-    desc: MacBook 本地 Flutter macOS 可见桌面窗口 P1-P5 验收
+    desc: MacBook 本地 Flutter macOS 可见桌面窗口 P1-P6 验收
     cmds:
       - node e2e-verify/mobile/macos.test.mjs
       - node e2e-verify/mobile/macos-screenshot.test.mjs
       - node e2e-verify/mobile/run-macos.mjs {{.CLI_ARGS}}
+
+  test:flutter:record:
+    desc: 已通过 Flutter macOS full gate 后的 P6 5fps fixture 录屏
+    cmds:
+      - node e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs {{.CLI_ARGS}}
 
   test:android:harness:
     desc: 后续 Android AVD 回归编排器的纯 Node 回归

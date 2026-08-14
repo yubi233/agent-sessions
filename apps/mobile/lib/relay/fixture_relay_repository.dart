@@ -23,6 +23,9 @@ class FixtureRelayRepository implements RelayRepository {
   var _delegationSequence = 0;
   var _failNextAttachmentChunk = false;
   int? _failAttachmentChunkAtIndex;
+  bool _networkAvailable = true;
+  bool _repeatCursorEventOnNextSnapshot = false;
+  final Map<String, List<int>> _snapshotAfterSequences = {};
 
   /// 供 ATTACH-01 注入一次可恢复失败；下一次相同幂等键重试必须能够继续。
   void failNextAttachmentChunk() => _failNextAttachmentChunk = true;
@@ -35,6 +38,31 @@ class FixtureRelayRepository implements RelayRepository {
   int get submittedCommandCount => _commandSequence;
 
   int get delegationCount => _delegations.length;
+
+  /// P6 测试只用这个开关模拟 Relay 不可达；远端事件注入仍可发生，表示应用离线期间服务端继续推进。
+  void setNetworkAvailable(bool value) => _networkAvailable = value;
+
+  List<int> snapshotAfterSequencesFor(String sessionId) =>
+      List<int>.unmodifiable(_snapshotAfterSequences[sessionId] ?? const []);
+
+  /// 下一次 snapshot 故意重发 cursor 边界事件，用于验证客户端恢复时的 sequence 去重保护。
+  void repeatCursorEventOnNextSnapshot() =>
+      _repeatCursorEventOnNextSnapshot = true;
+
+  /// 模拟应用离线期间 Relay 收到的新事件；该入口绕过本地网络开关，不能用于普通业务写操作。
+  Future<void> appendOfflineRecoveryEvent(String sessionId) async {
+    final state = _sessionState(sessionId);
+    state.append(
+      eventType: 'session.recovery.available',
+      payload: const {
+        'kind': 'system_notice',
+        'label': '离线期间有新事件',
+        'text': '已在恢复后按 cursor 补齐一条 fixture 状态事件。',
+      },
+      now: _clock(),
+    );
+    state.updateSession(status: MobileSessionStatus.idle, now: _clock());
+  }
 
   @override
   Future<AuthTokens> register(LoginCredentials credentials) async {
@@ -224,6 +252,7 @@ class FixtureRelayRepository implements RelayRepository {
 
   @override
   Future<List<MobileSession>> listSessions() async {
+    _requireFixtureNetwork();
     final sessions = _sessions.values.map((state) => state.session).toList();
     sessions.sort((left, right) {
       final leftTime = left.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -237,6 +266,7 @@ class FixtureRelayRepository implements RelayRepository {
   @override
   Future<MobileSession> createSession(CreateMobileSessionInput input) async {
     input.validate();
+    _requireFixtureNetwork();
     _requireFixtureOwner();
     _sessionSequence += 1;
     final id = 'session-fixture-${_sessionSequence.toString().padLeft(3, '0')}';
@@ -276,17 +306,30 @@ class FixtureRelayRepository implements RelayRepository {
     if (afterSequence < 0) {
       throw const RelayFailure(RelayFailureKind.validation, '事件游标不能为负数。');
     }
+    _requireFixtureNetwork();
     final state = _sessionState(sessionId);
+    _snapshotAfterSequences
+        .putIfAbsent(sessionId, () => <int>[])
+        .add(afterSequence);
+    final events = state.events
+        .where((event) => event.sequence > afterSequence)
+        .toList(growable: true);
+    if (_repeatCursorEventOnNextSnapshot && afterSequence > 0) {
+      _repeatCursorEventOnNextSnapshot = false;
+      final boundary = state.events.where(
+        (event) => event.sequence == afterSequence,
+      );
+      if (boundary.isNotEmpty) events.insert(0, boundary.single);
+    }
     return SessionSnapshot(
       session: state.session,
-      events: state.events
-          .where((event) => event.sequence > afterSequence)
-          .toList(growable: false),
+      events: List<RelaySessionEvent>.unmodifiable(events),
     );
   }
 
   @override
   Future<SessionLease> acquireSessionLease(String sessionId) async {
+    _requireFixtureNetwork();
     _requireFixtureOwner();
     final state = _sessionState(sessionId);
     // 每次显式获取都推进 fencing epoch，确保旧 UI 操作无法被 fixture 静默接受。
@@ -300,6 +343,7 @@ class FixtureRelayRepository implements RelayRepository {
     SessionCommandInput input,
   ) async {
     input.validate();
+    _requireFixtureNetwork();
     _requireFixtureOwner();
     final state = _sessionState(sessionId);
     if (input.leaseEpoch != state.leaseEpoch) {
@@ -446,41 +490,47 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   @override
-  Future<CapabilityMatrix> getCapabilities() async => CapabilityMatrix(
-    providers: [
-      _fixtureProvider(
-        'codex',
-        native: const {
-          'plan',
-          'goal',
-          'skill_catalog',
-          'invoke_skill',
-          'model_select',
-          'effort_select',
-          'attachments',
-          'delegate_session',
-        },
-        emulated: const {'delegate_cross_provider'},
-      ),
-      _fixtureProvider(
-        'claude',
-        native: const {'skill_catalog', 'model_select'},
-        emulated: const {'plan', 'goal'},
-      ),
-      _fixtureProvider('opencode'),
-      _fixtureProvider('openclaw', native: const {'skill_catalog'}),
-    ],
-  );
+  Future<CapabilityMatrix> getCapabilities() async {
+    _requireFixtureNetwork();
+    return CapabilityMatrix(
+      providers: [
+        _fixtureProvider(
+          'codex',
+          native: const {
+            'plan',
+            'goal',
+            'skill_catalog',
+            'invoke_skill',
+            'model_select',
+            'effort_select',
+            'attachments',
+            'delegate_session',
+          },
+          emulated: const {'delegate_cross_provider'},
+        ),
+        _fixtureProvider(
+          'claude',
+          native: const {'skill_catalog', 'model_select'},
+          emulated: const {'plan', 'goal'},
+        ),
+        _fixtureProvider('opencode'),
+        _fixtureProvider('openclaw', native: const {'skill_catalog'}),
+      ],
+    );
+  }
 
   @override
-  Future<SessionControlState> getSessionControls(String sessionId) async =>
-      _sessionState(sessionId).controls;
+  Future<SessionControlState> getSessionControls(String sessionId) async {
+    _requireFixtureNetwork();
+    return _sessionState(sessionId).controls;
+  }
 
   @override
   Future<AttachmentReceipt> uploadAttachmentChunk(
     AttachmentChunkUploadInput input,
   ) async {
     input.validate();
+    _requireFixtureNetwork();
     _requireFixtureOwner();
     final session = _sessionState(input.sessionId);
     _ensureFixtureLease(session, input.leaseEpoch);
@@ -535,6 +585,7 @@ class FixtureRelayRepository implements RelayRepository {
     AttachmentCompleteInput input,
   ) async {
     input.validate();
+    _requireFixtureNetwork();
     _requireFixtureOwner();
     final session = _sessionState(input.sessionId);
     _ensureFixtureLease(session, input.leaseEpoch);
@@ -577,6 +628,15 @@ class FixtureRelayRepository implements RelayRepository {
       throw const RelayFailure(
         RelayFailureKind.forbidden,
         '当前 fixture 没有 active Android owner。',
+      );
+    }
+  }
+
+  void _requireFixtureNetwork() {
+    if (!_networkAvailable) {
+      throw const RelayFailure(
+        RelayFailureKind.unavailable,
+        '本地 Relay fixture 当前不可用。',
       );
     }
   }
