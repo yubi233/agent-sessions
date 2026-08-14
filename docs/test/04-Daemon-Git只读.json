@@ -1,7 +1,7 @@
 {
   "suite": "daemon-git",
   "suite_version": 1,
-  "status": "in_progress",
+  "status": "completed",
   "plan_id": "DAEMON-GIT",
   "description": "Git 只读 RPC、snapshot_token 与路径安全。消费 WORKSPACE-01。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -23,8 +23,8 @@
     {
       "id": "GIT-01",
       "title": "porcelain v2 状态与变更列表",
-      "status": "passed",
-      "phase": "P2",
+      "status": "completed",
+      "phase": "v0.1/P4",
       "category": "Git",
       "priority": "P0",
       "test_layer": "Daemon unit + integration",
@@ -39,14 +39,15 @@
         "删除临时仓库"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/DAEMON-GIT/git-01.json"
+        "internal/gitread/git_test.go",
+        "task test:daemon (2026-08-14)"
       ]
     },
     {
       "id": "GIT-02",
       "title": "文件级与全量 diff",
-      "status": "passed",
-      "phase": "P2",
+      "status": "completed",
+      "phase": "v0.1/P4",
       "category": "Git",
       "priority": "P0",
       "test_layer": "Daemon integration",
@@ -61,14 +62,15 @@
         "删除临时仓库"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/DAEMON-GIT/git-02.json"
+        "internal/gitread/git_test.go",
+        "task test:daemon (2026-08-14)"
       ]
     },
     {
       "id": "GIT-03",
       "title": "路径穿越与非仓库拒绝",
-      "status": "passed",
-      "phase": "P2",
+      "status": "completed",
+      "phase": "v0.1/P4",
       "category": "安全",
       "priority": "P0",
       "test_layer": "Daemon security",
@@ -83,14 +85,15 @@
         "删除临时文件与链接"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/DAEMON-GIT/git-03.json"
+        "internal/gitread/git_test.go",
+        "task test:daemon (2026-08-14)"
       ]
     },
     {
       "id": "GIT-04",
       "title": "rename/binary/submodule/LFS",
-      "status": "in_progress",
-      "phase": "P2",
+      "status": "completed",
+      "phase": "v0.1/P4",
       "category": "Git",
       "priority": "P1",
       "test_layer": "Daemon integration",
@@ -103,14 +106,15 @@
         "删除临时仓库"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/DAEMON-GIT/git-04.json"
+        "internal/gitread/git_test.go",
+        "task test:daemon (2026-08-14)"
       ]
     },
     {
       "id": "GIT-05",
       "title": "snapshot 漂移",
-      "status": "passed",
-      "phase": "P2",
+      "status": "completed",
+      "phase": "v0.1/P4",
       "category": "Git",
       "priority": "P0",
       "test_layer": "Daemon integration",
@@ -124,14 +128,15 @@
         "删除临时仓库"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/DAEMON-GIT/git-05.json"
+        "internal/gitread/git_test.go",
+        "task test:daemon (2026-08-14)"
       ]
     },
     {
       "id": "GIT-06",
       "title": "超大 diff 保护",
-      "status": "passed",
-      "phase": "P2",
+      "status": "completed",
+      "phase": "v0.1/P4",
       "category": "Git",
       "priority": "P1",
       "test_layer": "Daemon integration",
@@ -145,7 +150,8 @@
         "删除临时仓库"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/DAEMON-GIT/git-06.json"
+        "internal/gitread/git_test.go",
+        "task test:daemon (2026-08-14)"
       ]
     }
   ]

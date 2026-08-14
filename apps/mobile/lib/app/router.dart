@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../state/app_controller.dart';
+import '../ui/git_diff_screens.dart';
 import '../ui/pairing_scanner.dart';
 import '../ui/screens.dart';
 import '../ui/session_screens.dart';
@@ -58,6 +59,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/sessions/new',
         builder: (context, state) => const NewSessionScreen(),
+      ),
+      GoRoute(
+        path: '/sessions/:id/git',
+        builder: (context, state) =>
+            GitDiffScreen(sessionId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: '/sessions/:id',

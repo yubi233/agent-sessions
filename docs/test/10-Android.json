@@ -104,21 +104,32 @@
     {
       "id": "MOBILE-04",
       "title": "Git DiffView 与 snapshot stale",
-      "status": "planned",
-      "phase": "P4",
+      "status": "completed",
+      "phase": "v0.1/P4",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "widget + integration",
-      "precondition": "Git fixtures。",
+      "test_layer": "Dart unit + Flutter widget + Daemon Git integration + Flutter macOS visible fixture",
+      "consumes": ["GIT-01", "GIT-02", "GIT-03", "GIT-04", "GIT-05", "GIT-06"],
+      "precondition": "Git fixture 覆盖 staged/unstaged、rename、binary、submodule、LFS、超大 diff 与 snapshot 漂移；MacBook 的可见 Flutter macOS 窗口使用 deterministic DiffView fixture，不连接真实工作区、Relay 或 Android AVD。",
       "steps": [
-        "文件树",
-        "unified/split",
-        "stale 重试"
+        "打开 session 的 Git 入口，读取同一个 snapshot 下的统计、文件树、状态筛选与搜索结果",
+        "选择文本文件，验证窄屏默认 unified、unified/split 切换、稳定行号、hunk 折叠与分页继续加载",
+        "选择 rename、binary、submodule、LFS 与超大 diff fixture，验证展示受限摘要而不是把二进制或超限内容渲染为文本",
+        "让 fixture 在首次读取后返回 snapshot stale，点击重试并验证旧快照内容被整体替换、不会混合两个 snapshot",
+        "在 480x960 可见 macOS 窗口采集已登记的 5fps DiffView fixture PNG"
       ],
-      "expected": "窄屏默认 unified；不混用快照。",
-      "cleanup": [],
+      "expected": "Git UI 只读；窄屏默认 unified；状态、分页与 diff 共用一个 snapshot token。漂移时仅显示可重试状态，成功重试后不混用旧、新快照。真实 Daemon 加密 RPC 尚未部署时，非 fixture 运行必须明确显示不可用，不能伪造成功。",
+      "cleanup": [
+        "清理 Flutter fixture 的筛选、展开 hunk、分页游标和 stale 注入状态",
+        "删除 Daemon 集成测试创建的临时 Git 仓库",
+        "关闭本轮启动的 Flutter macOS 子进程"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ANDROID/mobile-04.json"
+        "internal/gitread/git_test.go",
+        "apps/mobile/test/git_diff_controller_test.dart",
+        "apps/mobile/test/git_diff_screens_test.dart",
+        "e2e-verify/reports/2026-08-14T21-18-27-197Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T21-18-27-197Z/MOBILE/manifest.json"
       ]
     },
     {

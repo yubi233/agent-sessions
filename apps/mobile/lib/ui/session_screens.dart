@@ -318,6 +318,13 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           icon: const Icon(Icons.arrow_back),
         ),
         actions: [
+          // Git 入口始终只读，不依赖 Android lease；实际数据读取仍由独立 Daemon Git RPC 边界裁决。
+          IconButton(
+            key: const Key('session-open-git-button'),
+            tooltip: '查看 Git 变更',
+            onPressed: () => context.push('/sessions/${widget.sessionId}/git'),
+            icon: const Icon(Icons.difference_outlined),
+          ),
           IconButton(
             key: const Key('session-acquire-lease-button'),
             tooltip: sessions.hasSelectedLease ? '已获得控制权' : '获取会话控制权',

@@ -65,6 +65,10 @@ Future<void> main() async {
         ),
         if (localVisualFixture != null)
           relayRepositoryProvider.overrideWithValue(localVisualFixture.relay),
+        if (localVisualFixture != null)
+          gitDiffRepositoryProvider.overrideWithValue(
+            localVisualFixture.gitDiff,
+          ),
       ],
       child: AgentSessionsApp(
         localVisualScenario:
@@ -275,6 +279,8 @@ class _LocalVisualScenarioCoordinatorState
         LocalVisualScenario.sessionCapability ||
         LocalVisualScenario.sessionSkillConfirmation ||
         LocalVisualScenario.sessionAttachments => true,
+        LocalVisualScenario.sessionGitMain ||
+        LocalVisualScenario.sessionGitRestricted => false,
         _ => false,
       };
       if (needsLease && app.canManageDevices) {
@@ -316,6 +322,9 @@ class _LocalVisualScenarioCoordinatorState
       final router = ref.read(appRouterProvider);
       if (widget.scenario == LocalVisualScenario.sessionList) {
         router.go('/home');
+      } else if (widget.scenario == LocalVisualScenario.sessionGitMain ||
+          widget.scenario == LocalVisualScenario.sessionGitRestricted) {
+        router.go('/sessions/$sessionId/git');
       } else {
         router.go('/sessions/$sessionId');
       }

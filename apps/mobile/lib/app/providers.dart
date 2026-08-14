@@ -8,7 +8,9 @@ import 'package:flutter_riverpod/legacy.dart';
 import '../relay/fixture_relay_repository.dart';
 import '../relay/http_relay_repository.dart';
 import '../relay/relay_repository.dart';
+import '../git/git_diff_repository.dart';
 import '../state/app_controller.dart';
+import '../state/git_diff_controller.dart';
 import '../state/session_controller.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
@@ -40,6 +42,15 @@ final relayRepositoryProvider = Provider<RelayRepository>((ref) {
   );
 });
 
+/// Git 读取独立于 Relay 会话 repository：本地 fixture 可验收 UI，而已配置 Relay 时必须等待加密 Daemon RPC。
+final gitDiffRepositoryProvider = Provider<GitDiffRepository>((ref) {
+  const relayBaseUrl = String.fromEnvironment('RELAY_BASE_URL');
+  if (relayBaseUrl.isEmpty) {
+    return FixtureGitDiffRepository();
+  }
+  return const UnavailableDaemonGitDiffRepository();
+});
+
 final appControllerProvider = ChangeNotifierProvider<AppController>((ref) {
   final controller = AppController(
     relay: ref.read(relayRepositoryProvider),
@@ -57,6 +68,17 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
 ) {
   final controller = SessionController(
     relay: ref.read(relayRepositoryProvider),
+  );
+  unawaited(controller.initialize());
+  return controller;
+});
+
+/// DiffView 采用独立状态机，避免会话刷新、lease 或 composer rebuild 影响只读 Git 快照。
+final gitDiffControllerProvider = ChangeNotifierProvider<GitDiffController>((
+  ref,
+) {
+  final controller = GitDiffController(
+    repository: ref.read(gitDiffRepositoryProvider),
   );
   unawaited(controller.initialize());
   return controller;

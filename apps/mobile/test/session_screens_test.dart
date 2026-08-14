@@ -148,6 +148,34 @@ void main() {
     );
     expect(lease.onPressed, isNull);
   });
+
+  testWidgets('MOBILE-04：会话详情通过只读 Git 入口打开 DiffView', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _registerOwner(tester, 'git-entry-owner@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+
+    await _tapVisible(tester, find.byKey(const Key('session-open-git-button')));
+    await _waitForVisible(tester, find.byKey(const Key('git-diff-screen')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('git-diff-file-lib-state-session-controller-dart')),
+    );
+  });
 }
 
 Future<void> _registerOwner(WidgetTester tester, String email) async {

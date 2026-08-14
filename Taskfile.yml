@@ -80,7 +80,7 @@ tasks:
     dir: apps/mobile
 
   test:flutter:local:
-    desc: MacBook 本地 Flutter macOS 可见桌面窗口 P1/P2 验收
+    desc: MacBook 本地 Flutter macOS 可见桌面窗口 P1-P4 验收
     cmds:
       - node e2e-verify/mobile/macos.test.mjs
       - node e2e-verify/mobile/macos-screenshot.test.mjs

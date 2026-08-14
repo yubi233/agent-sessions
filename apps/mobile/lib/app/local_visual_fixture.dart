@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import '../git/git_diff_repository.dart';
 import '../relay/fixture_relay_repository.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
@@ -18,6 +19,8 @@ enum LocalVisualScenario {
   sessionCapability,
   sessionSkillConfirmation,
   sessionAttachments,
+  sessionGitMain,
+  sessionGitRestricted,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(String value) =>
@@ -31,6 +34,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(String value) =>
       'session-skill-confirmation' =>
         LocalVisualScenario.sessionSkillConfirmation,
       'session-attachments' => LocalVisualScenario.sessionAttachments,
+      'session-git-main' => LocalVisualScenario.sessionGitMain,
+      'session-git-restricted' => LocalVisualScenario.sessionGitRestricted,
       _ => LocalVisualScenario.none,
     };
 
@@ -38,6 +43,7 @@ class LocalVisualFixture {
   const LocalVisualFixture({
     required this.scenario,
     required this.relay,
+    required this.gitDiff,
     required this.tokens,
     required this.identities,
     required this.cache,
@@ -47,6 +53,7 @@ class LocalVisualFixture {
 
   final LocalVisualScenario scenario;
   final FixtureRelayRepository relay;
+  final FixtureGitDiffRepository gitDiff;
   final InMemorySecureTokenStore tokens;
   final InMemoryDeviceIdentityStore identities;
   final InMemoryEncryptedCacheStore cache;
@@ -64,6 +71,11 @@ class LocalVisualFixture {
     final tokens = InMemorySecureTokenStore();
     final identities = InMemoryDeviceIdentityStore();
     final cache = InMemoryEncryptedCacheStore();
+    final gitDiff = FixtureGitDiffRepository(
+      scenario: scenario == LocalVisualScenario.sessionGitRestricted
+          ? GitFixtureScenario.restricted
+          : GitFixtureScenario.main,
+    );
     final ownerTokens = await relay.register(
       const LoginCredentials(
         email: 'visual-owner@fixture.test',
@@ -117,6 +129,7 @@ class LocalVisualFixture {
     return LocalVisualFixture(
       scenario: scenario,
       relay: relay,
+      gitDiff: gitDiff,
       tokens: tokens,
       identities: identities,
       cache: cache,
@@ -137,7 +150,9 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionReadOnly ||
       LocalVisualScenario.sessionCapability ||
       LocalVisualScenario.sessionSkillConfirmation ||
-      LocalVisualScenario.sessionAttachments => true,
+      LocalVisualScenario.sessionAttachments ||
+      LocalVisualScenario.sessionGitMain ||
+      LocalVisualScenario.sessionGitRestricted => true,
       _ => false,
     };
     if (!needsSession) return null;

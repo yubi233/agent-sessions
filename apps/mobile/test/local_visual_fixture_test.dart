@@ -1,6 +1,7 @@
 import 'package:agent_sessions_mobile/app/local_visual_fixture.dart';
 import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
+import 'package:agent_sessions_mobile/git/git_diff_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -106,6 +107,26 @@ void main() {
         isTrue,
       );
       expect(() => drafts.last.validate(), throwsA(isA<Exception>()));
+    });
+
+    test('P4 DiffView 场景只使用固定 Git fixture，并覆盖主路径和 snapshot stale', () async {
+      final main = await LocalVisualFixture.create('session-git-main');
+      final restricted = await LocalVisualFixture.create(
+        'session-git-restricted',
+      );
+
+      expect(main!.scenario, LocalVisualScenario.sessionGitMain);
+      expect(restricted!.scenario, LocalVisualScenario.sessionGitRestricted);
+      expect(main.sessionId, isNotNull);
+      expect(
+        (await main.gitDiff.loadSnapshot()).repositoryLabel,
+        'fixture-agent-sessions',
+      );
+      expect(
+        (await restricted.gitDiff.loadSnapshot()).repositoryLabel,
+        'fixture-security-review',
+      );
+      expect(restricted.gitDiff.scenario, GitFixtureScenario.restricted);
     });
   });
 }
