@@ -54,6 +54,9 @@ class SessionController extends ChangeNotifier {
   MobileSession? get selectedSession => _sessionById(_selectedSessionId);
   SessionLease? get selectedLease => _selectedLease;
   CapabilityMatrix get capabilities => _capabilities;
+
+  /// Delegation 等独立控制器消费同一份 Relay capability 快照，避免按 Provider 名称猜测可用性。
+  CapabilityMatrix get capabilityMatrix => _capabilities;
   ProviderCapabilityProfile get selectedProviderCapabilities =>
       _capabilities.provider(selectedSession?.provider ?? 'unknown');
   SessionControlState get controls => _controls;

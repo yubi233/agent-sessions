@@ -1,5 +1,6 @@
 import 'package:agent_sessions_mobile/app/local_visual_fixture.dart';
 import 'package:agent_sessions_mobile/domain/control_models.dart';
+import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/git/git_diff_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -127,6 +128,41 @@ void main() {
         'fixture-security-review',
       );
       expect(restricted.gitDiff.scenario, GitFixtureScenario.restricted);
+    });
+
+    test('P5 Delegation 场景只提供安全摘要、已批准 child 图和 unsupported 降级', () async {
+      final proposed = await LocalVisualFixture.create(
+        'session-delegation-proposed',
+      );
+      final approved = await LocalVisualFixture.create(
+        'session-delegation-approved',
+      );
+      final restricted = await LocalVisualFixture.create(
+        'session-delegation-restricted',
+      );
+
+      final proposedNode = (await proposed!.relay.listSessionDelegations(
+        proposed.sessionId!,
+      )).single;
+      final approvedNode = (await approved!.relay.listSessionDelegations(
+        approved.sessionId!,
+      )).single;
+      final restrictedNode = (await restricted!.relay.listSessionDelegations(
+        restricted.sessionId!,
+      )).single;
+
+      expect(proposedNode.status, DelegationStatus.proposed);
+      expect(proposedNode.summaryEnvelope.containsKey('plaintext'), isFalse);
+      expect(approvedNode.status, DelegationStatus.running);
+      expect(approvedNode.childSessionId, isNotNull);
+      expect(restrictedNode.targetProvider, 'claude');
+      expect(
+        (await restricted.relay.getCapabilities())
+            .provider('claude')
+            .capability('delegate_cross_provider')
+            .isSupported,
+        isFalse,
+      );
     });
   });
 }

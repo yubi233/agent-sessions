@@ -10,6 +10,7 @@ import '../relay/http_relay_repository.dart';
 import '../relay/relay_repository.dart';
 import '../git/git_diff_repository.dart';
 import '../state/app_controller.dart';
+import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
 import '../state/session_controller.dart';
 import '../storage/encrypted_cache.dart';
@@ -72,6 +73,12 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
   unawaited(controller.initialize());
   return controller;
 });
+
+/// Delegation 图与会话正文独立拉取，父会话切换时不会把上一页的 child 节点短暂画到当前页面。
+final delegationControllerProvider =
+    ChangeNotifierProvider<DelegationController>(
+      (ref) => DelegationController(relay: ref.read(relayRepositoryProvider)),
+    );
 
 /// DiffView 采用独立状态机，避免会话刷新、lease 或 composer rebuild 影响只读 Git 快照。
 final gitDiffControllerProvider = ChangeNotifierProvider<GitDiffController>((

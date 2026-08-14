@@ -87,6 +87,21 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-10-git-restricted",
     localVisualScenario: "session-git-restricted",
   }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-11",
+    directory: "visual-mobile-11-delegation-proposed",
+    localVisualScenario: "session-delegation-proposed",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-12",
+    directory: "visual-mobile-12-delegation-approved",
+    localVisualScenario: "session-delegation-approved",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-13",
+    directory: "visual-mobile-13-delegation-restricted",
+    localVisualScenario: "session-delegation-restricted",
+  }),
 ]);
 
 function wait(milliseconds) {

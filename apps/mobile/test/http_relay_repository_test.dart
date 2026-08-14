@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:agent_sessions_mobile/domain/control_models.dart';
+import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/http_relay_repository.dart';
@@ -304,6 +305,101 @@ void main() {
       );
     });
 
+    test('Delegation 图只读取安全摘要，任务书字段必须被客户端拒绝', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/sessions/session_1/delegations');
+        expect(options.method, 'GET');
+        return _jsonResponse({
+          'delegations': [
+            {
+              'id': 'delegation_1',
+              'parent_session_id': 'session_1',
+              'target_provider': 'codex',
+              'status': 'proposed',
+              'summary_envelope': {
+                'alg': 'v1-aes256gcm-hkdfsha256',
+                'key_id': 'fixture-dek',
+                'nonce': 'fixture-nonce',
+                'ciphertext': 'fixture-opaque',
+                'aad_hash': 'fixture-aad',
+                'payload_version': 1,
+              },
+              'summary_envelope_sha256': _fixtureHash('a'),
+            },
+          ],
+        });
+      });
+
+      final delegations = await _authenticatedRepository(
+        adapter,
+      ).listSessionDelegations('session_1');
+
+      expect(delegations.single.summaryFingerprint, 'aaaaaaaaaaaa');
+      expect(delegations.single.childSessionId, isNull);
+      expect(delegations.single.status, DelegationStatus.proposed);
+      expect(
+        () => SessionDelegation.fromRelayJson({
+          'id': 'delegation_bad',
+          'parent_session_id': 'session_1',
+          'target_provider': 'codex',
+          'status': 'proposed',
+          'task_envelope': const {'plaintext': 'must-not-render'},
+          'summary_envelope': {
+            'alg': 'v1-aes256gcm-hkdfsha256',
+            'key_id': 'fixture-dek',
+            'nonce': 'fixture-nonce',
+            'ciphertext': 'fixture-opaque',
+            'aad_hash': 'fixture-aad',
+            'payload_version': 1,
+          },
+          'summary_envelope_sha256': _fixtureHash('a'),
+        }),
+        throwsA(isA<RelayFailure>()),
+      );
+    });
+
+    test('Delegation 决策只提交 parent lease 和幂等键，不发送 device_id', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/delegations/delegation_1/decision');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'decision': 'approve',
+          'idempotency_key': 'delegation-decision-1',
+          'lease_epoch': 9,
+        });
+        expect((options.data as Map).containsKey('device_id'), isFalse);
+        return _jsonResponse({
+          'id': 'delegation_1',
+          'parent_session_id': 'session_1',
+          'child_session_id': 'child_1',
+          'target_provider': 'codex',
+          'status': 'running',
+          'summary_envelope': {
+            'alg': 'v1-aes256gcm-hkdfsha256',
+            'key_id': 'fixture-dek',
+            'nonce': 'fixture-nonce',
+            'ciphertext': 'fixture-opaque',
+            'aad_hash': 'fixture-aad',
+            'payload_version': 1,
+          },
+          'summary_envelope_sha256': _fixtureHash('b'),
+        });
+      });
+
+      final result = await _authenticatedRepository(adapter).decideDelegation(
+        'delegation_1',
+        const DelegationDecisionInput(
+          decision: DelegationDecision.approve,
+          idempotencyKey: 'delegation-decision-1',
+          parentLeaseEpoch: 9,
+          deviceId: 'android-owner-local-boundary',
+        ),
+      );
+
+      expect(result.childSessionId, 'child_1');
+      expect(result.status, DelegationStatus.running);
+    });
+
     test('附件 DTO 以 base64 发送密文，不携带 device_id、filename 或本地显示名', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/attachments/chunks');
@@ -436,6 +532,9 @@ ResponseBody _jsonResponse(Object body, {int statusCode = 200}) =>
         'content-type': ['application/json'],
       },
     );
+
+String _fixtureHash(String character) =>
+    List<String>.filled(64, character).join();
 
 /// 纯内存 Dio transport：断言客户端实际发出的 method/path/body，不启动网络服务。
 class _FixtureHttpAdapter implements HttpClientAdapter {

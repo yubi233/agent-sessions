@@ -162,17 +162,18 @@
     {
       "id": "MOBILE-05",
       "title": "父子会话图确认与子会话切入",
-      "status": "in_progress",
+      "status": "completed",
       "phase": "v0.1/W5",
       "category": "跨工具子代理",
       "priority": "P0",
-      "test_layer": "Flutter widget + Android integration",
-      "precondition": "mock 多会话 adapter 已声明 delegate_session；父会话持有当前 Android lease。",
+      "test_layer": "Flutter widget + Flutter macOS visible fixture",
+      "precondition": "mock 多会话 adapter 已声明 delegate_session；父会话持有当前 Android owner lease；本轮以 MacBook 可见 Flutter 窗口验收，不要求 Android AVD/实机。",
       "steps": [
         "在父会话打开 delegation 确认卡",
         "确认同 Workspace 的子会话派发",
         "查看父子图并切入子会话",
-        "拒绝另一张确认卡"
+        "拒绝另一张确认卡",
+        "在 480x960 可见 macOS 窗口采集已登记的 5fps fixture PNG"
       ],
       "expected": "确认后只显示密文任务摘要和子会话状态；子会话获得独立控制入口；拒绝不创建 Provider 命令。",
       "cleanup": [
@@ -180,8 +181,9 @@
         "清除 mock delegation、cursor 与密文缓存"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ANDROID/mobile-05.json",
-        "e2e-verify/screencasts/<ts>/android-v01/manifest.json"
+        "apps/mobile/test/delegation_screens_test.dart",
+        "e2e-verify/reports/2026-08-14T22-24-46-752Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T22-24-46-752Z/MOBILE/manifest.json"
       ]
     },
     {

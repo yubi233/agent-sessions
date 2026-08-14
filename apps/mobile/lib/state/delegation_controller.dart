@@ -1,0 +1,198 @@
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
+
+import '../domain/control_models.dart';
+import '../domain/delegation_models.dart';
+import '../domain/models.dart';
+import '../domain/session_models.dart';
+import '../relay/relay_repository.dart';
+
+/// 父子图的加载状态与会话正文状态分离，避免 parent 刷新时短暂显示上一会话的 delegation。
+enum DelegationPhase { idle, loading, ready, error }
+
+/// DelegationController 只持有 parent 可见的安全图投影。
+/// 它不解密任务书、不读取 child timeline，也不缓存 child session 的控制权。
+class DelegationController extends ChangeNotifier {
+  DelegationController({
+    required this.relay,
+    DateTime Function()? clock,
+    Random? random,
+  }) : _clock = clock ?? DateTime.now,
+       _random = random ?? Random.secure();
+
+  final RelayRepository relay;
+  final DateTime Function() _clock;
+  final Random _random;
+
+  DelegationPhase _phase = DelegationPhase.idle;
+  String? _parentSessionId;
+  List<SessionDelegation> _delegations = const [];
+  final Set<String> _pendingActionKeys = {};
+  final Map<String, String> _idempotencyKeys = {};
+  String? _message;
+  int _requestSerial = 0;
+  int _idempotencyCounter = 0;
+
+  DelegationPhase get phase => _phase;
+  String? get parentSessionId => _parentSessionId;
+  List<SessionDelegation> get delegations =>
+      List<SessionDelegation>.unmodifiable(_delegations);
+  String? get message => _message;
+  bool get isLoading => _phase == DelegationPhase.loading;
+
+  bool isDecisionPending(String delegationId) =>
+      _pendingActionKeys.any((key) => key.endsWith(':$delegationId'));
+
+  /// parent 切换时先清空旧节点。request serial 防止慢响应覆盖当前详情页的图。
+  Future<void> loadForParent(
+    String parentSessionId, {
+    bool force = false,
+  }) async {
+    final normalized = parentSessionId.trim();
+    if (normalized.isEmpty) {
+      _parentSessionId = null;
+      _delegations = const [];
+      _phase = DelegationPhase.idle;
+      _message = null;
+      notifyListeners();
+      return;
+    }
+    if (!force &&
+        _parentSessionId == normalized &&
+        _phase == DelegationPhase.ready) {
+      return;
+    }
+    final serial = ++_requestSerial;
+    _parentSessionId = normalized;
+    _delegations = const [];
+    _message = null;
+    _phase = DelegationPhase.loading;
+    notifyListeners();
+    try {
+      final next = await relay.listSessionDelegations(normalized);
+      if (serial != _requestSerial || _parentSessionId != normalized) return;
+      _delegations = next;
+      _phase = DelegationPhase.ready;
+    } on RelayFailure catch (failure) {
+      if (serial != _requestSerial || _parentSessionId != normalized) return;
+      _phase = DelegationPhase.error;
+      _message = failure.message;
+    } catch (_) {
+      if (serial != _requestSerial || _parentSessionId != normalized) return;
+      _phase = DelegationPhase.error;
+      _message = '子会话图暂时不可用，请稍后刷新。';
+    }
+    notifyListeners();
+  }
+
+  /// 决策入口必须同时经过 Provider capability、Android owner 和 parent lease 三重门控。
+  /// child 的 lease 不会传入这里，防止 UI 误把 child 控制权当作父会话确认权限。
+  String? decisionBlockedReason({
+    required SessionDelegation delegation,
+    required DelegationDecision decision,
+    required CapabilityMatrix capabilities,
+    required bool canWrite,
+    required String? deviceId,
+    required SessionLease? parentLease,
+  }) {
+    if (delegation.parentSessionId != _parentSessionId) {
+      return '派发节点不属于当前会话。';
+    }
+    if (!canWrite || deviceId == null || deviceId.trim().isEmpty) {
+      return '当前登录是只读状态';
+    }
+    if (parentLease == null ||
+        parentLease.sessionId != delegation.parentSessionId ||
+        parentLease.epoch <= 0) {
+      return '请先获取父会话控制权';
+    }
+    final capability = capabilities
+        .provider(delegation.targetProvider)
+        .capability('delegate_cross_provider');
+    if (!capability.isSupported) {
+      return capability.reason ?? '目标 Provider 不支持跨工具派发。';
+    }
+    final allowed = switch (decision) {
+      DelegationDecision.approve ||
+      DelegationDecision.reject => delegation.canApproveOrReject,
+      DelegationDecision.cancel => delegation.canCancel,
+    };
+    if (!allowed) return '该派发节点当前不能执行此操作。';
+    return null;
+  }
+
+  /// approve/reject/cancel 共用稳定幂等键。成功后只替换同一安全图节点，绝不合并 child 内容。
+  Future<SessionDelegation?> decide({
+    required SessionDelegation delegation,
+    required DelegationDecision decision,
+    required CapabilityMatrix capabilities,
+    required bool canWrite,
+    required String? deviceId,
+    required SessionLease? parentLease,
+  }) async {
+    final blocked = decisionBlockedReason(
+      delegation: delegation,
+      decision: decision,
+      capabilities: capabilities,
+      canWrite: canWrite,
+      deviceId: deviceId,
+      parentLease: parentLease,
+    );
+    if (blocked != null) {
+      _message = blocked;
+      notifyListeners();
+      return null;
+    }
+    final actionKey = '${decision.wireValue}:${delegation.id}';
+    if (_pendingActionKeys.contains(actionKey)) return null;
+    final lease = parentLease!;
+    _pendingActionKeys.add(actionKey);
+    _message = null;
+    notifyListeners();
+    try {
+      final result = await relay.decideDelegation(
+        delegation.id,
+        DelegationDecisionInput(
+          decision: decision,
+          idempotencyKey: _idempotencyKeyFor('$actionKey:${lease.epoch}'),
+          parentLeaseEpoch: lease.epoch,
+          deviceId: deviceId!.trim(),
+        ),
+      );
+      if (result.parentSessionId != delegation.parentSessionId) {
+        throw const RelayFailure(
+          RelayFailureKind.protocol,
+          'Relay 返回了另一父会话的派发节点。',
+        );
+      }
+      _delegations = _delegations
+          .map((item) => item.id == result.id ? result : item)
+          .toList(growable: false);
+      return result;
+    } on RelayFailure catch (failure) {
+      _message = failure.message;
+      return null;
+    } catch (_) {
+      _message = '派发决策未完成，请稍后重试。';
+      return null;
+    } finally {
+      _pendingActionKeys.remove(actionKey);
+      notifyListeners();
+    }
+  }
+
+  void clearMessage() {
+    if (_message == null) return;
+    _message = null;
+    notifyListeners();
+  }
+
+  String _idempotencyKeyFor(
+    String operation,
+  ) => _idempotencyKeys.putIfAbsent(operation, () {
+    _idempotencyCounter += 1;
+    final randomPart = _random.nextInt(1 << 32).toRadixString(16);
+    return 'delegation-${_clock().toUtc().microsecondsSinceEpoch}-${_idempotencyCounter.toString().padLeft(4, '0')}-$randomPart';
+  });
+}

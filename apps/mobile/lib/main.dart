@@ -278,7 +278,10 @@ class _LocalVisualScenarioCoordinatorState
         LocalVisualScenario.sessionDetail ||
         LocalVisualScenario.sessionCapability ||
         LocalVisualScenario.sessionSkillConfirmation ||
-        LocalVisualScenario.sessionAttachments => true,
+        LocalVisualScenario.sessionAttachments ||
+        LocalVisualScenario.sessionDelegationProposed ||
+        LocalVisualScenario.sessionDelegationApproved ||
+        LocalVisualScenario.sessionDelegationRestricted => true,
         LocalVisualScenario.sessionGitMain ||
         LocalVisualScenario.sessionGitRestricted => false,
         _ => false,

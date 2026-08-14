@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../domain/control_models.dart';
+import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../git/git_diff_repository.dart';
@@ -21,6 +22,9 @@ enum LocalVisualScenario {
   sessionAttachments,
   sessionGitMain,
   sessionGitRestricted,
+  sessionDelegationProposed,
+  sessionDelegationApproved,
+  sessionDelegationRestricted,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(String value) =>
@@ -36,6 +40,12 @@ LocalVisualScenario localVisualScenarioFromEnvironment(String value) =>
       'session-attachments' => LocalVisualScenario.sessionAttachments,
       'session-git-main' => LocalVisualScenario.sessionGitMain,
       'session-git-restricted' => LocalVisualScenario.sessionGitRestricted,
+      'session-delegation-proposed' =>
+        LocalVisualScenario.sessionDelegationProposed,
+      'session-delegation-approved' =>
+        LocalVisualScenario.sessionDelegationApproved,
+      'session-delegation-restricted' =>
+        LocalVisualScenario.sessionDelegationRestricted,
       _ => LocalVisualScenario.none,
     };
 
@@ -152,7 +162,10 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionSkillConfirmation ||
       LocalVisualScenario.sessionAttachments ||
       LocalVisualScenario.sessionGitMain ||
-      LocalVisualScenario.sessionGitRestricted => true,
+      LocalVisualScenario.sessionGitRestricted ||
+      LocalVisualScenario.sessionDelegationProposed ||
+      LocalVisualScenario.sessionDelegationApproved ||
+      LocalVisualScenario.sessionDelegationRestricted => true,
       _ => false,
     };
     if (!needsSession) return null;
@@ -189,6 +202,30 @@ class LocalVisualFixture {
           deviceId: ownerDeviceId,
         ),
       );
+    }
+    // 三个 P5 场景都复用真实 fixture repository 的 parent lease 与决策链路，
+    // 而不是由页面静态拼出 child 节点。摘要始终保持 opaque envelope。
+    if (scenario == LocalVisualScenario.sessionDelegationProposed ||
+        scenario == LocalVisualScenario.sessionDelegationApproved ||
+        scenario == LocalVisualScenario.sessionDelegationRestricted) {
+      final proposal = await relay.seedDelegationProposal(
+        parentSessionId: primary.id,
+        targetProvider:
+            scenario == LocalVisualScenario.sessionDelegationRestricted
+            ? 'claude'
+            : 'codex',
+      );
+      if (scenario == LocalVisualScenario.sessionDelegationApproved) {
+        await relay.decideDelegation(
+          proposal.id,
+          DelegationDecisionInput(
+            decision: DelegationDecision.approve,
+            idempotencyKey: 'visual-delegation-approved',
+            parentLeaseEpoch: lease.epoch,
+            deviceId: ownerDeviceId,
+          ),
+        );
+      }
     }
     return primary.id;
   }

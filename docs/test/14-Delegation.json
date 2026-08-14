@@ -3,13 +3,14 @@
   "suite_version": 1,
   "status": "in_progress",
   "plan_id": "DELEGATION",
-  "description": "跨工具子代理的协议、Relay 索引、mock Dispatcher、权限边界、Android 确认卡和 full gate。任务书、结果正文和附件只以密文 envelope 处理。",
+  "description": "跨工具子代理的协议、Relay 索引、mock Dispatcher、权限边界、Android 确认卡和 full gate。P5 的 DELEG-01..07 已完成本地 full gate；E2E-DELEG-01 作为 P6 录屏待办保留。任务书、结果正文和附件只以密文 envelope 处理。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Adapter Platform / Relay / Android",
   "environment": {
     "relay": "isolated-local-sqlite",
     "adapter": "deterministic-mock",
-    "android": "AVD-or-authorized-device",
+    "flutter_macos": "visible-local-desktop-app-480x960",
+    "android": "deferred-not-a-v0.1-gate",
     "real_provider": "authorized-only"
   },
   "verification_defaults": {
@@ -93,12 +94,16 @@
       "phase": "v0.1/W5",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Flutter widget + Android integration",
-      "precondition": "MOBILE-05 fixture 已装载。",
-      "steps": ["查看 proposed 卡片", "拒绝一项", "批准一项", "打开子会话"],
-      "expected": "拒绝无副作用；批准前后状态可见，父页面不渲染子会话正文。",
+      "test_layer": "Flutter widget + Flutter macOS visible fixture",
+      "precondition": "MOBILE-05 fixture 已装载；本轮使用 MacBook 可见 Flutter 窗口，不要求 Android AVD/实机。",
+      "steps": ["查看 proposed 卡片", "拒绝一项", "批准一项", "打开子会话", "以 480x960/5fps 采集预登记 fixture"],
+      "expected": "拒绝无副作用；批准前后状态可见，父页面不渲染子会话正文，child 必须重新获取独立 lease。",
       "cleanup": ["清除 mock 会话和密文缓存"],
-      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-06.json"]
+      "evidence": [
+        "apps/mobile/test/delegation_screens_test.dart",
+        "e2e-verify/reports/2026-08-14T22-24-46-752Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T22-24-46-752Z/MOBILE/manifest.json"
+      ]
     },
     {
       "id": "DELEG-07",
@@ -106,25 +111,28 @@
       "phase": "v0.1/W5",
       "category": "full gate",
       "priority": "P1",
-      "test_layer": "Android integration + headed evidence",
+      "test_layer": "Flutter macOS visible full gate + headed evidence",
       "precondition": "DELEG-01 至 DELEG-06 已通过本地回归。",
       "steps": ["运行 mock parent-child full gate", "生成脱敏报告", "检查真实 Provider 凭据和授权状态"],
       "expected": "mock gate 明确 fixture_data=true；无专属凭据时真实 Provider live smoke=blocked。",
-      "cleanup": ["停止测试 Relay、AVD 和 mock runtime"],
-      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-07.json", "e2e-verify/screencasts/<ts>/android-v01/manifest.json"]
+      "cleanup": ["停止测试 Relay、可见 macOS debug App 和 mock runtime"],
+      "evidence": [
+        "e2e-verify/reports/2026-08-14T22-24-46-752Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T22-24-46-752Z/MOBILE/manifest.json"
+      ]
     },
     {
       "id": "E2E-DELEG-01",
-      "title": "可见 Android/Chrome mock 演示只展示 delegation 摘要",
+      "title": "可见 Flutter macOS/Chrome mock 演示只展示 delegation 摘要",
       "phase": "v0.1/P6",
       "category": "recording",
       "priority": "P1",
-      "test_layer": "headed browser + Android AVD recording",
+      "test_layer": "headed browser + Flutter macOS recording",
       "precondition": "DELEG-01 至 DELEG-07 的 local full gate 已通过，且录屏脚本读取本轮通过报告。",
-      "steps": ["启动可见 Chrome 与 Android AVD", "演示父会话、确认卡、子会话切入和拒绝态", "合成并审查脱敏视频"],
+      "steps": ["启动可见 Chrome 与 Flutter macOS App", "演示父会话、确认卡、子会话切入和拒绝态", "合成并审查脱敏视频"],
       "expected": "录屏 manifest 引用事先通过的测试 ID；不包含正文、diff、附件、token 或密钥；浏览器报告明确 headless=false。",
-      "cleanup": ["停止本轮 AVD、Chrome、Relay 与录屏进程"],
-      "evidence": ["e2e-verify/screencasts/<ts>/android-v01/manifest.json", "e2e-verify/reports/<ts>/DELEGATION/e2e-deleg-01.json"]
+      "cleanup": ["停止本轮 macOS App、Chrome、Relay 与录屏进程"],
+      "evidence": ["e2e-verify/screencasts/<ts>/flutter-v01/manifest.json", "e2e-verify/reports/<ts>/DELEGATION/e2e-deleg-01.json"]
     }
   ]
 }

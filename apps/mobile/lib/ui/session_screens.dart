@@ -6,8 +6,10 @@ import 'package:go_router/go_router.dart';
 
 import '../app/providers.dart';
 import '../domain/control_models.dart';
+import '../domain/delegation_models.dart';
 import '../domain/session_models.dart';
 import '../state/app_controller.dart';
+import '../state/delegation_controller.dart';
 import '../state/session_controller.dart';
 
 /// Happy 风格会话首页：优先呈现会话工作流，同时将 owner 安全入口保留在轻量控制区。
@@ -290,21 +292,30 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
   void didUpdateWidget(covariant SessionDetailScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sessionId != widget.sessionId) {
-      _selectCurrentSession();
+      // go_router 更新同一详情 State 时仍处于 build；下一帧再通知 delegation provider，
+      // 防止 child 切入触发 Riverpod 的 build 期状态修改断言。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_selectCurrentSession());
+      });
     }
   }
 
-  void _selectCurrentSession() {
+  Future<void> _selectCurrentSession({bool force = false}) async {
     final controller = ref.read(sessionControllerProvider);
-    if (controller.selectedSessionId != widget.sessionId) {
-      unawaited(controller.selectSession(widget.sessionId));
+    if (force || controller.selectedSessionId != widget.sessionId) {
+      await controller.selectSession(widget.sessionId);
     }
+    // delegation 只按当前 parent session 拉取，不能从 timeline 反推或复制 child 内容。
+    await ref
+        .read(delegationControllerProvider)
+        .loadForParent(widget.sessionId, force: force);
   }
 
   @override
   Widget build(BuildContext context) {
     final app = ref.watch(appControllerProvider);
     final sessions = ref.watch(sessionControllerProvider);
+    final delegations = ref.watch(delegationControllerProvider);
     final session = sessions.selectedSession;
     return Scaffold(
       key: const Key('session-detail-screen'),
@@ -343,9 +354,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           IconButton(
             key: const Key('session-refresh-button'),
             tooltip: '刷新会话',
-            onPressed: sessions.isDetailLoading
+            onPressed: sessions.isDetailLoading || delegations.isLoading
                 ? null
-                : () => sessions.selectSession(widget.sessionId),
+                : () => unawaited(_selectCurrentSession(force: true)),
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -371,6 +382,32 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                           session: session,
                           hasLease: sessions.hasSelectedLease,
                           canWrite: app.canManageDevices,
+                        ),
+                        _DelegationPanel(
+                          controller: delegations,
+                          sessions: sessions,
+                          canWrite: app.canManageDevices,
+                          deviceId: app.currentDevice?.id,
+                          onDecision: (delegation, decision) async {
+                            final result = await delegations.decide(
+                              delegation: delegation,
+                              decision: decision,
+                              capabilities: sessions.capabilityMatrix,
+                              canWrite: app.canManageDevices,
+                              deviceId: app.currentDevice?.id,
+                              parentLease: sessions.selectedLease,
+                            );
+                            // 批准后 child 会话进入列表；仅刷新索引，保留当前 parent 页面和其安全投影。
+                            if (result?.hasChildSession == true) {
+                              await sessions.refreshSessions();
+                            }
+                          },
+                          onOpenChild: (childSessionId) async {
+                            // selectSession 会清掉 parent lease；child 的写操作必须重新获取自己的 fencing epoch。
+                            await sessions.selectSession(childSessionId);
+                            if (!context.mounted) return;
+                            context.go('/sessions/$childSessionId');
+                          },
                         ),
                         _SessionControlPanel(
                           sessions: sessions,
@@ -420,6 +457,307 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       ),
     );
   }
+}
+
+/// Happy 风格父子图保持为一条紧凑控制带：父页只展示安全摘要与状态，child 正文永不嵌入这里。
+class _DelegationPanel extends StatelessWidget {
+  const _DelegationPanel({
+    required this.controller,
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+    required this.onDecision,
+    required this.onOpenChild,
+  });
+
+  final DelegationController controller;
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+  final Future<void> Function(SessionDelegation, DelegationDecision) onDecision;
+  final Future<void> Function(String childSessionId) onOpenChild;
+
+  @override
+  Widget build(BuildContext context) {
+    if (controller.isLoading && controller.delegations.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: LinearProgressIndicator(key: Key('delegation-loading')),
+      );
+    }
+    if (controller.delegations.isEmpty && controller.message == null) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      key: const Key('delegation-panel'),
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_tree_outlined, size: 17),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  '子会话',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ),
+              Text(
+                '${controller.delegations.length} 个节点',
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text('父会话只保留状态和加密摘要', key: Key('delegation-security-boundary')),
+          for (final delegation in controller.delegations) ...[
+            const Divider(height: 18),
+            _DelegationNode(
+              delegation: delegation,
+              controller: controller,
+              capabilities: sessions.capabilityMatrix,
+              canWrite: canWrite,
+              deviceId: deviceId,
+              parentLease: sessions.selectedLease,
+              onDecision: onDecision,
+              onOpenChild: onOpenChild,
+            ),
+          ],
+          if (controller.message != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    controller.message!,
+                    key: const Key('delegation-message'),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '关闭提示',
+                  onPressed: controller.clearMessage,
+                  icon: const Icon(Icons.close, size: 18),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DelegationNode extends StatelessWidget {
+  const _DelegationNode({
+    required this.delegation,
+    required this.controller,
+    required this.capabilities,
+    required this.canWrite,
+    required this.deviceId,
+    required this.parentLease,
+    required this.onDecision,
+    required this.onOpenChild,
+  });
+
+  final SessionDelegation delegation;
+  final DelegationController controller;
+  final CapabilityMatrix capabilities;
+  final bool canWrite;
+  final String? deviceId;
+  final SessionLease? parentLease;
+  final Future<void> Function(SessionDelegation, DelegationDecision) onDecision;
+  final Future<void> Function(String childSessionId) onOpenChild;
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = controller.isDecisionPending(delegation.id);
+    final approveBlocked = controller.decisionBlockedReason(
+      delegation: delegation,
+      decision: DelegationDecision.approve,
+      capabilities: capabilities,
+      canWrite: canWrite,
+      deviceId: deviceId,
+      parentLease: parentLease,
+    );
+    final cancelBlocked = controller.decisionBlockedReason(
+      delegation: delegation,
+      decision: DelegationDecision.cancel,
+      capabilities: capabilities,
+      canWrite: canWrite,
+      deviceId: deviceId,
+      parentLease: parentLease,
+    );
+    final childSessionId = delegation.childSessionId;
+    final statusColor = _delegationStatusColor(delegation.status, context);
+    // 全局 Happy 图标主题默认使用高对比前景色；派发被 capability 或 lease 拦截时，
+    // 必须在节点内覆写 disabled 色，避免“不能点击”仍被误认为是可执行操作。
+    final decisionActionStyle = _delegationActionStyle(context);
+    return Semantics(
+      container: true,
+      label: '子会话派发 ${delegation.status.label}',
+      child: Column(
+        key: Key('delegation-node-${delegation.id}'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const _DelegationGraphLabel(label: '父会话', detail: '当前会话'),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(Icons.arrow_forward, size: 18, color: statusColor),
+              ),
+              Expanded(
+                child: _DelegationGraphLabel(
+                  label: '子会话',
+                  detail: delegation.targetProvider,
+                ),
+              ),
+              Text(
+                delegation.status.label,
+                key: Key('delegation-status-${delegation.id}'),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelMedium?.copyWith(color: statusColor),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '加密摘要 ${delegation.summaryFingerprint}',
+            key: Key('delegation-summary-${delegation.id}'),
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+          if (delegation.canApproveOrReject) ...[
+            const SizedBox(height: 3),
+            Text(
+              approveBlocked ?? '请使用父会话控制权确认派发。',
+              key: Key('delegation-blocked-${delegation.id}'),
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    key: Key('delegation-reject-${delegation.id}'),
+                    tooltip: '拒绝派发',
+                    style: decisionActionStyle,
+                    onPressed: pending || approveBlocked != null
+                        ? null
+                        : () =>
+                              onDecision(delegation, DelegationDecision.reject),
+                    icon: const Icon(Icons.close),
+                  ),
+                  IconButton(
+                    key: Key('delegation-approve-${delegation.id}'),
+                    tooltip: '批准派发',
+                    style: decisionActionStyle,
+                    onPressed: pending || approveBlocked != null
+                        ? null
+                        : () => onDecision(
+                            delegation,
+                            DelegationDecision.approve,
+                          ),
+                    icon: pending
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (delegation.canCancel) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                key: Key('delegation-cancel-${delegation.id}'),
+                tooltip: '取消子会话',
+                style: decisionActionStyle,
+                onPressed: pending || cancelBlocked != null
+                    ? null
+                    : () => onDecision(delegation, DelegationDecision.cancel),
+                icon: const Icon(Icons.stop_circle_outlined),
+              ),
+            ),
+          ],
+          if (childSessionId != null && childSessionId.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Expanded(child: Text('子会话使用独立控制权')),
+                IconButton(
+                  key: Key('delegation-open-child-${delegation.id}'),
+                  tooltip: '打开子会话',
+                  onPressed: () => onOpenChild(childSessionId),
+                  icon: const Icon(Icons.arrow_forward_ios, size: 17),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DelegationGraphLabel extends StatelessWidget {
+  const _DelegationGraphLabel({required this.label, required this.detail});
+
+  final String label;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(label, style: Theme.of(context).textTheme.labelMedium),
+      Text(detail, maxLines: 1, overflow: TextOverflow.ellipsis),
+    ],
+  );
+}
+
+Color _delegationStatusColor(DelegationStatus status, BuildContext context) =>
+    switch (status) {
+      DelegationStatus.completed => const Color(0xff86e0bf),
+      DelegationStatus.failed ||
+      DelegationStatus.cancelled ||
+      DelegationStatus.rejected => Theme.of(context).colorScheme.error,
+      DelegationStatus.proposed => const Color(0xfff0c674),
+      DelegationStatus.approved ||
+      DelegationStatus.running => Theme.of(context).colorScheme.primary,
+      DelegationStatus.unknown => Theme.of(
+        context,
+      ).colorScheme.onSurfaceVariant,
+    };
+
+/// capability、角色或 lease 阻断时使用显式弱化图标，避免全局 IconButton 主题掩盖禁用状态。
+ButtonStyle _delegationActionStyle(BuildContext context) {
+  final active = Theme.of(context).colorScheme.onSurface;
+  final disabled = active.withAlpha(92);
+  return ButtonStyle(
+    foregroundColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.disabled) ? disabled : active,
+    ),
+  );
 }
 
 /// P3 控制面保持为紧凑、可扫描的 Happy 风格状态条；所有可执行图标都受 capability + role + lease 同一门控。

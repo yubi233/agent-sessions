@@ -99,7 +99,7 @@ test("macOS gate 拒绝 headless 和外部设备参数", () => {
   assert.throws(() => parseArgs(["--device-id", "android-device"]), /固定使用 macOS/);
 });
 
-test("P2/P3/P4 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
+test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
   assert.deepEqual(
     MACOS_SCREENSHOT_SCENARIOS.map((scenario) => scenario.id),
     [
@@ -114,6 +114,9 @@ test("P2/P3/P4 会话截图场景在 runner 中固定登记，避免录制前临
       "VISUAL-MOBILE-08",
       "VISUAL-MOBILE-09",
       "VISUAL-MOBILE-10",
+      "VISUAL-MOBILE-11",
+      "VISUAL-MOBILE-12",
+      "VISUAL-MOBILE-13",
     ],
   );
 });
