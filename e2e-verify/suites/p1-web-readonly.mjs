@@ -46,7 +46,10 @@ export const p1WebReadonly = {
       // 只读设备列表应展示 bootstrap owner。
       await page.getByTestId("device-list").waitFor({ state: "visible" });
       const items = await page.getByTestId("device-item").count();
-      const passed = items >= 1;
+      // P4 WEB-01：能力矩阵亦只读展示。
+      await page.getByTestId("capability-list").waitFor({ state: "visible" });
+      const caps = await page.getByTestId("capability-item").count();
+      const passed = items >= 1 && caps >= 4;
 
       return report({
         suite: "p1-web-readonly",

@@ -92,6 +92,8 @@ func localAPICORS() gin.HandlerFunc {
 	allowed := map[string]bool{
 		"http://127.0.0.1:15173": true,
 		"http://localhost:15173": true,
+		"http://127.0.0.1:15174": true,
+		"http://localhost:15174": true,
 		"http://127.0.0.1:5173":  true,
 		"http://localhost:5173":  true,
 		"http://127.0.0.1:5174":  true,
@@ -182,6 +184,9 @@ func (a *API) handleListDevices(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	if devices == nil {
+		devices = []domain.Device{}
+	}
 	writeOK(c, gin.H{"devices": devices})
 }
 
@@ -254,6 +259,9 @@ func (a *API) handleListSessions(c *gin.Context) {
 	if err != nil {
 		writeError(c, err)
 		return
+	}
+	if sessions == nil {
+		sessions = []store.SessionRow{}
 	}
 	writeOK(c, gin.H{"sessions": sessions})
 }

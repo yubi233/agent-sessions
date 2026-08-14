@@ -50,6 +50,8 @@ func localHealthCORS() gin.HandlerFunc {
 	allowedOrigins := map[string]bool{
 		"http://127.0.0.1:15173": true,
 		"http://localhost:15173": true,
+		"http://127.0.0.1:15174": true,
+		"http://localhost:15174": true,
 	}
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")

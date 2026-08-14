@@ -12,6 +12,34 @@ importers:
         specifier: ^3.6.2
         version: 3.9.6
 
+  apps/admin-web:
+    dependencies:
+      vue:
+        specifier: ^3.5.18
+        version: 3.5.41(typescript@5.9.2)
+    devDependencies:
+      '@vitejs/plugin-vue':
+        specifier: ^6.0.1
+        version: 6.0.8(vite@7.3.6(@types/node@24.13.3))(vue@3.5.41(typescript@5.9.2))
+      '@vue/test-utils':
+        specifier: ^2.4.6
+        version: 2.4.11(@vue/compiler-dom@3.5.41)(@vue/server-renderer@3.5.41)(vue@3.5.41(typescript@5.9.2))
+      jsdom:
+        specifier: ^26.1.0
+        version: 26.1.0
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.2
+      vite:
+        specifier: ^7.1.3
+        version: 7.3.6(@types/node@24.13.3)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@24.13.3)(jsdom@26.1.0)
+      vue-tsc:
+        specifier: ^3.0.5
+        version: 3.3.9(typescript@5.9.2)
+
   apps/web:
     dependencies:
       vue:
@@ -35,7 +63,7 @@ importers:
         version: 7.3.6(@types/node@24.13.3)
       vitest:
         specifier: ^3.2.4
-        version: 3.2.7(@types/node@24.13.3)(jsdom@26.1.0)(supports-color@10.2.2)
+        version: 3.2.7(@types/node@24.13.3)(jsdom@26.1.0)
       vue-tsc:
         specifier: ^3.0.5
         version: 3.3.9(typescript@5.9.2)
@@ -56,7 +84,7 @@ importers:
         version: 5.9.2
       vitest:
         specifier: ^3.2.4
-        version: 3.2.7(@types/node@24.13.3)(jsdom@26.1.0)(supports-color@10.2.2)
+        version: 3.2.7(@types/node@24.13.3)(jsdom@26.1.0)
 
   packages/protocol-ts:
     devDependencies:
@@ -1883,7 +1911,7 @@ snapshots:
 
   uri-js-replace@1.0.1: {}
 
-  vite-node@3.2.4(@types/node@24.13.3)(supports-color@10.2.2):
+  vite-node@3.2.4(@types/node@24.13.3):
     dependencies:
       cac: 6.7.14
       debug: 4.4.3(supports-color@10.2.2)
@@ -1916,7 +1944,7 @@ snapshots:
       '@types/node': 24.13.3
       fsevents: 2.3.3
 
-  vitest@3.2.7(@types/node@24.13.3)(jsdom@26.1.0)(supports-color@10.2.2):
+  vitest@3.2.7(@types/node@24.13.3)(jsdom@26.1.0):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/expect': 3.2.7
@@ -1939,7 +1967,7 @@ snapshots:
       tinypool: 1.1.1
       tinyrainbow: 2.0.0
       vite: 7.3.6(@types/node@24.13.3)
-      vite-node: 3.2.4(@types/node@24.13.3)(supports-color@10.2.2)
+      vite-node: 3.2.4(@types/node@24.13.3)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 24.13.3

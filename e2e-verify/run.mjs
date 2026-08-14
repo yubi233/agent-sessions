@@ -3,7 +3,7 @@
 // 汇总结果写入 e2e-verify/reports/<timestamp>/<plan_id>/。
 // 用法：node e2e-verify/run.mjs [--suite <id>] [--headless]
 import { startRelay } from "./lib/relay.mjs";
-import { startWeb } from "./lib/web.mjs";
+import { startWeb, startAdmin } from "./lib/web.mjs";
 import { writeReport, baseReport } from "./lib/report.mjs";
 import { registry } from "./lib/suites.mjs";
 
@@ -27,6 +27,7 @@ async function main() {
   // 启动隔离 Relay，供所有场景复用。
   const relay = await startRelay({ port: 8787 });
   const web = await startWeb({ relayBase: relay.base });
+  const admin = await startAdmin({ port: 15174, relayBase: relay.base });
   const results = [];
 
   const report = (payload) => {
@@ -41,10 +42,11 @@ async function main() {
   try {
     for (const scene of selected) {
       process.stdout.write(`[run] ${scene.id} (${scene.title})\n`);
-      const r = await scene.run({ relay, web, report, headless });
+      const r = await scene.run({ relay, web, admin, report, headless });
       process.stdout.write(`[run] ${scene.id} -> ${r.status}\n`);
     }
   } finally {
+    await admin.stop();
     await web.stop();
     await relay.stop();
   }

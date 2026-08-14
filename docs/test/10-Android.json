@@ -1,7 +1,7 @@
 {
   "suite": "android",
   "suite_version": 1,
-  "status": "planned",
+  "status": "in_progress",
   "plan_id": "ANDROID",
   "description": "Flutter widget/integration：配对壳、会话控制、生命周期、附件与 DiffView。跨层根因 ID 只消费不重定义。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -28,24 +28,41 @@
       "priority": "P0",
       "test_layer": "Flutter widget + integration",
       "precondition": "mock Relay。",
-      "steps": ["登录", "QR 配对", "检查 Drift"],
+      "steps": [
+        "登录",
+        "QR 配对",
+        "检查 Drift"
+      ],
       "expected": "Drift 仅密文；Keystore 保存包装密钥。",
-      "cleanup": ["清除模拟器测试数据"],
-      "evidence": ["e2e-verify/reports/<ts>/ANDROID/mobile-01.json"]
+      "cleanup": [
+        "清除模拟器测试数据"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ANDROID/mobile-01.json"
+      ]
     },
     {
       "id": "MOBILE-02",
       "title": "mock 会话 start/stream/abort",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "Android",
       "priority": "P0",
       "test_layer": "integration_test",
       "precondition": "mock adapter 垂直切片可用。",
-      "steps": ["创建会话", "看流式 Markdown", "abort", "离线/权限拒绝/版本过低"],
+      "steps": [
+        "创建会话",
+        "看流式 Markdown",
+        "abort",
+        "离线/权限拒绝/版本过低"
+      ],
       "expected": "状态机可见；写命令带 lease。",
-      "cleanup": ["删除测试会话"],
-      "evidence": ["e2e-verify/reports/<ts>/ANDROID/mobile-02.json"]
+      "cleanup": [
+        "删除测试会话"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ANDROID/mobile-02.json"
+      ]
     },
     {
       "id": "MOBILE-03",
@@ -56,10 +73,15 @@
       "priority": "P1",
       "test_layer": "widget + integration",
       "precondition": "capability fixtures。",
-      "steps": ["unsupported 入口", "高风险 skill 拒绝"],
+      "steps": [
+        "unsupported 入口",
+        "高风险 skill 拒绝"
+      ],
       "expected": "不伪造 Provider 写操作。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ANDROID/mobile-03.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ANDROID/mobile-03.json"
+      ]
     },
     {
       "id": "MOBILE-04",
@@ -70,10 +92,16 @@
       "priority": "P0",
       "test_layer": "widget + integration",
       "precondition": "Git fixtures。",
-      "steps": ["文件树", "unified/split", "stale 重试"],
+      "steps": [
+        "文件树",
+        "unified/split",
+        "stale 重试"
+      ],
       "expected": "窄屏默认 unified；不混用快照。",
       "cleanup": [],
-      "evidence": ["e2e-verify/reports/<ts>/ANDROID/mobile-04.json"]
+      "evidence": [
+        "e2e-verify/reports/<ts>/ANDROID/mobile-04.json"
+      ]
     },
     {
       "id": "ATTACH-01",
@@ -84,10 +112,18 @@
       "priority": "P1",
       "test_layer": "integration",
       "precondition": "允许图片/文本 fixture 与超限文件。",
-      "steps": ["合法上传", "超限", "错误 MIME"],
+      "steps": [
+        "合法上传",
+        "超限",
+        "错误 MIME"
+      ],
       "expected": "超限拒绝；重试不重复完成。",
-      "cleanup": ["删除测试附件"],
-      "evidence": ["e2e-verify/reports/<ts>/ANDROID/attach-01.json"]
+      "cleanup": [
+        "删除测试附件"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ANDROID/attach-01.json"
+      ]
     }
   ]
 }

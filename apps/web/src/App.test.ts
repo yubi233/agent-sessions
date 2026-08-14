@@ -26,4 +26,26 @@ describe("Relay 状态页", () => {
     await flushPromises();
     expect(wrapper.get('[data-testid="relay-error"]').text()).toContain("无法连接 Relay");
   });
+
+  it("WEB-01：登录后只读展示设备、会话与能力矩阵", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true }) // readyz
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: "tok" }) }) // login
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ devices: [{ id: "d1", role: "android_owner", display_name: "Android", status: "active" }] }) }) // devices
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ sessions: [{ id: "s1", provider: "mock", status: "running" }] }) }) // sessions
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ providers: [{ kind: "claude", version: "", capabilities: [] }] }) }); // capabilities
+    vi.stubGlobal("fetch", fetchMock);
+    const wrapper = mount(App);
+
+    await wrapper.get('[data-testid="login-email"]').setValue("a@b.dev");
+    await wrapper.get('[data-testid="login-password"]').setValue("pw");
+    await wrapper.get('form[data-testid="login-form"]').trigger("submit");
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="auth-ok"]').text()).toContain("已登录");
+    expect(wrapper.get('[data-testid="device-list"]').text()).toContain("Android");
+    expect(wrapper.get('[data-testid="session-list"]').text()).toContain("mock");
+    expect(wrapper.get('[data-testid="capability-list"]').text()).toContain("claude");
+  });
 });
