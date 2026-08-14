@@ -1,6 +1,6 @@
 {
-  "registry_version": 1,
-  "status": "planned",
+  "registry_version": 2,
+  "status": "in_progress",
   "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
   "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
   "evidence_rule": "报告放在 e2e-verify/reports/<timestamp>/<plan_id>/，必须包含测试 ID、suite/fixture revision、命令、local_test、fixture_data、real_browser、headless、real_upstream、real_model、failure_class 和 remaining_risk；不得包含 token、正文、diff 或解密附件。",
@@ -131,12 +131,24 @@
       "suite_path": "docs/test/10-Android.json",
       "owner": "Android App",
       "id_prefix": ["MOBILE-", "ATTACH-"],
-      "owned_ids": ["MOBILE-01", "MOBILE-02", "MOBILE-03", "MOBILE-04", "ATTACH-01"],
-      "consumed_ids": ["PAIR-01", "PAIR-02", "PAIR-03", "SESS-01", "SESS-02", "CTRL-01", "CTRL-02", "GIT-01", "GIT-02", "MODE-01", "MODE-02", "MODE-03"],
+      "owned_ids": ["MOBILE-01", "MOBILE-02", "MOBILE-03", "MOBILE-04", "MOBILE-05", "MOBILE-06", "ATTACH-01"],
+      "consumed_ids": ["PAIR-01", "PAIR-02", "PAIR-03", "SESS-01", "SESS-02", "CTRL-01", "CTRL-02", "GIT-01", "GIT-02", "GIT-03", "GIT-04", "GIT-05", "GIT-06", "MODE-01", "MODE-02", "MODE-03", "MODE-04", "DELEG-06"],
       "dependencies": ["PROTO-CRYPTO", "RELAY-REALTIME", "DAEMON-GIT", "ADAPTER-PLATFORM"],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": false,
-      "uniqueness_rule": "Android widget/integration、生命周期、缓存、通知、附件和 DiffView 客户端断言由此 suite 定义；跨层根因测试只消费所属 ID。"
+      "uniqueness_rule": "Android widget/integration、生命周期、缓存、通知、附件、DiffView 与子会话切入客户端断言由此 suite 定义；跨层根因测试只消费所属 ID。"
+    },
+    {
+      "plan_id": "DELEGATION",
+      "suite_path": "docs/test/14-Delegation.json",
+      "owner": "Adapter Platform / Relay / Android",
+      "id_prefix": ["DELEG-", "E2E-DELEG-"],
+      "owned_ids": ["DELEG-01", "DELEG-02", "DELEG-03", "DELEG-04", "DELEG-05", "DELEG-06", "DELEG-07", "E2E-DELEG-01"],
+      "consumed_ids": ["ADPT-01", "SESS-01", "SESS-02", "CTRL-01", "CTRL-02", "WORKSPACE-01", "MODE-01"],
+      "dependencies": ["PROTO-CRYPTO", "RELAY-REALTIME", "DAEMON-CORE", "ADAPTER-PLATFORM", "ANDROID"],
+      "status": "in_progress",
+      "allow_real_upstream": true,
+      "uniqueness_rule": "Delegation 协议、Relay 父子索引、Daemon mock 派发、权限边界、Android 确认卡及 mock full gate 只由此 suite 定义；真实跨 Provider smoke 必须单独标记 blocked 或 authorized。"
     },
     {
       "plan_id": "WEB",

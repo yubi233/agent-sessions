@@ -19,21 +19,33 @@ def fail(msg: str) -> None:
 def main() -> None:
     index = json.loads(INDEX.read_text(encoding="utf-8"))
     owned: dict[str, str] = {}
+    consumed: list[tuple[str, str]] = []
     for suite in index["suites"]:
         path = ROOT / suite["suite_path"]
         if not path.exists():
             fail(f"missing suite {path}")
         data = json.loads(path.read_text(encoding="utf-8"))
         case_ids = [c["id"] for c in data.get("cases", [])]
+        case_id_set = set(case_ids)
         for item in suite.get("owned_ids", []):
             if item in owned:
                 fail(f"duplicate owned id {item}")
             owned[item] = suite["plan_id"]
+        for item in suite.get("consumed_ids", []):
+            consumed.append((suite["plan_id"], item))
         extra = set(case_ids) - set(suite.get("owned_ids", [])) - set(suite.get("consumed_ids", []))
         if extra and data.get("plan_id") != "FOUNDATION-ACCEPTANCE":
             # 基础验收只消费 ID；领域 suite 的 cases 必须登记
             if suite["plan_id"] != "FOUNDATION-ACCEPTANCE":
                 fail(f"{suite['plan_id']} cases not registered: {sorted(extra)}")
+        # 注册表与 suite 必须双向一致：避免“已登记却没有可执行验收定义”的假覆盖。
+        missing_cases = set(suite.get("owned_ids", [])) - case_id_set
+        if missing_cases:
+            fail(f"{suite['plan_id']} owned ids missing cases: {sorted(missing_cases)}")
+    # 被消费的精确 ID 必须存在明确 owner，防止计划引用拼写错误或孤立的测试编号。
+    for plan_id, item in consumed:
+        if item not in owned:
+            fail(f"{plan_id} consumes unowned id {item}")
     project_doc = (ROOT / "docs" / "zh" / "项目文档.md").read_text(encoding="utf-8")
     if "SQLite" not in project_doc:
         fail("项目文档未回填 SQLite 存储决策")

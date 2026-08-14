@@ -1,0 +1,130 @@
+{
+  "suite": "delegation",
+  "suite_version": 1,
+  "status": "in_progress",
+  "plan_id": "DELEGATION",
+  "description": "跨工具子代理的协议、Relay 索引、mock Dispatcher、权限边界、Android 确认卡和 full gate。任务书、结果正文和附件只以密文 envelope 处理。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Adapter Platform / Relay / Android",
+  "environment": {
+    "relay": "isolated-local-sqlite",
+    "adapter": "deterministic-mock",
+    "android": "AVD-or-authorized-device",
+    "real_provider": "authorized-only"
+  },
+  "verification_defaults": {
+    "report_kind": "full_gate",
+    "real_browser": false,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "DELEG-01",
+      "title": "Delegation 命令、事件和能力契约保持加密边界",
+      "phase": "v0.1/W5",
+      "category": "协议",
+      "priority": "P0",
+      "test_layer": "Go contract + Dart unit",
+      "precondition": "PROTO-CRYPTO@v1-draft schema 已生成。",
+      "steps": ["序列化 delegation.create 命令", "验证 scope、lease_epoch、idempotency_key 和 ciphertext envelope", "反序列化 delegation.changed 事件"],
+      "expected": "协议不包含任务正文或子会话全文；能力状态只能是 native/emulated/unsupported。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-01.json"]
+    },
+    {
+      "id": "DELEG-02",
+      "title": "Relay 保存父子索引和密文摘要元数据",
+      "phase": "v0.1/W5",
+      "category": "Relay integration",
+      "priority": "P0",
+      "test_layer": "Go integration",
+      "precondition": "隔离 SQLite、父 Session 和 Android owner lease 已建立。",
+      "steps": ["提交确认后的 delegation.create", "读取父会话 delegation 列表", "检查 SQLite 行和审计字段"],
+      "expected": "父/子 session、provider、状态和 envelope hash 可查询；任务正文与私钥不落库。",
+      "cleanup": ["清理隔离数据库"],
+      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-02.json"]
+    },
+    {
+      "id": "DELEG-03",
+      "title": "mock Dispatcher 在确认后创建独立子会话",
+      "phase": "v0.1/W5",
+      "category": "Daemon integration",
+      "priority": "P0",
+      "test_layer": "Go integration",
+      "precondition": "deterministic mock adapter 支持 delegate_session。",
+      "steps": ["批准同 Workspace delegation", "启动子会话", "观察 proposed 到 running 的事件"],
+      "expected": "子会话拥有独立 session_id、provider 和 lease；父会话仅接收摘要状态。",
+      "cleanup": ["终止 mock 子会话"],
+      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-03.json"]
+    },
+    {
+      "id": "DELEG-04",
+      "title": "unsupported 跨 Provider 请求不启动子代理",
+      "phase": "v0.1/W5",
+      "category": "能力降级",
+      "priority": "P1",
+      "test_layer": "Go contract + Flutter widget",
+      "precondition": "目标 provider 声明 delegate_cross_provider=unsupported。",
+      "steps": ["选择不支持的 provider", "尝试创建跨 provider delegation"],
+      "expected": "入口禁用且说明原因；没有 Provider command 或 child session。",
+      "cleanup": [],
+      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-04.json"]
+    },
+    {
+      "id": "DELEG-05",
+      "title": "Workspace 越界和过期 lease 被拒绝",
+      "phase": "v0.1/W5",
+      "category": "授权",
+      "priority": "P0",
+      "test_layer": "Go integration",
+      "precondition": "两个 Workspace 与一个已过期 epoch 可用。",
+      "steps": ["跨 Workspace 创建 delegation", "使用旧 epoch 重试", "查询父子图"],
+      "expected": "返回显式授权或 fencing 错误，未创建子会话，未回退为 shell。",
+      "cleanup": ["释放测试 lease"],
+      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-05.json"]
+    },
+    {
+      "id": "DELEG-06",
+      "title": "Android 确认卡保护派发并可切入子会话",
+      "phase": "v0.1/W5",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Flutter widget + Android integration",
+      "precondition": "MOBILE-05 fixture 已装载。",
+      "steps": ["查看 proposed 卡片", "拒绝一项", "批准一项", "打开子会话"],
+      "expected": "拒绝无副作用；批准前后状态可见，父页面不渲染子会话正文。",
+      "cleanup": ["清除 mock 会话和密文缓存"],
+      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-06.json"]
+    },
+    {
+      "id": "DELEG-07",
+      "title": "mock full gate 与真实 Provider gate 口径分离",
+      "phase": "v0.1/W5",
+      "category": "full gate",
+      "priority": "P1",
+      "test_layer": "Android integration + headed evidence",
+      "precondition": "DELEG-01 至 DELEG-06 已通过本地回归。",
+      "steps": ["运行 mock parent-child full gate", "生成脱敏报告", "检查真实 Provider 凭据和授权状态"],
+      "expected": "mock gate 明确 fixture_data=true；无专属凭据时真实 Provider live smoke=blocked。",
+      "cleanup": ["停止测试 Relay、AVD 和 mock runtime"],
+      "evidence": ["e2e-verify/reports/<ts>/DELEGATION/deleg-07.json", "e2e-verify/screencasts/<ts>/android-v01/manifest.json"]
+    },
+    {
+      "id": "E2E-DELEG-01",
+      "title": "可见 Android/Chrome mock 演示只展示 delegation 摘要",
+      "phase": "v0.1/P6",
+      "category": "recording",
+      "priority": "P1",
+      "test_layer": "headed browser + Android AVD recording",
+      "precondition": "DELEG-01 至 DELEG-07 的 local full gate 已通过，且录屏脚本读取本轮通过报告。",
+      "steps": ["启动可见 Chrome 与 Android AVD", "演示父会话、确认卡、子会话切入和拒绝态", "合成并审查脱敏视频"],
+      "expected": "录屏 manifest 引用事先通过的测试 ID；不包含正文、diff、附件、token 或密钥；浏览器报告明确 headless=false。",
+      "cleanup": ["停止本轮 AVD、Chrome、Relay 与录屏进程"],
+      "evidence": ["e2e-verify/screencasts/<ts>/android-v01/manifest.json", "e2e-verify/reports/<ts>/DELEGATION/e2e-deleg-01.json"]
+    }
+  ]
+}

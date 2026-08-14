@@ -1,13 +1,13 @@
 {
   "suite": "android",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "ANDROID",
-  "description": "Flutter widget/integration：配对壳、会话控制、生命周期、附件与 DiffView。跨层根因 ID 只消费不重定义。",
+  "description": "Flutter widget/integration：配对、安全缓存、会话控制、生命周期、附件、DiffView 和子会话切入。跨层根因 ID 只消费不重定义。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Android App",
   "environment": {
-    "android": "emulator-or-device-not-configured"
+    "android": "AVD 或已授权真机；本轮 full gate 使用 Nexus_5X_API_32，Chrome headed 用于可见网页演示"
   },
   "verification_defaults": {
     "report_kind": "not_run",
@@ -44,7 +44,7 @@
     {
       "id": "MOBILE-02",
       "title": "mock 会话 start/stream/abort",
-      "status": "passed",
+      "status": "in_progress",
       "phase": "P4",
       "category": "Android",
       "priority": "P0",
@@ -123,6 +123,55 @@
       ],
       "evidence": [
         "e2e-verify/reports/<ts>/ANDROID/attach-01.json"
+      ]
+    },
+    {
+      "id": "MOBILE-05",
+      "title": "父子会话图确认与子会话切入",
+      "status": "planned",
+      "phase": "v0.1/W5",
+      "category": "跨工具子代理",
+      "priority": "P0",
+      "test_layer": "Flutter widget + Android integration",
+      "precondition": "mock 多会话 adapter 已声明 delegate_session；父会话持有当前 Android lease。",
+      "steps": [
+        "在父会话打开 delegation 确认卡",
+        "确认同 Workspace 的子会话派发",
+        "查看父子图并切入子会话",
+        "拒绝另一张确认卡"
+      ],
+      "expected": "确认后只显示密文任务摘要和子会话状态；子会话获得独立控制入口；拒绝不创建 Provider 命令。",
+      "cleanup": [
+        "取消或删除测试子会话",
+        "清除 mock delegation、cursor 与密文缓存"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ANDROID/mobile-05.json",
+        "e2e-verify/screencasts/<ts>/android-v01/manifest.json"
+      ]
+    },
+    {
+      "id": "MOBILE-06",
+      "title": "前后台与网络切换后按 cursor 恢复且不重放写命令",
+      "status": "planned",
+      "phase": "v0.1/W6",
+      "category": "生命周期与通知",
+      "priority": "P0",
+      "test_layer": "Dart unit + Android integration",
+      "precondition": "存在已确认 event cursor、唯一 idempotency_key 和一条待处理本地通知。",
+      "steps": [
+        "让应用进入后台并断开网络",
+        "在后台期间产生 fixture 事件",
+        "切换网络、回到前台并恢复连接",
+        "观察应用内降级通知和会话事件"
+      ],
+      "expected": "只补齐 cursor 之后的事件；相同 idempotency_key 不会再次发送；无 UnifiedPush distributor 时显示应用内通知而不丢失事件。",
+      "cleanup": [
+        "清理模拟器应用数据、通知和测试 Relay"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/ANDROID/mobile-06.json",
+        "e2e-verify/screencasts/<ts>/android-v01/manifest.json"
       ]
     }
   ]
