@@ -65,6 +65,7 @@ Future<void> main() async {
         localVisualScenario:
             localVisualFixture?.scenario ?? LocalVisualScenario.none,
         localVisualPairingRequestId: localVisualFixture?.pairingRequestId,
+        localVisualSessionId: localVisualFixture?.sessionId,
       ),
     ),
   );
@@ -75,6 +76,7 @@ class AgentSessionsApp extends ConsumerWidget {
     this.useMacBookPhoneCanvas = true,
     this.localVisualScenario = LocalVisualScenario.none,
     this.localVisualPairingRequestId,
+    this.localVisualSessionId,
     super.key,
   });
 
@@ -82,11 +84,13 @@ class AgentSessionsApp extends ConsumerWidget {
   final bool useMacBookPhoneCanvas;
   final LocalVisualScenario localVisualScenario;
   final String? localVisualPairingRequestId;
+  final String? localVisualSessionId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => MaterialApp.router(
     routerConfig: ref.watch(appRouterProvider),
     title: 'Agent Sessions',
+    debugShowCheckedModeBanner: false,
     theme: _mobileTheme(),
     darkTheme: _mobileTheme(),
     // 本地和 Android 均固定深色移动控制面，保证会话状态颜色不会随宿主系统切换而歧义化。
@@ -102,6 +106,7 @@ class AgentSessionsApp extends ConsumerWidget {
       return _LocalVisualScenarioCoordinator(
         scenario: localVisualScenario,
         pairingRequestId: localVisualPairingRequestId,
+        sessionId: localVisualSessionId,
         child: canvas,
       );
     },
@@ -113,11 +118,13 @@ class _LocalVisualScenarioCoordinator extends ConsumerStatefulWidget {
   const _LocalVisualScenarioCoordinator({
     required this.scenario,
     required this.pairingRequestId,
+    required this.sessionId,
     required this.child,
   });
 
   final LocalVisualScenario scenario;
   final String? pairingRequestId;
+  final String? sessionId;
   final Widget child;
 
   @override
@@ -132,6 +139,8 @@ class _LocalVisualScenarioCoordinatorState
     super.initState();
     if (widget.scenario == LocalVisualScenario.pairingPending) {
       _openPairingWhenOwnerReady();
+    } else if (widget.sessionId != null) {
+      _openSessionWhenReady();
     }
   }
 
@@ -146,6 +155,41 @@ class _LocalVisualScenarioCoordinatorState
         return;
       }
       await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  /// 截图场景仍复用真实控制器加载、选择和获取 lease 的链路，避免把静态页面当成会话验收。
+  Future<void> _openSessionWhenReady() async {
+    final sessionId = widget.sessionId;
+    if (sessionId == null || sessionId.isEmpty) return;
+    for (var attempt = 0; attempt < 80; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      if (!app.isAuthenticated) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        continue;
+      }
+      final sessions = ref.read(sessionControllerProvider);
+      await sessions.initialize();
+      if (!sessions.sessions.any((session) => session.id == sessionId)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        continue;
+      }
+      await sessions.selectSession(sessionId);
+      if (widget.scenario == LocalVisualScenario.sessionDetail &&
+          app.canManageDevices) {
+        await sessions.acquireSelectedLease(
+          deviceId: app.currentDevice?.id,
+          canWrite: app.canManageDevices,
+        );
+      }
+      if (!mounted) return;
+      final router = ref.read(appRouterProvider);
+      if (widget.scenario == LocalVisualScenario.sessionList) {
+        router.go('/home');
+      } else {
+        router.go('/sessions/$sessionId');
+      }
+      return;
     }
   }
 

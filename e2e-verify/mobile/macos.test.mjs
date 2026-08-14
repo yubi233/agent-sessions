@@ -29,6 +29,7 @@ import {
 } from "./macos.mjs";
 import {
   classifyFlutterFailure,
+  MACOS_SCREENSHOT_SCENARIOS,
   parseArgs,
   summarizeFlutterFailure,
 } from "./run-macos.mjs";
@@ -92,6 +93,20 @@ test("macOS gate 拒绝 headless 和外部设备参数", () => {
   assert.equal(parseArgs(["--diagnostic"]).diagnostic, true);
   assert.throws(() => parseArgs(["--headless"]), /不支持 --headless/);
   assert.throws(() => parseArgs(["--device-id", "android-device"]), /固定使用 macOS/);
+});
+
+test("P2 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
+  assert.deepEqual(
+    MACOS_SCREENSHOT_SCENARIOS.map((scenario) => scenario.id),
+    [
+      "VISUAL-MOBILE-01",
+      "VISUAL-MOBILE-02",
+      "VISUAL-PAIR-01",
+      "VISUAL-MOBILE-03",
+      "VISUAL-MOBILE-04",
+      "VISUAL-MOBILE-05",
+    ],
+  );
 });
 
 test("桌面窗口观测器只接受固定应用进程名、结构化窗口元数据和竖屏尺寸", () => {

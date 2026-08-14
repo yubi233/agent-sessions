@@ -37,7 +37,7 @@
 
 ## MacBook Flutter macOS gate
 
-`task test:flutter:local`先运行`e2e-verify/mobile/macos*.test.mjs`的纯 Node 编排回归，再执行一次`flutter build macos --debug --no-pub`。随后运行`apps/mobile/test/`长期 unit/widget 套件；全部断言通过后，runner 直接启动固定 debug 可执行文件，按已登记 fixture 场景在真实 macOS 窗口以 5fps 连续抓取 1 秒 PNG。启动器只给 debug macOS 进程注入`LOCAL_FIXTURE_MODE=true`和固定场景名，并只终止本轮 CoreGraphics 已观测到的 PID；它不再依赖当前 macOS 26/Xcode 26 上不稳定的`flutter run -d macos`设备发现链路。
+`task test:flutter:local`先运行`e2e-verify/mobile/macos*.test.mjs`的纯 Node 编排回归，再执行一次`flutter build macos --debug --no-pub`。随后运行`apps/mobile/test/`长期 unit/widget 套件；全部断言通过后，runner 直接启动固定 debug 可执行文件，按已登记 fixture 场景在真实 macOS 窗口以 5fps 连续抓取 1 秒 PNG。当前场景为`VISUAL-MOBILE-01..05`与`VISUAL-PAIR-01`：P2 增加会话列表、完整会话详情和只读详情，且必须在录制前由`MACOS_SCREENSHOT_SCENARIOS`固定登记。启动器只给 debug macOS 进程注入`LOCAL_FIXTURE_MODE=true`和固定场景名，并只终止本轮 CoreGraphics 已观测到的 PID；它不再依赖当前 macOS 26/Xcode 26 上不稳定的`flutter run -d macos`设备发现链路。
 
 报告标记`real_browser=false`、`visible_desktop_app=true`、`headless=false`、`host_platform="macos"`、`real_device=false`、`simulated_device=false`。本轮按用户约束可以保存 deterministic fixture 的 QR 与请求标识截图，但绝不启动真实账号、token、恢复码、会话正文、附件或 diff；macOS 结果也不能写成 Android Keystore/Drift 原生通过。`flutter test -d macos`的 native integration 仍因 Flutter open/VM 握手回归留待工具链修复后重启。浏览器验收仍由`task test:e2e`的 headed Chrome 提供。
 

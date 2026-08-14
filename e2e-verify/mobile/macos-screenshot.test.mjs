@@ -25,7 +25,14 @@ test("macOS 截图只接受有效 PNG 并读取实际尺寸", () => {
 test("截图 manifest 只保留 fixture 元数据、哈希和窗口尺寸", () => {
   const manifest = buildMacosScreenshotManifest({
     timestamp: "2026-08-14T15-00-00-000Z",
-    declaredScenarioIds: ["VISUAL-MOBILE-01", "VISUAL-MOBILE-02", "VISUAL-PAIR-01"],
+    declaredScenarioIds: [
+      "VISUAL-MOBILE-01",
+      "VISUAL-MOBILE-02",
+      "VISUAL-PAIR-01",
+      "VISUAL-MOBILE-03",
+      "VISUAL-MOBILE-04",
+      "VISUAL-MOBILE-05",
+    ],
     artifacts: [{
       filename: "visual-mobile-01-login.png",
       height: 997,

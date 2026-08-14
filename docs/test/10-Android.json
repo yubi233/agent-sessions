@@ -22,7 +22,7 @@
     {
       "id": "MOBILE-01",
       "title": "登录配对与密文缓存",
-      "status": "in_progress",
+      "status": "completed",
       "phase": "P4",
       "category": "Android",
       "priority": "P0",
@@ -44,11 +44,11 @@
     {
       "id": "MOBILE-02",
       "title": "Happy 风格会话列表、流式时间线与写控制",
-      "status": "in_progress",
+      "status": "completed",
       "phase": "v0.1/P2",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS integration + Relay contract",
+      "test_layer": "Dart unit + Flutter widget + HTTP DTO contract + Flutter macOS visible fixture gate",
       "consumes": ["SESS-01", "SESS-02", "CTRL-01", "CTRL-02"],
       "precondition": "MacBook 上的可见 Flutter macOS 窗口、已建立 fixture Android owner、deterministic fixture Relay；不依赖 Android AVD、真机、真实 Provider 或真实上游。",
       "steps": [
@@ -67,9 +67,10 @@
       "evidence": [
         "apps/mobile/test/session_controller_test.dart",
         "apps/mobile/test/session_screens_test.dart",
-        "apps/mobile/integration_test/w2_session_control_flow_test.dart",
-        "e2e-verify/reports/<ts>/MOBILE/mobile-02-macos.json",
-        "e2e-verify/screenshots/<ts>/MOBILE/manifest.json"
+        "apps/mobile/test/http_relay_repository_test.dart",
+        "apps/mobile/test/local_visual_fixture_test.dart",
+        "e2e-verify/reports/2026-08-14T18-32-31-364Z/MOBILE/mobile-01-macos.json",
+        "e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/manifest.json"
       ]
     },
     {

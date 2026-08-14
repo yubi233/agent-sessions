@@ -44,6 +44,21 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-pair-01-pending",
     localVisualScenario: "pairing-pending",
   }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-03",
+    directory: "visual-mobile-03-session-list",
+    localVisualScenario: "session-list",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-04",
+    directory: "visual-mobile-04-session-detail",
+    localVisualScenario: "session-detail",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-05",
+    directory: "visual-mobile-05-session-readonly",
+    localVisualScenario: "session-readonly",
+  }),
 ]);
 
 function wait(milliseconds) {

@@ -1,0 +1,225 @@
+{
+  "timestamp": "2026-08-14T18-32-31-364Z",
+  "plan_id": "MOBILE",
+  "suite": "mobile-macos-local-gate",
+  "status": "passed",
+  "real_browser": false,
+  "real_model": false,
+  "real_upstream": false,
+  "fixture_data": true,
+  "local_test": true,
+  "headless": false,
+  "command": "flutter build macos --debug --no-pub && node e2e-verify/mobile/run-macos.mjs",
+  "browser": "n/a",
+  "model": "n/a",
+  "provider": "n/a",
+  "credential_source": "none",
+  "request_ids": [],
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "artifacts": [
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-01-login/frame-0001.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-01-login/frame-0002.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-01-login/frame-0003.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-01-login/frame-0004.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-01-login/frame-0005.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-02-owner-ready/frame-0001.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-02-owner-ready/frame-0002.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-02-owner-ready/frame-0003.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-02-owner-ready/frame-0004.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-02-owner-ready/frame-0005.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-pair-01-pending/frame-0001.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-pair-01-pending/frame-0002.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-pair-01-pending/frame-0003.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-pair-01-pending/frame-0004.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-pair-01-pending/frame-0005.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-03-session-list/frame-0001.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-03-session-list/frame-0002.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-03-session-list/frame-0003.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-03-session-list/frame-0004.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-03-session-list/frame-0005.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-04-session-detail/frame-0001.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-04-session-detail/frame-0002.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-04-session-detail/frame-0003.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-04-session-detail/frame-0004.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-04-session-detail/frame-0005.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-05-session-readonly/frame-0001.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-05-session-readonly/frame-0002.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-05-session-readonly/frame-0003.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-05-session-readonly/frame-0004.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/visual-mobile-05-session-readonly/frame-0005.png",
+    "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/screenshots/2026-08-14T18-32-31-364Z/MOBILE/manifest.json"
+  ],
+  "failure_class": null,
+  "remaining_risk": "macOS 26 + Flutter 3.47 的 flutter test -d macos 存在官方 open/VM 握手回归；integration_test 保留给后续 Android 原生或工具链修复后的 macOS gate。",
+  "gate_kind": "flutter_macos_visible_widget_gate",
+  "host_platform": "macos",
+  "real_device": false,
+  "simulated_device": false,
+  "visible_desktop_app": true,
+  "test_ids": [
+    "MOBILE-01",
+    "PAIR-01",
+    "PAIR-02",
+    "PAIR-03"
+  ],
+  "functional_widget_tests": [
+    "test"
+  ],
+  "deferred_native_integration_tests": [
+    "integration_test/w1_auth_pairing_flow_test.dart",
+    "integration_test/w1_visual_owner_fixture_test.dart",
+    "integration_test/w1_macos_drift_cache_test.dart"
+  ],
+  "native_integration_status": "deferred_due_to_flutter_macos_open_vm_handshake_regression",
+  "fixture_revision": "local-deterministic-fixture",
+  "prebuilt_debug_build": {
+    "exit_code": 0,
+    "timed_out": false,
+    "app_executable": "/Users/yubi/code/agentProject/agent-sessions/apps/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile"
+  },
+  "visible_app_launcher": "prebuilt-macos-debug-app",
+  "target_mobile_content_size": {
+    "height": 960,
+    "width": 480
+  },
+  "macos_phone_canvas_mode": "480x960-logical-scaled-when-host-is-shorter",
+  "test_summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "visible_desktop_smoke": {
+    "exit_code": null,
+    "timed_out": false,
+    "graceful_exit_requested": true,
+    "visible_desktop_app": true,
+    "portrait_mobile_window_observed": true,
+    "observed_window_frame": {
+      "id": 6865,
+      "pid": 83155,
+      "width": 480,
+      "height": 992
+    },
+    "observed_window_mode": "native",
+    "screenshot_capture_error": null,
+    "screenshot_count": 5,
+    "maximum_window_count": 1,
+    "window_observation_attempts": 9,
+    "window_observer_errors": 0,
+    "controlled_exit_requested": true
+  },
+  "visual_scenario_runs": [
+    {
+      "id": "VISUAL-MOBILE-01",
+      "frame_count": 5,
+      "exit_code": null,
+      "signal": "SIGTERM",
+      "timed_out": false,
+      "controlled_exit_requested": true,
+      "observed_window_frame": {
+        "id": 6865,
+        "pid": 83155,
+        "width": 480,
+        "height": 992
+      },
+      "observed_window_mode": "native"
+    },
+    {
+      "id": "VISUAL-MOBILE-02",
+      "frame_count": 5,
+      "exit_code": null,
+      "signal": "SIGTERM",
+      "timed_out": false,
+      "controlled_exit_requested": true,
+      "observed_window_frame": {
+        "id": 6880,
+        "pid": 83319,
+        "width": 480,
+        "height": 992
+      },
+      "observed_window_mode": "native"
+    },
+    {
+      "id": "VISUAL-PAIR-01",
+      "frame_count": 5,
+      "exit_code": null,
+      "signal": "SIGTERM",
+      "timed_out": false,
+      "controlled_exit_requested": true,
+      "observed_window_frame": {
+        "id": 6895,
+        "pid": 83512,
+        "width": 480,
+        "height": 992
+      },
+      "observed_window_mode": "native"
+    },
+    {
+      "id": "VISUAL-MOBILE-03",
+      "frame_count": 5,
+      "exit_code": null,
+      "signal": "SIGTERM",
+      "timed_out": false,
+      "controlled_exit_requested": true,
+      "observed_window_frame": {
+        "id": 6910,
+        "pid": 83706,
+        "width": 480,
+        "height": 992
+      },
+      "observed_window_mode": "native"
+    },
+    {
+      "id": "VISUAL-MOBILE-04",
+      "frame_count": 5,
+      "exit_code": null,
+      "signal": "SIGTERM",
+      "timed_out": false,
+      "controlled_exit_requested": true,
+      "observed_window_frame": {
+        "id": 6925,
+        "pid": 83866,
+        "width": 480,
+        "height": 992
+      },
+      "observed_window_mode": "native"
+    },
+    {
+      "id": "VISUAL-MOBILE-05",
+      "frame_count": 5,
+      "exit_code": null,
+      "signal": "SIGTERM",
+      "timed_out": false,
+      "controlled_exit_requested": true,
+      "observed_window_frame": {
+        "id": 6940,
+        "pid": 84072,
+        "width": 480,
+        "height": 992
+      },
+      "observed_window_mode": "native"
+    }
+  ],
+  "test_results": [
+    {
+      "path": "test",
+      "test_ids": [
+        "MOBILE-01",
+        "PAIR-01",
+        "PAIR-02",
+        "PAIR-03"
+      ],
+      "requires_visible_window": false,
+      "passed": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "test_success_output_observed": true,
+      "failure_summary": null,
+      "visible_desktop_app_during_test": false
+    }
+  ],
+  "duration_ms": 60872
+}
