@@ -1,0 +1,217 @@
+{
+  "schema_version": 2,
+  "timestamp": "2026-08-14T17-49-05-300Z",
+  "suite": "mobile-macos-local-gate",
+  "capture_mode": "macos-window",
+  "fixture_data": true,
+  "declared_scenarios": [
+    "VISUAL-MOBILE-01",
+    "VISUAL-MOBILE-02",
+    "VISUAL-PAIR-01"
+  ],
+  "frame_rate_fps": 5,
+  "captured_scenarios": [
+    "VISUAL-MOBILE-01",
+    "VISUAL-MOBILE-02",
+    "VISUAL-PAIR-01"
+  ],
+  "target_mobile_content_size": {
+    "height": 960,
+    "width": 480
+  },
+  "observed_window_frame": {
+    "height": 992,
+    "width": 480
+  },
+  "observed_window_mode": "native",
+  "screenshots": [
+    {
+      "scenario_id": "VISUAL-MOBILE-01",
+      "filename": "frame-0005.png",
+      "frame_index": 5,
+      "width": 1096,
+      "height": 2120,
+      "size_bytes": 597964,
+      "sha256": "d9e1f576e8796b8d083539a45e7f66434e04fb2212c8d241da5cef1ebdea210d"
+    },
+    {
+      "scenario_id": "VISUAL-MOBILE-02",
+      "filename": "frame-0005.png",
+      "frame_index": 5,
+      "width": 1096,
+      "height": 2120,
+      "size_bytes": 633855,
+      "sha256": "75625a182a880dd4bf16de16d0242ea29df9b4eabe39613db977fbf7de10b7ef"
+    },
+    {
+      "scenario_id": "VISUAL-PAIR-01",
+      "filename": "frame-0005.png",
+      "frame_index": 5,
+      "width": 1096,
+      "height": 2120,
+      "size_bytes": 723762,
+      "sha256": "71a51b84a85c265943dbd478efe59ea6386c0644f4e7b91180fdcacd13f62036"
+    }
+  ],
+  "frame_sets": [
+    {
+      "scenario_id": "VISUAL-MOBILE-01",
+      "frame_count": 5,
+      "selected_frame": "frame-0005.png",
+      "selected_frame_index": 5,
+      "frames": [
+        {
+          "filename": "frame-0001.png",
+          "frame_index": 1,
+          "captured_offset_ms": 256,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 597964,
+          "sha256": "d9e1f576e8796b8d083539a45e7f66434e04fb2212c8d241da5cef1ebdea210d"
+        },
+        {
+          "filename": "frame-0002.png",
+          "frame_index": 2,
+          "captured_offset_ms": 441,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 597964,
+          "sha256": "d9e1f576e8796b8d083539a45e7f66434e04fb2212c8d241da5cef1ebdea210d"
+        },
+        {
+          "filename": "frame-0003.png",
+          "frame_index": 3,
+          "captured_offset_ms": 623,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 597964,
+          "sha256": "d9e1f576e8796b8d083539a45e7f66434e04fb2212c8d241da5cef1ebdea210d"
+        },
+        {
+          "filename": "frame-0004.png",
+          "frame_index": 4,
+          "captured_offset_ms": 820,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 597964,
+          "sha256": "d9e1f576e8796b8d083539a45e7f66434e04fb2212c8d241da5cef1ebdea210d"
+        },
+        {
+          "filename": "frame-0005.png",
+          "frame_index": 5,
+          "captured_offset_ms": 997,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 597964,
+          "sha256": "d9e1f576e8796b8d083539a45e7f66434e04fb2212c8d241da5cef1ebdea210d"
+        }
+      ]
+    },
+    {
+      "scenario_id": "VISUAL-MOBILE-02",
+      "frame_count": 5,
+      "selected_frame": "frame-0005.png",
+      "selected_frame_index": 5,
+      "frames": [
+        {
+          "filename": "frame-0001.png",
+          "frame_index": 1,
+          "captured_offset_ms": 248,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 633855,
+          "sha256": "75625a182a880dd4bf16de16d0242ea29df9b4eabe39613db977fbf7de10b7ef"
+        },
+        {
+          "filename": "frame-0002.png",
+          "frame_index": 2,
+          "captured_offset_ms": 427,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 633855,
+          "sha256": "75625a182a880dd4bf16de16d0242ea29df9b4eabe39613db977fbf7de10b7ef"
+        },
+        {
+          "filename": "frame-0003.png",
+          "frame_index": 3,
+          "captured_offset_ms": 600,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 633855,
+          "sha256": "75625a182a880dd4bf16de16d0242ea29df9b4eabe39613db977fbf7de10b7ef"
+        },
+        {
+          "filename": "frame-0004.png",
+          "frame_index": 4,
+          "captured_offset_ms": 767,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 633855,
+          "sha256": "75625a182a880dd4bf16de16d0242ea29df9b4eabe39613db977fbf7de10b7ef"
+        },
+        {
+          "filename": "frame-0005.png",
+          "frame_index": 5,
+          "captured_offset_ms": 970,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 633855,
+          "sha256": "75625a182a880dd4bf16de16d0242ea29df9b4eabe39613db977fbf7de10b7ef"
+        }
+      ]
+    },
+    {
+      "scenario_id": "VISUAL-PAIR-01",
+      "frame_count": 5,
+      "selected_frame": "frame-0005.png",
+      "selected_frame_index": 5,
+      "frames": [
+        {
+          "filename": "frame-0001.png",
+          "frame_index": 1,
+          "captured_offset_ms": 210,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 723762,
+          "sha256": "71a51b84a85c265943dbd478efe59ea6386c0644f4e7b91180fdcacd13f62036"
+        },
+        {
+          "filename": "frame-0002.png",
+          "frame_index": 2,
+          "captured_offset_ms": 408,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 723762,
+          "sha256": "71a51b84a85c265943dbd478efe59ea6386c0644f4e7b91180fdcacd13f62036"
+        },
+        {
+          "filename": "frame-0003.png",
+          "frame_index": 3,
+          "captured_offset_ms": 594,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 723762,
+          "sha256": "71a51b84a85c265943dbd478efe59ea6386c0644f4e7b91180fdcacd13f62036"
+        },
+        {
+          "filename": "frame-0004.png",
+          "frame_index": 4,
+          "captured_offset_ms": 789,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 723762,
+          "sha256": "71a51b84a85c265943dbd478efe59ea6386c0644f4e7b91180fdcacd13f62036"
+        },
+        {
+          "filename": "frame-0005.png",
+          "frame_index": 5,
+          "captured_offset_ms": 991,
+          "width": 1096,
+          "height": 2120,
+          "size_bytes": 723762,
+          "sha256": "71a51b84a85c265943dbd478efe59ea6386c0644f4e7b91180fdcacd13f62036"
+        }
+      ]
+    }
+  ]
+}

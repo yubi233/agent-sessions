@@ -55,10 +55,22 @@ func (a *API) RequireAuth() gin.HandlerFunc {
 		subj := domain.AuthSubject{
 			AccountID: at.AccountID, DeviceID: at.DeviceID, Role: at.Role, DeviceOK: true,
 		}
-		// 撤销设备必须立即失效：每次请求校验设备状态。
+		// 设备令牌必须绑定仍有效且同账号同角色的设备，不能只信任 access_tokens 历史字段。
 		if at.DeviceID != "" {
 			dev, derr := a.Repo.DeviceByID(c.Request.Context(), at.DeviceID)
-			if derr == nil && dev.Status != domain.DeviceActive {
+			if derr != nil {
+				if errors.Is(derr, sql.ErrNoRows) {
+					writeError(c, domain.ErrUnauthenticated)
+					return
+				}
+				writeError(c, derr)
+				return
+			}
+			if dev.AccountID != at.AccountID || dev.Role != at.Role {
+				writeError(c, domain.ErrUnauthenticated)
+				return
+			}
+			if dev.Status != domain.DeviceActive {
 				writeError(c, domain.ErrDeviceRevoked)
 				return
 			}

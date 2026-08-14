@@ -17,13 +17,13 @@ class CryptoEnvelope {
   });
 
   factory CryptoEnvelope.fromJson(Map<String, dynamic> json) => CryptoEnvelope(
-        alg: json['alg'] as String,
-        keyId: json['key_id'] as String,
-        nonce: json['nonce'] as String,
-        ciphertext: json['ciphertext'] as String,
-        aadHash: json['aad_hash'] as String,
-        payloadVersion: json['payload_version'] as int,
-      );
+    alg: json['alg'] as String,
+    keyId: json['key_id'] as String,
+    nonce: json['nonce'] as String,
+    ciphertext: json['ciphertext'] as String,
+    aadHash: json['aad_hash'] as String,
+    payloadVersion: json['payload_version'] as int,
+  );
 
   final String alg;
   final String keyId;
@@ -44,12 +44,12 @@ class AssociatedData {
   });
 
   factory AssociatedData.fromJson(Map<String, dynamic> json) => AssociatedData(
-        entityId: json['entity_id'] as String,
-        eventType: json['event_type'] as String,
-        protocolVersion: json['protocol_version'] as int,
-        eventSeq: json['event_seq'] as int,
-        keyId: json['key_id'] as String,
-      );
+    entityId: json['entity_id'] as String,
+    eventType: json['event_type'] as String,
+    protocolVersion: json['protocol_version'] as int,
+    eventSeq: json['event_seq'] as int,
+    keyId: json['key_id'] as String,
+  );
 
   final String entityId;
   final String eventType;
@@ -58,24 +58,24 @@ class AssociatedData {
   final String keyId;
 
   AssociatedData withKeyId(String value) => AssociatedData(
-        entityId: entityId,
-        eventType: eventType,
-        protocolVersion: protocolVersion,
-        eventSeq: eventSeq,
-        keyId: value,
-      );
+    entityId: entityId,
+    eventType: eventType,
+    protocolVersion: protocolVersion,
+    eventSeq: eventSeq,
+    keyId: value,
+  );
 
   Uint8List encode() => Uint8List.fromList(
-        utf8.encode(
-          jsonEncode({
-            'entity_id': entityId,
-            'event_type': eventType,
-            'protocol_version': protocolVersion,
-            'event_seq': eventSeq,
-            'key_id': keyId,
-          }),
-        ),
-      );
+    utf8.encode(
+      jsonEncode({
+        'entity_id': entityId,
+        'event_type': eventType,
+        'protocol_version': protocolVersion,
+        'event_seq': eventSeq,
+        'key_id': keyId,
+      }),
+    ),
+  );
 }
 
 /// CryptoBox 实现与 Go/TypeScript 相同的 HKDF + AES-256-GCM 解密流程。
@@ -123,5 +123,6 @@ class CryptoBox {
   static Uint8List _decodeBase64Url(String value) =>
       Uint8List.fromList(base64Url.decode(base64Url.normalize(value)));
 
-  static String _hex(List<int> bytes) => bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+  static String _hex(List<int> bytes) =>
+      bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
 }

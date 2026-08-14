@@ -5,6 +5,7 @@
 import { startRelay } from "./lib/relay.mjs";
 import { startWeb, startAdmin } from "./lib/web.mjs";
 import { writeReport, baseReport } from "./lib/report.mjs";
+import { createFixtureAccountFactory } from "./lib/fixture-account.mjs";
 import { registry } from "./lib/suites.mjs";
 
 function parseArgs(argv) {
@@ -28,6 +29,7 @@ async function main() {
   const relay = await startRelay({ port: 8787 });
   const web = await startWeb({ relayBase: relay.base });
   const admin = await startAdmin({ port: 15174, relayBase: relay.base });
+  const fixtureAccount = createFixtureAccountFactory(relay.base);
   const results = [];
 
   const report = (payload) => {
@@ -42,7 +44,7 @@ async function main() {
   try {
     for (const scene of selected) {
       process.stdout.write(`[run] ${scene.id} (${scene.title})\n`);
-      const r = await scene.run({ relay, web, admin, report, headless });
+      const r = await scene.run({ relay, web, admin, report, headless, fixtureAccount });
       process.stdout.write(`[run] ${scene.id} -> ${r.status}\n`);
     }
   } finally {

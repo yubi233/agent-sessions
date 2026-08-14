@@ -6,9 +6,13 @@ import 'package:agent_sessions_mobile/crypto/box.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  final vectors = jsonDecode(
-    File('../../packages/crypto/testdata/vectors.json').readAsStringSync(),
-  ) as List<dynamic>;
+  final vectors =
+      jsonDecode(
+            File(
+              '../../packages/crypto/testdata/vectors.json',
+            ).readAsStringSync(),
+          )
+          as List<dynamic>;
 
   group('P0-CRYPTO-01 Dart golden vectors', () {
     for (final raw in vectors.cast<Map<String, dynamic>>()) {
@@ -41,6 +45,6 @@ void main() {
 }
 
 List<int> _hex(String value) => [
-      for (var index = 0; index < value.length; index += 2)
-        int.parse(value.substring(index, index + 2), radix: 16),
-    ];
+  for (var index = 0; index < value.length; index += 2)
+    int.parse(value.substring(index, index + 2), radix: 16),
+];

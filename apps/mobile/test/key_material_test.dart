@@ -27,7 +27,10 @@ void main() {
         remotePublicKey: await sender.extractPublicKey(),
       );
 
-      expect(await senderSecret.extractBytes(), await recipientSecret.extractBytes());
+      expect(
+        await senderSecret.extractBytes(),
+        await recipientSecret.extractBytes(),
+      );
     });
   });
 }

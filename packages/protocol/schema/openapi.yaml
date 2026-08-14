@@ -30,19 +30,10 @@ paths:
                 $ref: "#/components/schemas/Health"
         "503":
           description: not ready
-  /v1/version:
-    get:
-      operationId: getVersion
-      responses:
-        "200":
-          description: version
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Version"
   /v1/auth/register:
     post:
       operationId: register
+      description: 为新账号创建初始 Android owner；成功时返回已绑定设备的令牌对。
       requestBody:
         required: true
         content:
@@ -55,10 +46,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Account"
+                $ref: "#/components/schemas/DeviceBoundTokenPair"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /v1/auth/login:
     post:
       operationId: login
+      description: 密码只校验账号；省略 device_role 时签发未绑定的 Web 只读令牌，禁止声明 Android 写身份。
       requestBody:
         required: true
         content:
@@ -72,6 +68,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /v1/auth/refresh:
     post:
       operationId: refresh
@@ -88,6 +88,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /v1/auth/logout:
     post:
       operationId: logout
@@ -102,6 +108,8 @@ paths:
       responses:
         "204":
           description: logged out
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /v1/devices:
     get:
       operationId: listDevices
@@ -113,12 +121,13 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Device"
+                $ref: "#/components/schemas/DeviceList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /v1/devices/{id}:
     delete:
       operationId: revokeDevice
+      description: 仅 android_owner 可撤销设备；被撤销设备的 bearer 与 refresh 均立即失效。
       security:
         - bearerAuth: []
       parameters:
@@ -130,9 +139,14 @@ paths:
       responses:
         "204":
           description: revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/pairing/bootstrap:
     post:
       operationId: bootstrapOwner
+      description: 仅初始 android_owner 可写入一次本机公钥。
       security:
         - bearerAuth: []
       requestBody:
@@ -148,6 +162,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Device"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/pairing/requests:
     post:
       operationId: createPairing
@@ -166,9 +188,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PairingRequest"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /v1/pairing/requests/{id}:
     get:
       operationId: getPairing
+      description: 仅当前 Android owner 可读取；响应包含待配对设备的公开身份和加密密钥。
       security:
         - bearerAuth: []
       parameters:
@@ -184,9 +211,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PairingRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/pairing/requests/{id}/approve:
     post:
       operationId: approvePairing
+      description: 仅 android_owner 可批准；重复批准幂等，并发批准只创建一台设备。
       security:
         - bearerAuth: []
       parameters:
@@ -202,9 +234,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/pairing/requests/{id}/cancel:
     post:
       operationId: cancelPairing
+      description: 仅当前 Android owner 可取消待处理配对请求。
       security:
         - bearerAuth: []
       parameters:
@@ -216,6 +255,52 @@ paths:
       responses:
         "204":
           description: cancelled
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/recovery-codes:
+    post:
+      operationId: generateRecoveryCode
+      description: 仅 android_owner 可生成；恢复码明文只在此响应返回一次。
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: recovery code shown once to the current owner
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryCodeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/recovery-codes/restore:
+    post:
+      operationId: restoreRecoveryCode
+      description: 无 bearer 恢复入口；恢复码一次性消费且限次，成功后撤销既有 Android 写设备。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecoveryRestoreRequest"
+      responses:
+        "200":
+          description: recovered owner device and a new device-bound token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryRestoreResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /v1/terminals:
     get:
       operationId: listTerminals
@@ -227,9 +312,9 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Terminal"
+                $ref: "#/components/schemas/TerminalList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /v1/projects:
     get:
       operationId: listProjects
@@ -241,9 +326,9 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Project"
+                $ref: "#/components/schemas/ProjectList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /v1/workspaces:
     get:
       operationId: listWorkspaces
@@ -255,28 +340,96 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Workspace"
+                $ref: "#/components/schemas/WorkspaceList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createWorkspace
+      description: 仅 android_owner/android 写控制端可登记 Workspace。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceRequest"
+      responses:
+        "201":
+          description: created workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/sessions:
     get:
       operationId: listSessions
       security:
         - bearerAuth: []
-      parameters:
-        - in: query
-          name: cursor
-          schema:
-            type: string
       responses:
         "200":
           description: sessions
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Session"
+                $ref: "#/components/schemas/SessionList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createSession
+      description: 仅 android_owner/android 写控制端可创建逻辑会话。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "201":
+          description: created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/sessions/{id}/lease:
+    post:
+      operationId: acquireSessionLease
+      description: 仅 android_owner/android 写控制端可获取当前会话的 fencing epoch。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: current lease
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaseResponse"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/sessions/{id}/snapshot:
     get:
       operationId: getSessionSnapshot
@@ -292,6 +445,8 @@ paths:
           name: after_seq
           schema:
             type: integer
+            format: int64
+            minimum: 0
       responses:
         "200":
           description: snapshot
@@ -299,9 +454,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionSnapshot"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /v1/sessions/{id}/commands:
     post:
       operationId: submitSessionCommand
+      description: 仅 android_owner/android 写控制端可提交；lease_epoch 必须为当前正 fencing epoch。
       security:
         - bearerAuth: []
       parameters:
@@ -323,6 +485,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Command"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/commands/{id}:
     get:
       operationId: getCommand
@@ -341,30 +511,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Command"
-  /v1/workspaces/{id}/git/status:
-    post:
-      operationId: gitStatus
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: id
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EncryptedRPC"
-      responses:
-        "202":
-          description: accepted
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Command"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/capabilities:
     get:
       operationId: getCapabilities
@@ -376,21 +526,9 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/CapabilityItem"
-  /v1/admin/overview:
-    get:
-      operationId: adminOverview
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: metadata only
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminOverview"
+                $ref: "#/components/schemas/CapabilityProvidersResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /v1/events:
     get:
       operationId: streamEvents
@@ -401,33 +539,75 @@ paths:
           name: Last-Event-ID
           schema:
             type: string
+        - in: query
+          name: after_seq
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
       responses:
         "200":
           description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
+  responses:
+    BadRequest:
+      description: 请求体、游标或参数不符合契约。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: 缺少、失效或被重放的认证凭据。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: 设备已撤销、只读或不具备当前操作所需角色。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: 幂等键、租约或 bootstrap 状态冲突。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooManyRequests:
+      description: 恢复码失败次数超过冷却阈值。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
   schemas:
     Health:
       type: object
-      required: [status, store]
+      required: [status]
       properties:
         status:
           type: string
-        store:
-          type: string
-        detail:
-          type: string
-    Version:
+    ErrorResponse:
       type: object
-      required: [protocol_version, service]
+      required: [code, message]
       properties:
-        protocol_version:
-          type: integer
-        service:
+        code:
           type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
     RegisterRequest:
       type: object
       required: [email, password]
@@ -446,6 +626,8 @@ components:
           type: string
         device_role:
           type: string
+          description: 仅允许 web 或 admin；省略时服务端按 web 只读 token 处理。
+          enum: [web, admin]
     RefreshRequest:
       type: object
       required: [refresh_token]
@@ -454,8 +636,10 @@ components:
           type: string
     TokenPair:
       type: object
-      required: [access_token, refresh_token, expires_in]
+      required: [account_id, access_token, refresh_token, expires_in]
       properties:
+        account_id:
+          type: string
         access_token:
           type: string
         refresh_token:
@@ -464,14 +648,50 @@ components:
           type: integer
         device_id:
           type: string
-    Account:
+    DeviceBoundTokenPair:
       type: object
-      required: [id, email]
+      required: [account_id, device_id, access_token, refresh_token, expires_in]
       properties:
-        id:
+        account_id:
           type: string
+        device_id:
+          type: string
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+    RecoveryCodeResponse:
+      type: object
+      required: [recovery_code]
+      properties:
+        recovery_code:
+          type: string
+    RecoveryRestoreRequest:
+      type: object
+      required: [email, recovery_code, display_name, identity_public_key, encryption_public_key]
+      properties:
         email:
           type: string
+        recovery_code:
+          type: string
+        display_name:
+          type: string
+        identity_public_key:
+          type: string
+        encryption_public_key:
+          type: string
+        platform:
+          type: string
+    RecoveryRestoreResponse:
+      type: object
+      required: [device, tokens]
+      properties:
+        device:
+          $ref: "#/components/schemas/Device"
+        tokens:
+          $ref: "#/components/schemas/DeviceBoundTokenPair"
     BootstrapRequest:
       type: object
       required: [display_name, identity_public_key, encryption_public_key]
@@ -490,7 +710,7 @@ components:
       properties:
         role:
           type: string
-          enum: [android, terminal, web, admin]
+          enum: [android, terminal, web]
         display_name:
           type: string
         identity_public_key:
@@ -512,8 +732,15 @@ components:
           type: string
         display_name:
           type: string
+        identity_public_key:
+          type: string
+        encryption_public_key:
+          type: string
+        platform:
+          type: string
         expires_at:
           type: string
+          format: date-time
     Device:
       type: object
       required: [id, role, status]
@@ -532,6 +759,15 @@ components:
           type: string
         last_seen_unix_ms:
           type: integer
+          format: int64
+    DeviceList:
+      type: object
+      required: [devices]
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: "#/components/schemas/Device"
     Terminal:
       type: object
       required: [id, device_id, status]
@@ -548,6 +784,15 @@ components:
           type: string
         last_seen_unix_ms:
           type: integer
+          format: int64
+    TerminalList:
+      type: object
+      required: [terminals]
+      properties:
+        terminals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Terminal"
     Project:
       type: object
       required: [id, fingerprint]
@@ -557,7 +802,15 @@ components:
         fingerprint:
           type: string
         encrypted_name:
-          type: object
+          type: string
+    ProjectList:
+      type: object
+      required: [projects]
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
     Workspace:
       type: object
       required: [id, project_id, terminal_id]
@@ -567,6 +820,26 @@ components:
         project_id:
           type: string
         terminal_id:
+          type: string
+        branch:
+          type: string
+        status:
+          type: string
+    WorkspaceList:
+      type: object
+      required: [workspaces]
+      properties:
+        workspaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/Workspace"
+    CreateWorkspaceRequest:
+      type: object
+      required: [project_id, canonical_root]
+      properties:
+        project_id:
+          type: string
+        canonical_root:
           type: string
         branch:
           type: string
@@ -584,8 +857,35 @@ components:
           type: string
         last_seq:
           type: integer
+          format: int64
         provider:
           type: string
+    SessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+    CreateSessionRequest:
+      type: object
+      required: [workspace_id]
+      properties:
+        workspace_id:
+          type: string
+        provider:
+          type: string
+    LeaseResponse:
+      type: object
+      required: [session_id, lease_epoch]
+      properties:
+        session_id:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+          minimum: 1
     SessionSnapshot:
       type: object
       required: [session, events]
@@ -602,13 +902,14 @@ components:
       properties:
         event_seq:
           type: integer
+          format: int64
         event_type:
           type: string
         envelope:
           type: object
     SubmitCommandRequest:
       type: object
-      required: [kind, idempotency_key]
+      required: [kind, idempotency_key, lease_epoch]
       properties:
         kind:
           type: string
@@ -616,6 +917,8 @@ components:
           type: string
         lease_epoch:
           type: integer
+          format: int64
+          minimum: 1
         target_instance_id:
           type: string
         ciphertext:
@@ -634,34 +937,38 @@ components:
           type: string
         lease_epoch:
           type: integer
-    EncryptedRPC:
-      type: object
-      required: [ciphertext]
-      properties:
-        ciphertext:
-          type: object
+          format: int64
+          minimum: 1
     CapabilityItem:
       type: object
-      required: [name, state]
+      required: [name, status]
       properties:
         name:
           type: string
-        state:
+        status:
           type: string
           enum: [native, emulated, unsupported]
         reason:
           type: string
-    AdminOverview:
+    CapabilityProvider:
       type: object
-      required: [devices, terminals, sessions]
+      required: [kind, version, available, capabilities]
       properties:
-        devices:
-          type: integer
-        terminals:
-          type: integer
-        sessions:
-          type: integer
-        online_devices:
-          type: integer
-        store:
+        kind:
           type: string
+        version:
+          type: string
+        available:
+          type: boolean
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityItem"
+    CapabilityProvidersResponse:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityProvider"

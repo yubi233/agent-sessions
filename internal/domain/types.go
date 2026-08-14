@@ -41,9 +41,12 @@ var (
 	ErrPairingNotFound       = errors.New("pairing not found")
 	ErrPairingAlreadyHandled = errors.New("pairing already handled")
 	ErrAccountExists         = errors.New("account exists")
+	ErrRegistrationClosed    = errors.New("registration closed")
 	ErrRecoveryLocked        = errors.New("recovery locked")
 	ErrRecoveryInvalid       = errors.New("recovery invalid")
 	ErrReadOnlyDevice        = errors.New("read-only device")
+	ErrBootstrapCompleted    = errors.New("bootstrap already completed")
+	ErrLastOwner             = errors.New("last owner cannot be revoked")
 )
 
 // Account 是账号聚合根；密码只用于校验账号，不派生正文密钥。
@@ -82,11 +85,13 @@ type PairingRequest struct {
 
 // TokenPair 是登录/刷新产生的访问与刷新令牌。access 为短期 opaque，refresh 只存哈希。
 type TokenPair struct {
-	AccountID    string        `json:"account_id"`
+	AccountID    string        `json:"account_id,omitempty"`
+	DeviceID     string        `json:"device_id,omitempty"`
 	AccessToken  string        `json:"access_token"`
 	RefreshToken string        `json:"refresh_token"`
-	AccessTTL    time.Duration `json:"access_ttl"`
-	RefreshTTL   time.Duration `json:"refresh_ttl"`
+	ExpiresIn    int64         `json:"expires_in"`
+	AccessTTL    time.Duration `json:"-"`
+	RefreshTTL   time.Duration `json:"-"`
 }
 
 // AuthSubject 是鉴权中间件写入上下文的认证主体。

@@ -113,6 +113,48 @@ func TestSubmitCommandReadOnly(t *testing.T) {
 	}
 }
 
+// CTRL-02 根因：lease/instance 在写事务内复核，旧 epoch 或旧 instance 都不能留下命令/outbox。
+func TestSubmitCommandFencesLeaseAndTargetInstanceInTransaction(t *testing.T) {
+	repo := newRepo(t)
+	svc := NewSessionService(repo)
+	sessID := newSession(t, repo)
+	ctx := context.Background()
+	if err := repo.SetSessionInstance(ctx, sessID, "inst-current"); err != nil {
+		t.Fatalf("set current instance: %v", err)
+	}
+	if _, err := svc.AcquireLease(ctx, sessID, "dev", "inst-current"); err != nil {
+		t.Fatalf("acquire current lease: %v", err)
+	}
+
+	if _, err := svc.SubmitCommand(ctx, CommandInput{
+		AccountID: "acct", DeviceID: "dev", Role: RoleAndroidOwner,
+		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "old-instance", LeaseEpoch: 1, TargetInstanceID: "inst-old",
+	}); err != ErrTargetStale {
+		t.Fatalf("old instance error=%v want target stale", err)
+	}
+	// 同一设备续租使 epoch 递增，模拟客户端在检查后才提交的旧命令。
+	if _, err := svc.AcquireLease(ctx, sessID, "dev", "inst-current"); err != nil {
+		t.Fatalf("renew lease: %v", err)
+	}
+	if _, err := svc.SubmitCommand(ctx, CommandInput{
+		AccountID: "acct", DeviceID: "dev", Role: RoleAndroidOwner,
+		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "old-epoch", LeaseEpoch: 1, TargetInstanceID: "inst-current",
+	}); err != ErrTargetStale {
+		t.Fatalf("old epoch error=%v want target stale", err)
+	}
+	accepted, err := svc.SubmitCommand(ctx, CommandInput{
+		AccountID: "acct", DeviceID: "dev", Role: RoleAndroidOwner,
+		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "current", LeaseEpoch: 2, TargetInstanceID: "inst-current",
+	})
+	if err != nil || accepted.ID == "" {
+		t.Fatalf("current command=%+v err=%v", accepted, err)
+	}
+	commands, err := repo.ListCommands(ctx, sessID)
+	if err != nil || len(commands) != 1 {
+		t.Fatalf("only current command may persist; commands=%d err=%v", len(commands), err)
+	}
+}
+
 // outbox worker 重放 pending 条目。
 func TestOutboxDrain(t *testing.T) {
 	repo := newRepo(t)

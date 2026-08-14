@@ -73,10 +73,29 @@ tasks:
       - node e2e-verify/record.mjs
 
   test:android:
-    desc: Flutter 分析与 widget 测试
+    desc: Flutter 分析与 widget 测试（单 worker，规避当前 macOS Flutter listener 清理竞态）
     cmds:
-      - flutter test --machine
+      - flutter analyze
+      - flutter test --machine --concurrency=1
     dir: apps/mobile
+
+  test:flutter:local:
+    desc: MacBook 本地 Flutter macOS 可见桌面窗口 P1 验收
+    cmds:
+      - node e2e-verify/mobile/macos.test.mjs
+      - node e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs {{.CLI_ARGS}}
+
+  test:android:harness:
+    desc: 后续 Android AVD 回归编排器的纯 Node 回归
+    cmds:
+      - node --test e2e-verify/mobile/android.test.mjs
+
+  test:android:e2e:
+    desc: 后续 Android AVD integration diagnostic（不属于本轮 v0.1 gate）
+    cmds:
+      - task: test:android:harness
+      - node e2e-verify/mobile/run-android.mjs {{.CLI_ARGS}}
 
   docs:verify:
     cmds:

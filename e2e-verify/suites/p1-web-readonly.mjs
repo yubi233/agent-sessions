@@ -7,16 +7,11 @@ export const p1WebReadonly = {
   title: "P1 Web 只读登录 headed 回归",
   planId: "RELAY-REALTIME",
   async run(ctx) {
-    const { relay, web, report, headless = false } = ctx;
-    const email = `web-${Date.now()}@test.dev`;
-
-    // 先通过 API 注册 fixture 账号（bootstrap owner），再走浏览器用户流程。
-    const reg = await fetch(`${relay.base}/v1/auth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password: "e2e-pass-123" }),
-    });
-    if (!reg.ok) {
+    const { web, report, headless = false, fixtureAccount } = ctx;
+    let account;
+    try {
+      account = await fixtureAccount();
+    } catch {
       return report({
         suite: "p1-web-readonly",
         status: "failed",
@@ -26,7 +21,7 @@ export const p1WebReadonly = {
         command: `node e2e-verify/run.mjs --suite p1-web-readonly`,
         artifacts: [],
         failure_class: "test_harness_defect",
-        remaining_risk: "无法预置 fixture 账号，headed 登录流程无法执行",
+        remaining_risk: "无法预置单租户 fixture owner，headed 登录流程无法执行",
       });
     }
 
@@ -38,8 +33,8 @@ export const p1WebReadonly = {
       await page.getByTestId("relay-ready").waitFor({ state: "visible" });
 
       // 用户可见登录流程。
-      await page.getByTestId("login-email").fill(email);
-      await page.getByTestId("login-password").fill("e2e-pass-123");
+      await page.getByTestId("login-email").fill(account.email);
+      await page.getByTestId("login-password").fill(account.password);
       await page.getByTestId("login-submit").click();
       await page.getByTestId("auth-ok").waitFor({ state: "visible" });
 

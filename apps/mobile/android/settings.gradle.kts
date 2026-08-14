@@ -1,4 +1,12 @@
 pluginManagement {
+    // 官方 Google Maven 不稳定时，调用方可显式设置 HTTPS 镜像；未设置时仍只使用官方仓库。
+    val googleMavenMirror =
+        System.getenv("AGENT_SESSIONS_GOOGLE_MAVEN_MIRROR")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    require(googleMavenMirror == null || googleMavenMirror.startsWith("https://")) {
+        "AGENT_SESSIONS_GOOGLE_MAVEN_MIRROR 必须是 HTTPS URL"
+    }
     val flutterSdkPath =
         run {
             val properties = java.util.Properties()
@@ -11,6 +19,12 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
+        googleMavenMirror?.let { mirror ->
+            maven {
+                name = "AgentSessionsGoogleMavenMirror"
+                url = uri(mirror)
+            }
+        }
         google()
         mavenCentral()
         gradlePluginPortal()

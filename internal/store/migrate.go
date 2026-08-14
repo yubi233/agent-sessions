@@ -161,6 +161,12 @@ var migrations = []string{
 		locked_until INTEGER NOT NULL DEFAULT 0,
 		created_at INTEGER NOT NULL
 	);`,
+	// 同一账号内同一身份公钥只可绑定一台设备；空公钥仅允许尚未 bootstrap 的初始 owner。
+	`CREATE UNIQUE INDEX IF NOT EXISTS devices_account_identity_public_key
+		 ON devices(account_id, identity_public_key)
+		 WHERE identity_public_key <> '';`,
+	// refresh family 必须保存签发时的角色，轮换时不能依赖设备查找而把 Admin/Web 降权或误提权。
+	`ALTER TABLE token_families ADD COLUMN role TEXT NOT NULL DEFAULT 'web';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

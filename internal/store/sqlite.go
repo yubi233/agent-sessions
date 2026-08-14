@@ -29,6 +29,13 @@ func (r *sqliteRepo) CreateAccount(ctx context.Context, id, email string, passwo
 	return err
 }
 
+// CountAccounts 只用于单租户首个 owner bootstrap 门禁，不返回账号内容。
+func (r *sqliteRepo) CountAccounts(ctx context.Context) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM accounts`).Scan(&count)
+	return count, err
+}
+
 func (r *sqliteRepo) AccountByEmail(ctx context.Context, email string) (AccountRow, error) {
 	return scanAccount(r.db.QueryRowContext(ctx,
 		`SELECT id,email,password_hash,created_at FROM accounts WHERE email=?`, email))
@@ -95,14 +102,30 @@ func (r *sqliteRepo) SetDeviceStatus(ctx context.Context, id, status string) err
 	return err
 }
 
+// UpdateBootstrapDevice 只允许初始 owner 写入一次公钥，防止已配对设备被静默换钥。
+func (r *sqliteRepo) UpdateBootstrapDevice(ctx context.Context, d DeviceRow) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE devices
+		 SET display_name=?, platform=?, identity_public_key=?, encryption_public_key=?
+		 WHERE id=? AND account_id=? AND role=? AND status=?
+		   AND identity_public_key='' AND encryption_public_key=''`,
+		d.DisplayName, d.Platform, d.IdentityPublicKey, d.EncryptionPublicKey,
+		d.ID, d.AccountID, d.Role, d.Status)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
 func (r *sqliteRepo) CreateTokenFamily(ctx context.Context, tf TokenFamilyRow) error {
 	revoked := 0
 	if tf.Revoked {
 		revoked = 1
 	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO token_families(id,account_id,device_id,refresh_hash,revoked,created_at) VALUES(?,?,?,?,?,?)`,
-		tf.ID, tf.AccountID, tf.DeviceID, tf.RefreshHash, revoked, tf.CreatedAt.UnixMilli())
+		`INSERT INTO token_families(id,account_id,device_id,role,refresh_hash,revoked,created_at) VALUES(?,?,?,?,?,?,?)`,
+		tf.ID, tf.AccountID, tf.DeviceID, tf.Role, tf.RefreshHash, revoked, tf.CreatedAt.UnixMilli())
 	return err
 }
 
@@ -111,8 +134,8 @@ func (r *sqliteRepo) TokenFamilyByID(ctx context.Context, id string) (TokenFamil
 	var revoked int
 	var created int64
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT id,account_id,device_id,refresh_hash,revoked,created_at FROM token_families WHERE id=?`, id).
-		Scan(&tf.ID, &tf.AccountID, &tf.DeviceID, &tf.RefreshHash, &revoked, &created); err != nil {
+		`SELECT id,account_id,device_id,role,refresh_hash,revoked,created_at FROM token_families WHERE id=?`, id).
+		Scan(&tf.ID, &tf.AccountID, &tf.DeviceID, &tf.Role, &tf.RefreshHash, &revoked, &created); err != nil {
 		return TokenFamilyRow{}, err
 	}
 	tf.Revoked = revoked == 1
@@ -120,9 +143,27 @@ func (r *sqliteRepo) TokenFamilyByID(ctx context.Context, id string) (TokenFamil
 	return tf, nil
 }
 
-func (r *sqliteRepo) UpdateTokenFamilyRefreshHash(ctx context.Context, id, hash string) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE token_families SET refresh_hash=? WHERE id=?`, hash, id)
-	return err
+// RotateTokenFamilyRefreshHash 是 refresh rotation 的比较交换操作。
+// 设备 family 在 SQL 条件中复核活跃状态，避免校验与落库之间被撤销后仍签发 access。
+func (r *sqliteRepo) RotateTokenFamilyRefreshHash(ctx context.Context, id, currentHash, nextHash string, notBefore time.Time) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE token_families
+		 SET refresh_hash=?
+		 WHERE id=? AND refresh_hash=? AND revoked=0 AND created_at>=?
+		   AND (
+			 device_id='' OR EXISTS (
+				 SELECT 1 FROM devices
+				 WHERE devices.id=token_families.device_id
+				   AND devices.account_id=token_families.account_id
+				   AND devices.status='active'
+			 )
+		   )`,
+		nextHash, id, currentHash, notBefore.UnixMilli())
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
 }
 
 func (r *sqliteRepo) TokenFamilyByRefreshHash(ctx context.Context, hash string) (TokenFamilyRow, error) {
@@ -130,8 +171,8 @@ func (r *sqliteRepo) TokenFamilyByRefreshHash(ctx context.Context, hash string) 
 	var revoked int
 	var created int64
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT id,account_id,device_id,refresh_hash,revoked,created_at FROM token_families WHERE refresh_hash=?`, hash).
-		Scan(&tf.ID, &tf.AccountID, &tf.DeviceID, &tf.RefreshHash, &revoked, &created); err != nil {
+		`SELECT id,account_id,device_id,role,refresh_hash,revoked,created_at FROM token_families WHERE refresh_hash=?`, hash).
+		Scan(&tf.ID, &tf.AccountID, &tf.DeviceID, &tf.Role, &tf.RefreshHash, &revoked, &created); err != nil {
 		return TokenFamilyRow{}, err
 	}
 	tf.Revoked = revoked == 1
@@ -142,6 +183,19 @@ func (r *sqliteRepo) TokenFamilyByRefreshHash(ctx context.Context, hash string) 
 func (r *sqliteRepo) RevokeTokenFamily(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE token_families SET revoked=1 WHERE id=?`, id)
 	return err
+}
+
+// RevokeTokenFamilyIfCurrent 只撤销当前认证主体持有的 refresh，避免仅凭 family ID 造成跨账号注销。
+func (r *sqliteRepo) RevokeTokenFamilyIfCurrent(ctx context.Context, id, accountID, refreshHash string) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE token_families SET revoked=1
+		 WHERE id=? AND account_id=? AND refresh_hash=? AND revoked=0`,
+		id, accountID, refreshHash)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
 }
 
 func (r *sqliteRepo) PutAccessToken(ctx context.Context, at AccessTokenRow) error {
@@ -194,6 +248,17 @@ func (r *sqliteRepo) SetPairingStatus(ctx context.Context, id, status string) er
 	return err
 }
 
+// SetPairingStatusIfCurrent 通过条件更新原子认领配对请求，避免并发批准创建重复设备。
+func (r *sqliteRepo) SetPairingStatusIfCurrent(ctx context.Context, id, currentStatus, nextStatus string) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE pairing_requests SET status=? WHERE id=? AND status=?`, nextStatus, id, currentStatus)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
 func (r *sqliteRepo) PutKeyWrap(ctx context.Context, kw KeyWrapRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO device_key_wraps(dek_id,recipient_device_id,sender_device_id,wrapped_dek,created_at) VALUES(?,?,?,?,?)`,
@@ -224,7 +289,11 @@ func (r *sqliteRepo) ListKeyWraps(ctx context.Context, dekID string) ([]KeyWrapR
 func (r *sqliteRepo) UpsertRecoveryCode(ctx context.Context, rc RecoveryRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO recovery_codes(account_id,code_hash,failed_attempts,locked_until,created_at) VALUES(?,?,?,?,?)
-		 ON CONFLICT(account_id) DO UPDATE SET code_hash=excluded.code_hash, failed_attempts=0, locked_until=0`,
+		 ON CONFLICT(account_id) DO UPDATE SET
+		 code_hash=excluded.code_hash,
+		 failed_attempts=excluded.failed_attempts,
+		 locked_until=excluded.locked_until,
+		 created_at=excluded.created_at`,
 		rc.AccountID, rc.CodeHash, rc.FailedAttempts, rc.LockedUntil.UnixMilli(), rc.CreatedAt.UnixMilli())
 	return err
 }
@@ -241,6 +310,19 @@ func (r *sqliteRepo) RecoveryByAccount(ctx context.Context, accountID string) (R
 	rc.LockedUntil = time.UnixMilli(locked)
 	rc.CreatedAt = time.UnixMilli(created)
 	return rc, nil
+}
+
+// ConsumeRecoveryCode 以哈希和冷却时间作为条件原子消费恢复码，避免并发重放。
+func (r *sqliteRepo) ConsumeRecoveryCode(ctx context.Context, accountID, codeHash string, now time.Time) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`DELETE FROM recovery_codes
+		 WHERE account_id=? AND code_hash=? AND locked_until<=?`,
+		accountID, codeHash, now.UnixMilli())
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
 }
 
 func (r *sqliteRepo) AppendAudit(ctx context.Context, accountID, action, metadataJSON string) error {
@@ -420,6 +502,11 @@ func (r *sqliteRepo) ListSessions(ctx context.Context, accountID string) ([]Sess
 
 func (r *sqliteRepo) SetSessionStatus(ctx context.Context, id, status string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET status=? WHERE id=?`, status, id)
+	return err
+}
+
+func (r *sqliteRepo) SetSessionLastSeq(ctx context.Context, id string, lastSeq int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET last_seq=? WHERE id=?`, lastSeq, id)
 	return err
 }
 

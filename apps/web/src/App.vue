@@ -58,7 +58,7 @@ async function login(): Promise<void> {
     const loginRes = await fetch(`${relayURL}/v1/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email.value, password: password.value, device_id: "web", role: "web" }),
+      body: JSON.stringify({ email: email.value, password: password.value }),
     });
     if (!loginRes.ok) {
       throw new Error(`login ${loginRes.status}`);

@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yubi233/agent-sessions/internal/authz"
 	"github.com/yubi233/agent-sessions/internal/domain"
+	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/internal/store"
 )
 
@@ -74,6 +77,28 @@ func (e *testEnv) registerAs(t *testing.T, email string) authPair {
 	}
 	_ = json.Unmarshal(reg.Body.Bytes(), &pair)
 	return authPair{AccountID: pair.AccountID, AccessToken: pair.AccessToken, RefreshToken: pair.RefreshToken}
+}
+
+// provisionAdditionalAccount 仅用于账号 scope 根因测试：生产 API 只允许首个 owner 注册。
+// 该 helper 直接写入隔离测试 SQLite，不能被业务代码或浏览器验收复用。
+func (e *testEnv) provisionAdditionalAccount(t *testing.T, email string) authPair {
+	t.Helper()
+	ctx := t.Context()
+	accountID := id.New("acct_test")
+	if err := e.repo.CreateAccount(ctx, accountID, email, authz.HashPassword("test-pass-123"), time.Now()); err != nil {
+		t.Fatalf("provision additional account: %v", err)
+	}
+	owner, err := domain.NewPairingService(e.repo).BootstrapOwner(ctx, accountID, domain.Device{
+		DisplayName: "scope test owner", Platform: "android",
+	})
+	if err != nil {
+		t.Fatalf("bootstrap additional owner: %v", err)
+	}
+	tokens, err := domain.NewAuthService(e.repo).IssueForDevice(ctx, accountID, owner.ID)
+	if err != nil {
+		t.Fatalf("issue additional owner token: %v", err)
+	}
+	return authPair{AccountID: accountID, AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken}
 }
 
 // 创建一个会话所需的最小环境：先建 project/workspace，再建 session。

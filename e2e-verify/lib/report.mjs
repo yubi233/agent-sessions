@@ -10,6 +10,51 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+// 报告会长期归档，因此在落盘前统一移除常见凭据与正文类字段。
+// 测试结果只需要状态、计数和脱敏摘要，不能把原始请求或应用内容当作证据保存。
+const SENSITIVE_KEYS = /(api.?key|authorization|cookie|password|secret|token|private.?key|access.?key|refresh.?token|prompt|body|content|message|envelope)/i;
+const ALLOWED_SENSITIVE_SHAPES = new Set([
+  "credential_source",
+  "request_ids",
+  "usage",
+  "input_tokens",
+  "output_tokens",
+  "target_mobile_content_size",
+]);
+const MAX_STRING_LENGTH = 2_000;
+
+function sanitizeString(value) {
+  const normalized = String(value)
+    .replace(/(bearer\s+)[^\s"']+/gi, "$1[REDACTED]")
+    .replace(/([?&](?:api[_-]?key|token|password|secret)=)[^&#\s"']+/gi, "$1[REDACTED]")
+    .replace(/((?:api[_-]?key|token|password|secret)\s*[:=]\s*)[^\s,}"']+/gi, "$1[REDACTED]");
+  return normalized.length > MAX_STRING_LENGTH
+    ? `${normalized.slice(0, MAX_STRING_LENGTH)}...[TRUNCATED]`
+    : normalized;
+}
+
+// sanitizeReport 只保留报告需要的结构化信息，递归处理扩展字段，防止未来场景误写敏感值。
+export function sanitizeReport(value, key = "") {
+  if (value == null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") {
+    return SENSITIVE_KEYS.test(key) && !ALLOWED_SENSITIVE_SHAPES.has(key)
+      ? "[REDACTED]"
+      : sanitizeString(value);
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizeReport(item, key));
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        SENSITIVE_KEYS.test(entryKey) && !ALLOWED_SENSITIVE_SHAPES.has(entryKey)
+          ? "[REDACTED]"
+          : sanitizeReport(entryValue, entryKey),
+      ]),
+    );
+  }
+  return sanitizeString(value);
+}
+
 // writeReport 写入一条脱敏报告并返回其磁盘路径。
 export function writeReport({ planId, name, report }) {
   const ts = report.timestamp || timestamp();
@@ -21,7 +66,7 @@ export function writeReport({ planId, name, report }) {
     plan_id: planId,
     ...report,
   };
-  writeFileSync(file, JSON.stringify(body, null, 2) + "\n", "utf-8");
+  writeFileSync(file, JSON.stringify(sanitizeReport(body), null, 2) + "\n", "utf-8");
   return file;
 }
 
@@ -36,7 +81,12 @@ export function baseReport({
   local_test = true,
   headless = false,
   command,
-  browser,
+  browser = "n/a",
+  model = "n/a",
+  provider = "n/a",
+  credential_source = "none",
+  request_ids = [],
+  usage = { input_tokens: 0, output_tokens: 0 },
   artifacts = [],
   failure_class = null,
   remaining_risk = "",
@@ -52,6 +102,11 @@ export function baseReport({
     headless,
     command,
     browser,
+    model,
+    provider,
+    credential_source,
+    request_ids,
+    usage,
     artifacts,
     failure_class,
     remaining_risk,

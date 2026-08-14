@@ -69,22 +69,42 @@ func NewSessionService(repo store.Repository) *SessionService {
 
 // CreateSession 创建逻辑会话并写初始事件。
 func (s *SessionService) CreateSession(ctx context.Context, accountID, workspaceID, provider string) (store.SessionRow, error) {
+	workspaces, err := s.repo.ListWorkspaces(ctx, accountID)
+	if err != nil {
+		return store.SessionRow{}, err
+	}
+	owned := false
+	for _, workspace := range workspaces {
+		if workspace.ID == workspaceID {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		return store.SessionRow{}, ErrWorkspaceNotFound
+	}
 	sess := store.SessionRow{
 		ID: id.New("sess"), WorkspaceID: workspaceID, AccountID: accountID,
 		Status: SessionIdle, Provider: provider,
 	}
-	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+	var initialSeq int64
+	err = s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
 		if err := tx.CreateSession(ctx, sess); err != nil {
 			return err
 		}
-		_, err := tx.AppendEvent(ctx, store.SessionEventRow{
+		seq, err := tx.AppendEvent(ctx, store.SessionEventRow{
 			SessionID: sess.ID, EventType: "session.created", EnvelopeJSON: `{"session_id":"` + sess.ID + `"}`,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		initialSeq = seq
+		return tx.SetSessionLastSeq(ctx, sess.ID, seq)
 	})
 	if err != nil {
 		return store.SessionRow{}, err
 	}
+	sess.LastSeq = initialSeq
 	return sess, nil
 }
 
@@ -119,6 +139,10 @@ func (s *SessionService) AppendEvent(ctx context.Context, sessionID, eventType, 
 		if err != nil {
 			return err
 		}
+		// last_seq 是客户端快照游标的权威值，必须和事件追加处于同一事务。
+		if err := tx.SetSessionLastSeq(ctx, sessionID, seq); err != nil {
+			return err
+		}
 		return tx.SetSessionStatus(ctx, sessionID, SessionRunning)
 	})
 	if err != nil {
@@ -128,29 +152,12 @@ func (s *SessionService) AppendEvent(ctx context.Context, sessionID, eventType, 
 }
 
 // SubmitCommand 提交异步命令：幂等键去重 + lease/fencing 校验 + 写入 outbox。
-// 非 Android 写端、旧 epoch、撤销设备均被拒绝。重复幂等键返回原命令。
+// 非 Android 写端、缺失/旧 epoch、撤销设备均被拒绝。重复幂等键返回原命令。
 func (s *SessionService) SubmitCommand(ctx context.Context, in CommandInput) (store.CommandRow, error) {
 	if !protocol.DeviceRoleCanWrite(in.Role) {
 		return store.CommandRow{}, ErrReadOnlyDevice
 	}
 	scopeHash := hashScope(in.AccountID, in.SessionID)
-	// 幂等：相同 (scope,idempotency_key) 返回原结果，不产生第二次动作。
-	if existing, err := s.repo.CommandByScopeKey(ctx, scopeHash, in.IdempotencyKey); err == nil {
-		return existing, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return store.CommandRow{}, err
-	}
-	if in.SessionID != "" {
-		if _, err := s.repo.SessionByID(ctx, in.SessionID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return store.CommandRow{}, ErrSessionNotFound
-			}
-			return store.CommandRow{}, err
-		}
-		if err := s.checkLease(ctx, in.SessionID, in.DeviceID, in.LeaseEpoch); err != nil {
-			return store.CommandRow{}, err
-		}
-	}
 	cmd := store.CommandRow{
 		ID: id.New("cmd"), AccountID: in.AccountID, SessionID: in.SessionID, Kind: in.Kind,
 		Status: CommandAccepted, ScopeHash: scopeHash, IdempotencyKey: in.IdempotencyKey,
@@ -158,21 +165,69 @@ func (s *SessionService) SubmitCommand(ctx context.Context, in CommandInput) (st
 	}
 	var out store.CommandRow
 	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		// 幂等读取、会话/lease 校验、命令与 outbox 必须在同一事务，避免旧 epoch 在检查后插入。
+		if existing, lookupErr := tx.CommandByScopeKey(ctx, scopeHash, in.IdempotencyKey); lookupErr == nil {
+			out = existing
+			return nil
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		}
+		if in.SessionID != "" {
+			session, sessionErr := tx.SessionByID(ctx, in.SessionID)
+			if sessionErr != nil {
+				if errors.Is(sessionErr, sql.ErrNoRows) {
+					return ErrSessionNotFound
+				}
+				return sessionErr
+			}
+			if session.AccountID != in.AccountID {
+				return ErrScopeDenied
+			}
+			if err := checkLeaseWithRepo(ctx, tx, in.SessionID, in.DeviceID, in.LeaseEpoch); err != nil {
+				return err
+			}
+			// 存在运行实例时，所有写命令必须明确绑定当前 instance；旧实例不能接收命令。
+			if session.CurrentInstanceID != "" && in.TargetInstanceID != session.CurrentInstanceID {
+				return ErrTargetStale
+			}
+			lease, leaseErr := tx.LeaseBySession(ctx, in.SessionID)
+			if leaseErr != nil {
+				return leaseErr
+			}
+			if lease.InstanceID != "" && in.TargetInstanceID != lease.InstanceID {
+				return ErrTargetStale
+			}
+		}
 		if err := tx.CreateCommand(ctx, cmd); err != nil {
 			return err
 		}
 		return tx.EnqueueOutbox(ctx, store.OutboxRow{Kind: "command.updated", PayloadJSON: `{"command_id":"` + cmd.ID + `"}`, Status: "pending"})
 	})
 	if err != nil {
+		// 并发同键插入会命中唯一索引；提交者的原命令才是可重试结果。
+		if existing, lookupErr := s.repo.CommandByScopeKey(ctx, scopeHash, in.IdempotencyKey); lookupErr == nil {
+			return existing, nil
+		}
 		return store.CommandRow{}, err
 	}
-	out = cmd
+	if out.ID == "" {
+		out = cmd
+	}
 	return out, nil
 }
 
 // checkLease 校验写端是否持有当前 lease 且 epoch 匹配（fencing）。
 func (s *SessionService) checkLease(ctx context.Context, sessionID, deviceID string, epoch int64) error {
-	lease, err := s.repo.LeaseBySession(ctx, sessionID)
+	return checkLeaseWithRepo(ctx, s.repo, sessionID, deviceID, epoch)
+}
+
+// checkLeaseWithRepo 允许 SubmitCommand 在既有事务连接中做 fencing，避免事务外 TOCTOU 窗口。
+func checkLeaseWithRepo(ctx context.Context, repo store.Repository, sessionID, deviceID string, epoch int64) error {
+	if epoch <= 0 {
+		// 每次写命令都必须显式携带当前 fencing epoch，不能把 0 当作兼容通配符。
+		return ErrTargetStale
+	}
+	lease, err := repo.LeaseBySession(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrLeaseConflict
@@ -182,7 +237,7 @@ func (s *SessionService) checkLease(ctx context.Context, sessionID, deviceID str
 	if lease.DeviceID != deviceID {
 		return ErrLeaseConflict
 	}
-	if epoch != 0 && lease.Epoch != epoch {
+	if lease.Epoch != epoch {
 		return ErrTargetStale
 	}
 	return nil

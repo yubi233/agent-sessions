@@ -31,7 +31,7 @@ func TestAUTH01LoginRefreshLogout(t *testing.T) {
 	_ = json.Unmarshal(rot.Body.Bytes(), &rotated)
 
 	// logout 后重放旧 refresh 应被拒（family 已撤销）。
-	if code := env.do(t, http.MethodPost, "/v1/auth/logout", map[string]any{"refresh_token": rotated.RefreshToken}, rotated.AccessToken).Code; code != http.StatusOK {
+	if code := env.do(t, http.MethodPost, "/v1/auth/logout", map[string]any{"refresh_token": rotated.RefreshToken}, rotated.AccessToken).Code; code != http.StatusNoContent {
 		t.Fatalf("logout status=%d", code)
 	}
 	reuse := env.do(t, http.MethodPost, "/v1/auth/refresh", map[string]any{"refresh_token": pair.RefreshToken}, "")
@@ -83,12 +83,12 @@ func TestPAIR01OwnerBootstrapAndApprove(t *testing.T) {
 	}
 }
 
-// PAIR-03：撤销 Web 设备后，该设备访问被拒绝（DEVICE_REVOKED）。
-func TestPAIR03RevokeDevice(t *testing.T) {
+// PAIR-03：唯一 owner 不可撤销自身，避免帐号失去唯一 key-admin。
+func TestPAIR03CannotRevokeCurrentOwner(t *testing.T) {
 	env := newTestEnv(t)
 	pair := env.registerAs(t, "revoke@test.dev")
 
-	// 撤销 owner 设备自身后，其 token 失效。
+	// 首设备是唯一 owner；设备列表 API 不回显公钥但会提供稳定设备 ID。
 	devList := env.do(t, http.MethodGet, "/v1/devices", nil, pair.AccessToken)
 	var dl struct {
 		Devices []struct {
@@ -100,13 +100,13 @@ func TestPAIR03RevokeDevice(t *testing.T) {
 		t.Fatalf("no devices")
 	}
 	rev := env.do(t, http.MethodDelete, "/v1/devices/"+dl.Devices[0].ID, nil, pair.AccessToken)
-	if rev.Code != http.StatusOK {
-		t.Fatalf("revoke status=%d body=%s", rev.Code, rev.Body.String())
+	if rev.Code != http.StatusConflict {
+		t.Fatalf("self revoke status=%d want 409 body=%s", rev.Code, rev.Body.String())
 	}
-	// 撤销后 token 不能再访问。
+	// 被拒绝后原 owner 会话保持可用，可继续生成恢复码或管理其他设备。
 	after := env.do(t, http.MethodGet, "/v1/devices", nil, pair.AccessToken)
-	if after.Code != http.StatusForbidden {
-		t.Fatalf("post-revoke status=%d want 403 body=%s", after.Code, after.Body.String())
+	if after.Code != http.StatusOK {
+		t.Fatalf("owner session after rejected self-revoke status=%d want 200 body=%s", after.Code, after.Body.String())
 	}
 }
 

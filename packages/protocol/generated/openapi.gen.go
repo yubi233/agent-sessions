@@ -6,20 +6,21 @@ package protocol
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/oapi-codegen/runtime"
 )
 
-// Defines values for CapabilityItemState.
+// Defines values for CapabilityItemStatus.
 const (
-	Emulated    CapabilityItemState = "emulated"
-	Native      CapabilityItemState = "native"
-	Unsupported CapabilityItemState = "unsupported"
+	Emulated    CapabilityItemStatus = "emulated"
+	Native      CapabilityItemStatus = "native"
+	Unsupported CapabilityItemStatus = "unsupported"
 )
 
-// Valid indicates whether the value is a known member of the CapabilityItemState enum.
-func (e CapabilityItemState) Valid() bool {
+// Valid indicates whether the value is a known member of the CapabilityItemStatus enum.
+func (e CapabilityItemStatus) Valid() bool {
 	switch e {
 	case Emulated:
 		return true
@@ -77,9 +78,26 @@ func (e DeviceStatus) Valid() bool {
 	}
 }
 
+// Defines values for LoginRequestDeviceRole.
+const (
+	LoginRequestDeviceRoleAdmin LoginRequestDeviceRole = "admin"
+	LoginRequestDeviceRoleWeb   LoginRequestDeviceRole = "web"
+)
+
+// Valid indicates whether the value is a known member of the LoginRequestDeviceRole enum.
+func (e LoginRequestDeviceRole) Valid() bool {
+	switch e {
+	case LoginRequestDeviceRoleAdmin:
+		return true
+	case LoginRequestDeviceRoleWeb:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PairingCreateRequestRole.
 const (
-	PairingCreateRequestRoleAdmin    PairingCreateRequestRole = "admin"
 	PairingCreateRequestRoleAndroid  PairingCreateRequestRole = "android"
 	PairingCreateRequestRoleTerminal PairingCreateRequestRole = "terminal"
 	PairingCreateRequestRoleWeb      PairingCreateRequestRole = "web"
@@ -88,8 +106,6 @@ const (
 // Valid indicates whether the value is a known member of the PairingCreateRequestRole enum.
 func (e PairingCreateRequestRole) Valid() bool {
 	switch e {
-	case PairingCreateRequestRoleAdmin:
-		return true
 	case PairingCreateRequestRoleAndroid:
 		return true
 	case PairingCreateRequestRoleTerminal:
@@ -125,21 +141,6 @@ func (e PairingRequestStatus) Valid() bool {
 	}
 }
 
-// Account defines model for Account.
-type Account struct {
-	Email string `json:"email"`
-	Id    string `json:"id"`
-}
-
-// AdminOverview defines model for AdminOverview.
-type AdminOverview struct {
-	Devices       int     `json:"devices"`
-	OnlineDevices *int    `json:"online_devices,omitempty"`
-	Sessions      int     `json:"sessions"`
-	Store         *string `json:"store,omitempty"`
-	Terminals     int     `json:"terminals"`
-}
-
 // BootstrapRequest defines model for BootstrapRequest.
 type BootstrapRequest struct {
 	DisplayName         string  `json:"display_name"`
@@ -150,18 +151,31 @@ type BootstrapRequest struct {
 
 // CapabilityItem defines model for CapabilityItem.
 type CapabilityItem struct {
-	Name   string              `json:"name"`
-	Reason *string             `json:"reason,omitempty"`
-	State  CapabilityItemState `json:"state"`
+	Name   string               `json:"name"`
+	Reason *string              `json:"reason,omitempty"`
+	Status CapabilityItemStatus `json:"status"`
 }
 
-// CapabilityItemState defines model for CapabilityItem.State.
-type CapabilityItemState string
+// CapabilityItemStatus defines model for CapabilityItem.Status.
+type CapabilityItemStatus string
+
+// CapabilityProvider defines model for CapabilityProvider.
+type CapabilityProvider struct {
+	Available    bool             `json:"available"`
+	Capabilities []CapabilityItem `json:"capabilities"`
+	Kind         string           `json:"kind"`
+	Version      string           `json:"version"`
+}
+
+// CapabilityProvidersResponse defines model for CapabilityProvidersResponse.
+type CapabilityProvidersResponse struct {
+	Providers []CapabilityProvider `json:"providers"`
+}
 
 // CipherEvent defines model for CipherEvent.
 type CipherEvent struct {
 	Envelope  map[string]interface{} `json:"envelope"`
-	EventSeq  int                    `json:"event_seq"`
+	EventSeq  int64                  `json:"event_seq"`
 	EventType string                 `json:"event_type"`
 }
 
@@ -170,15 +184,29 @@ type Command struct {
 	Id             string `json:"id"`
 	IdempotencyKey string `json:"idempotency_key"`
 	Kind           string `json:"kind"`
-	LeaseEpoch     *int   `json:"lease_epoch,omitempty"`
+	LeaseEpoch     *int64 `json:"lease_epoch,omitempty"`
 	Status         string `json:"status"`
+}
+
+// CreateSessionRequest defines model for CreateSessionRequest.
+type CreateSessionRequest struct {
+	Provider    *string `json:"provider,omitempty"`
+	WorkspaceId string  `json:"workspace_id"`
+}
+
+// CreateWorkspaceRequest defines model for CreateWorkspaceRequest.
+type CreateWorkspaceRequest struct {
+	Branch        *string `json:"branch,omitempty"`
+	CanonicalRoot string  `json:"canonical_root"`
+	ProjectId     string  `json:"project_id"`
+	Status        *string `json:"status,omitempty"`
 }
 
 // Device defines model for Device.
 type Device struct {
 	DisplayName    *string      `json:"display_name,omitempty"`
 	Id             string       `json:"id"`
-	LastSeenUnixMs *int         `json:"last_seen_unix_ms,omitempty"`
+	LastSeenUnixMs *int64       `json:"last_seen_unix_ms,omitempty"`
 	Platform       *string      `json:"platform,omitempty"`
 	Role           DeviceRole   `json:"role"`
 	Status         DeviceStatus `json:"status"`
@@ -190,24 +218,48 @@ type DeviceRole string
 // DeviceStatus defines model for Device.Status.
 type DeviceStatus string
 
-// EncryptedRPC defines model for EncryptedRPC.
-type EncryptedRPC struct {
-	Ciphertext map[string]interface{} `json:"ciphertext"`
+// DeviceBoundTokenPair defines model for DeviceBoundTokenPair.
+type DeviceBoundTokenPair struct {
+	AccessToken  string `json:"access_token"`
+	AccountId    string `json:"account_id"`
+	DeviceId     string `json:"device_id"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+// DeviceList defines model for DeviceList.
+type DeviceList struct {
+	Devices []Device `json:"devices"`
+}
+
+// ErrorResponse defines model for ErrorResponse.
+type ErrorResponse struct {
+	Code    string                  `json:"code"`
+	Details *map[string]interface{} `json:"details,omitempty"`
+	Message string                  `json:"message"`
 }
 
 // Health defines model for Health.
 type Health struct {
-	Detail *string `json:"detail,omitempty"`
-	Status string  `json:"status"`
-	Store  string  `json:"store"`
+	Status string `json:"status"`
+}
+
+// LeaseResponse defines model for LeaseResponse.
+type LeaseResponse struct {
+	LeaseEpoch int64  `json:"lease_epoch"`
+	SessionId  string `json:"session_id"`
 }
 
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
-	DeviceRole *string `json:"device_role,omitempty"`
-	Email      string  `json:"email"`
-	Password   string  `json:"password"`
+	// DeviceRole 仅允许 web 或 admin；省略时服务端按 web 只读 token 处理。
+	DeviceRole *LoginRequestDeviceRole `json:"device_role,omitempty"`
+	Email      string                  `json:"email"`
+	Password   string                  `json:"password"`
 }
+
+// LoginRequestDeviceRole 仅允许 web 或 admin；省略时服务端按 web 只读 token 处理。
+type LoginRequestDeviceRole string
 
 // PairingCreateRequest defines model for PairingCreateRequest.
 type PairingCreateRequest struct {
@@ -223,11 +275,14 @@ type PairingCreateRequestRole string
 
 // PairingRequest defines model for PairingRequest.
 type PairingRequest struct {
-	DisplayName *string              `json:"display_name,omitempty"`
-	ExpiresAt   *string              `json:"expires_at,omitempty"`
-	Id          string               `json:"id"`
-	Role        string               `json:"role"`
-	Status      PairingRequestStatus `json:"status"`
+	DisplayName         *string              `json:"display_name,omitempty"`
+	EncryptionPublicKey *string              `json:"encryption_public_key,omitempty"`
+	ExpiresAt           *time.Time           `json:"expires_at,omitempty"`
+	Id                  string               `json:"id"`
+	IdentityPublicKey   *string              `json:"identity_public_key,omitempty"`
+	Platform            *string              `json:"platform,omitempty"`
+	Role                string               `json:"role"`
+	Status              PairingRequestStatus `json:"status"`
 }
 
 // PairingRequestStatus defines model for PairingRequest.Status.
@@ -235,9 +290,35 @@ type PairingRequestStatus string
 
 // Project defines model for Project.
 type Project struct {
-	EncryptedName *map[string]interface{} `json:"encrypted_name,omitempty"`
-	Fingerprint   string                  `json:"fingerprint"`
-	Id            string                  `json:"id"`
+	EncryptedName *string `json:"encrypted_name,omitempty"`
+	Fingerprint   string  `json:"fingerprint"`
+	Id            string  `json:"id"`
+}
+
+// ProjectList defines model for ProjectList.
+type ProjectList struct {
+	Projects []Project `json:"projects"`
+}
+
+// RecoveryCodeResponse defines model for RecoveryCodeResponse.
+type RecoveryCodeResponse struct {
+	RecoveryCode string `json:"recovery_code"`
+}
+
+// RecoveryRestoreRequest defines model for RecoveryRestoreRequest.
+type RecoveryRestoreRequest struct {
+	DisplayName         string  `json:"display_name"`
+	Email               string  `json:"email"`
+	EncryptionPublicKey string  `json:"encryption_public_key"`
+	IdentityPublicKey   string  `json:"identity_public_key"`
+	Platform            *string `json:"platform,omitempty"`
+	RecoveryCode        string  `json:"recovery_code"`
+}
+
+// RecoveryRestoreResponse defines model for RecoveryRestoreResponse.
+type RecoveryRestoreResponse struct {
+	Device Device               `json:"device"`
+	Tokens DeviceBoundTokenPair `json:"tokens"`
 }
 
 // RefreshRequest defines model for RefreshRequest.
@@ -254,10 +335,15 @@ type RegisterRequest struct {
 // Session defines model for Session.
 type Session struct {
 	Id          string  `json:"id"`
-	LastSeq     *int    `json:"last_seq,omitempty"`
+	LastSeq     *int64  `json:"last_seq,omitempty"`
 	Provider    *string `json:"provider,omitempty"`
 	Status      string  `json:"status"`
 	WorkspaceId string  `json:"workspace_id"`
+}
+
+// SessionList defines model for SessionList.
+type SessionList struct {
+	Sessions []Session `json:"sessions"`
 }
 
 // SessionSnapshot defines model for SessionSnapshot.
@@ -271,7 +357,7 @@ type SubmitCommandRequest struct {
 	Ciphertext       *map[string]interface{} `json:"ciphertext,omitempty"`
 	IdempotencyKey   string                  `json:"idempotency_key"`
 	Kind             string                  `json:"kind"`
-	LeaseEpoch       *int                    `json:"lease_epoch,omitempty"`
+	LeaseEpoch       int64                   `json:"lease_epoch"`
 	TargetInstanceId *string                 `json:"target_instance_id,omitempty"`
 }
 
@@ -280,23 +366,23 @@ type Terminal struct {
 	DeviceId       string  `json:"device_id"`
 	Hostname       *string `json:"hostname,omitempty"`
 	Id             string  `json:"id"`
-	LastSeenUnixMs *int    `json:"last_seen_unix_ms,omitempty"`
+	LastSeenUnixMs *int64  `json:"last_seen_unix_ms,omitempty"`
 	Platform       *string `json:"platform,omitempty"`
 	Status         string  `json:"status"`
+}
+
+// TerminalList defines model for TerminalList.
+type TerminalList struct {
+	Terminals []Terminal `json:"terminals"`
 }
 
 // TokenPair defines model for TokenPair.
 type TokenPair struct {
 	AccessToken  string  `json:"access_token"`
+	AccountId    string  `json:"account_id"`
 	DeviceId     *string `json:"device_id,omitempty"`
 	ExpiresIn    int     `json:"expires_in"`
 	RefreshToken string  `json:"refresh_token"`
-}
-
-// Version defines model for Version.
-type Version struct {
-	ProtocolVersion int    `json:"protocol_version"`
-	Service         string `json:"service"`
 }
 
 // Workspace defines model for Workspace.
@@ -308,19 +394,35 @@ type Workspace struct {
 	TerminalId string  `json:"terminal_id"`
 }
 
-// StreamEventsParams defines parameters for StreamEvents.
-type StreamEventsParams struct {
-	LastEventID *string `json:"Last-Event-ID,omitempty"`
+// WorkspaceList defines model for WorkspaceList.
+type WorkspaceList struct {
+	Workspaces []Workspace `json:"workspaces"`
 }
 
-// ListSessionsParams defines parameters for ListSessions.
-type ListSessionsParams struct {
-	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+// BadRequest defines model for BadRequest.
+type BadRequest = ErrorResponse
+
+// Conflict defines model for Conflict.
+type Conflict = ErrorResponse
+
+// Forbidden defines model for Forbidden.
+type Forbidden = ErrorResponse
+
+// TooManyRequests defines model for TooManyRequests.
+type TooManyRequests = ErrorResponse
+
+// Unauthorized defines model for Unauthorized.
+type Unauthorized = ErrorResponse
+
+// StreamEventsParams defines parameters for StreamEvents.
+type StreamEventsParams struct {
+	AfterSeq    *int64  `form:"after_seq,omitempty" json:"after_seq,omitempty"`
+	LastEventID *string `json:"Last-Event-ID,omitempty"`
 }
 
 // GetSessionSnapshotParams defines parameters for GetSessionSnapshot.
 type GetSessionSnapshotParams struct {
-	AfterSeq *int `form:"after_seq,omitempty" json:"after_seq,omitempty"`
+	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
 }
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
@@ -341,11 +443,17 @@ type BootstrapOwnerJSONRequestBody = BootstrapRequest
 // CreatePairingJSONRequestBody defines body for CreatePairing for application/json ContentType.
 type CreatePairingJSONRequestBody = PairingCreateRequest
 
+// RestoreRecoveryCodeJSONRequestBody defines body for RestoreRecoveryCode for application/json ContentType.
+type RestoreRecoveryCodeJSONRequestBody = RecoveryRestoreRequest
+
+// CreateSessionJSONRequestBody defines body for CreateSession for application/json ContentType.
+type CreateSessionJSONRequestBody = CreateSessionRequest
+
 // SubmitSessionCommandJSONRequestBody defines body for SubmitSessionCommand for application/json ContentType.
 type SubmitSessionCommandJSONRequestBody = SubmitCommandRequest
 
-// GitStatusJSONRequestBody defines body for GitStatus for application/json ContentType.
-type GitStatusJSONRequestBody = EncryptedRPC
+// CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
+type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -355,9 +463,6 @@ type ServerInterface interface {
 	// GetReadyz SQLite 可读写
 	// (GET /readyz)
 	GetReadyz(c *gin.Context)
-
-	// (GET /v1/admin/overview)
-	AdminOverview(c *gin.Context)
 
 	// (POST /v1/auth/login)
 	Login(c *gin.Context)
@@ -404,11 +509,23 @@ type ServerInterface interface {
 	// (GET /v1/projects)
 	ListProjects(c *gin.Context)
 
+	// (POST /v1/recovery-codes)
+	GenerateRecoveryCode(c *gin.Context)
+
+	// (POST /v1/recovery-codes/restore)
+	RestoreRecoveryCode(c *gin.Context)
+
 	// (GET /v1/sessions)
-	ListSessions(c *gin.Context, params ListSessionsParams)
+	ListSessions(c *gin.Context)
+
+	// (POST /v1/sessions)
+	CreateSession(c *gin.Context)
 
 	// (POST /v1/sessions/{id}/commands)
 	SubmitSessionCommand(c *gin.Context, id string)
+
+	// (POST /v1/sessions/{id}/lease)
+	AcquireSessionLease(c *gin.Context, id string)
 
 	// (GET /v1/sessions/{id}/snapshot)
 	GetSessionSnapshot(c *gin.Context, id string, params GetSessionSnapshotParams)
@@ -416,14 +533,11 @@ type ServerInterface interface {
 	// (GET /v1/terminals)
 	ListTerminals(c *gin.Context)
 
-	// (GET /v1/version)
-	GetVersion(c *gin.Context)
-
 	// (GET /v1/workspaces)
 	ListWorkspaces(c *gin.Context)
 
-	// (POST /v1/workspaces/{id}/git/status)
-	GitStatus(c *gin.Context, id string)
+	// (POST /v1/workspaces)
+	CreateWorkspace(c *gin.Context)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -459,19 +573,6 @@ func (siw *ServerInterfaceWrapper) GetReadyz(c *gin.Context) {
 	}
 
 	siw.Handler.GetReadyz(c)
-}
-
-// AdminOverview operation middleware
-func (siw *ServerInterfaceWrapper) AdminOverview(c *gin.Context) {
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.AdminOverview(c)
 }
 
 // Login operation middleware
@@ -610,6 +711,14 @@ func (siw *ServerInterfaceWrapper) StreamEvents(c *gin.Context) {
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params StreamEventsParams
+
+	// ------------- Optional query parameter "after_seq" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after_seq", c.Request.URL.Query(), &params.AfterSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after_seq: %w", err), http.StatusBadRequest)
+		return
+	}
 
 	headers := c.Request.Header
 
@@ -756,22 +865,8 @@ func (siw *ServerInterfaceWrapper) ListProjects(c *gin.Context) {
 	siw.Handler.ListProjects(c)
 }
 
-// ListSessions operation middleware
-func (siw *ServerInterfaceWrapper) ListSessions(c *gin.Context) {
-
-	var err error
-	_ = err
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ListSessionsParams
-
-	// ------------- Optional query parameter "cursor" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", c.Request.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter cursor: %w", err), http.StatusBadRequest)
-		return
-	}
+// GenerateRecoveryCode operation middleware
+func (siw *ServerInterfaceWrapper) GenerateRecoveryCode(c *gin.Context) {
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -780,7 +875,46 @@ func (siw *ServerInterfaceWrapper) ListSessions(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.ListSessions(c, params)
+	siw.Handler.GenerateRecoveryCode(c)
+}
+
+// RestoreRecoveryCode operation middleware
+func (siw *ServerInterfaceWrapper) RestoreRecoveryCode(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RestoreRecoveryCode(c)
+}
+
+// ListSessions operation middleware
+func (siw *ServerInterfaceWrapper) ListSessions(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSessions(c)
+}
+
+// CreateSession operation middleware
+func (siw *ServerInterfaceWrapper) CreateSession(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateSession(c)
 }
 
 // SubmitSessionCommand operation middleware
@@ -808,6 +942,31 @@ func (siw *ServerInterfaceWrapper) SubmitSessionCommand(c *gin.Context) {
 	siw.Handler.SubmitSessionCommand(c, id)
 }
 
+// AcquireSessionLease operation middleware
+func (siw *ServerInterfaceWrapper) AcquireSessionLease(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AcquireSessionLease(c, id)
+}
+
 // GetSessionSnapshot operation middleware
 func (siw *ServerInterfaceWrapper) GetSessionSnapshot(c *gin.Context) {
 
@@ -828,7 +987,7 @@ func (siw *ServerInterfaceWrapper) GetSessionSnapshot(c *gin.Context) {
 
 	// ------------- Optional query parameter "after_seq" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "after_seq", c.Request.URL.Query(), &params.AfterSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after_seq", c.Request.URL.Query(), &params.AfterSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after_seq: %w", err), http.StatusBadRequest)
 		return
@@ -857,19 +1016,6 @@ func (siw *ServerInterfaceWrapper) ListTerminals(c *gin.Context) {
 	siw.Handler.ListTerminals(c)
 }
 
-// GetVersion operation middleware
-func (siw *ServerInterfaceWrapper) GetVersion(c *gin.Context) {
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.GetVersion(c)
-}
-
 // ListWorkspaces operation middleware
 func (siw *ServerInterfaceWrapper) ListWorkspaces(c *gin.Context) {
 
@@ -883,20 +1029,8 @@ func (siw *ServerInterfaceWrapper) ListWorkspaces(c *gin.Context) {
 	siw.Handler.ListWorkspaces(c)
 }
 
-// GitStatus operation middleware
-func (siw *ServerInterfaceWrapper) GitStatus(c *gin.Context) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "id" -------------
-	var id string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
-		return
-	}
+// CreateWorkspace operation middleware
+func (siw *ServerInterfaceWrapper) CreateWorkspace(c *gin.Context) {
 
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
@@ -905,7 +1039,7 @@ func (siw *ServerInterfaceWrapper) GitStatus(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.GitStatus(c, id)
+	siw.Handler.CreateWorkspace(c)
 }
 
 // GinServerOptions provides options for the Gin server.
@@ -937,7 +1071,6 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 
 	router.GET(options.BaseURL+"/healthz", wrapper.GetHealthz)
 	router.GET(options.BaseURL+"/readyz", wrapper.GetReadyz)
-	router.GET(options.BaseURL+"/v1/version", wrapper.GetVersion)
 	router.POST(options.BaseURL+"/v1/auth/register", wrapper.Register)
 	router.POST(options.BaseURL+"/v1/auth/login", wrapper.Login)
 	router.POST(options.BaseURL+"/v1/auth/refresh", wrapper.Refresh)
@@ -949,15 +1082,18 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/pairing/requests/:id", wrapper.GetPairing)
 	router.POST(options.BaseURL+"/v1/pairing/requests/:id/approve", wrapper.ApprovePairing)
 	router.POST(options.BaseURL+"/v1/pairing/requests/:id/cancel", wrapper.CancelPairing)
+	router.POST(options.BaseURL+"/v1/recovery-codes", wrapper.GenerateRecoveryCode)
+	router.POST(options.BaseURL+"/v1/recovery-codes/restore", wrapper.RestoreRecoveryCode)
 	router.GET(options.BaseURL+"/v1/terminals", wrapper.ListTerminals)
 	router.GET(options.BaseURL+"/v1/projects", wrapper.ListProjects)
 	router.GET(options.BaseURL+"/v1/workspaces", wrapper.ListWorkspaces)
+	router.POST(options.BaseURL+"/v1/workspaces", wrapper.CreateWorkspace)
 	router.GET(options.BaseURL+"/v1/sessions", wrapper.ListSessions)
+	router.POST(options.BaseURL+"/v1/sessions", wrapper.CreateSession)
+	router.POST(options.BaseURL+"/v1/sessions/:id/lease", wrapper.AcquireSessionLease)
 	router.GET(options.BaseURL+"/v1/sessions/:id/snapshot", wrapper.GetSessionSnapshot)
 	router.POST(options.BaseURL+"/v1/sessions/:id/commands", wrapper.SubmitSessionCommand)
 	router.GET(options.BaseURL+"/v1/commands/:id", wrapper.GetCommand)
-	router.POST(options.BaseURL+"/v1/workspaces/:id/git/status", wrapper.GitStatus)
 	router.GET(options.BaseURL+"/v1/capabilities", wrapper.GetCapabilities)
-	router.GET(options.BaseURL+"/v1/admin/overview", wrapper.AdminOverview)
 	router.GET(options.BaseURL+"/v1/events", wrapper.StreamEvents)
 }

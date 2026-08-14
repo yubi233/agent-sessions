@@ -21,6 +21,14 @@ version: 1.0.0+1
 environment:
   sdk: ^3.12.2
 
+# Android 密文缓存只使用标准 SQLite DDL/DML；显式复用系统 libsqlite.so，
+# 避免 sqlite3 native-asset hook 在每次 AVD 构建时依赖 GitHub 二进制下载。
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+      name_android: sqlite
+
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
 # consider running `flutter pub upgrade --major-versions`. Alternatively,
@@ -29,8 +37,16 @@ environment:
 # versions available, run `flutter pub outdated`.
 dependencies:
   cryptography: ^2.9.0
+  dio: ^5.9.0
+  drift: ^2.32.0
+  drift_flutter: ^0.3.1
   flutter:
     sdk: flutter
+  flutter_riverpod: ^3.2.0
+  flutter_secure_storage: ^10.0.0
+  go_router: ^17.0.1
+  mobile_scanner: ^7.4.0
+  qr_flutter: ^4.1.0
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -38,6 +54,8 @@ dependencies:
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to

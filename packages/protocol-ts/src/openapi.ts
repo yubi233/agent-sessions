@@ -38,22 +38,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/version": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getVersion"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/auth/register": {
         parameters: {
             query?: never;
@@ -63,6 +47,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description 为新账号创建初始 Android owner；成功时返回已绑定设备的令牌对。 */
         post: operations["register"];
         delete?: never;
         options?: never;
@@ -79,6 +64,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description 密码只校验账号；省略 device_role 时签发未绑定的 Web 只读令牌，禁止声明 Android 写身份。 */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -144,6 +130,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
+        /** @description 仅 android_owner 可撤销设备；被撤销设备的 bearer 与 refresh 均立即失效。 */
         delete: operations["revokeDevice"];
         options?: never;
         head?: never;
@@ -159,6 +146,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description 仅初始 android_owner 可写入一次本机公钥。 */
         post: operations["bootstrapOwner"];
         delete?: never;
         options?: never;
@@ -189,6 +177,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description 仅当前 Android owner 可读取；响应包含待配对设备的公开身份和加密密钥。 */
         get: operations["getPairing"];
         put?: never;
         post?: never;
@@ -207,6 +196,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description 仅 android_owner 可批准；重复批准幂等，并发批准只创建一台设备。 */
         post: operations["approvePairing"];
         delete?: never;
         options?: never;
@@ -223,7 +213,42 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description 仅当前 Android owner 可取消待处理配对请求。 */
         post: operations["cancelPairing"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅 android_owner 可生成；恢复码明文只在此响应返回一次。 */
+        post: operations["generateRecoveryCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recovery-codes/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 无 bearer 恢复入口；恢复码一次性消费且限次，成功后撤销既有 Android 写设备。 */
+        post: operations["restoreRecoveryCode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -271,7 +296,8 @@ export interface paths {
         };
         get: operations["listWorkspaces"];
         put?: never;
-        post?: never;
+        /** @description 仅 android_owner/android 写控制端可登记 Workspace。 */
+        post: operations["createWorkspace"];
         delete?: never;
         options?: never;
         head?: never;
@@ -287,7 +313,25 @@ export interface paths {
         };
         get: operations["listSessions"];
         put?: never;
-        post?: never;
+        /** @description 仅 android_owner/android 写控制端可创建逻辑会话。 */
+        post: operations["createSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅 android_owner/android 写控制端可获取当前会话的 fencing epoch。 */
+        post: operations["acquireSessionLease"];
         delete?: never;
         options?: never;
         head?: never;
@@ -319,6 +363,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description 仅 android_owner/android 写控制端可提交；lease_epoch 必须为当前正 fencing epoch。 */
         post: operations["submitSessionCommand"];
         delete?: never;
         options?: never;
@@ -342,22 +387,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/workspaces/{id}/git/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["gitStatus"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/capabilities": {
         parameters: {
             query?: never;
@@ -366,22 +395,6 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getCapabilities"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/admin/overview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["adminOverview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -412,12 +425,13 @@ export interface components {
     schemas: {
         Health: {
             status: string;
-            store: string;
-            detail?: string;
         };
-        Version: {
-            protocol_version: number;
-            service: string;
+        ErrorResponse: {
+            code: string;
+            message: string;
+            details?: {
+                [key: string]: unknown;
+            };
         };
         RegisterRequest: {
             email: string;
@@ -426,20 +440,43 @@ export interface components {
         LoginRequest: {
             email: string;
             password: string;
-            device_role?: string;
+            /**
+             * @description 仅允许 web 或 admin；省略时服务端按 web 只读 token 处理。
+             * @enum {string}
+             */
+            device_role?: "web" | "admin";
         };
         RefreshRequest: {
             refresh_token: string;
         };
         TokenPair: {
+            account_id: string;
             access_token: string;
             refresh_token: string;
             expires_in: number;
             device_id?: string;
         };
-        Account: {
-            id: string;
+        DeviceBoundTokenPair: {
+            account_id: string;
+            device_id: string;
+            access_token: string;
+            refresh_token: string;
+            expires_in: number;
+        };
+        RecoveryCodeResponse: {
+            recovery_code: string;
+        };
+        RecoveryRestoreRequest: {
             email: string;
+            recovery_code: string;
+            display_name: string;
+            identity_public_key: string;
+            encryption_public_key: string;
+            platform?: string;
+        };
+        RecoveryRestoreResponse: {
+            device: components["schemas"]["Device"];
+            tokens: components["schemas"]["DeviceBoundTokenPair"];
         };
         BootstrapRequest: {
             display_name: string;
@@ -449,7 +486,7 @@ export interface components {
         };
         PairingCreateRequest: {
             /** @enum {string} */
-            role: "android" | "terminal" | "web" | "admin";
+            role: "android" | "terminal" | "web";
             display_name: string;
             identity_public_key: string;
             encryption_public_key: string;
@@ -461,6 +498,10 @@ export interface components {
             status: "pending" | "approved" | "cancelled" | "expired";
             role: string;
             display_name?: string;
+            identity_public_key?: string;
+            encryption_public_key?: string;
+            platform?: string;
+            /** Format: date-time */
             expires_at?: string;
         };
         Device: {
@@ -471,7 +512,11 @@ export interface components {
             status: "active" | "revoked";
             display_name?: string;
             platform?: string;
+            /** Format: int64 */
             last_seen_unix_ms?: number;
+        };
+        DeviceList: {
+            devices: components["schemas"]["Device"][];
         };
         Terminal: {
             id: string;
@@ -479,12 +524,19 @@ export interface components {
             hostname?: string;
             platform?: string;
             status: string;
+            /** Format: int64 */
             last_seen_unix_ms?: number;
+        };
+        TerminalList: {
+            terminals: components["schemas"]["Terminal"][];
         };
         Project: {
             id: string;
             fingerprint: string;
-            encrypted_name?: Record<string, never>;
+            encrypted_name?: string;
+        };
+        ProjectList: {
+            projects: components["schemas"]["Project"][];
         };
         Workspace: {
             id: string;
@@ -493,18 +545,41 @@ export interface components {
             branch?: string;
             status?: string;
         };
+        WorkspaceList: {
+            workspaces: components["schemas"]["Workspace"][];
+        };
+        CreateWorkspaceRequest: {
+            project_id: string;
+            canonical_root: string;
+            branch?: string;
+            status?: string;
+        };
         Session: {
             id: string;
             workspace_id: string;
             status: string;
+            /** Format: int64 */
             last_seq?: number;
             provider?: string;
+        };
+        SessionList: {
+            sessions: components["schemas"]["Session"][];
+        };
+        CreateSessionRequest: {
+            workspace_id: string;
+            provider?: string;
+        };
+        LeaseResponse: {
+            session_id: string;
+            /** Format: int64 */
+            lease_epoch: number;
         };
         SessionSnapshot: {
             session: components["schemas"]["Session"];
             events: components["schemas"]["CipherEvent"][];
         };
         CipherEvent: {
+            /** Format: int64 */
             event_seq: number;
             event_type: string;
             envelope: Record<string, never>;
@@ -512,7 +587,8 @@ export interface components {
         SubmitCommandRequest: {
             kind: string;
             idempotency_key: string;
-            lease_epoch?: number;
+            /** Format: int64 */
+            lease_epoch: number;
             target_instance_id?: string;
             ciphertext?: Record<string, never>;
         };
@@ -521,26 +597,72 @@ export interface components {
             kind: string;
             status: string;
             idempotency_key: string;
+            /** Format: int64 */
             lease_epoch?: number;
-        };
-        EncryptedRPC: {
-            ciphertext: Record<string, never>;
         };
         CapabilityItem: {
             name: string;
             /** @enum {string} */
-            state: "native" | "emulated" | "unsupported";
+            status: "native" | "emulated" | "unsupported";
             reason?: string;
         };
-        AdminOverview: {
-            devices: number;
-            terminals: number;
-            sessions: number;
-            online_devices?: number;
-            store?: string;
+        CapabilityProvider: {
+            kind: string;
+            version: string;
+            available: boolean;
+            capabilities: components["schemas"]["CapabilityItem"][];
+        };
+        CapabilityProvidersResponse: {
+            providers: components["schemas"]["CapabilityProvider"][];
         };
     };
-    responses: never;
+    responses: {
+        /** @description 请求体、游标或参数不符合契约。 */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description 缺少、失效或被重放的认证凭据。 */
+        Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description 设备已撤销、只读或不具备当前操作所需角色。 */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description 幂等键、租约或 bootstrap 状态冲突。 */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description 恢复码失败次数超过冷却阈值。 */
+        TooManyRequests: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+    };
     parameters: never;
     requestBodies: never;
     headers: never;
@@ -595,26 +717,6 @@ export interface operations {
             };
         };
     };
-    getVersion: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description version */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Version"];
-                };
-            };
-        };
-    };
     register: {
         parameters: {
             query?: never;
@@ -634,9 +736,11 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Account"];
+                    "application/json": components["schemas"]["DeviceBoundTokenPair"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
         };
     };
     login: {
@@ -661,6 +765,8 @@ export interface operations {
                     "application/json": components["schemas"]["TokenPair"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
         };
     };
     refresh: {
@@ -685,6 +791,9 @@ export interface operations {
                     "application/json": components["schemas"]["TokenPair"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     logout: {
@@ -707,6 +816,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
         };
     };
     listDevices: {
@@ -724,9 +834,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Device"][];
+                    "application/json": components["schemas"]["DeviceList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
         };
     };
     revokeDevice: {
@@ -747,6 +858,8 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     bootstrapOwner: {
@@ -771,6 +884,10 @@ export interface operations {
                     "application/json": components["schemas"]["Device"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     createPairing: {
@@ -795,6 +912,8 @@ export interface operations {
                     "application/json": components["schemas"]["PairingRequest"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
         };
     };
     getPairing: {
@@ -817,6 +936,8 @@ export interface operations {
                     "application/json": components["schemas"]["PairingRequest"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     approvePairing: {
@@ -839,6 +960,9 @@ export interface operations {
                     "application/json": components["schemas"]["Device"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     cancelPairing: {
@@ -859,6 +983,58 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    generateRecoveryCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description recovery code shown once to the current owner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodeResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    restoreRecoveryCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description recovered owner device and a new device-bound token pair */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryRestoreResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            429: components["responses"]["TooManyRequests"];
         };
     };
     listTerminals: {
@@ -876,9 +1052,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Terminal"][];
+                    "application/json": components["schemas"]["TerminalList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
         };
     };
     listProjects: {
@@ -896,9 +1073,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Project"][];
+                    "application/json": components["schemas"]["ProjectList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
         };
     };
     listWorkspaces: {
@@ -916,16 +1094,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Workspace"][];
+                    "application/json": components["schemas"]["WorkspaceList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description created workspace */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     listSessions: {
         parameters: {
-            query?: {
-                cursor?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -938,9 +1142,62 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Session"][];
+                    "application/json": components["schemas"]["SessionList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description created session */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    acquireSessionLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description current lease */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaseResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getSessionSnapshot: {
@@ -965,6 +1222,9 @@ export interface operations {
                     "application/json": components["schemas"]["SessionSnapshot"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     submitSessionCommand: {
@@ -991,6 +1251,10 @@ export interface operations {
                     "application/json": components["schemas"]["Command"];
                 };
             };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
     getCommand: {
@@ -1013,32 +1277,8 @@ export interface operations {
                     "application/json": components["schemas"]["Command"];
                 };
             };
-        };
-    };
-    gitStatus: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EncryptedRPC"];
-            };
-        };
-        responses: {
-            /** @description accepted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Command"];
-                };
-            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     getCapabilities: {
@@ -1056,34 +1296,17 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CapabilityItem"][];
+                    "application/json": components["schemas"]["CapabilityProvidersResponse"];
                 };
             };
-        };
-    };
-    adminOverview: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description metadata only */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AdminOverview"];
-                };
-            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     streamEvents: {
         parameters: {
-            query?: never;
+            query?: {
+                after_seq?: number;
+            };
             header?: {
                 "Last-Event-ID"?: string;
             };
@@ -1097,8 +1320,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "text/event-stream": string;
+                };
             };
+            401: components["responses"]["Unauthorized"];
         };
     };
 }

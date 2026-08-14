@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Release 包也必须保留 Keychain Sharing，避免本地通过而发布包无法读取安全存储。 -->
+	<key>keychain-access-groups</key>
+	<array/>
+</dict>
+</plist>

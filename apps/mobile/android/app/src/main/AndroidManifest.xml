@@ -1,8 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 二维码配对只在用户主动打开扫描器时请求相机权限。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 没有相机的 Android 设备仍可安装并改用手动输入配对码。 -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <!-- Keystore 包装密钥不能随 SharedPreferences 自动备份，否则恢复后会出现无法解包的旧密钥。 -->
     <application
         android:label="agent_sessions_mobile"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"

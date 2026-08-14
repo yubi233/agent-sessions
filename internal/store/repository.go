@@ -11,6 +11,7 @@ import (
 type Repository interface {
 	// 账号
 	CreateAccount(ctx context.Context, id, email string, passwordHash []byte, createdAt time.Time) error
+	CountAccounts(ctx context.Context) (int, error)
 	AccountByEmail(ctx context.Context, email string) (AccountRow, error)
 	AccountByID(ctx context.Context, id string) (AccountRow, error)
 
@@ -19,13 +20,18 @@ type Repository interface {
 	DeviceByID(ctx context.Context, id string) (DeviceRow, error)
 	ListDevices(ctx context.Context, accountID string) ([]DeviceRow, error)
 	SetDeviceStatus(ctx context.Context, id, status string) error
+	UpdateBootstrapDevice(ctx context.Context, d DeviceRow) (bool, error)
 
 	// 令牌 family 与 access token
 	CreateTokenFamily(ctx context.Context, tf TokenFamilyRow) error
 	TokenFamilyByID(ctx context.Context, id string) (TokenFamilyRow, error)
 	TokenFamilyByRefreshHash(ctx context.Context, hash string) (TokenFamilyRow, error)
-	UpdateTokenFamilyRefreshHash(ctx context.Context, id, hash string) error
+	// RotateTokenFamilyRefreshHash 仅在当前哈希、未撤销和未过期时轮换 refresh。
+	// 返回 false 表示令牌已轮换、撤销、过期或绑定设备已失效，调用方必须重新判定原因。
+	RotateTokenFamilyRefreshHash(ctx context.Context, id, currentHash, nextHash string, notBefore time.Time) (bool, error)
 	RevokeTokenFamily(ctx context.Context, id string) error
+	// RevokeTokenFamilyIfCurrent 以账号和当前哈希条件撤销，避免用 family ID 误伤其他会话。
+	RevokeTokenFamilyIfCurrent(ctx context.Context, id, accountID, refreshHash string) (bool, error)
 	PutAccessToken(ctx context.Context, at AccessTokenRow) error
 	AccessTokenByValue(ctx context.Context, token string) (AccessTokenRow, error)
 	DeleteAccessToken(ctx context.Context, token string) error
@@ -34,6 +40,7 @@ type Repository interface {
 	CreatePairingRequest(ctx context.Context, p PairingRow) error
 	PairingByID(ctx context.Context, id string) (PairingRow, error)
 	SetPairingStatus(ctx context.Context, id, status string) error
+	SetPairingStatusIfCurrent(ctx context.Context, id, currentStatus, nextStatus string) (bool, error)
 
 	// DEK 包装
 	PutKeyWrap(ctx context.Context, kw KeyWrapRow) error
@@ -42,6 +49,7 @@ type Repository interface {
 	// 恢复码
 	UpsertRecoveryCode(ctx context.Context, rc RecoveryRow) error
 	RecoveryByAccount(ctx context.Context, accountID string) (RecoveryRow, error)
+	ConsumeRecoveryCode(ctx context.Context, accountID, codeHash string, now time.Time) (bool, error)
 
 	// 审计（脱敏元数据，不写正文）
 	AppendAudit(ctx context.Context, accountID, action, metadataJSON string) error
@@ -69,6 +77,7 @@ type Repository interface {
 	SessionByID(ctx context.Context, id string) (SessionRow, error)
 	ListSessions(ctx context.Context, accountID string) ([]SessionRow, error)
 	SetSessionStatus(ctx context.Context, id, status string) error
+	SetSessionLastSeq(ctx context.Context, id string, lastSeq int64) error
 	SetSessionInstance(ctx context.Context, id, instanceID string) error
 	CreateInstance(ctx context.Context, i InstanceRow) error
 	InstanceByID(ctx context.Context, id string) (InstanceRow, error)
@@ -126,6 +135,7 @@ type TokenFamilyRow struct {
 	ID          string
 	AccountID   string
 	DeviceID    string
+	Role        string
 	RefreshHash string
 	Revoked     bool
 	CreatedAt   time.Time

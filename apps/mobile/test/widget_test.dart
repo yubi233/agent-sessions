@@ -1,40 +1,281 @@
-// Android mock 控制壳 widget 测试（MOBILE-02 的 widget 层级）。
+import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:agent_sessions_mobile/main.dart';
+import 'support/app_harness.dart';
+import 'support/pairing_scanner_fixture.dart';
 
 void main() {
-  testWidgets('MOBILE-02：登录后新建 mock 会话并流式显示', (tester) async {
-    await tester.pumpWidget(const AgentSessionsApp());
+  testWidgets('MOBILE-01：首次注册建立 owner，普通登录不恢复写权限', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
 
-    // 初始未连接。
-    expect(find.textContaining('未连接'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('register-link')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('register-email')),
+      'owner@fixture.test',
+    );
+    await tester.enterText(
+      find.byKey(const Key('register-password')),
+      'test-password',
+    );
+    await tester.tap(find.byKey(const Key('register-submit')));
+    await tester.pumpAndSettle();
 
-    // 登录（mock）。
-    await tester.tap(find.byKey(const Key('login-button')));
-    await tester.pump();
-    expect(find.textContaining('已登录'), findsOneWidget);
+    expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
+    expect(find.byKey(const Key('pairing-page-link')), findsOneWidget);
 
-    // 新建会话 → 显示运行中与流式消息。
-    await tester.tap(find.byKey(const Key('start-button')));
-    await tester.pump();
-    expect(find.textContaining('正在启动'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 500));
-    expect(find.textContaining('运行中'), findsOneWidget);
-    expect(find.text('hello from mock'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('signout-button')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('login-email')),
+      'owner@fixture.test',
+    );
+    await tester.enterText(
+      find.byKey(const Key('login-password')),
+      'test-password',
+    );
+    await tester.tap(find.byKey(const Key('login-submit')));
+    await tester.pumpAndSettle();
 
-    // 中止后回到空闲。
-    await tester.tap(find.byKey(const Key('abort-button')));
-    await tester.pump();
-    expect(find.textContaining('已中止'), findsOneWidget);
+    // 密码登录 token 没有 device_id，不能借用内存身份存储中已有 owner 绑定。
+    expect(find.byKey(const Key('readonly-auth-state')), findsOneWidget);
+    final pairingTile = tester.widget<ListTile>(
+      find.byKey(const Key('pairing-page-link')),
+    );
+    expect(pairingTile.enabled, isFalse);
   });
 
-  testWidgets('MOBILE-02：未启动会话时 abort 禁用', (tester) async {
-    await tester.pumpWidget(const AgentSessionsApp());
-    await tester.tap(find.byKey(const Key('login-button')));
-    await tester.pump();
-    final abort = tester.widget<OutlinedButton>(find.byKey(const Key('abort-button')));
-    expect(abort.onPressed, isNull);
+  testWidgets('MOBILE-01：owner 恢复码只在当前页展示，确认后立即清除', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
+    await _registerOwner(tester, 'recovery-code-owner@fixture.test');
+
+    await tester.tap(find.byKey(const Key('recovery-code-page-link')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('recovery-code-generate-button')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('recovery-code-generate-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('recovery-code-value')), findsOneWidget);
+    expect(
+      find.byKey(const Key('recovery-code-dismiss-button')),
+      findsOneWidget,
+    );
+
+    // 确认后返回控制端，再进入同一路由必须重新生成，不能复用内存外的旧明文。
+    await tester.tap(find.byKey(const Key('recovery-code-dismiss-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('recovery-code-value')), findsNothing);
+    await tester.tap(find.byKey(const Key('recovery-code-page-link')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('recovery-code-generate-button')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('recovery-code-value')), findsNothing);
   });
+
+  testWidgets('PAIR-01..03：owner 读取 QR payload、批准并撤销终端设备', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('register-link')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('register-email')),
+      'pairing@fixture.test',
+    );
+    await tester.enterText(
+      find.byKey(const Key('register-password')),
+      'test-password',
+    );
+    await tester.tap(find.byKey(const Key('register-submit')));
+    await tester.pumpAndSettle();
+
+    final request = await harness.relay.createPairing(
+      const PairingRequestInput(
+        role: DeviceRole.terminal,
+        displayName: 'Fixture Terminal',
+        platform: 'linux',
+        keys: DeviceRegistrationMaterial(
+          identityPublicKey: 'terminal-id-public',
+          encryptionPublicKey: 'terminal-encryption-public',
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('pairing-request-id')),
+      PairingPayload.encode(request.id),
+    );
+    await tester.tap(find.byKey(const Key('pairing-load-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(Key('pairing-qr-image-${request.id}')), findsOneWidget);
+    expect(find.byKey(Key('pairing-short-code-${request.id}')), findsOneWidget);
+    await tester.tap(find.byKey(Key('pairing-approve-${request.id}')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('back-home-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('devices-page-link')));
+    await tester.pumpAndSettle();
+    final deviceId = 'device-${request.id}';
+    expect(find.byKey(Key('device-$deviceId')), findsOneWidget);
+    await tester.tap(find.byKey(Key('device-revoke-$deviceId')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('revoked'), findsOneWidget);
+  });
+
+  testWidgets('PAIR-01：有效相机扫描回填 payload 并自动读取配对请求', (tester) async {
+    final harness = MobileAppHarness(
+      scannerBuilder: buildPairingScannerFixture,
+    );
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
+    await _registerOwner(tester, 'scanner@fixture.test');
+
+    final request = await harness.relay.createPairing(
+      const PairingRequestInput(
+        role: DeviceRole.terminal,
+        displayName: 'Camera Fixture Terminal',
+        platform: 'linux',
+        keys: DeviceRegistrationMaterial(
+          identityPublicKey: 'camera-terminal-identity',
+          encryptionPublicKey: 'camera-terminal-encryption',
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('fixture-scanner-payload')), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('fixture-scanner-payload')),
+      PairingPayload.encode(request.id),
+    );
+    await tester.tap(find.byKey(const Key('fixture-scanner-detect-button')));
+    await tester.pumpAndSettle();
+
+    final requestInput = tester.widget<TextField>(
+      find.byKey(const Key('pairing-request-id')),
+    );
+    expect(requestInput.controller!.text, PairingPayload.encode(request.id));
+    expect(find.byKey(Key('pairing-request-${request.id}')), findsOneWidget);
+  });
+
+  testWidgets('PAIR-01：无效扫码内容不会离开扫码页或请求 Relay', (tester) async {
+    final harness = MobileAppHarness(
+      scannerBuilder: buildPairingScannerFixture,
+    );
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
+    await _registerOwner(tester, 'invalid-scan@fixture.test');
+    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('fixture-scanner-payload')),
+      'https://untrusted.example/not-a-pairing-request',
+    );
+    await tester.tap(find.byKey(const Key('fixture-scanner-detect-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('pairing-scanner-invalid-payload')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('pairing-scanner-screen')), findsOneWidget);
+  });
+
+  testWidgets('PAIR-01：相机权限失败后回退到手动输入', (tester) async {
+    final harness = MobileAppHarness(
+      scannerBuilder: buildPairingScannerFixture,
+    );
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
+    await _registerOwner(tester, 'fallback@fixture.test');
+
+    final request = await harness.relay.createPairing(
+      const PairingRequestInput(
+        role: DeviceRole.terminal,
+        displayName: 'Manual Fallback Terminal',
+        platform: 'linux',
+        keys: DeviceRegistrationMaterial(
+          identityPublicKey: 'fallback-terminal-identity',
+          encryptionPublicKey: 'fallback-terminal-encryption',
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('fixture-scanner-unavailable-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('pairing-scanner-fallback-message')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const Key('pairing-scanner-manual-fallback-button')),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('pairing-request-id')),
+      PairingPayload.encode(request.id),
+    );
+    await tester.tap(find.byKey(const Key('pairing-load-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(Key('pairing-request-${request.id}')), findsOneWidget);
+  });
+
+  testWidgets('MOBILE-01：恢复码要求邮箱并恢复已绑定 owner', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('recovery-link')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('recovery-email')),
+      'recover@fixture.test',
+    );
+    await tester.enterText(
+      find.byKey(const Key('recovery-code')),
+      'RECOVERY-FIXTURE-0001',
+    );
+    await tester.tap(find.byKey(const Key('recovery-submit')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
+  });
+}
+
+Future<void> _registerOwner(WidgetTester tester, String email) async {
+  await tester.tap(find.byKey(const Key('register-link')));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byKey(const Key('register-email')), email);
+  await tester.enterText(
+    find.byKey(const Key('register-password')),
+    'test-password',
+  );
+  await tester.tap(find.byKey(const Key('register-submit')));
+  await tester.pumpAndSettle();
+  expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
 }

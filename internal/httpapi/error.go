@@ -14,6 +14,10 @@ import (
 // mapError 把领域错误映射为稳定协议错误码与 HTTP 状态。
 // 客户端只能按 code 分支，不能依赖 message 文案；正文/密钥不得进入错误体。
 func mapError(err error) (int, protocol.APIError) {
+	var protocolErr protocol.APIError
+	if errors.As(err, &protocolErr) {
+		return http.StatusBadRequest, protocolErr
+	}
 	switch {
 	case errors.Is(err, domain.ErrInvalidCredentials), errors.Is(err, domain.ErrUnauthenticated):
 		return http.StatusUnauthorized, protocol.NewError(protocol.ErrUnauthenticated, "authentication required")
@@ -21,6 +25,8 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusForbidden, protocol.NewError(protocol.ErrDeviceRevoked, "device revoked")
 	case errors.Is(err, domain.ErrOwnerRequired):
 		return http.StatusForbidden, protocol.NewError(protocol.ErrOwnerRequired, "owner device required")
+	case errors.Is(err, domain.ErrLastOwner):
+		return http.StatusConflict, protocol.NewError(protocol.ErrOwnerRequired, "last owner cannot be revoked")
 	case errors.Is(err, domain.ErrTokenReused):
 		return http.StatusUnauthorized, protocol.NewError(protocol.ErrTokenReused, "refresh token reused")
 	case errors.Is(err, domain.ErrPairingExpired):
@@ -35,8 +41,14 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusUnauthorized, protocol.NewError(protocol.ErrInvalidRequest, "invalid recovery code")
 	case errors.Is(err, domain.ErrReadOnlyDevice):
 		return http.StatusForbidden, protocol.NewError(protocol.ErrReadOnlyDevice, "read-only device")
+	case errors.Is(err, domain.ErrScopeDenied):
+		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "resource scope denied")
+	case errors.Is(err, domain.ErrBootstrapCompleted):
+		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "owner bootstrap already completed")
 	case errors.Is(err, domain.ErrAccountExists):
 		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "account exists")
+	case errors.Is(err, domain.ErrRegistrationClosed):
+		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "initial owner already exists")
 	case errors.Is(err, domain.ErrLeaseConflict):
 		return http.StatusConflict, protocol.NewError(protocol.ErrLeaseConflict, "lease conflict")
 	case errors.Is(err, domain.ErrTargetStale):
