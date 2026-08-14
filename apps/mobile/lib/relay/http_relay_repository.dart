@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import '../domain/control_models.dart';
+import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import 'relay_repository.dart';
@@ -260,6 +261,49 @@ class HttpRelayRepository implements RelayRepository {
       },
     );
     return SessionCommandReceipt.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<List<SessionDelegation>> listSessionDelegations(
+    String parentSessionId,
+  ) async {
+    if (parentSessionId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '父会话标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/sessions/$parentSessionId/delegations',
+    );
+    return _asList(
+      response.data,
+      wrappedKey: 'delegations',
+    ).map(SessionDelegation.fromRelayJson).toList(growable: false);
+  }
+
+  @override
+  Future<SessionDelegation> decideDelegation(
+    String delegationId,
+    DelegationDecisionInput input,
+  ) async {
+    input.validate();
+    if (delegationId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '派发标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/delegations/$delegationId/decision',
+      // device_id 不进入 wire body；Relay 必须从 bearer 绑定的 Android 写设备推导。
+      data: {
+        'decision': input.decision.wireValue,
+        'idempotency_key': input.idempotencyKey,
+        'lease_epoch': input.parentLeaseEpoch,
+      },
+    );
+    final delegation = SessionDelegation.fromRelayJson(_asMap(response.data));
+    if (delegation.id != delegationId) {
+      throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了另一派发节点。');
+    }
+    return delegation;
   }
 
   @override

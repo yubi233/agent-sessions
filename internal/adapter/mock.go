@@ -29,7 +29,7 @@ func (m *MockAdapter) SetWakeOverride(instanceID, result string) {
 	m.wakeOverrides[instanceID] = result
 }
 
-// Detect 报告 mock 能力：核心能力 native，跨 Provider 派发 unsupported。
+// Detect 报告 mock 能力：核心能力 native，跨 Provider 派发由 deterministic dispatcher 模拟。
 func (m *MockAdapter) Detect(ctx context.Context) (Capabilities, error) {
 	_ = ctx
 	byName := map[string]string{
@@ -39,7 +39,7 @@ func (m *MockAdapter) Detect(ctx context.Context) (Capabilities, error) {
 		"model_select": CapabilityNative, "effort_select": CapabilityNative,
 		"attachments": CapabilityNative, "file_read": CapabilityNative, "git_read": CapabilityNative,
 		"usage": CapabilityNative, "delegate_session": CapabilityNative,
-		"delegate_cross_provider": CapabilityUnsupported,
+		"delegate_cross_provider": CapabilityEmulated,
 	}
 	caps := make([]Capability, 0, len(CapabilityNames))
 	for _, name := range CapabilityNames {

@@ -618,6 +618,85 @@ func (r *sqliteRepo) ListCommands(ctx context.Context, sessionID string) ([]Comm
 	return out, rows.Err()
 }
 
+// CreateDelegation 持久化父子会话图。调用方必须已经完成同一事务内的账号、workspace 与 lease 校验。
+func (r *sqliteRepo) CreateDelegation(ctx context.Context, d DelegationRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO delegations(
+			id,account_id,parent_session_id,child_session_id,target_provider,status,
+			task_envelope_json,task_envelope_sha256,summary_envelope_json,summary_envelope_sha256,
+			idempotency_key,parent_lease_epoch,created_by_device_id,created_at_unix_ms,updated_at_unix_ms
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		d.ID, d.AccountID, d.ParentSessionID, nullableString(d.ChildSessionID), d.TargetProvider, d.Status,
+		d.TaskEnvelopeJSON, d.TaskEnvelopeSHA256, d.SummaryEnvelopeJSON, d.SummaryEnvelopeSHA256,
+		d.IdempotencyKey, d.ParentLeaseEpoch, d.CreatedByDeviceID, d.CreatedAtUnixMS, d.UpdatedAtUnixMS)
+	return err
+}
+
+func scanDelegation(row *sql.Row) (DelegationRow, error) {
+	var d DelegationRow
+	var child sql.NullString
+	err := row.Scan(
+		&d.ID, &d.AccountID, &d.ParentSessionID, &child, &d.TargetProvider, &d.Status,
+		&d.TaskEnvelopeJSON, &d.TaskEnvelopeSHA256, &d.SummaryEnvelopeJSON, &d.SummaryEnvelopeSHA256,
+		&d.IdempotencyKey, &d.ParentLeaseEpoch, &d.CreatedByDeviceID, &d.CreatedAtUnixMS, &d.UpdatedAtUnixMS,
+	)
+	if err != nil {
+		return DelegationRow{}, err
+	}
+	d.ChildSessionID = child.String
+	return d, nil
+}
+
+const delegationColumns = `id,account_id,parent_session_id,child_session_id,target_provider,status,
+	task_envelope_json,task_envelope_sha256,summary_envelope_json,summary_envelope_sha256,
+	idempotency_key,parent_lease_epoch,created_by_device_id,created_at_unix_ms,updated_at_unix_ms`
+
+// DelegationByID 供决策与子会话状态监督读取；调用方仍须复核 account_id。
+func (r *sqliteRepo) DelegationByID(ctx context.Context, id string) (DelegationRow, error) {
+	return scanDelegation(r.db.QueryRowContext(ctx,
+		`SELECT `+delegationColumns+` FROM delegations WHERE id=?`, id))
+}
+
+// DelegationByParentKey 实现创建请求的幂等重放，避免产生重复 child Session。
+func (r *sqliteRepo) DelegationByParentKey(ctx context.Context, parentSessionID, idempotencyKey string) (DelegationRow, error) {
+	return scanDelegation(r.db.QueryRowContext(ctx,
+		`SELECT `+delegationColumns+` FROM delegations WHERE parent_session_id=? AND idempotency_key=?`,
+		parentSessionID, idempotencyKey))
+}
+
+func (r *sqliteRepo) ListDelegationsByParent(ctx context.Context, parentSessionID string) ([]DelegationRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+delegationColumns+` FROM delegations WHERE parent_session_id=? ORDER BY created_at_unix_ms ASC, id ASC`,
+		parentSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DelegationRow
+	for rows.Next() {
+		var d DelegationRow
+		var child sql.NullString
+		if err := rows.Scan(
+			&d.ID, &d.AccountID, &d.ParentSessionID, &child, &d.TargetProvider, &d.Status,
+			&d.TaskEnvelopeJSON, &d.TaskEnvelopeSHA256, &d.SummaryEnvelopeJSON, &d.SummaryEnvelopeSHA256,
+			&d.IdempotencyKey, &d.ParentLeaseEpoch, &d.CreatedByDeviceID, &d.CreatedAtUnixMS, &d.UpdatedAtUnixMS,
+		); err != nil {
+			return nil, err
+		}
+		d.ChildSessionID = child.String
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// UpdateDelegation 只允许改变状态、child 关联和更新时间，密文任务书与摘要在创建后不可被 Relay 改写。
+func (r *sqliteRepo) UpdateDelegation(ctx context.Context, id, status, childSessionID string, updatedAtUnixMS int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE delegations SET status=?, child_session_id=?, updated_at_unix_ms=? WHERE id=?`,
+		status, nullableString(childSessionID), updatedAtUnixMS, id)
+	return err
+}
+
 func (r *sqliteRepo) AcquireLease(ctx context.Context, l LeaseRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO control_leases(session_id,device_id,epoch,instance_id) VALUES(?,?,?,?)

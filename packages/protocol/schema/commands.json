@@ -24,7 +24,8 @@
         "git.status",
         "git.changes",
         "git.diff",
-        "delegation.create"
+        "delegation.create",
+        "delegation.resolve"
       ]
     },
     "status": {

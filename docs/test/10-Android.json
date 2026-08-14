@@ -162,7 +162,7 @@
     {
       "id": "MOBILE-05",
       "title": "父子会话图确认与子会话切入",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "v0.1/W5",
       "category": "跨工具子代理",
       "priority": "P0",

@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../domain/control_models.dart';
+import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import 'relay_repository.dart';
@@ -15,9 +16,11 @@ class FixtureRelayRepository implements RelayRepository {
   final Map<String, PairingRequest> _pairings = {};
   final Map<String, _FixtureSessionState> _sessions = {};
   final Map<String, _FixtureAttachmentState> _attachments = {};
+  final Map<String, _FixtureDelegationState> _delegations = {};
   var _pairingSequence = 0;
   var _sessionSequence = 0;
   var _commandSequence = 0;
+  var _delegationSequence = 0;
   var _failNextAttachmentChunk = false;
   int? _failAttachmentChunkAtIndex;
 
@@ -30,6 +33,8 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   int get submittedCommandCount => _commandSequence;
+
+  int get delegationCount => _delegations.length;
 
   @override
   Future<AuthTokens> register(LoginCredentials credentials) async {
@@ -334,6 +339,112 @@ class FixtureRelayRepository implements RelayRepository {
     return receipt;
   }
 
+  /// 仅为 unit/widget/可见 macOS fixture 创建“来自 parent Adapter”的 proposed 节点。
+  /// UI 本身不伪造任务书：真实运行必须由已授权 Adapter 提供加密 envelope 后才会出现此卡片。
+  Future<SessionDelegation> seedDelegationProposal({
+    required String parentSessionId,
+    String targetProvider = 'codex',
+  }) async {
+    final parent = _sessionState(parentSessionId);
+    _delegationSequence += 1;
+    final sequence = _delegationSequence.toString().padLeft(3, '0');
+    final delegation = SessionDelegation(
+      id: 'delegation-fixture-$sequence',
+      parentSessionId: parent.session.id,
+      targetProvider: targetProvider,
+      status: DelegationStatus.proposed,
+      summaryEnvelope: _fixtureDelegationEnvelope(sequence),
+      summaryEnvelopeSha256: _fixtureDelegationHash(sequence),
+    );
+    _delegations[delegation.id] = _FixtureDelegationState(delegation);
+    _appendDelegationEvent(parent, delegation);
+    return delegation;
+  }
+
+  @override
+  Future<List<SessionDelegation>> listSessionDelegations(
+    String parentSessionId,
+  ) async {
+    _sessionState(parentSessionId);
+    return _delegations.values
+        .map((state) => state.delegation)
+        .where((delegation) => delegation.parentSessionId == parentSessionId)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<SessionDelegation> decideDelegation(
+    String delegationId,
+    DelegationDecisionInput input,
+  ) async {
+    input.validate();
+    _requireFixtureOwner();
+    final state = _delegations[delegationId];
+    if (state == null) {
+      throw const RelayFailure(RelayFailureKind.protocol, '找不到派发节点。');
+    }
+    final parent = _sessionState(state.delegation.parentSessionId);
+    _ensureFixtureLease(parent, input.parentLeaseEpoch);
+    final previous = state.decisions[input.idempotencyKey];
+    if (previous != null) return previous;
+
+    final current = state.delegation;
+    SessionDelegation next;
+    switch (input.decision) {
+      case DelegationDecision.approve:
+        if (!current.canApproveOrReject) {
+          throw const RelayFailure(RelayFailureKind.protocol, '该派发节点不能再确认。');
+        }
+        final target = (await getCapabilities()).provider(
+          current.targetProvider,
+        );
+        if (!target.capability('delegate_cross_provider').isSupported) {
+          throw RelayFailure(
+            RelayFailureKind.forbidden,
+            target.capability('delegate_cross_provider').reason ??
+                '目标 Provider 不支持跨工具派发。',
+          );
+        }
+        // Fixture child 必须走普通会话创建和独立 lease，不会继承 parent epoch 或时间线正文。
+        final child = await createSession(
+          CreateMobileSessionInput(
+            workspaceId: parent.session.workspaceId,
+            provider: current.targetProvider,
+            deviceId: input.deviceId,
+          ),
+        );
+        await acquireSessionLease(child.id);
+        _sessionState(
+          child.id,
+        ).updateSession(status: MobileSessionStatus.streaming, now: _clock());
+        next = current.copyWith(
+          childSessionId: child.id,
+          status: DelegationStatus.running,
+        );
+      case DelegationDecision.reject:
+        if (!current.canApproveOrReject) {
+          throw const RelayFailure(RelayFailureKind.protocol, '该派发节点不能再拒绝。');
+        }
+        next = current.copyWith(status: DelegationStatus.rejected);
+      case DelegationDecision.cancel:
+        if (!current.canCancel) {
+          throw const RelayFailure(RelayFailureKind.protocol, '该派发节点当前不能取消。');
+        }
+        final childId = current.childSessionId;
+        if (childId != null) {
+          _sessionState(
+            childId,
+          ).updateSession(status: MobileSessionStatus.stopped, now: _clock());
+        }
+        next = current.copyWith(status: DelegationStatus.cancelled);
+    }
+    state
+      ..delegation = next
+      ..decisions[input.idempotencyKey] = next;
+    _appendDelegationEvent(parent, next);
+    return next;
+  }
+
   @override
   Future<CapabilityMatrix> getCapabilities() async => CapabilityMatrix(
     providers: [
@@ -347,7 +458,9 @@ class FixtureRelayRepository implements RelayRepository {
           'model_select',
           'effort_select',
           'attachments',
+          'delegate_session',
         },
+        emulated: const {'delegate_cross_provider'},
       ),
       _fixtureProvider(
         'claude',
@@ -549,6 +662,27 @@ class FixtureRelayRepository implements RelayRepository {
     state.updateSession(status: MobileSessionStatus.stopped, now: now);
   }
 
+  // parent 只收到状态和密文摘要；child 的 session timeline 不会被复制到此处。
+  void _appendDelegationEvent(
+    _FixtureSessionState parent,
+    SessionDelegation delegation,
+  ) {
+    parent.append(
+      eventType: 'delegation.changed',
+      payload: {
+        'kind': 'delegation_changed',
+        'label': '子任务状态更新',
+        'delegation_id': delegation.id,
+        'child_session_id': delegation.childSessionId,
+        'target_provider': delegation.targetProvider,
+        'status': delegation.status.wireValue,
+        'summary_envelope': delegation.summaryEnvelope,
+        'summary_envelope_sha256': delegation.summaryEnvelopeSha256,
+      },
+      now: _clock(),
+    );
+  }
+
   void _appendPermissionDecision(
     _FixtureSessionState state,
     SessionCommandInput input,
@@ -695,6 +829,8 @@ ProviderCapabilityProfile _fixtureProvider(
     'model_select',
     'effort_select',
     'attachments',
+    'delegate_session',
+    'delegate_cross_provider',
   ];
   return ProviderCapabilityProfile(
     kind: kind,
@@ -748,6 +884,31 @@ bool _sameBytes(Uint8List left, Uint8List right) {
     if (left[index] != right[index]) return false;
   }
   return true;
+}
+
+// 视觉和 widget fixture 只生成不可读的固定 envelope 形状；业务 UI 只显示 hash，不读取 ciphertext。
+Map<String, dynamic> _fixtureDelegationEnvelope(String seed) => {
+  'alg': 'v1-aes256gcm-hkdfsha256',
+  'key_id': 'fixture-dek',
+  'nonce': 'fixture-nonce-$seed',
+  'ciphertext': 'fixture-opaque-$seed',
+  'aad_hash': 'fixture-aad-$seed',
+  'payload_version': 1,
+};
+
+String _fixtureDelegationHash(String seed) {
+  final prefix = seed.codeUnits
+      .map((unit) => unit.toRadixString(16).padLeft(2, '0'))
+      .join();
+  return (prefix + List<String>.filled(64, '0').join()).substring(0, 64);
+}
+
+/// fixture 的派发状态只保存 parent 可见元数据和加密摘要，不保存 child timeline 或任务书。
+class _FixtureDelegationState {
+  _FixtureDelegationState(this.delegation);
+
+  SessionDelegation delegation;
+  final Map<String, SessionDelegation> decisions = {};
 }
 
 /// fixture 内部状态只保存无敏感演示 payload；真实 Relay 仍只保存 event envelope。

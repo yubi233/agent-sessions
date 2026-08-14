@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/httpapi"
 	"github.com/yubi233/agent-sessions/internal/store"
@@ -38,8 +39,10 @@ func NewServer(db *sql.DB, logger *slog.Logger) *gin.Engine {
 	auth := domain.NewAuthService(repo)
 	pairing := domain.NewPairingService(repo)
 	sessions := domain.NewSessionService(repo)
+	// v0.1 只注入 deterministic mock dispatcher；真实 Provider 需专属凭据与授权后另行装配。
+	delegations := domain.NewDelegationService(repo, daemon.NewDeterministicDelegationDispatcher())
 	presence := domain.NewPresenceHub(0)
-	api := httpapi.New(auth, pairing, sessions, repo)
+	api := httpapi.New(auth, pairing, sessions, delegations, repo)
 	api.RegisterRoutes(router, logger, presence)
 	return router
 }

@@ -1,4 +1,5 @@
 import '../domain/control_models.dart';
+import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 
@@ -51,6 +52,17 @@ abstract interface class RelayRepository {
   Future<SessionCommandReceipt> submitSessionCommand(
     String sessionId,
     SessionCommandInput input,
+  );
+
+  /// parent 图只返回密文摘要与 child 引用；任务书和 child 正文不会经过该接口返回。
+  Future<List<SessionDelegation>> listSessionDelegations(
+    String parentSessionId,
+  );
+
+  /// Android 用 parent lease 批准、拒绝或取消 Delegation。child 的后续控制必须重新获取 child lease。
+  Future<SessionDelegation> decideDelegation(
+    String delegationId,
+    DelegationDecisionInput input,
   );
 
   /// Relay capability matrix 是会话控制入口的唯一依据；未知能力由客户端按 unsupported 展示。

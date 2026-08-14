@@ -460,6 +460,98 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "400":
           $ref: "#/components/responses/BadRequest"
+  /v1/sessions/{id}/delegations:
+    get:
+      operationId: listSessionDelegations
+      description: 只读返回 parent Session 的 Delegation 图投影。响应只含状态、child session id、Provider 和加密摘要，不返回任务书或 child 正文。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: parent delegation graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DelegationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createSessionDelegation
+      description: 仅 Android 写控制端可创建 proposed 节点。请求只能携带加密任务书和摘要，必须使用 parent 当前 lease_epoch；批准前不会创建 child Session。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDelegationRequest"
+      responses:
+        "202":
+          description: proposed delegation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delegation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/delegations/{id}/decision:
+    post:
+      operationId: decideDelegation
+      description: Android 对 proposed/running 节点执行 approve、reject 或 cancel。决策使用 parent lease；approve 后 child 取得独立 lease。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DelegationDecisionRequest"
+      responses:
+        "200":
+          description: updated delegation state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Delegation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/sessions/{id}/commands:
     post:
       operationId: submitSessionCommand
@@ -650,6 +742,12 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
     Conflict:
       description: 幂等键、租约或 bootstrap 状态冲突。
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: 请求的资源不存在或不属于当前账号。
       content:
         application/json:
           schema:
@@ -972,6 +1070,69 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CipherEvent"
+    Delegation:
+      type: object
+      description: parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。
+      required: [id, parent_session_id, target_provider, status, summary_envelope, summary_envelope_sha256]
+      properties:
+        id:
+          type: string
+        parent_session_id:
+          type: string
+        child_session_id:
+          type: string
+        target_provider:
+          type: string
+        status:
+          type: string
+          enum: [proposed, approved, running, completed, failed, cancelled, rejected]
+        summary_envelope:
+          type: object
+          description: 客户端加密摘要；Relay 不解密、不搜索。
+        summary_envelope_sha256:
+          type: string
+    DelegationList:
+      type: object
+      required: [delegations]
+      properties:
+        delegations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Delegation"
+    CreateDelegationRequest:
+      type: object
+      description: 任务书与摘要必须为完整加密 envelope；不得包含任务正文、路径、子会话消息或附件正文。
+      required: [target_workspace_id, target_provider, task_envelope, summary_envelope, idempotency_key, lease_epoch]
+      properties:
+        target_workspace_id:
+          type: string
+        target_terminal_id:
+          type: string
+        target_provider:
+          type: string
+        task_envelope:
+          type: object
+        summary_envelope:
+          type: object
+        idempotency_key:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+    DelegationDecisionRequest:
+      type: object
+      required: [decision, idempotency_key, lease_epoch]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject, cancel]
+        idempotency_key:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+          minimum: 1
     CipherEvent:
       type: object
       required: [event_seq, event_type, envelope]

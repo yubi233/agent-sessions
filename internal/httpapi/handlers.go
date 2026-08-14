@@ -45,9 +45,13 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.GET("/projects", a.handleListProjects)
 		auth.GET("/sessions", a.handleListSessions)
 		auth.GET("/sessions/:id/snapshot", a.handleSessionSnapshot)
+		// Delegation 图可由同账号所有已配对端只读；创建和决策仍只允许 Android 写控制端。
+		auth.GET("/sessions/:id/delegations", a.handleListDelegations)
 		// 创建 Workspace/Session 会改变账号元数据，和会话命令一样只允许 Android 控制端发起。
 		auth.POST("/sessions", a.RequireWrite(), a.handleCreateSession)
 		auth.POST("/sessions/:id/commands", a.RequireWrite(), a.handleSubmitCommand)
+		auth.POST("/sessions/:id/delegations", a.RequireWrite(), a.handleCreateDelegation)
+		auth.POST("/delegations/:id/decision", a.RequireWrite(), a.handleDelegationDecision)
 		auth.GET("/commands/:id", a.handleGetCommand)
 		auth.POST("/sessions/:id/lease", a.RequireWrite(), a.handleAcquireLease)
 		// 附件写入和会话命令共用 Android 写身份与 fencing；Relay 只接收密文块。
@@ -463,6 +467,98 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 	c.JSON(http.StatusAccepted, newCommandView(cmd))
 }
 
+// Delegation 请求只包含密文任务书/摘要、目标 Provider 与父会话 fencing；不接受正文、路径或 child 会话内容。
+type createDelegationRequest struct {
+	TargetWorkspaceID string          `json:"target_workspace_id"`
+	TargetTerminalID  string          `json:"target_terminal_id"`
+	TargetProvider    string          `json:"target_provider"`
+	TaskEnvelope      json.RawMessage `json:"task_envelope"`
+	SummaryEnvelope   json.RawMessage `json:"summary_envelope"`
+	IdempotencyKey    string          `json:"idempotency_key"`
+	LeaseEpoch        int64           `json:"lease_epoch"`
+}
+
+type delegationDecisionRequest struct {
+	Decision       string `json:"decision"`
+	IdempotencyKey string `json:"idempotency_key"`
+	LeaseEpoch     int64  `json:"lease_epoch"`
+}
+
+const maxDelegationRequestBytes int64 = 96 * 1024
+
+// handleCreateDelegation 只创建 Android 可见的 proposed 卡片；批准前不能创建 child 或启动 Provider。
+func (a *API) handleCreateDelegation(c *gin.Context) {
+	var req createDelegationRequest
+	if err := decodeStrictDelegationJSON(c, &req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed delegation request"))
+		return
+	}
+	subj := subject(c)
+	delegation, err := a.Delegations.CreateProposal(c.Request.Context(), domain.DelegationCreateInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		ParentSessionID: c.Param("id"), TargetWorkspaceID: req.TargetWorkspaceID,
+		TargetTerminalID: req.TargetTerminalID, TargetProvider: req.TargetProvider,
+		TaskEnvelope: req.TaskEnvelope, SummaryEnvelope: req.SummaryEnvelope,
+		IdempotencyKey: req.IdempotencyKey, LeaseEpoch: req.LeaseEpoch,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, newDelegationView(delegation))
+}
+
+// handleListDelegations 仅投影 parent 的状态、child id、Provider 和加密摘要；任务书与 child 正文都不会离开 Relay。
+func (a *API) handleListDelegations(c *gin.Context) {
+	rows, err := a.Delegations.ListForParent(c.Request.Context(), subject(c).AccountID, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	views := make([]delegationView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, newDelegationView(row))
+	}
+	writeOK(c, gin.H{"delegations": views})
+}
+
+// handleDelegationDecision 用 parent 当前 lease 保护 approve/reject/cancel；进入 child 后由 child lease 接管写控制。
+func (a *API) handleDelegationDecision(c *gin.Context) {
+	var req delegationDecisionRequest
+	if err := decodeStrictDelegationJSON(c, &req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed delegation decision"))
+		return
+	}
+	subj := subject(c)
+	delegation, err := a.Delegations.Decide(c.Request.Context(), domain.DelegationDecisionInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		DelegationID: c.Param("id"), Decision: req.Decision, IdempotencyKey: req.IdempotencyKey,
+		ParentLeaseEpoch: req.LeaseEpoch,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newDelegationView(delegation))
+}
+
+// decodeStrictDelegationJSON 与附件链路一样拒绝未知字段，避免任务明文在协议扩展时被悄悄接收。
+func decodeStrictDelegationJSON(c *gin.Context, destination any) error {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxDelegationRequestBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
 // attachmentChunkRequest 是附件上传 wire DTO。没有 filename 或正文，所有可识别元数据都必须位于 metadata_ciphertext。
 type attachmentChunkRequest struct {
 	AttachmentID       string `json:"attachment_id"`
@@ -779,6 +875,26 @@ type commandView struct {
 	Status         string `json:"status"`
 	IdempotencyKey string `json:"idempotency_key"`
 	LeaseEpoch     int64  `json:"lease_epoch,omitempty"`
+}
+
+// delegationView 是 parent 图的安全投影。task_envelope 从不返回；summary_envelope 仍是客户端加密对象。
+type delegationView struct {
+	ID                    string          `json:"id"`
+	ParentSessionID       string          `json:"parent_session_id"`
+	ChildSessionID        string          `json:"child_session_id,omitempty"`
+	TargetProvider        string          `json:"target_provider"`
+	Status                string          `json:"status"`
+	SummaryEnvelope       json.RawMessage `json:"summary_envelope"`
+	SummaryEnvelopeSHA256 string          `json:"summary_envelope_sha256"`
+}
+
+func newDelegationView(delegation store.DelegationRow) delegationView {
+	return delegationView{
+		ID: delegation.ID, ParentSessionID: delegation.ParentSessionID,
+		ChildSessionID: delegation.ChildSessionID, TargetProvider: delegation.TargetProvider,
+		Status: delegation.Status, SummaryEnvelope: json.RawMessage(delegation.SummaryEnvelopeJSON),
+		SummaryEnvelopeSHA256: delegation.SummaryEnvelopeSHA256,
+	}
 }
 
 // attachmentReceiptView 不回显 ciphertext、metadata_ciphertext 或客户端显示名，避免响应链路扩大可见范围。

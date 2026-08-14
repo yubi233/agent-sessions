@@ -19,14 +19,18 @@ type API struct {
 	Auth         *domain.AuthService
 	Pairing      *domain.PairingService
 	Sessions     *domain.SessionService
+	Delegations  *domain.DelegationService
 	Attachments  *domain.AttachmentService
 	Capabilities *adapterreg.Registry
 	Repo         store.Repository
 }
 
 // New 构造 HTTP API 聚合。
-func New(auth *domain.AuthService, pairing *domain.PairingService, sessions *domain.SessionService, repo store.Repository) *API {
-	return &API{Auth: auth, Pairing: pairing, Sessions: sessions, Attachments: domain.NewAttachmentService(repo), Capabilities: adapterreg.New(), Repo: repo}
+func New(auth *domain.AuthService, pairing *domain.PairingService, sessions *domain.SessionService, delegations *domain.DelegationService, repo store.Repository) *API {
+	return &API{
+		Auth: auth, Pairing: pairing, Sessions: sessions, Delegations: delegations,
+		Attachments: domain.NewAttachmentService(repo), Capabilities: adapterreg.New(), Repo: repo,
+	}
 }
 
 // RequireAuth 是鉴权中间件：解析 Bearer token，校验有效期与设备状态，

@@ -354,6 +354,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}/delegations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 只读返回 parent Session 的 Delegation 图投影。响应只含状态、child session id、Provider 和加密摘要，不返回任务书或 child 正文。 */
+        get: operations["listSessionDelegations"];
+        put?: never;
+        /** @description 仅 Android 写控制端可创建 proposed 节点。请求只能携带加密任务书和摘要，必须使用 parent 当前 lease_epoch；批准前不会创建 child Session。 */
+        post: operations["createSessionDelegation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/delegations/{id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Android 对 proposed/running 节点执行 approve、reject 或 cancel。决策使用 parent lease；approve 后 child 取得独立 lease。 */
+        post: operations["decideDelegation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions/{id}/commands": {
         parameters: {
             query?: never;
@@ -612,6 +647,39 @@ export interface components {
             session: components["schemas"]["Session"];
             events: components["schemas"]["CipherEvent"][];
         };
+        /** @description parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。 */
+        Delegation: {
+            id: string;
+            parent_session_id: string;
+            child_session_id?: string;
+            target_provider: string;
+            /** @enum {string} */
+            status: "proposed" | "approved" | "running" | "completed" | "failed" | "cancelled" | "rejected";
+            /** @description 客户端加密摘要；Relay 不解密、不搜索。 */
+            summary_envelope: Record<string, never>;
+            summary_envelope_sha256: string;
+        };
+        DelegationList: {
+            delegations: components["schemas"]["Delegation"][];
+        };
+        /** @description 任务书与摘要必须为完整加密 envelope；不得包含任务正文、路径、子会话消息或附件正文。 */
+        CreateDelegationRequest: {
+            target_workspace_id: string;
+            target_terminal_id?: string;
+            target_provider: string;
+            task_envelope: Record<string, never>;
+            summary_envelope: Record<string, never>;
+            idempotency_key: string;
+            /** Format: int64 */
+            lease_epoch: number;
+        };
+        DelegationDecisionRequest: {
+            /** @enum {string} */
+            decision: "approve" | "reject" | "cancel";
+            idempotency_key: string;
+            /** Format: int64 */
+            lease_epoch: number;
+        };
         CipherEvent: {
             /** Format: int64 */
             event_seq: number;
@@ -714,6 +782,15 @@ export interface components {
         };
         /** @description 幂等键、租约或 bootstrap 状态冲突。 */
         Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description 请求的资源不存在或不属于当前账号。 */
+        NotFound: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1302,6 +1379,92 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listSessionDelegations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description parent delegation graph */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DelegationList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createSessionDelegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDelegationRequest"];
+            };
+        };
+        responses: {
+            /** @description proposed delegation */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Delegation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    decideDelegation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DelegationDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description updated delegation state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Delegation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     submitSessionCommand: {

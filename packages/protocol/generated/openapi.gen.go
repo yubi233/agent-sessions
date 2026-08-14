@@ -96,6 +96,60 @@ func (e CapabilityItemStatus) Valid() bool {
 	}
 }
 
+// Defines values for DelegationStatus.
+const (
+	DelegationStatusApproved  DelegationStatus = "approved"
+	DelegationStatusCancelled DelegationStatus = "cancelled"
+	DelegationStatusCompleted DelegationStatus = "completed"
+	DelegationStatusFailed    DelegationStatus = "failed"
+	DelegationStatusProposed  DelegationStatus = "proposed"
+	DelegationStatusRejected  DelegationStatus = "rejected"
+	DelegationStatusRunning   DelegationStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the DelegationStatus enum.
+func (e DelegationStatus) Valid() bool {
+	switch e {
+	case DelegationStatusApproved:
+		return true
+	case DelegationStatusCancelled:
+		return true
+	case DelegationStatusCompleted:
+		return true
+	case DelegationStatusFailed:
+		return true
+	case DelegationStatusProposed:
+		return true
+	case DelegationStatusRejected:
+		return true
+	case DelegationStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegationDecisionRequestDecision.
+const (
+	Approve DelegationDecisionRequestDecision = "approve"
+	Cancel  DelegationDecisionRequestDecision = "cancel"
+	Reject  DelegationDecisionRequestDecision = "reject"
+)
+
+// Valid indicates whether the value is a known member of the DelegationDecisionRequestDecision enum.
+func (e DelegationDecisionRequestDecision) Valid() bool {
+	switch e {
+	case Approve:
+		return true
+	case Cancel:
+		return true
+	case Reject:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeviceRole.
 const (
 	DeviceRoleAdmin        DeviceRole = "admin"
@@ -291,6 +345,17 @@ type Command struct {
 	Status         string `json:"status"`
 }
 
+// CreateDelegationRequest 任务书与摘要必须为完整加密 envelope；不得包含任务正文、路径、子会话消息或附件正文。
+type CreateDelegationRequest struct {
+	IdempotencyKey    string                 `json:"idempotency_key"`
+	LeaseEpoch        int64                  `json:"lease_epoch"`
+	SummaryEnvelope   map[string]interface{} `json:"summary_envelope"`
+	TargetProvider    string                 `json:"target_provider"`
+	TargetTerminalId  *string                `json:"target_terminal_id,omitempty"`
+	TargetWorkspaceId string                 `json:"target_workspace_id"`
+	TaskEnvelope      map[string]interface{} `json:"task_envelope"`
+}
+
 // CreateSessionRequest defines model for CreateSessionRequest.
 type CreateSessionRequest struct {
 	Provider    *string `json:"provider,omitempty"`
@@ -303,6 +368,37 @@ type CreateWorkspaceRequest struct {
 	CanonicalRoot string  `json:"canonical_root"`
 	ProjectId     string  `json:"project_id"`
 	Status        *string `json:"status,omitempty"`
+}
+
+// Delegation parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。
+type Delegation struct {
+	ChildSessionId  *string          `json:"child_session_id,omitempty"`
+	Id              string           `json:"id"`
+	ParentSessionId string           `json:"parent_session_id"`
+	Status          DelegationStatus `json:"status"`
+
+	// SummaryEnvelope 客户端加密摘要；Relay 不解密、不搜索。
+	SummaryEnvelope       map[string]interface{} `json:"summary_envelope"`
+	SummaryEnvelopeSha256 string                 `json:"summary_envelope_sha256"`
+	TargetProvider        string                 `json:"target_provider"`
+}
+
+// DelegationStatus defines model for Delegation.Status.
+type DelegationStatus string
+
+// DelegationDecisionRequest defines model for DelegationDecisionRequest.
+type DelegationDecisionRequest struct {
+	Decision       DelegationDecisionRequestDecision `json:"decision"`
+	IdempotencyKey string                            `json:"idempotency_key"`
+	LeaseEpoch     int64                             `json:"lease_epoch"`
+}
+
+// DelegationDecisionRequestDecision defines model for DelegationDecisionRequest.Decision.
+type DelegationDecisionRequestDecision string
+
+// DelegationList defines model for DelegationList.
+type DelegationList struct {
+	Delegations []Delegation `json:"delegations"`
 }
 
 // Device defines model for Device.
@@ -511,6 +607,9 @@ type Conflict = ErrorResponse
 // Forbidden defines model for Forbidden.
 type Forbidden = ErrorResponse
 
+// NotFound defines model for NotFound.
+type NotFound = ErrorResponse
+
 // PayloadTooLarge defines model for PayloadTooLarge.
 type PayloadTooLarge = ErrorResponse
 
@@ -549,6 +648,9 @@ type RefreshJSONRequestBody = RefreshRequest
 // RegisterJSONRequestBody defines body for Register for application/json ContentType.
 type RegisterJSONRequestBody = RegisterRequest
 
+// DecideDelegationJSONRequestBody defines body for DecideDelegation for application/json ContentType.
+type DecideDelegationJSONRequestBody = DelegationDecisionRequest
+
 // BootstrapOwnerJSONRequestBody defines body for BootstrapOwner for application/json ContentType.
 type BootstrapOwnerJSONRequestBody = BootstrapRequest
 
@@ -563,6 +665,9 @@ type CreateSessionJSONRequestBody = CreateSessionRequest
 
 // SubmitSessionCommandJSONRequestBody defines body for SubmitSessionCommand for application/json ContentType.
 type SubmitSessionCommandJSONRequestBody = SubmitCommandRequest
+
+// CreateSessionDelegationJSONRequestBody defines body for CreateSessionDelegation for application/json ContentType.
+type CreateSessionDelegationJSONRequestBody = CreateDelegationRequest
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
@@ -599,6 +704,9 @@ type ServerInterface interface {
 
 	// (GET /v1/commands/{id})
 	GetCommand(c *gin.Context, id string)
+
+	// (POST /v1/delegations/{id}/decision)
+	DecideDelegation(c *gin.Context, id string)
 
 	// (GET /v1/devices)
 	ListDevices(c *gin.Context)
@@ -641,6 +749,12 @@ type ServerInterface interface {
 
 	// (POST /v1/sessions/{id}/commands)
 	SubmitSessionCommand(c *gin.Context, id string)
+
+	// (GET /v1/sessions/{id}/delegations)
+	ListSessionDelegations(c *gin.Context, id string)
+
+	// (POST /v1/sessions/{id}/delegations)
+	CreateSessionDelegation(c *gin.Context, id string)
 
 	// (POST /v1/sessions/{id}/lease)
 	AcquireSessionLease(c *gin.Context, id string)
@@ -819,6 +933,31 @@ func (siw *ServerInterfaceWrapper) GetCommand(c *gin.Context) {
 	}
 
 	siw.Handler.GetCommand(c, id)
+}
+
+// DecideDelegation operation middleware
+func (siw *ServerInterfaceWrapper) DecideDelegation(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DecideDelegation(c, id)
 }
 
 // ListDevices operation middleware
@@ -1098,6 +1237,56 @@ func (siw *ServerInterfaceWrapper) SubmitSessionCommand(c *gin.Context) {
 	siw.Handler.SubmitSessionCommand(c, id)
 }
 
+// ListSessionDelegations operation middleware
+func (siw *ServerInterfaceWrapper) ListSessionDelegations(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListSessionDelegations(c, id)
+}
+
+// CreateSessionDelegation operation middleware
+func (siw *ServerInterfaceWrapper) CreateSessionDelegation(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateSessionDelegation(c, id)
+}
+
 // AcquireSessionLease operation middleware
 func (siw *ServerInterfaceWrapper) AcquireSessionLease(c *gin.Context) {
 
@@ -1248,6 +1437,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/sessions", wrapper.CreateSession)
 	router.POST(options.BaseURL+"/v1/sessions/:id/lease", wrapper.AcquireSessionLease)
 	router.GET(options.BaseURL+"/v1/sessions/:id/snapshot", wrapper.GetSessionSnapshot)
+	router.GET(options.BaseURL+"/v1/sessions/:id/delegations", wrapper.ListSessionDelegations)
+	router.POST(options.BaseURL+"/v1/sessions/:id/delegations", wrapper.CreateSessionDelegation)
+	router.POST(options.BaseURL+"/v1/delegations/:id/decision", wrapper.DecideDelegation)
 	router.POST(options.BaseURL+"/v1/sessions/:id/commands", wrapper.SubmitSessionCommand)
 	router.GET(options.BaseURL+"/v1/commands/:id", wrapper.GetCommand)
 	router.POST(options.BaseURL+"/v1/attachments/chunks", wrapper.UploadAttachmentChunk)

@@ -93,6 +93,13 @@ type Repository interface {
 	UpdateCommandStatus(ctx context.Context, id, status string) error
 	ListCommands(ctx context.Context, sessionID string) ([]CommandRow, error)
 
+	// Delegation：父子 Session 图只存密文 envelope 与白名单索引，Relay 不解密任务书或摘要。
+	CreateDelegation(ctx context.Context, d DelegationRow) error
+	DelegationByID(ctx context.Context, id string) (DelegationRow, error)
+	DelegationByParentKey(ctx context.Context, parentSessionID, idempotencyKey string) (DelegationRow, error)
+	ListDelegationsByParent(ctx context.Context, parentSessionID string) ([]DelegationRow, error)
+	UpdateDelegation(ctx context.Context, id, status, childSessionID string, updatedAtUnixMS int64) error
+
 	// ControlLease（fencing epoch 由应用层在事务内比较）
 	AcquireLease(ctx context.Context, l LeaseRow) error
 	LeaseBySession(ctx context.Context, sessionID string) (LeaseRow, error)
@@ -259,6 +266,26 @@ type CommandRow struct {
 	LeaseEpoch       int64
 	TargetInstanceID string
 	CiphertextJSON   string
+}
+
+// DelegationRow 是父子 Session 图的最小持久化投影。两个 envelope 都是客户端密文，
+// 仅哈希、状态和关系允许被 Relay 查询、审计和投影给只读端。
+type DelegationRow struct {
+	ID                    string
+	AccountID             string
+	ParentSessionID       string
+	ChildSessionID        string
+	TargetProvider        string
+	Status                string
+	TaskEnvelopeJSON      string
+	TaskEnvelopeSHA256    string
+	SummaryEnvelopeJSON   string
+	SummaryEnvelopeSHA256 string
+	IdempotencyKey        string
+	ParentLeaseEpoch      int64
+	CreatedByDeviceID     string
+	CreatedAtUnixMS       int64
+	UpdatedAtUnixMS       int64
 }
 
 // LeaseRow 是 control_leases 表的行投影。

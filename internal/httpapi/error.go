@@ -53,6 +53,14 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusConflict, protocol.NewError(protocol.ErrLeaseConflict, "lease conflict")
 	case errors.Is(err, domain.ErrTargetStale):
 		return http.StatusConflict, protocol.NewError(protocol.ErrTargetInstanceStale, "target instance stale")
+	case errors.Is(err, domain.ErrIdempotencyUsed), errors.Is(err, domain.ErrDelegationInvalidState):
+		return http.StatusConflict, protocol.NewError(protocol.ErrIdempotencyConflict, "delegation decision conflict")
+	case errors.Is(err, domain.ErrDelegationUnsupported):
+		return http.StatusConflict, protocol.NewError(protocol.ErrCapabilityUnsupported, "delegation capability unsupported")
+	case errors.Is(err, domain.ErrDelegationBoundary):
+		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "delegation workspace or terminal denied")
+	case errors.Is(err, domain.ErrDelegationNotFound):
+		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "delegation not found")
 	case errors.Is(err, domain.ErrSessionNotFound), errors.Is(err, domain.ErrWorkspaceNotFound):
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "session not found")
 	case errors.Is(err, domain.ErrAttachmentNotFound):

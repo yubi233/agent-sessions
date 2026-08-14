@@ -193,6 +193,29 @@ var migrations = []string{
 		UNIQUE(attachment_id, idempotency_key),
 		FOREIGN KEY(attachment_id) REFERENCES attachments(id)
 	);`,
+	// Delegation 只保存父子索引与客户端加密 envelope。任务书和结果摘要均不允许以明文进入 Relay。
+	`CREATE TABLE IF NOT EXISTS delegations (
+		id TEXT PRIMARY KEY,
+		account_id TEXT NOT NULL,
+		parent_session_id TEXT NOT NULL,
+		child_session_id TEXT,
+		target_provider TEXT NOT NULL,
+		status TEXT NOT NULL,
+		task_envelope_json TEXT NOT NULL,
+		task_envelope_sha256 TEXT NOT NULL,
+		summary_envelope_json TEXT NOT NULL,
+		summary_envelope_sha256 TEXT NOT NULL,
+		idempotency_key TEXT NOT NULL,
+		parent_lease_epoch INTEGER NOT NULL,
+		created_by_device_id TEXT NOT NULL,
+		created_at_unix_ms INTEGER NOT NULL,
+		updated_at_unix_ms INTEGER NOT NULL,
+		UNIQUE(parent_session_id, idempotency_key),
+		FOREIGN KEY(parent_session_id) REFERENCES sessions(id),
+		FOREIGN KEY(child_session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS delegations_parent_session_idx
+		ON delegations(parent_session_id, updated_at_unix_ms DESC);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

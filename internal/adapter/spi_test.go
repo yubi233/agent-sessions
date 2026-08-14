@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// ADPT-01：SPI 与能力矩阵合同——mock 返回三态且未知能力 unsupported。
+// ADPT-01 / DELEG-01：SPI 与能力矩阵合同——mock 对跨 Provider 只声明 emulated，不冒充真实 Provider。
 func TestMockCapabilitiesContract(t *testing.T) {
 	m := NewMockAdapter()
 	caps, err := m.Detect(context.Background())
@@ -22,9 +22,9 @@ func TestMockCapabilitiesContract(t *testing.T) {
 			t.Fatalf("invalid status %q for %s", c.Status, c.Name)
 		}
 	}
-	// 未知能力默认 unsupported（跨 Provider 派发）。
-	if byName["delegate_cross_provider"] != CapabilityUnsupported {
-		t.Fatalf("delegate_cross_provider should be unsupported")
+	// deterministic dispatcher 只提供 emulated 跨 Provider 链路；真实 Provider 仍必须另做授权 smoke。
+	if byName["delegate_cross_provider"] != CapabilityEmulated {
+		t.Fatalf("delegate_cross_provider should be emulated")
 	}
 	if byName["start"] != CapabilityNative {
 		t.Fatalf("start should be native")
