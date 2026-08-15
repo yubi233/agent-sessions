@@ -201,7 +201,7 @@
     {
       "id": "ADPT-OPENCODE-07",
       "title": "permission_mode 能力契约与 fail-closed",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.3/P0",
       "category": "OpenCode",
       "priority": "P1",

@@ -9,6 +9,10 @@
 
 在 v0.1 审计基础上，v0.2 完成真实 transport 后对同一固定提交 `eb980a5c9eea25b1c145c06cd6241a0a365c2b6d` 重新对照。**v0.1 标注为缺口的项，v0.2 已交付**：OpenCode 真实 HTTP/SSE transport（health/session/prompt_async/abort/SSE 映射）、Resume 三态、通用只读文件浏览、会话快捷操作（details/resume/fork/archive 按 capability fail-closed）、composer 模型/effort 选择与脱敏 usage 计数、`@`/`/` 自动补全、真实选附件（DEK 密封）、草稿自动保存、Delegation 可见派发入口。全流程复测证据见[实施记录 08](08-v0.2-Android会话能力对齐Happy.md)与[自动化测试文档](../自动化测试文档.md)。
 
+### v0.3 处理结果（2026-08-15）
+
+v0.3 已按[迭代计划 v0.3](../迭代计划/迭代计划v0.3.md)解决下列差距并沉淀回归（MOBILE-10..14、ADPT-OPENCODE-07、VISUAL-MOBILE-18..20，Flutter 102 用例 + 20 场景 macOS full gate + 9 场景 5fps 录屏通过）：permission mode 选择器（`session.permission_mode`）、goal 文本编辑（`goal.edit`）、usage 深度（cache 计数 + context 窗口警告）、Provider 版本/连接提示（状态条 chip + fail-closed 原因）、duplicate 入口（capability fail-closed）与 details 复制白名单字段。仍保持 fail-closed 的项：fork/archive/duplicate 的真实动作、版本比较语义（MINIMUM_CLI_VERSION）、真实 Provider 的 permission mode/goal 编辑实现。
+
 ### v0.2 后仍存在的差距（对照固定提交实测代码）
 
 | 能力域 | Happy Mobile 基线（固定提交） | Agent Sessions v0.2 | 差距 | 后续动作 |

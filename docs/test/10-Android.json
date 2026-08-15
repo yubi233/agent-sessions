@@ -306,7 +306,7 @@
     {
       "id": "MOBILE-10",
       "title": "composer permission mode 选择器",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.3/P0",
       "category": "Android",
       "priority": "P0",
@@ -328,7 +328,7 @@
     {
       "id": "MOBILE-11",
       "title": "goal 文本编辑",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.3/P0",
       "category": "Android",
       "priority": "P0",
@@ -351,7 +351,7 @@
     {
       "id": "MOBILE-12",
       "title": "usage 深度与 context 警告",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.3/P1",
       "category": "Android",
       "priority": "P1",
@@ -373,7 +373,7 @@
     {
       "id": "MOBILE-13",
       "title": "Provider 版本与连接提示",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.3/P1",
       "category": "Android",
       "priority": "P1",
@@ -396,7 +396,7 @@
     {
       "id": "MOBILE-14",
       "title": "duplicate 入口与复制元数据",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.3/P2",
       "category": "Android",
       "priority": "P2",
