@@ -26,6 +26,48 @@ v0.3 已按[迭代计划 v0.3](../迭代计划/迭代计划v0.3.md)解决下列�
 | 连接态展示 | realtimeStatus + ConnectButton | 状态条有会话状态/lease，无 Provider 连接态 | 局部 | 接 Detect 连接态展示 |
 | 实时语音 / Inbox/Friends | 明确能力 | 明确排除 | 排除 | 不纳入远程编码会话 gate |
 
+### 全项目对照（2026-08-15，固定提交 eb980a5 全仓库盘点）
+
+对照范围扩大到 Happy 整个 monorepo（happy-app / happy-cli / happy-server / happy-server-self-host / happy-wire）。
+
+#### 已对齐或更强（Agent Sessions 有对应实现）
+
+| 功能域 | Happy | Agent Sessions |
+| --- | --- | --- |
+| 移动端会话控制 | SessionView/quickActions | v0.1-v0.3 逐项对齐（消息/工具/权限/问题/模型/effort/permission mode/goal 编辑/usage/补全/附件/resume/文件浏览/Git/草稿/子会话） |
+| Git 变更与文件浏览 | FilesSidebar/AllFilesDiffView/FileViewPanel | GitDiffView + 只读文件页（安全边界更强） |
+| 子会话/并行操作 | SideChatPanel | Delegation 父子图 + 派发入口（加密摘要更强） |
+| 自托管服务端 | happy-server-self-host | deploy Compose + 隔离 SQLite（单租户） |
+| 多 Provider 抽象 | happy-cli 的 claude/codex/gemini/openclaw | Adapter SPI 四类（OpenCode 真实 transport 已贯通，其余 fail-closed） |
+
+#### 明确排除（产品决策，不视为欠缺）
+
+实时语音、Inbox/Friends/社交 feed、付费/订阅（RevenueCat）、GitHub 集成、Happy wire 兼容、远程 shell、Git 写。
+
+#### 真实欠缺（Happy 有、本项目无，且不在排除清单）
+
+| 优先级 | 能力域 | Happy 参考 | Agent Sessions 现状 |
+| --- | --- | --- | --- |
+| P0 | 设置页体系 | settings/（account、agents、appearance、features、language、usage、connect） | 无设置中心；主题硬编码 `ThemeMode.dark`；无 i18n |
+| P0 | 机器/终端状态页 | machine/[id]（status/logs/restart/update）、terminal/connect | 只有配对流程；daemon 状态仅 Web 首页粗粒度展示 |
+| P0 | 代码查看器 | CodeView/CodeEditor（语法高亮） | 文件浏览仅纯文本预览，无代码视图 |
+| P1 | 会话 info 页 | session/[id]/info（machine/copy/kill/share/revert/summarize） | 只有详情底表（部分对齐：copy/kill 缺） |
+| P1 | 用量统计页 | settings/usage + UsagePanel（today/7days/30days 图表） | 仅会话内 usage 计数 |
+| P1 | 更新提示 | UpdateBanner + changelog（useUpdates/useChangelog） | 无更新提示；版本仅在 Web 能力矩阵 |
+| P1 | 命令面板 | CommandPalette | 无 |
+| P2 | 会话分享 | share API + 分享链接 | 无 |
+| P2 | Artifacts | artifacts/（list/new/edit/[id]） | 无产物体系 |
+| P2 | 最近会话 | session/recent | 仅会话列表（无独立最近页） |
+| P2 | 单条消息页 | session/[id]/message/[messageId] | 无 |
+| P2 | GitHub 集成 | apiGithub | 排除清单外未实现 |
+| P3 | CLI 生态 | happy-cli（agent/sandbox/resume/daemon/sessionProtocol/modules/testing） | apps/daemon 仅 status/doctor/run/runner 最小集 |
+| P3 | 推送注册 | pushRegistration/apiPush | UnifiedPush 延后 |
+| P3 | 文本选择工具 | text-selection.tsx | 无 |
+
+#### 结论
+
+会话页能力已基本对齐（v0.1-v0.3）；全项目层面主要欠缺集中在**设置体系、机器状态可见性、代码查看器、用量统计与更新提示**（P0/P1），以及分享/Artifacts/命令面板等增强功能（P2）。社交、付费、语音为明确排除项。建议 v0.4 优先排期 P0/P1 项。
+
 ### v0.1 原文（保留，作为审计轨迹）
 
 ## P2 Todo
