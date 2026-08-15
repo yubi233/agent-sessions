@@ -32,6 +32,9 @@ enum LocalVisualScenario {
   sessionFilesBrowse,
   // v0.2/P3 视觉场景：composer 模型/effort/usage 控制面。
   sessionComposerControls,
+  // v0.3/P3 视觉场景：goal 编辑入口与 Provider 探测失败提示。
+  sessionGoalEdit,
+  sessionProviderUnavailable,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(
@@ -57,6 +60,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'session-quick-menu' => LocalVisualScenario.sessionQuickMenu,
   'session-files-browse' => LocalVisualScenario.sessionFilesBrowse,
   'session-composer-controls' => LocalVisualScenario.sessionComposerControls,
+  'session-goal-edit' => LocalVisualScenario.sessionGoalEdit,
+  'session-provider-unavailable' => LocalVisualScenario.sessionProviderUnavailable,
   _ => LocalVisualScenario.none,
 };
 
@@ -110,6 +115,10 @@ class LocalVisualFixture {
     final relay = FixtureRelayRepository(
       clock: () => DateTime.utc(2026, 8, 14, 12),
     );
+    if (scenario == LocalVisualScenario.sessionProviderUnavailable) {
+      // 探测失败场景：能力矩阵全部 unavailable，状态条展示 fail-closed 原因。
+      relay.providersUnavailable = true;
+    }
     final tokens = InMemorySecureTokenStore();
     final identities = InMemoryDeviceIdentityStore();
     final cache = InMemoryEncryptedCacheStore();
@@ -201,7 +210,9 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionLifecycleRecovery ||
       LocalVisualScenario.sessionQuickMenu ||
       LocalVisualScenario.sessionFilesBrowse ||
-      LocalVisualScenario.sessionComposerControls => true,
+      LocalVisualScenario.sessionComposerControls ||
+      LocalVisualScenario.sessionGoalEdit ||
+      LocalVisualScenario.sessionProviderUnavailable => true,
       _ => false,
     };
     if (!needsSession) return null;

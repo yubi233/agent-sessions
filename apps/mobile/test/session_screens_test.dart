@@ -1,6 +1,9 @@
+import 'package:agent_sessions_mobile/app/providers.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/app_harness.dart';
@@ -446,6 +449,106 @@ void main() {
       snapshot.events.any((event) => event.eventType == 'session.goal_edited'),
       isTrue,
     );
+  });
+
+  testWidgets('MOBILE-13：状态条展示 Provider 版本与连接态（fail-closed 原因）', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _registerOwner(tester, 'provider-status@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+
+    // codex fixture 可用且带版本：展示「已连接 · v...」。
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-provider-version-chip')),
+    );
+    expect(find.textContaining('已连接'), findsOneWidget);
+
+    // 探测失败路径：全部 Provider unavailable -> 状态条 fail-closed 展示。
+    harness.relay.providersUnavailable = true;
+    final container = ProviderScope.containerOf(
+      tester.element(find.byKey(const Key('session-detail-screen'))),
+    );
+    await container.read(sessionControllerProvider).refreshCapabilities();
+    await tester.pump(const Duration(milliseconds: 100));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-provider-version-chip')),
+    );
+    expect(find.text('未连接'), findsOneWidget);
+    // 失败原因通过 chip 的 Tooltip 表达（白名单 reason）。
+    final tooltip = tester.widget<Tooltip>(
+      find
+          .ancestor(
+            of: find.byKey(const Key('session-provider-version-chip')),
+            matching: find.byType(Tooltip),
+          )
+          .first,
+    );
+    expect(tooltip.message, contains('探测失败'));
+  });
+
+  testWidgets('MOBILE-14：duplicate 按 capability fail-closed，details 复制白名单字段', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _registerOwner(tester, 'duplicate-entry@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+    final sessionId = (await harness.relay.listSessions()).single.id;
+
+    // duplicate 未声明能力：菜单项禁用并说明原因。
+    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
+    await _waitForVisible(tester, find.byKey(const Key('session-quick-duplicate')));
+    await _waitForVisible(tester, find.text('Provider 未声明 duplicate 能力'));
+    await _tapAway(tester);
+
+    // details 底表复制按钮只处理白名单字段（剪贴板用 mock 通道断言，避免真实平台挂起）。
+    final clipboardValues = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardValues.add((call.arguments as Map)['text'] as String);
+          }
+          return null;
+        });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
+    await _tapVisible(tester, find.byKey(const Key('session-quick-details')));
+    await _waitForVisible(tester, find.byKey(const Key('session-details-sheet')));
+    await _tapVisible(tester, find.byKey(const Key('session-copy-id-button')));
+    await _tapVisible(tester, find.byKey(const Key('session-copy-provider-button')));
+    expect(clipboardValues, [sessionId, 'codex']);
   });
 }
 

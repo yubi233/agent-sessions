@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -389,6 +390,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                           session: session,
                           hasLease: sessions.hasSelectedLease,
                           canWrite: app.canManageDevices,
+                          provider: sessions.selectedProviderCapabilities,
                         ),
                         _SessionRecoveryStrip(
                           controller: recovery,
@@ -572,6 +574,22 @@ class _SessionQuickMenu extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
           ),
         ),
+        // v0.3/P2：duplicate 与 fork/archive 同规则——capability 未声明时 fail-closed。
+        const PopupMenuItem(
+          key: Key('session-quick-duplicate'),
+          value: 'duplicate',
+          enabled: false,
+          child: ListTile(
+            leading: Icon(Icons.copy_all_outlined),
+            title: Text('Duplicate 会话'),
+            subtitle: Text(
+              'Provider 未声明 duplicate 能力',
+              style: TextStyle(fontSize: 11),
+            ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
         const PopupMenuItem(
           key: Key('session-quick-archive'),
           value: 'archive',
@@ -597,8 +615,9 @@ class _SessionQuickMenu extends StatelessWidget {
     if (session == null) return;
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       builder: (sheetContext) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
           child: Column(
             key: const Key('session-details-sheet'),
@@ -617,6 +636,29 @@ class _SessionQuickMenu extends StatelessWidget {
               _DetailRow(
                 label: '事件序号',
                 value: '${session.lastSequence}',
+              ),
+              const SizedBox(height: 12),
+              // v0.3/P2：复制只包含白名单元数据（会话 ID/Provider/工作区），不复制密文或正文。
+              Wrap(
+                spacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    key: const Key('session-copy-id-button'),
+                    onPressed: () => Clipboard.setData(
+                      ClipboardData(text: session.id),
+                    ),
+                    icon: const Icon(Icons.copy_outlined, size: 16),
+                    label: const Text('复制会话 ID'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('session-copy-provider-button'),
+                    onPressed: () => Clipboard.setData(
+                      ClipboardData(text: session.provider),
+                    ),
+                    icon: const Icon(Icons.copy_outlined, size: 16),
+                    label: const Text('复制 Provider'),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
               Text(
@@ -3197,11 +3239,15 @@ class _SessionStatusStrip extends StatelessWidget {
     required this.session,
     required this.hasLease,
     required this.canWrite,
+    required this.provider,
   });
 
   final MobileSession? session;
   final bool hasLease;
   final bool canWrite;
+
+  /// v0.3/P1：Provider 能力快照（version/available/reason 白名单），用于连接态与版本提示。
+  final ProviderCapabilityProfile provider;
 
   @override
   Widget build(BuildContext context) {
@@ -3211,6 +3257,22 @@ class _SessionStatusStrip extends StatelessWidget {
         : hasLease
         ? '已获得控制权'
         : '未获取控制权';
+    // v0.3/P1：Provider 连接态与版本只来自 capability 白名单；探测失败时展示 fail-closed 原因。
+    final providerConnected = provider.available;
+    final providerVersion = provider.version.trim();
+    final providerReason = provider.capabilities
+        .where((entry) => entry.name == 'start')
+        .map((entry) => entry.reason)
+        .whereType<String>()
+        .firstOrNull;
+    final providerLabel = !providerConnected
+        ? '未连接'
+        : providerVersion.isNotEmpty
+        ? '已连接 · v$providerVersion'
+        : '已连接';
+    final providerTooltip = !providerConnected
+        ? (providerReason ?? 'Provider 当前不可用。')
+        : 'Provider 版本仅来自探测结果。';
     return Container(
       key: const Key('session-status-strip'),
       width: double.infinity,
@@ -3235,6 +3297,28 @@ class _SessionStatusStrip extends StatelessWidget {
             child: Text(
               status.label,
               style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ),
+          Tooltip(
+            message: providerTooltip,
+            child: Container(
+              key: const Key('session-provider-version-chip'),
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: providerConnected
+                    ? Theme.of(context).colorScheme.surfaceContainerHighest
+                    : Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                providerLabel,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: providerConnected
+                      ? null
+                      : Theme.of(context).colorScheme.error,
+                ),
+              ),
             ),
           ),
           Text(leaseText, style: Theme.of(context).textTheme.labelMedium),

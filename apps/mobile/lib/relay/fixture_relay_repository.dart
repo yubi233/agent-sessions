@@ -31,6 +31,10 @@ class FixtureRelayRepository implements RelayRepository {
   /// 置为 false 可复现「无 DEK」时附件入口 fail-closed 的行为。
   bool contentKeysReady = true;
 
+  /// v0.3/P1：置为 true 模拟「Provider 探测失败」——能力矩阵 available=false 且带中文原因，
+  /// 用于验证状态条 fail-closed 展示（MOBILE-13）。
+  bool providersUnavailable = false;
+
   /// 供 ATTACH-01 注入一次可恢复失败；下一次相同幂等键重试必须能够继续。
   void failNextAttachmentChunk() => _failNextAttachmentChunk = true;
 
@@ -551,6 +555,27 @@ class FixtureRelayRepository implements RelayRepository {
   @override
   Future<CapabilityMatrix> getCapabilities() async {
     _requireFixtureNetwork();
+    if (providersUnavailable) {
+      // 探测失败：全部 Provider 不可用，能力全部 unsupported 并带中文原因。
+      return CapabilityMatrix(
+        providers: [
+          for (final kind in const ['codex', 'claude', 'opencode', 'openclaw'])
+            ProviderCapabilityProfile(
+              kind: kind,
+              version: '',
+              available: false,
+              capabilities: [
+                for (final name in _fixtureCapabilityNames())
+                  CapabilityEntry(
+                    name: name,
+                    availability: CapabilityAvailability.unsupported,
+                    reason: 'OpenCode 本地服务探测失败，控制能力已安全禁用。',
+                  ),
+              ],
+            ),
+        ],
+      );
+    }
     return CapabilityMatrix(
       providers: [        _fixtureProvider(
           'codex',
@@ -1030,6 +1055,14 @@ class FixtureRelayRepository implements RelayRepository {
     return deviceId == 'readonly' ? null : deviceId;
   }
 }
+
+/// fixture 能力名清单（与 SPI CapabilityNames 对齐）。
+List<String> _fixtureCapabilityNames() => const [
+  'start', 'resume', 'abort', 'usage', 'permission', 'permission_mode',
+  'question', 'plan', 'goal', 'skill_catalog', 'invoke_skill',
+  'model_select', 'effort_select', 'attachments', 'file_read', 'git_read',
+  'delegate_session', 'delegate_cross_provider',
+];
 
 ProviderCapabilityProfile _fixtureProvider(
   String kind, {

@@ -122,6 +122,21 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-17-composer-controls",
     localVisualScenario: "session-composer-controls",
   }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-18",
+    directory: "visual-mobile-18-permission-usage",
+    localVisualScenario: "session-composer-controls",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-19",
+    directory: "visual-mobile-19-goal-edit",
+    localVisualScenario: "session-goal-edit",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-20",
+    directory: "visual-mobile-20-provider-unavailable",
+    localVisualScenario: "session-provider-unavailable",
+  }),
 ]);
 
 function wait(milliseconds) {

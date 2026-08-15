@@ -232,5 +232,34 @@ void main() {
       expect(controls.models.contains(controls.model), isTrue,
           reason: '当前模型必须属于目录，否则 composer 下拉断言失败');
     });
+
+    test('v0.3 P3 goal 编辑场景预置 goal 与 lease 链路', () async {
+      final fixture = await LocalVisualFixture.create('session-goal-edit');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionGoalEdit);
+      final controls = await fixture.relay.getSessionControls(
+        fixture.sessionId!,
+      );
+      expect(controls.goal, isNotNull);
+    });
+
+    test('v0.3 P3 Provider 探测失败场景全部能力 unavailable', () async {
+      final fixture = await LocalVisualFixture.create(
+        'session-provider-unavailable',
+      );
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionProviderUnavailable);
+      final matrix = await fixture.relay.getCapabilities();
+      for (final provider in matrix.providers) {
+        expect(provider.available, isFalse);
+        expect(provider.version, isEmpty);
+        expect(
+          provider.capability('start').availability,
+          CapabilityAvailability.unsupported,
+        );
+      }
+    });
   });
 }
