@@ -1,9 +1,9 @@
 {
   "suite": "adapter-opencode",
-  "suite_version": 2,
+  "suite_version": 3,
   "status": "in_progress",
   "plan_id": "ADAPTER-OPENCODE",
-  "description": "OpenCode 本地 API/WS/SSE fixture、fail-closed capability contract 与授权 CLI live smoke。真实 CLI 通过不等于移动端 Adapter transport 已打通。",
+  "description": "OpenCode 本地 HTTP/SSE fixture、fail-closed capability contract、授权 CLI live smoke 与 Adapter transport live。真实 CLI 通过不等于移动端 Adapter transport 已打通。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "OpenCode Adapter",
   "environment": {
@@ -29,13 +29,13 @@
       "category": "OpenCode",
       "priority": "P0",
       "test_layer": "contract",
-      "precondition": "可选 AGENT_SESSIONS_OPENCODE_URL；当前 transport 尚未实现。",
+      "precondition": "可选 AGENT_SESSIONS_OPENCODE_URL；未探测到健康本地服务时 transport 必须 fail-closed。",
       "steps": [
-        "配置本地 URL 后调用 Detect",
-        "验证全部能力仍为 unsupported，并带出不可用原因",
-        "验证 Start/Resume 与能力声明一致"
+        "未配置 URL、配置不可达 URL、配置健康 fixture 分别调用 Detect",
+        "验证未探测成功时全部能力 unsupported 并带中文原因，且不写 Version",
+        "验证 Start/Resume 与能力声明一致，禁止 URL 单独把能力升为 native"
       ],
-      "expected": "未建立 HTTP/SSE/WS client 前不宣称 native，Start 返回不可用错误且 Resume 返回 unsupported。",
+      "expected": "只有 GET /global/health 返回 healthy+version 后才允许声明 Version；Start/Resume 未实现或探测失败时保持 unsupported。",
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/01.json"
@@ -45,16 +45,18 @@
       "id": "ADPT-OPENCODE-02",
       "title": "session 映射与恢复语义",
       "status": "in_progress",
-      "phase": "P3",
+      "phase": "v0.2/P1",
       "category": "OpenCode",
       "priority": "P0",
       "test_layer": "contract",
-      "precondition": "session fixture。",
+      "precondition": "httptest 模拟 OpenCode 1.17 /session、/prompt_async、/abort、/event SSE。",
       "steps": [
-        "create/resume/send/abort",
-        "注入不可恢复"
+        "Start 调用 POST /session 并保存加密 session handle",
+        "Send 调用 POST /session/{id}/prompt_async，Abort 调用 POST /session/{id}/abort",
+        "将 SSE message.part.updated / tool / usage / session.error 映射为 canonical Event",
+        "Resume 对存在会话、上下文丢失、404 分别返回 resumed、restarted_with_context、unsupported"
       ],
-      "expected": "restarted_with_context 或 unsupported，不伪造 resumed。",
+      "expected": "不伪造 resumed；事件不含 OpenCode 私有正文进入公共协议；取消/断线/Dispose 回收 SSE。",
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/02.json"
@@ -64,7 +66,7 @@
       "id": "ADPT-OPENCODE-03",
       "title": "交互能力探测",
       "status": "in_progress",
-      "phase": "P3",
+      "phase": "v0.2/P1",
       "category": "OpenCode",
       "priority": "P1",
       "test_layer": "contract",
@@ -122,6 +124,68 @@
       "evidence": [
         "docs/zh/实施记录/07-HappyMobile功能对比与OpenCode验证.md",
         "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04-live-smoke.json"
+      ]
+    },
+    {
+      "id": "ADPT-OPENCODE-05",
+      "title": "授权 OpenCode 本地服务 Adapter transport live",
+      "status": "in_progress",
+      "phase": "v0.2/P1",
+      "category": "OpenCode",
+      "priority": "P0",
+      "test_layer": "authorized upstream",
+      "precondition": "用户授权；本机可启动 opencode serve；Basic Auth 仅从当前环境 OPENCODE_SERVER_USERNAME/PASSWORD 读取。",
+      "steps": [
+        "启动隔离临时目录的 opencode serve",
+        "Detect 读取 /global/health 版本",
+        "Start/Send 一条无工具最小请求、Abort、Resume 三态之一",
+        "清理服务与临时目录；报告只保留事件类型、哈希和 usage"
+      ],
+      "expected": "real_model 与 real_upstream 为 true；能力与 Start/Resume 行为一致；不能把 CLI smoke 当作本项通过。",
+      "cleanup": ["停止本轮 serve", "删除临时目录"],
+      "evidence": [
+        "e2e-verify/real/opencode-transport.mjs",
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/05-transport-live.json"
+      ]
+    },
+    {
+      "id": "ADPT-OPENCODE-06",
+      "title": "Daemon 将会话命令转发到 OpenCode Adapter",
+      "status": "in_progress",
+      "phase": "v0.2/P4",
+      "category": "OpenCode",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "fixture 或授权本地 OpenCode；Relay 命令带正数 lease 与幂等键。",
+      "steps": [
+        "提交 session.send / session.abort",
+        "验证 Daemon runner 调用 Adapter Handle 而不是只写 outbox",
+        "验证 wake 结果写入 session_instances 且不把 OpenCode session ID 暴露给客户端"
+      ],
+      "expected": "命令被消费；失败保持 fail-closed；报告不含 session 正文。",
+      "cleanup": ["停止 runner", "清理隔离 SQLite"],
+      "evidence": [
+        "internal/daemon/opencode_runner_test.go"
+      ]
+    },
+    {
+      "id": "E2E-OPENCODE-01",
+      "title": "headed Web 能力矩阵展示 OpenCode 探测结果",
+      "status": "in_progress",
+      "phase": "v0.2/P5",
+      "category": "OpenCode",
+      "priority": "P1",
+      "test_layer": "headed E2E",
+      "precondition": "隔离 Relay；OpenCode Detect 已有 fixture 或真实探测结果。",
+      "steps": [
+        "用 headed Chrome 登录只读 Web",
+        "打开能力矩阵，确认 opencode 的 available/version/start/resume/abort 状态与 Detect 一致",
+        "确认页面仍无写入口"
+      ],
+      "expected": "real_browser=true、headless=false；不把 fixture 写成真实模型通过。",
+      "cleanup": ["关闭浏览器", "停止本轮 Relay"],
+      "evidence": [
+        "e2e-verify/suites/p1-web-readonly.mjs"
       ]
     }
   ]

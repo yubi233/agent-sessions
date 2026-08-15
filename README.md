@@ -16,8 +16,10 @@ P0-P5 的本地运行基线已经提交：Go Relay/Daemon、Vue 只读客户端�
 - [基础验收用例](docs/test/基础验收用例.json)：跨项目关键用户旅程用例。
 - [架构决策记录](docs/adr/)：协议、安全、会话和适配器等不可随意改变的设计决策。
 - [v0.1 迭代计划](docs/zh/迭代计划/迭代计划v0.1.md)：Android 完整会话控制、Delegation 与发布门禁的本轮范围。
+- [v0.2 迭代计划](docs/zh/迭代计划/迭代计划v0.2.md)：Android 会话能力对齐 Happy Mobile，以及 OpenCode 真实 transport。
 - [v0.1 实施记录](docs/zh/实施记录/06-v0.1-Android完整会话控制.md)：分阶段 todo、测试矩阵、命令证据和提交记录。
 - [Happy Mobile 对比与 OpenCode 验证](docs/zh/实施记录/07-HappyMobile功能对比与OpenCode验证.md)：固定上游版本的功能矩阵、真实模型 smoke 与 Provider transport 缺口。
+- [v0.2 实施记录](docs/zh/实施记录/08-v0.2-Android会话能力对齐Happy.md)：会话快捷操作、文件浏览、composer 控制面与 transport 兑现。
 
 ## 目标边界
 

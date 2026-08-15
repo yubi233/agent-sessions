@@ -63,6 +63,7 @@ const (
 	EventUsage              EventType = "usage"
 	EventFileChange         EventType = "file_change"
 	EventDelegationChanged  EventType = "delegation_changed"
+	EventSessionError       EventType = "session_error" // Provider 会话级错误（脱敏文案）
 )
 
 // Event 是一条规范化事件。私有 Provider 字段不进入公共协议。

@@ -210,6 +210,70 @@
         "e2e-verify/reports/2026-08-14T23-17-55-302Z/MOBILE/mobile-p6-macos-recording.json",
         "e2e-verify/screencasts/2026-08-14T23-17-55-302Z/MOBILE/manifest.json"
       ]
+    },
+    {
+      "id": "MOBILE-07",
+      "title": "会话快捷操作与 Provider resume 入口",
+      "status": "in_progress",
+      "phase": "v0.2/P2",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 会话；capability 分别给出 resume native / unsupported。",
+      "steps": [
+        "打开会话详情菜单，验证 details、resume、fork、archive 入口按 capability 显示或禁用",
+        "断开/离线 fixture 下点击 Resume，写命令携带正数 lease_epoch 与幂等键",
+        "unsupported 时展示中文原因，不发送 Provider 命令"
+      ],
+      "expected": "不伪造 fork/archive 成功；resume 结果映射为 resumed / restarted_with_context / unsupported。MacBook 可见结果不写成 Android 真机通过。",
+      "cleanup": ["清除 fixture 菜单状态", "关闭本轮 Flutter macOS 子进程"],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-08",
+      "title": "composer 模型/effort、usage/context、自动补全与选附件",
+      "status": "in_progress",
+      "phase": "v0.2/P3",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "capability 声明 model_select、effort_select、usage、attachments 的三态。",
+      "steps": [
+        "在 composer 切换模型与 effort，无 capability 时禁用并说明原因",
+        "展示脱敏 input/output/context 计数，不渲染 prompt 或回复正文",
+        "输入 @ 或 / 时给出文件/Skill 建议；拒绝越权路径",
+        "有会话 DEK 时可选择图片/文本附件并进入既有密文队列"
+      ],
+      "expected": "未知能力 fail-closed；附件仍遵守 MIME/大小限制；可见 fixture 不含真实文件内容。",
+      "cleanup": ["清空内存草稿与附件 draft"],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-09",
+      "title": "只读工作区文件浏览",
+      "status": "in_progress",
+      "phase": "v0.2/P2",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget + Daemon 路径安全 + Flutter macOS visible fixture",
+      "precondition": "confirmed workspace；文件读取走与 Git 相同的路径校验。",
+      "steps": [
+        "从会话页打开文件浏览，展示树与搜索",
+        "打开文本文件只读预览；二进制/超大文件给安全摘要",
+        "绝对路径、..、仓库外符号链接被拒绝"
+      ],
+      "expected": "无写按钮、无 shell；fixture 路径为固定无敏感名称。",
+      "cleanup": ["关闭文件页", "清理 fixture 树"],
+      "evidence": [
+        "apps/mobile/test/workspace_files_screens_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
     }
   ]
 }

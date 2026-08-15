@@ -13,4 +13,7 @@
 
 每份记录必须链接对应的实施计划、测试 ID、命令、报告目录和回滚点。真实 Provider、真实模型与生产端点没有明确凭据时保持 `blocked`，不得用 fixture 标记为通过。
 
-专题记录：[Happy Mobile 功能对比与 OpenCode 验证](07-HappyMobile功能对比与OpenCode验证.md)补充了本机 OpenCode Go 的授权 live smoke、能力 fail-closed 修复和下一阶段的 Provider transport 优先级。
+专题记录：
+
+- [Happy Mobile 功能对比与 OpenCode 验证](07-HappyMobile功能对比与OpenCode验证.md)：固定上游版本对照、CLI live smoke、transport 优先级。
+- [v0.2 Android 会话能力对齐 Happy](08-v0.2-Android会话能力对齐Happy.md)：会话快捷操作、文件浏览、composer 控制面与 OpenCode 真实 transport。
