@@ -31,16 +31,39 @@ const demoScript = [
 ];
 
 function parseArgs(argv) {
-  const args = { fps: 6, quality: 65 };
+  const args = { fps: 6, quality: 65, suite: "p1" };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--fps") args.fps = parseInt(argv[++i], 10);
     else if (argv[i] === "--quality") args.quality = parseInt(argv[++i], 10);
+    else if (argv[i] === "--suite") args.suite = argv[++i] || "p1";
   }
   return args;
 }
 
+// v0.2/P5：能力矩阵录屏 demo：登录只读 Web 后打开能力矩阵页，
+// 展示 opencode 真实探测结果（version/start/resume/abort native）且页面无写入口。
+const capabilityMatrixDemoScript = [
+  { name: "打开 Web 只读首页", action: async (page, base) => page.goto(base, { waitUntil: "domcontentloaded" }), dwell: 600 },
+  { name: "登录演示账号", action: async (page) => {
+      await page.getByTestId("login-email").fill("demo@example.dev");
+      await page.getByTestId("login-password").fill("demo-pass-123");
+      await page.getByTestId("login-submit").click();
+      await page.getByTestId("auth-ok").waitFor({ state: "visible" });
+    }, dwell: 900 },
+  { name: "打开能力矩阵", action: async (page) => {
+      await page.getByTestId("capabilities-link").click();
+      await page.getByTestId("capability-matrix-view").waitFor({ state: "visible" });
+    }, dwell: 1000 },
+  { name: "展示 opencode 真实探测结果", action: async (page) => {
+      await page.getByTestId("matrix-provider-opencode").waitFor({ state: "visible" });
+      await page.getByTestId("matrix-version-opencode").waitFor({ state: "visible" });
+    }, dwell: 1400 },
+];
+
 async function main() {
-  const { fps, quality } = parseArgs(process.argv.slice(2));
+  const { fps, quality, suite } = parseArgs(process.argv.slice(2));
+  // 先登记回归内容：suite=p5 录能力矩阵，其余保留既有 P1 只读 demo。
+  const activeDemo = suite === "p5" ? capabilityMatrixDemoScript : demoScript;
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const outDir = join(SCREENCAST_DIR, ts);
   const frameDir = join(outDir, "frames");
@@ -80,7 +103,7 @@ async function main() {
     });
 
     // 逐步骤执行用户可见流程，每个状态保留停留时间以便录屏审阅。
-    for (const step of demoScript) {
+    for (const step of activeDemo) {
       await step.action(page, web.base);
       await new Promise((r) => setTimeout(r, step.dwell));
     }
@@ -91,7 +114,8 @@ async function main() {
       timestamp: ts,
       fps,
       quality,
-      steps: demoScript.map((s) => s.name),
+      suite,
+      steps: activeDemo.map((s) => s.name),
       frame_count: frames.length,
       relay_base: relay.base,
       web_base: web.base,
@@ -113,16 +137,18 @@ async function main() {
       planId: "PROTO-CRYPTO",
       name: "p0-web-relay-recording",
       report: baseReport({
-        suite: "p0-web-relay-recording",
+        suite: suite === "p5" ? "p5-opencode-capabilities-recording" : "p0-web-relay-recording",
         status: "passed",
         real_browser: true,
         fixture_data: true,
         local_test: true,
         headless: false,
         browser: "system-chrome",
-        command: "node e2e-verify/record.mjs",
+        command: `node e2e-verify/record.mjs --suite ${suite}`,
         artifacts: [join(outDir, "manifest.json"), mp4],
-        remaining_risk: "录屏复用已通过的 P0 Web 状态回归；不覆盖 P1 账户和会话功能。",
+        remaining_risk: suite === "p5"
+          ? "录屏展示能力矩阵真实探测结果；探测失败路径由 p5-opencode-capabilities headed 回归覆盖。"
+          : "录屏复用已通过的 P0 Web 状态回归；不覆盖 P1 账户和会话功能。",
       }),
     });
   } finally {

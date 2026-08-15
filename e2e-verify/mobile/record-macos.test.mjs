@@ -28,7 +28,7 @@ test("P6 Flutter 录屏固定使用 5fps、gate report 和三个预登记场景"
   );
 });
 
-test("P6 Flutter 录屏拒绝没有 VISUAL-MOBILE-14 证据的 full gate", () => {
+test("P6/v0.2-P5 Flutter 录屏拒绝缺少任一登记场景证据的 full gate", () => {
   assert.throws(
     () =>
       validatePassedGateReport({
@@ -37,14 +37,29 @@ test("P6 Flutter 录屏拒绝没有 VISUAL-MOBILE-14 证据的 full gate", () =>
         visible_desktop_app: true,
         visual_scenario_runs: [],
       }),
-    /VISUAL-MOBILE-14/,
+    /缺少以下场景/,
   );
+  // 只给部分场景证据仍必须被拒绝。
+  assert.throws(
+    () =>
+      validatePassedGateReport({
+        status: "passed",
+        headless: false,
+        visible_desktop_app: true,
+        visual_scenario_runs: [{ id: "VISUAL-MOBILE-14", frame_count: 5 }],
+      }),
+    /VISUAL-MOBILE-15/,
+  );
+  // 全部登记场景都有 5fps 证据才放行。
   assert.equal(
     validatePassedGateReport({
       status: "passed",
       headless: false,
       visible_desktop_app: true,
-      visual_scenario_runs: [{ id: "VISUAL-MOBILE-14", frame_count: 5 }],
+      visual_scenario_runs: FLUTTER_RECORDING_SCENARIO_IDS.map((id) => ({
+        id,
+        frame_count: 5,
+      })),
     }).status,
     "passed",
   );

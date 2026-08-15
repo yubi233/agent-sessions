@@ -34,8 +34,12 @@
         "重启本地应用并检查受控认证状态；同时由 Dart/Relay 回归验证密文 envelope 和事务边界"
       ],
       "expected": "认证、配对、撤销和恢复状态在 UI 中可见；macOS 本地验收不写成 Android Keystore/Drift 原生通过，Android 原生验证留待后续。",
-      "cleanup": ["关闭本轮启动的 Flutter macOS 子进程并清理 fixture 状态"],
-      "evidence": ["e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"]
+      "cleanup": [
+        "关闭本轮启动的 Flutter macOS 子进程并清理 fixture 状态"
+      ],
+      "evidence": [
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
     },
     {
       "id": "MOBILE-02",
@@ -45,7 +49,12 @@
       "category": "Android",
       "priority": "P0",
       "test_layer": "Dart unit + Flutter widget + HTTP DTO contract + Flutter macOS visible fixture gate",
-      "consumes": ["SESS-01", "SESS-02", "CTRL-01", "CTRL-02"],
+      "consumes": [
+        "SESS-01",
+        "SESS-02",
+        "CTRL-01",
+        "CTRL-02"
+      ],
       "precondition": "MacBook 上的可见 Flutter macOS 窗口、已建立 fixture Android owner、deterministic fixture Relay；不依赖 Android AVD、真机、真实 Provider 或真实上游。",
       "steps": [
         "进入会话首页，验证空会话提示与高优先级新会话图标入口",
@@ -77,7 +86,11 @@
       "category": "Android",
       "priority": "P1",
       "test_layer": "Dart unit + Flutter widget + HTTP DTO + Flutter macOS visible fixture",
-      "consumes": ["MODE-01", "MODE-02", "MODE-03"],
+      "consumes": [
+        "MODE-01",
+        "MODE-02",
+        "MODE-03"
+      ],
       "precondition": "capability fixtures 已声明 native/emulated/unsupported；MacBook 可见 Flutter macOS 窗口；不依赖 Android AVD、真实 Provider 或真实上游。",
       "steps": [
         "读取 provider capability matrix，验证未知和 unsupported 入口禁用并说明原因",
@@ -105,7 +118,14 @@
       "category": "Android",
       "priority": "P0",
       "test_layer": "Dart unit + Flutter widget + Daemon Git integration + Flutter macOS visible fixture",
-      "consumes": ["GIT-01", "GIT-02", "GIT-03", "GIT-04", "GIT-05", "GIT-06"],
+      "consumes": [
+        "GIT-01",
+        "GIT-02",
+        "GIT-03",
+        "GIT-04",
+        "GIT-05",
+        "GIT-06"
+      ],
       "precondition": "Git fixture 覆盖 staged/unstaged、rename、binary、submodule、LFS、超大 diff 与 snapshot 漂移；MacBook 的可见 Flutter macOS 窗口使用 deterministic DiffView fixture，不连接真实工作区、Relay 或 Android AVD。",
       "steps": [
         "打开 session 的 Git 入口，读取同一个 snapshot 下的统计、文件树、状态筛选与搜索结果",
@@ -214,7 +234,7 @@
     {
       "id": "MOBILE-07",
       "title": "会话快捷操作与 Provider resume 入口",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.2/P2",
       "category": "Android",
       "priority": "P0",
@@ -226,7 +246,10 @@
         "unsupported 时展示中文原因，不发送 Provider 命令"
       ],
       "expected": "不伪造 fork/archive 成功；resume 结果映射为 resumed / restarted_with_context / unsupported。MacBook 可见结果不写成 Android 真机通过。",
-      "cleanup": ["清除 fixture 菜单状态", "关闭本轮 Flutter macOS 子进程"],
+      "cleanup": [
+        "清除 fixture 菜单状态",
+        "关闭本轮 Flutter macOS 子进程"
+      ],
       "evidence": [
         "apps/mobile/test/session_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
@@ -235,7 +258,7 @@
     {
       "id": "MOBILE-08",
       "title": "composer 模型/effort、usage/context、自动补全与选附件",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.2/P3",
       "category": "Android",
       "priority": "P1",
@@ -248,7 +271,9 @@
         "有会话 DEK 时可选择图片/文本附件并进入既有密文队列"
       ],
       "expected": "未知能力 fail-closed；附件仍遵守 MIME/大小限制；可见 fixture 不含真实文件内容。",
-      "cleanup": ["清空内存草稿与附件 draft"],
+      "cleanup": [
+        "清空内存草稿与附件 draft"
+      ],
       "evidence": [
         "apps/mobile/test/session_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
@@ -257,7 +282,7 @@
     {
       "id": "MOBILE-09",
       "title": "只读工作区文件浏览",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "v0.2/P2",
       "category": "Android",
       "priority": "P1",
@@ -269,7 +294,10 @@
         "绝对路径、..、仓库外符号链接被拒绝"
       ],
       "expected": "无写按钮、无 shell；fixture 路径为固定无敏感名称。",
-      "cleanup": ["关闭文件页", "清理 fixture 树"],
+      "cleanup": [
+        "关闭文件页",
+        "清理 fixture 树"
+      ],
       "evidence": [
         "apps/mobile/test/workspace_files_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"

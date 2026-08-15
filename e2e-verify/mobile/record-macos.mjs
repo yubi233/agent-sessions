@@ -26,10 +26,14 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MOBILE_ROOT = join(ROOT, "apps", "mobile");
 const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
 export const FLUTTER_RECORDING_FPS = 5;
+// v0.2/P5 录屏范围：P6 生命周期恢复 + v0.2 快捷菜单/Resume、文件浏览与 composer 控制面。
 export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-11",
   "VISUAL-MOBILE-12",
   "VISUAL-MOBILE-14",
+  "VISUAL-MOBILE-15",
+  "VISUAL-MOBILE-16",
+  "VISUAL-MOBILE-17",
 ]);
 
 class RecordingError extends Error {
@@ -133,10 +137,14 @@ export function validatePassedGateReport(report) {
   const visualRuns = Array.isArray(report.visual_scenario_runs)
     ? report.visual_scenario_runs
     : [];
-  const lifecycleRun = visualRuns.find((run) => run?.id === "VISUAL-MOBILE-14");
-  if (lifecycleRun?.frame_count !== FLUTTER_RECORDING_FPS) {
+  // 录屏范围内的每个场景都必须具备 5fps 截图证据，缺任一场景都拒绝录屏。
+  const missing = FLUTTER_RECORDING_SCENARIO_IDS.filter((id) => {
+    const run = visualRuns.find((item) => item?.id === id);
+    return run?.frame_count !== FLUTTER_RECORDING_FPS;
+  });
+  if (missing.length > 0) {
     throw new RecordingError(
-      "full gate 未完成 VISUAL-MOBILE-14 的 5fps 截图证据。",
+      `full gate 缺少以下场景的 5fps 截图证据：${missing.join(", ")}`,
       {
         failureClass: "checkpoint_mismatch",
       },
