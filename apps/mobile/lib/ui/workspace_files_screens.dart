@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../app/providers.dart';
 import '../domain/workspace_files_models.dart';
 import '../state/workspace_files_controller.dart';
+import 'appearance_controls.dart';
 
 /// Happy 风格的只读工作区文件浏览：树、搜索、文本预览与安全摘要。
 /// 不提供写按钮、shell 或 Git 写入口；越权路径由 Daemon workspacesafe 语义拒绝。
@@ -51,6 +52,7 @@ class _WorkspaceFilesScreenState extends ConsumerState<WorkspaceFilesScreen> {
           icon: const Icon(Icons.arrow_back),
         ),
         actions: [
+          const AppearanceMenu(),
           IconButton(
             key: const Key('workspace-files-refresh-button'),
             tooltip: '刷新文件列表',
@@ -248,7 +250,9 @@ class _WorkspaceEntryList extends StatelessWidget {
             key: Key('workspace-file-${entry.path}'),
             dense: true,
             leading: Icon(
-              entry.isDirectory ? Icons.folder_outlined : Icons.description_outlined,
+              entry.isDirectory
+                  ? Icons.folder_outlined
+                  : Icons.description_outlined,
               size: 20,
             ),
             title: Text(entry.name),

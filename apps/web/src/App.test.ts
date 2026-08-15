@@ -1,14 +1,17 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import App from "./App.vue";
 import HomeView from "./views/HomeView.vue";
 import CapabilitiesView from "./views/CapabilitiesView.vue";
 import { router } from "./router";
 import { sessionState } from "./session";
+import { clearThemePreferenceForTest } from "./theme";
 
 describe("Relay 状态页", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     sessionState.token = "";
+    clearThemePreferenceForTest();
   });
 
   function mountHome() {
@@ -93,6 +96,21 @@ describe("Relay 状态页", () => {
     expect(wrapper.find('[data-testid="capabilities-link"]').exists()).toBe(
       true,
     );
+  });
+
+  it("WEB-06：主题菜单使用语义选择器并保持可访问标签", async () => {
+    await router.push("/");
+    await router.isReady();
+    const wrapper = mount(App, { global: { plugins: [router] } });
+    await flushPromises();
+
+    const control = wrapper.get('[data-testid="theme-select"]');
+    expect(control.attributes("aria-label")).toBe("外观");
+    await control.setValue("dark");
+    await flushPromises();
+
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.dataset.themePreference).toBe("dark");
   });
 });
 

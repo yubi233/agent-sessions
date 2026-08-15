@@ -18,6 +18,8 @@ import 'state/lifecycle_recovery_controller.dart';
 import 'storage/encrypted_cache.dart';
 import 'storage/runtime_encrypted_cache.dart';
 import 'storage/secure_token_store.dart';
+import 'storage/theme_preference_store.dart';
+import 'ui/app_theme.dart';
 
 const _compileTimeLocalFixtureMode = bool.fromEnvironment('LOCAL_FIXTURE_MODE');
 const _compileTimeLocalVisualScenarioValue = String.fromEnvironment(
@@ -64,6 +66,11 @@ Future<void> main() async {
               (_useLocalFixtureMode
                   ? InMemoryEncryptedCacheStore()
                   : createRuntimeEncryptedCacheStore()),
+        ),
+        themePreferenceStoreProvider.overrideWithValue(
+          _useLocalFixtureMode
+              ? InMemoryThemePreferenceStore()
+              : FlutterThemePreferenceStore(),
         ),
         if (localVisualFixture != null)
           relayRepositoryProvider.overrideWithValue(localVisualFixture.relay),
@@ -116,46 +123,48 @@ class AgentSessionsApp extends ConsumerWidget {
   final int localVisualFrameIntervalMs;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => MaterialApp.router(
-    routerConfig: ref.watch(appRouterProvider),
-    title: 'Agent Sessions',
-    debugShowCheckedModeBanner: false,
-    theme: _mobileTheme(),
-    darkTheme: _mobileTheme(),
-    // 本地和 Android 均固定深色移动控制面，保证会话状态颜色不会随宿主系统切换而歧义化。
-    themeMode: ThemeMode.dark,
-    builder: (context, child) {
-      if (child == null) return const SizedBox.shrink();
-      // 生命周期观察必须在 Android、macOS 和 widget harness 都存在；MacBook 画布仅影响可见尺寸。
-      final runtimeBoundChild = RuntimeRecoveryBinding(child: child);
-      if (!useMacBookPhoneCanvas ||
-          kIsWeb ||
-          defaultTargetPlatform != TargetPlatform.macOS) {
-        return runtimeBoundChild;
-      }
-      final coordinated = _LocalVisualScenarioCoordinator(
-        scenario: localVisualScenario,
-        pairingRequestId: localVisualPairingRequestId,
-        sessionId: localVisualSessionId,
-        localVisualRecovery: localVisualRecovery,
-        child: runtimeBoundChild,
-      );
-      // CoreGraphics 失败时，debug fixture 可从已经显示的 Flutter render tree 取帧；
-      // 此 hook 不进入 release/Android/Web，也不会截取宿主桌面或访问真实会话内容。
-      final captured =
-          localVisualFrameDirectory.isNotEmpty &&
-              localVisualFrameCount > 0 &&
-              localVisualFrameIntervalMs > 0
-          ? _LocalVisualFrameRecorder(
-              directory: localVisualFrameDirectory,
-              frameCount: localVisualFrameCount,
-              frameIntervalMs: localVisualFrameIntervalMs,
-              child: coordinated,
-            )
-          : coordinated;
-      return MacBookPhoneCanvas(child: captured);
-    },
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final appearance = ref.watch(themeControllerProvider);
+    return MaterialApp.router(
+      routerConfig: ref.watch(appRouterProvider),
+      title: 'Agent Sessions',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light(appearance.accent),
+      darkTheme: AppTheme.dark(appearance.accent),
+      themeMode: appearance.materialThemeMode,
+      builder: (context, child) {
+        if (child == null) return const SizedBox.shrink();
+        // 生命周期观察必须在 Android、macOS 和 widget harness 都存在；MacBook 画布仅影响可见尺寸。
+        final runtimeBoundChild = RuntimeRecoveryBinding(child: child);
+        if (!useMacBookPhoneCanvas ||
+            kIsWeb ||
+            defaultTargetPlatform != TargetPlatform.macOS) {
+          return runtimeBoundChild;
+        }
+        final coordinated = _LocalVisualScenarioCoordinator(
+          scenario: localVisualScenario,
+          pairingRequestId: localVisualPairingRequestId,
+          sessionId: localVisualSessionId,
+          localVisualRecovery: localVisualRecovery,
+          child: runtimeBoundChild,
+        );
+        // CoreGraphics 失败时，debug fixture 可从已经显示的 Flutter render tree 取帧；
+        // 此 hook 不进入 release/Android/Web，也不会截取宿主桌面或访问真实会话内容。
+        final captured =
+            localVisualFrameDirectory.isNotEmpty &&
+                localVisualFrameCount > 0 &&
+                localVisualFrameIntervalMs > 0
+            ? _LocalVisualFrameRecorder(
+                directory: localVisualFrameDirectory,
+                frameCount: localVisualFrameCount,
+                frameIntervalMs: localVisualFrameIntervalMs,
+                child: coordinated,
+              )
+            : coordinated;
+        return MacBookPhoneCanvas(child: captured);
+      },
+    );
+  }
 }
 
 /// macOS Screen Recording 只在当前环境出现异常时使用的 debug fallback：窗口仍由 runner 真实启动并观察，
@@ -375,7 +384,7 @@ class MacBookPhoneCanvas extends StatelessWidget {
   Widget build(BuildContext context) {
     final inheritedMedia = MediaQuery.of(context);
     return ColoredBox(
-      color: const Color(0xff111113),
+      color: Theme.of(context).scaffoldBackgroundColor,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final availableWidth = constraints.hasBoundedWidth
@@ -421,163 +430,4 @@ class MacBookPhoneCanvas extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 参考 Happy 移动端的深色中性层级：重点状态和主操作使用高对比，其余信息保持低噪声。
-ThemeData _mobileTheme() {
-  const canvas = Color(0xff111113);
-  const surface = Color(0xff1a1a1e);
-  const surfaceRaised = Color(0xff232329);
-  const border = Color(0xff35353d);
-  const primaryText = Color(0xfff4f4f6);
-  const secondaryText = Color(0xffa4a4af);
-  const primaryAction = Color(0xfff4f4f6);
-  const shape = RoundedRectangleBorder(
-    borderRadius: BorderRadius.all(Radius.circular(8)),
-  );
-  final colorScheme = const ColorScheme.dark(
-    primary: primaryAction,
-    onPrimary: canvas,
-    secondary: Color(0xff86e0bf),
-    onSecondary: canvas,
-    surface: surface,
-    onSurface: primaryText,
-    error: Color(0xffffb4ab),
-    onError: Color(0xff690005),
-  );
-
-  return ThemeData(
-    useMaterial3: true,
-    brightness: Brightness.dark,
-    colorScheme: colorScheme,
-    scaffoldBackgroundColor: canvas,
-    dividerColor: border,
-    textTheme: const TextTheme(
-      headlineSmall: TextStyle(
-        color: primaryText,
-        fontSize: 26,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0,
-      ),
-      titleLarge: TextStyle(
-        color: primaryText,
-        fontSize: 20,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0,
-      ),
-      titleMedium: TextStyle(
-        color: primaryText,
-        fontSize: 17,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0,
-      ),
-      bodyLarge: TextStyle(color: primaryText, fontSize: 17, letterSpacing: 0),
-      bodyMedium: TextStyle(
-        color: secondaryText,
-        fontSize: 14,
-        letterSpacing: 0,
-      ),
-      labelLarge: TextStyle(
-        color: primaryText,
-        fontSize: 15,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0,
-      ),
-      labelMedium: TextStyle(
-        color: secondaryText,
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 0,
-      ),
-    ),
-    appBarTheme: const AppBarTheme(
-      backgroundColor: canvas,
-      foregroundColor: primaryText,
-      elevation: 0,
-      scrolledUnderElevation: 0,
-      surfaceTintColor: Colors.transparent,
-      centerTitle: true,
-      toolbarHeight: 68,
-    ),
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: surface,
-      labelStyle: const TextStyle(color: secondaryText),
-      hintStyle: const TextStyle(color: secondaryText),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      border: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-        borderSide: const BorderSide(color: border),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-        borderSide: const BorderSide(color: border),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-        borderSide: const BorderSide(color: primaryAction, width: 1.5),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-        borderSide: const BorderSide(color: Color(0xffffb4ab)),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: const BorderRadius.all(Radius.circular(8)),
-        borderSide: const BorderSide(color: Color(0xffffb4ab), width: 1.5),
-      ),
-    ),
-    filledButtonTheme: FilledButtonThemeData(
-      style: ButtonStyle(
-        minimumSize: const WidgetStatePropertyAll(Size.fromHeight(52)),
-        backgroundColor: const WidgetStatePropertyAll(primaryAction),
-        foregroundColor: const WidgetStatePropertyAll(canvas),
-        shape: const WidgetStatePropertyAll(shape),
-        textStyle: const WidgetStatePropertyAll(
-          TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0,
-          ),
-        ),
-      ),
-    ),
-    outlinedButtonTheme: OutlinedButtonThemeData(
-      style: ButtonStyle(
-        minimumSize: const WidgetStatePropertyAll(Size.fromHeight(48)),
-        foregroundColor: const WidgetStatePropertyAll(primaryText),
-        side: const WidgetStatePropertyAll(BorderSide(color: border)),
-        shape: const WidgetStatePropertyAll(shape),
-      ),
-    ),
-    textButtonTheme: TextButtonThemeData(
-      style: ButtonStyle(
-        foregroundColor: const WidgetStatePropertyAll(secondaryText),
-        textStyle: const WidgetStatePropertyAll(
-          TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0,
-          ),
-        ),
-      ),
-    ),
-    listTileTheme: const ListTileThemeData(
-      iconColor: secondaryText,
-      textColor: primaryText,
-      contentPadding: EdgeInsets.symmetric(horizontal: 0, vertical: 4),
-      minVerticalPadding: 10,
-      minLeadingWidth: 32,
-      horizontalTitleGap: 12,
-    ),
-    iconButtonTheme: const IconButtonThemeData(
-      style: ButtonStyle(foregroundColor: WidgetStatePropertyAll(primaryText)),
-    ),
-    snackBarTheme: const SnackBarThemeData(
-      backgroundColor: surfaceRaised,
-      contentTextStyle: TextStyle(color: primaryText),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(8)),
-      ),
-    ),
-  );
 }

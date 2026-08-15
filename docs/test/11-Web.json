@@ -140,7 +140,7 @@
     {
       "id": "WEB-06",
       "title": "Web 设计令牌、主题、响应式与键盘无障碍",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "v0.4/P1-P4",
       "category": "Web UI",
       "priority": "P0",
@@ -157,7 +157,8 @@
       ],
       "evidence": [
         "apps/web/src/App.test.ts",
-        "e2e-verify/reports/<ts>/WEB/web-06.json"
+        "e2e-verify/suites/p1-design-system.mjs",
+        "e2e-verify/reports/<ts>/V04-UI/p1-design-system.json"
       ]
     },
     {

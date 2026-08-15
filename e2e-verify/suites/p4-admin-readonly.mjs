@@ -17,6 +17,7 @@ export const p4AdminReadonly = {
       return report({
         suite: "p4-admin-readonly", status: "failed",
         real_browser: !headless, headless, browser: label,
+        fixture_data: true,
         command: `node e2e-verify/run.mjs --suite p4-admin-readonly`,
         artifacts: [], failure_class: "test_harness_defect",
         remaining_risk: "无法预置单租户 fixture owner",
@@ -44,6 +45,7 @@ export const p4AdminReadonly = {
       return report({
         suite: "p4-admin-readonly", status: passed ? "passed" : "failed",
         real_browser: !headless, headless, browser: label,
+        fixture_data: true,
         command: `node e2e-verify/run.mjs --suite p4-admin-readonly`,
         artifacts: [], failure_class: passed ? null : "product_defect",
         remaining_risk: passed ? "" : "Admin 元数据展示或只读约束未满足",

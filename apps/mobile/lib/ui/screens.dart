@@ -6,6 +6,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../app/providers.dart';
 import '../domain/models.dart';
 import '../state/app_controller.dart';
+import 'appearance_controls.dart';
+import 'app_theme.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -40,7 +42,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return _StatusScaffold(
       title: '登录',
       errorMessage: app.errorMessage,
-      child: Center(
+      child: _ScrollableCenter(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: Form(
@@ -144,7 +146,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     return _StatusScaffold(
       title: '创建 owner',
       errorMessage: app.errorMessage,
-      child: Center(
+      child: _ScrollableCenter(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: Form(
@@ -236,7 +238,7 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
     return _StatusScaffold(
       title: '恢复账户',
       errorMessage: app.errorMessage,
-      child: Center(
+      child: _ScrollableCenter(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: Form(
@@ -448,7 +450,7 @@ class RecoveryCodeScreen extends ConsumerWidget {
         },
         icon: const Icon(Icons.arrow_back),
       ),
-      child: Center(
+      child: _ScrollableCenter(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
           child: code == null
@@ -758,7 +760,7 @@ class _StatusScaffold extends StatelessWidget {
     appBar: AppBar(
       title: _MobileHeaderTitle(title: title),
       leading: leading,
-      actions: actions,
+      actions: [const AppearanceMenu(), ...actions],
     ),
     body: SafeArea(
       top: false,
@@ -826,8 +828,8 @@ class _MobileHeaderTitle extends StatelessWidget {
           key: const Key('mobile-header-status'),
           width: 7,
           height: 7,
-          decoration: const BoxDecoration(
-            color: Color(0xff86e0bf),
+          decoration: BoxDecoration(
+            color: context.appColors.success,
             shape: BoxShape.circle,
           ),
         ),
@@ -848,6 +850,19 @@ class _MobileSectionHeading extends StatelessWidget {
       alignment: Alignment.centerLeft,
       child: Text(text, style: Theme.of(context).textTheme.labelMedium),
     ),
+  );
+}
+
+/// 认证与恢复页面在 200% 字号下允许纵向滚动，避免关键按钮被底部裁切。
+class _ScrollableCenter extends StatelessWidget {
+  const _ScrollableCenter({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    padding: const EdgeInsets.symmetric(vertical: 24),
+    child: Center(child: child),
   );
 }
 

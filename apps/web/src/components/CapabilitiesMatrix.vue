@@ -19,6 +19,9 @@ function statusClass(status: CapabilityStatus): string {
 
 <template>
   <table class="matrix" data-testid="capability-matrix">
+    <caption class="sr-only">
+      Provider 能力矩阵
+    </caption>
     <thead>
       <tr>
         <th scope="col">Provider</th>
@@ -40,10 +43,16 @@ function statusClass(status: CapabilityStatus): string {
           >
             {{ provider.kind }}
           </th>
-          <td :data-testid="`matrix-version-${provider.kind}`">
+          <td
+            data-label="Version"
+            :data-testid="`matrix-version-${provider.kind}`"
+          >
             {{ provider.version || "未探测到" }}
           </td>
-          <td :data-testid="`matrix-available-${provider.kind}`">
+          <td
+            data-label="Available"
+            :data-testid="`matrix-available-${provider.kind}`"
+          >
             {{ provider.available ? "可用" : "不可用" }}
           </td>
           <td colspan="2"></td>
@@ -54,53 +63,19 @@ function statusClass(status: CapabilityStatus): string {
           class="matrix-capability"
         >
           <td colspan="3"></td>
-          <td>{{ cap.name }}</td>
+          <td data-label="Capability">{{ cap.name }}</td>
           <td
+            data-label="Status"
             :data-testid="statusTestId(provider.kind, cap.name)"
             :data-status="cap.status"
             :class="statusClass(cap.status)"
             :title="cap.reason || CAPABILITY_LABELS[cap.status]"
           >
-            {{ CAPABILITY_LABELS[cap.status] }}
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>{{ CAPABILITY_LABELS[cap.status] }}</span>
           </td>
         </tr>
       </template>
     </tbody>
   </table>
 </template>
-
-<style scoped>
-.matrix {
-  border-collapse: collapse;
-  font-size: 0.9rem;
-  margin-top: 12px;
-  text-align: left;
-  width: 100%;
-}
-
-.matrix th,
-.matrix td {
-  border: 1px solid #33435f;
-  padding: 6px 10px;
-}
-
-.matrix .matrix-provider th {
-  background: #22304a;
-}
-
-.capability-status {
-  font-weight: 700;
-}
-
-.status-native {
-  color: #7be0a6;
-}
-
-.status-emulated {
-  color: #ffd479;
-}
-
-.status-unsupported {
-  color: #ff8f8f;
-}
-</style>

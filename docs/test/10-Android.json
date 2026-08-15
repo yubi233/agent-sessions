@@ -417,7 +417,7 @@
     {
       "id": "MOBILE-15",
       "title": "主题系统：浅色/深色/跟随系统与 accent 切换",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "v0.4/P1",
       "category": "Android",
       "priority": "P0",
@@ -435,6 +435,7 @@
       "evidence": [
         "apps/mobile/test/theme_controller_test.dart",
         "apps/mobile/test/theme_screens_test.dart",
+        "e2e-verify/mobile/run-macos.mjs",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
@@ -681,7 +682,7 @@
     {
       "id": "MOBILE-26",
       "title": "Apple 风格 UI 全屏打磨回归（稳定 Key 保持）",
-      "status": "planned",
+      "status": "in_progress",
       "phase": "v0.4/P1-P4",
       "category": "Android",
       "priority": "P2",
@@ -697,6 +698,7 @@
         "恢复系统设置，清理截图/录屏中的敏感测试数据和临时 profile"
       ],
       "evidence": [
+        "apps/mobile/test/theme_screens_test.dart",
         "apps/mobile/test/accessibility_screens_test.dart",
         "e2e-verify/mobile/run-macos.mjs",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"

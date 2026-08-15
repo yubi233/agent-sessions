@@ -13,6 +13,8 @@ import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
+import 'appearance_controls.dart';
+import 'app_theme.dart';
 
 /// Happy 风格会话首页：优先呈现会话工作流，同时将 owner 安全入口保留在轻量控制区。
 class SessionHomeScreen extends ConsumerWidget {
@@ -27,6 +29,7 @@ class SessionHomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const _SessionHeaderTitle(title: 'Sessions'),
         actions: [
+          const AppearanceMenu(),
           IconButton(
             key: const Key('session-new-button'),
             tooltip: '新建会话',
@@ -332,6 +335,7 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           icon: const Icon(Icons.arrow_back),
         ),
         actions: [
+          const AppearanceMenu(),
           // Git 入口始终只读，不依赖 Android lease；实际数据读取仍由独立 Daemon Git RPC 边界裁决。
           IconButton(
             key: const Key('session-open-git-button'),
@@ -597,10 +601,7 @@ class _SessionQuickMenu extends StatelessWidget {
           child: ListTile(
             leading: Icon(Icons.archive_outlined),
             title: Text('归档会话'),
-            subtitle: Text(
-              'Provider 未声明归档能力',
-              style: TextStyle(fontSize: 11),
-            ),
+            subtitle: Text('Provider 未声明归档能力', style: TextStyle(fontSize: 11)),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),
@@ -633,10 +634,7 @@ class _SessionQuickMenu extends StatelessWidget {
                 label: '状态',
                 value: _sessionStatusPresentation(session.status).label,
               ),
-              _DetailRow(
-                label: '事件序号',
-                value: '${session.lastSequence}',
-              ),
+              _DetailRow(label: '事件序号', value: '${session.lastSequence}'),
               const SizedBox(height: 12),
               // v0.3/P2：复制只包含白名单元数据（会话 ID/Provider/工作区），不复制密文或正文。
               Wrap(
@@ -644,9 +642,8 @@ class _SessionQuickMenu extends StatelessWidget {
                 children: [
                   OutlinedButton.icon(
                     key: const Key('session-copy-id-button'),
-                    onPressed: () => Clipboard.setData(
-                      ClipboardData(text: session.id),
-                    ),
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: session.id)),
                     icon: const Icon(Icons.copy_outlined, size: 16),
                     label: const Text('复制会话 ID'),
                   ),
@@ -793,25 +790,25 @@ class _DelegationPanel extends StatelessWidget {
           ],
           if (controller.message != null) ...[
             const SizedBox(height: 6),
-             Row(
-               children: [
-                 Expanded(
-                   child: Text(
-                     controller.message!,
-                     key: const Key('delegation-message'),
-                     style: TextStyle(
-                       color: Theme.of(context).colorScheme.error,
-                     ),
-                   ),
-                 ),
-                 IconButton(
-                   tooltip: '关闭提示',
-                   onPressed: controller.clearMessage,
-                   icon: const Icon(Icons.close, size: 18),
-                 ),
-               ],
-             ),
-           ],
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    controller.message!,
+                    key: const Key('delegation-message'),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '关闭提示',
+                  onPressed: controller.clearMessage,
+                  icon: const Icon(Icons.close, size: 18),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -957,10 +954,7 @@ class _DelegationProposalSheetState
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              '新建子会话',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('新建子会话', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 6),
             Text(
               '任务书将加密提交给已授权 Daemon；当前界面只展示状态与摘要指纹。',
@@ -1206,11 +1200,11 @@ class _DelegationGraphLabel extends StatelessWidget {
 
 Color _delegationStatusColor(DelegationStatus status, BuildContext context) =>
     switch (status) {
-      DelegationStatus.completed => const Color(0xff86e0bf),
+      DelegationStatus.completed => context.appColors.success,
       DelegationStatus.failed ||
       DelegationStatus.cancelled ||
       DelegationStatus.rejected => Theme.of(context).colorScheme.error,
-      DelegationStatus.proposed => const Color(0xfff0c674),
+      DelegationStatus.proposed => context.appColors.warning,
       DelegationStatus.approved ||
       DelegationStatus.running => Theme.of(context).colorScheme.primary,
       DelegationStatus.unknown => Theme.of(
@@ -1367,7 +1361,9 @@ class _SessionControlPanel extends StatelessWidget {
                 ),
                 IconButton(
                   key: const Key('session-goal-toggle-button'),
-                  tooltip: goal?.phase == GoalPhase.active ? '暂停 Goal' : '恢复 Goal',
+                  tooltip: goal?.phase == GoalPhase.active
+                      ? '暂停 Goal'
+                      : '恢复 Goal',
                   onPressed:
                       goal != null &&
                           goal.phase != GoalPhase.completed &&
@@ -1424,8 +1420,7 @@ Future<void> _showGoalEditDialog(
 }) async {
   final objective = await showDialog<Object>(
     context: context,
-    builder: (dialogContext) =>
-        _GoalEditDialog(initialTitle: currentTitle),
+    builder: (dialogContext) => _GoalEditDialog(initialTitle: currentTitle),
   );
   if (objective is String && objective.isNotEmpty) {
     sessions.editGoal(
@@ -1503,15 +1498,15 @@ class _CapabilityStateLabel extends StatelessWidget {
     final presentation = switch (entry.availability) {
       CapabilityAvailability.native => (
         Icons.check_circle_outline,
-        const Color(0xff86e0bf),
+        context.appColors.success,
       ),
       CapabilityAvailability.emulated => (
         Icons.auto_awesome_outlined,
-        const Color(0xffffbe5c),
+        context.appColors.warning,
       ),
       CapabilityAvailability.unsupported => (
         Icons.block_outlined,
-        const Color(0xffa4a4af),
+        context.appColors.neutral,
       ),
     };
     return Semantics(
@@ -1599,15 +1594,18 @@ class _SkillConfirmationCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        border: Border.all(color: const Color(0xffffbe5c)),
+        border: Border.all(color: context.appColors.warning),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.only(top: 2),
-            child: Icon(Icons.warning_amber_outlined, color: Color(0xffffbe5c)),
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(
+              Icons.warning_amber_outlined,
+              color: context.appColors.warning,
+            ),
           ),
           const SizedBox(width: 9),
           Expanded(
@@ -2381,7 +2379,8 @@ class _SessionComposerState extends State<_SessionComposer> {
                 children: [
                   IconButton(
                     key: const Key('session-attachment-add-button'),
-                    tooltip: widget.sessions.attachmentPickBlockedReason(
+                    tooltip:
+                        widget.sessions.attachmentPickBlockedReason(
                           canWrite: widget.canWrite,
                         ) ??
                         '选择图片或文本附件',
@@ -2389,9 +2388,10 @@ class _SessionComposerState extends State<_SessionComposer> {
                     // 无 DEK 时保持 fail-closed，不允许把明文文件或显示名放进 Relay。
                     onPressed:
                         widget.sessions.attachmentPickBlockedReason(
-                              canWrite: widget.canWrite,
-                            ) ==
-                            null && !widget.sessions.isBusy
+                                  canWrite: widget.canWrite,
+                                ) ==
+                                null &&
+                            !widget.sessions.isBusy
                         ? () => widget.sessions.pickAttachment(
                             deviceId: widget.deviceId,
                             canWrite: widget.canWrite,
@@ -2535,8 +2535,7 @@ class _ComposerControlStrip extends StatelessWidget {
                     for (final model in controls.models)
                       DropdownMenuItem(value: model, child: Text(model)),
                   ],
-                  onChanged:
-                      modelBlocked == null && controls.models.isNotEmpty
+                  onChanged: modelBlocked == null && controls.models.isNotEmpty
                       ? (value) {
                           if (value != null) {
                             sessions.selectModel(
@@ -2640,9 +2639,7 @@ class _ComposerControlStrip extends StatelessWidget {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      border: Border.all(
-                        color: Theme.of(context).dividerColor,
-                      ),
+                      border: Border.all(color: Theme.of(context).dividerColor),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
@@ -2675,7 +2672,6 @@ class _ComposerControlStrip extends StatelessWidget {
       ),
     );
   }
-
 }
 
 /// v0.2/P3：@ / 自动补全面板。候选为空时展示空态说明（fail-closed）。
@@ -3080,6 +3076,7 @@ class _SessionListItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = _sessionStatusPresentation(session.status);
+    final statusColor = _sessionStatusColor(context, status.tone);
     return Container(
       key: Key('session-row-${session.id}'),
       margin: const EdgeInsets.only(bottom: 6),
@@ -3105,10 +3102,10 @@ class _SessionListItem extends StatelessWidget {
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: status.color.withValues(alpha: 0.16),
+                  color: statusColor.withValues(alpha: 0.16),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(status.icon, color: status.color),
+                child: Icon(status.icon, color: statusColor),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -3147,15 +3144,16 @@ class _SessionListItem extends StatelessWidget {
                           width: 7,
                           height: 7,
                           decoration: BoxDecoration(
-                            color: status.color,
+                            color: statusColor,
                             shape: BoxShape.circle,
                           ),
                         ),
                         const SizedBox(width: 6),
                         Text(
                           status.label,
-                          style: Theme.of(context).textTheme.labelMedium
-                              ?.copyWith(color: status.color),
+                          style: Theme.of(
+                            context,
+                          ).textTheme.labelMedium?.copyWith(color: statusColor),
                         ),
                       ],
                     ),
@@ -3252,6 +3250,7 @@ class _SessionStatusStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = _sessionStatusPresentation(session?.status);
+    final statusColor = _sessionStatusColor(context, status.tone);
     final leaseText = !canWrite
         ? '只读'
         : hasLease
@@ -3288,7 +3287,7 @@ class _SessionStatusStrip extends StatelessWidget {
             width: 7,
             height: 7,
             decoration: BoxDecoration(
-              color: status.color,
+              color: statusColor,
               shape: BoxShape.circle,
             ),
           ),
@@ -3424,25 +3423,25 @@ _RecoveryPresentation _recoveryPresentation(
   SessionRecoveryPhase phase,
   BuildContext context,
 ) => switch (phase) {
-  SessionRecoveryPhase.paused => const _RecoveryPresentation(
+  SessionRecoveryPhase.paused => _RecoveryPresentation(
     label: '后台暂停',
     icon: Icons.pause_circle_outline,
-    color: Color(0xfff0c674),
+    color: context.appColors.warning,
   ),
-  SessionRecoveryPhase.waitingForNetwork => const _RecoveryPresentation(
+  SessionRecoveryPhase.waitingForNetwork => _RecoveryPresentation(
     label: '等待网络',
     icon: Icons.cloud_off_outlined,
-    color: Color(0xfff0c674),
+    color: context.appColors.warning,
   ),
   SessionRecoveryPhase.recovering => _RecoveryPresentation(
     label: '正在恢复',
     icon: Icons.sync,
     color: Theme.of(context).colorScheme.secondary,
   ),
-  SessionRecoveryPhase.recovered => const _RecoveryPresentation(
+  SessionRecoveryPhase.recovered => _RecoveryPresentation(
     label: '恢复完成',
     icon: Icons.cloud_done_outlined,
-    color: Color(0xff86e0bf),
+    color: context.appColors.success,
   ),
   SessionRecoveryPhase.unavailable => _RecoveryPresentation(
     label: '恢复未完成',
@@ -3534,8 +3533,8 @@ class _SessionHeaderTitle extends StatelessWidget {
           key: const Key('mobile-header-status'),
           width: 7,
           height: 7,
-          decoration: const BoxDecoration(
-            color: Color(0xff86e0bf),
+          decoration: BoxDecoration(
+            color: context.appColors.success,
             shape: BoxShape.circle,
           ),
         ),
@@ -3547,51 +3546,62 @@ class _SessionHeaderTitle extends StatelessWidget {
 class _SessionStatusPresentation {
   const _SessionStatusPresentation({
     required this.label,
-    required this.color,
+    required this.tone,
     required this.icon,
   });
 
   final String label;
-  final Color color;
+  final _SessionStatusTone tone;
   final IconData icon;
 }
+
+enum _SessionStatusTone { info, warning, neutral, error, success }
+
+Color _sessionStatusColor(BuildContext context, _SessionStatusTone tone) =>
+    switch (tone) {
+      _SessionStatusTone.info => context.appColors.info,
+      _SessionStatusTone.warning => context.appColors.warning,
+      _SessionStatusTone.neutral => context.appColors.neutral,
+      _SessionStatusTone.error => Theme.of(context).colorScheme.error,
+      _SessionStatusTone.success => context.appColors.success,
+    };
 
 _SessionStatusPresentation _sessionStatusPresentation(
   MobileSessionStatus? status,
 ) => switch (status) {
   MobileSessionStatus.streaming => const _SessionStatusPresentation(
     label: '生成中',
-    color: Color(0xff61a7ff),
+    tone: _SessionStatusTone.info,
     icon: Icons.auto_awesome_outlined,
   ),
   MobileSessionStatus.waitingPermission => const _SessionStatusPresentation(
     label: '等待确认',
-    color: Color(0xffffbe5c),
+    tone: _SessionStatusTone.warning,
     icon: Icons.shield_outlined,
   ),
   MobileSessionStatus.waitingQuestion => const _SessionStatusPresentation(
     label: '等待回答',
-    color: Color(0xffffbe5c),
+    tone: _SessionStatusTone.warning,
     icon: Icons.help_outline,
   ),
   MobileSessionStatus.stopped => const _SessionStatusPresentation(
     label: '已停止',
-    color: Color(0xffa4a4af),
+    tone: _SessionStatusTone.neutral,
     icon: Icons.stop_circle_outlined,
   ),
   MobileSessionStatus.errored => const _SessionStatusPresentation(
     label: '出现错误',
-    color: Color(0xffff8b83),
+    tone: _SessionStatusTone.error,
     icon: Icons.error_outline,
   ),
   MobileSessionStatus.offline => const _SessionStatusPresentation(
     label: '离线',
-    color: Color(0xffa4a4af),
+    tone: _SessionStatusTone.neutral,
     icon: Icons.cloud_off_outlined,
   ),
   _ => const _SessionStatusPresentation(
     label: '在线',
-    color: Color(0xff86e0bf),
+    tone: _SessionStatusTone.success,
     icon: Icons.forum_outlined,
   ),
 };

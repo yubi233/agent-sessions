@@ -20,6 +20,8 @@ import '../state/session_controller.dart';
 import '../state/workspace_files_controller.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
+import '../storage/theme_preference_store.dart';
+import 'theme_controller.dart';
 
 /// 未配置 RELAY_BASE_URL 时使用固定 fixture，保证 Android/Web 本地测试无需真实上游。
 final secureTokenStoreProvider = Provider<SecureTokenStore>(
@@ -31,6 +33,16 @@ final deviceIdentityStoreProvider = Provider<DeviceIdentityStore>(
 final encryptedCacheStoreProvider = Provider<EncryptedCacheStore>(
   (ref) => InMemoryEncryptedCacheStore(),
 );
+final themePreferenceStoreProvider = Provider<ThemePreferenceStore>(
+  (ref) => InMemoryThemePreferenceStore(),
+);
+
+/// 外观状态与认证、Relay 和会话控制分离，主题切换不会触发远端读取或写入。
+final themeControllerProvider = ChangeNotifierProvider<ThemeController>((ref) {
+  final controller = ThemeController(ref.read(themePreferenceStoreProvider));
+  unawaited(controller.initialize());
+  return controller;
+});
 
 final relayRepositoryProvider = Provider<RelayRepository>((ref) {
   const relayBaseUrl = String.fromEnvironment('RELAY_BASE_URL');

@@ -44,10 +44,20 @@ onMounted(loadCapabilities);
 
 <template>
   <main class="page" aria-labelledby="matrix-title">
-    <section class="card card-wide">
+    <header class="page-intro">
       <p class="eyebrow">Agent Sessions</p>
       <h1 id="matrix-title">Provider 能力矩阵</h1>
-      <p :data-testid="`matrix-${loadState}`" class="status" role="status">
+      <p class="intro-copy">
+        能力来自 Relay 探测结果，未声明的能力默认不可用。
+      </p>
+    </header>
+    <section class="page-section capability-section">
+      <p
+        :data-testid="`matrix-${loadState}`"
+        class="status"
+        role="status"
+        aria-live="polite"
+      >
         {{ loadMessage }}
       </p>
 
@@ -67,22 +77,10 @@ onMounted(loadCapabilities);
         v-if="loadState === 'ok'"
         to="/"
         data-testid="matrix-back"
-        class="back-link"
+        class="text-link"
       >
         返回首页
       </RouterLink>
     </section>
   </main>
 </template>
-
-<style scoped>
-.card-wide {
-  max-width: 760px;
-}
-
-.back-link {
-  color: #78a8ff;
-  display: inline-block;
-  margin-top: 16px;
-}
-</style>

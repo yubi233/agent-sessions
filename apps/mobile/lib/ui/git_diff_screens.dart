@@ -7,6 +7,8 @@ import 'package:go_router/go_router.dart';
 import '../app/providers.dart';
 import '../domain/git_diff_models.dart';
 import '../state/git_diff_controller.dart';
+import 'appearance_controls.dart';
+import 'app_theme.dart';
 
 /// Happy 风格的移动 Git DiffView：只读查看，不提供 stage、discard、commit 或 shell 入口。
 class GitDiffScreen extends ConsumerStatefulWidget {
@@ -51,6 +53,7 @@ class _GitDiffScreenState extends ConsumerState<GitDiffScreen> {
           icon: const Icon(Icons.arrow_back),
         ),
         actions: [
+          const AppearanceMenu(),
           IconButton(
             key: const Key('git-diff-refresh-button'),
             tooltip: '刷新 Git 快照',
@@ -221,9 +224,9 @@ class _Metric extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = positive
-        ? const Color(0xff86e0bf)
+        ? context.appColors.success
         : negative
-        ? const Color(0xffffb4ab)
+        ? Theme.of(context).colorScheme.error
         : Theme.of(context).textTheme.bodyMedium?.color;
     return Expanded(
       child: Column(
@@ -321,9 +324,8 @@ class _GitFileRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final selectedColor = selected
-        ? const Color(0xff24292b)
+        ? Theme.of(context).colorScheme.surfaceContainerHighest
         : Colors.transparent;
     return Material(
       color: selectedColor,
@@ -336,7 +338,11 @@ class _GitFileRow extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
           child: Row(
             children: [
-              Icon(_iconFor(file), size: 17, color: _changeColor(file, scheme)),
+              Icon(
+                _iconFor(file),
+                size: 17,
+                color: _changeColor(file, context),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
@@ -395,12 +401,13 @@ IconData _iconFor(GitChangeFile file) => switch (file.limitedKind) {
   },
 };
 
-Color _changeColor(GitChangeFile file, ColorScheme scheme) =>
+Color _changeColor(GitChangeFile file, BuildContext context) =>
     switch (file.type) {
-      GitChangeType.added || GitChangeType.untracked => const Color(0xff86e0bf),
-      GitChangeType.deleted => const Color(0xffffb4ab),
-      GitChangeType.renamed => const Color(0xfff0c674),
-      _ => scheme.onSurfaceVariant,
+      GitChangeType.added ||
+      GitChangeType.untracked => context.appColors.success,
+      GitChangeType.deleted => Theme.of(context).colorScheme.error,
+      GitChangeType.renamed => context.appColors.warning,
+      _ => Theme.of(context).colorScheme.onSurfaceVariant,
     };
 
 String _keyPath(String path) => path.replaceAll(RegExp(r'[^a-zA-Z0-9]+'), '-');
@@ -657,7 +664,7 @@ class _UnifiedDiffLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final background = _lineBackground(line.kind);
+    final background = _lineBackground(context, line.kind);
     return Container(
       width: double.infinity,
       color: background,
@@ -722,7 +729,7 @@ class _SplitCell extends StatelessWidget {
         : line.kind != GitDiffLineKind.deletion;
     final number = left ? line.oldLine : line.newLine;
     return Container(
-      color: show ? _lineBackground(line.kind) : Colors.transparent,
+      color: show ? _lineBackground(context, line.kind) : Colors.transparent,
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -764,11 +771,12 @@ class _LineNumber extends StatelessWidget {
   );
 }
 
-Color _lineBackground(GitDiffLineKind kind) => switch (kind) {
-  GitDiffLineKind.addition => const Color(0xff193c2c),
-  GitDiffLineKind.deletion => const Color(0xff49262a),
-  GitDiffLineKind.context => Colors.transparent,
-};
+Color _lineBackground(BuildContext context, GitDiffLineKind kind) =>
+    switch (kind) {
+      GitDiffLineKind.addition => context.appColors.diffAddition,
+      GitDiffLineKind.deletion => context.appColors.diffDeletion,
+      GitDiffLineKind.context => Colors.transparent,
+    };
 
 String _linePrefix(GitDiffLineKind kind) => switch (kind) {
   GitDiffLineKind.addition => '+ ',
