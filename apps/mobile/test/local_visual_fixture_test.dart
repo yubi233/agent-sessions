@@ -188,5 +188,34 @@ void main() {
         cursorBefore,
       );
     });
+
+    test('v0.2 P2 快捷菜单场景预置持有 lease 的 codex 会话（resume 可用）', () async {
+      final fixture = await LocalVisualFixture.create('session-quick-menu');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionQuickMenu);
+      final sessions = SessionController(relay: fixture.relay);
+      await sessions.initialize();
+      await sessions.selectSession(fixture.sessionId!);
+      // 预置 lease：真实 controller 链路下 resume 入口应可用。
+      expect(sessions.hasSelectedLease, isFalse);
+      final capabilities = await fixture.relay.getCapabilities();
+      expect(
+        capabilities.provider('codex').capability('resume').availability,
+        CapabilityAvailability.native,
+      );
+    });
+
+    test('v0.2 P2 文件浏览场景预置会话与确定性文件树（无真实路径）', () async {
+      final fixture = await LocalVisualFixture.create('session-files-browse');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionFilesBrowse);
+      expect(fixture.sessionId, isNotNull);
+      final snapshot = await fixture.relay.getSessionSnapshot(
+        fixture.sessionId!,
+      );
+      expect(snapshot.events, isNotEmpty);
+    });
   });
 }

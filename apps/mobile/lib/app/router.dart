@@ -6,6 +6,7 @@ import '../ui/git_diff_screens.dart';
 import '../ui/pairing_scanner.dart';
 import '../ui/screens.dart';
 import '../ui/session_screens.dart';
+import '../ui/workspace_files_screens.dart';
 import 'providers.dart';
 
 /// 路由守卫只依据本机认证状态决定入口；设备和写权限仍由 Relay 最终裁决。
@@ -64,6 +65,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/sessions/:id/git',
         builder: (context, state) =>
             GitDiffScreen(sessionId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/sessions/:id/files',
+        builder: (context, state) => WorkspaceFilesScreen(
+          sessionId: state.pathParameters['id']!,
+        ),
       ),
       GoRoute(
         path: '/sessions/:id',

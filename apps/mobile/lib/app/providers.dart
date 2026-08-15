@@ -9,11 +9,13 @@ import '../relay/fixture_relay_repository.dart';
 import '../relay/http_relay_repository.dart';
 import '../relay/relay_repository.dart';
 import '../git/git_diff_repository.dart';
+import '../files/workspace_files_repository.dart';
 import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
+import '../state/workspace_files_controller.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
 
@@ -51,6 +53,17 @@ final gitDiffRepositoryProvider = Provider<GitDiffRepository>((ref) {
     return FixtureGitDiffRepository();
   }
   return const UnavailableDaemonGitDiffRepository();
+});
+
+/// 只读文件浏览与 Git 一样独立于会话传输：fixture 验收 UI；真实 Relay 未部署加密 Daemon RPC 时不可用。
+final workspaceFilesRepositoryProvider = Provider<WorkspaceFilesRepository>((
+  ref,
+) {
+  const relayBaseUrl = String.fromEnvironment('RELAY_BASE_URL');
+  if (relayBaseUrl.isEmpty) {
+    return FixtureWorkspaceFilesRepository();
+  }
+  return const UnavailableWorkspaceFilesRepository();
 });
 
 final appControllerProvider = ChangeNotifierProvider<AppController>((ref) {
@@ -101,3 +114,11 @@ final gitDiffControllerProvider = ChangeNotifierProvider<GitDiffController>((
   unawaited(controller.initialize());
   return controller;
 });
+
+/// 文件浏览控制器只读取只读 repository；与 DiffView 一样独立于会话状态机。
+final workspaceFilesControllerProvider =
+    ChangeNotifierProvider<WorkspaceFilesController>((ref) {
+      return WorkspaceFilesController(
+        repository: ref.read(workspaceFilesRepositoryProvider),
+      );
+    });

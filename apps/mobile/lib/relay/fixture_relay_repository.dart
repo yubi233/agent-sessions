@@ -359,6 +359,14 @@ class FixtureRelayRepository implements RelayRepository {
         _appendSendConversation(state, input.ciphertext);
       case SessionCommandKind.abort:
         _appendAbort(state);
+      case SessionCommandKind.resume:
+        // v0.2/P2：resume 只更新会话状态并追加一条系统通知；不伪造 Provider 唤醒结果，
+        // 真实结果只能来自 Daemon 的 Adapter 三态映射。
+        state.resumeCount += 1;
+        _appendSystemNotice(
+          state,
+          '已提交恢复请求（第 ${state.resumeCount} 次）',
+        );
       case SessionCommandKind.permissionApprove:
       case SessionCommandKind.permissionReject:
         _appendPermissionDecision(state, input);
@@ -401,6 +409,45 @@ class FixtureRelayRepository implements RelayRepository {
       summaryEnvelopeSha256: _fixtureDelegationHash(sequence),
     );
     _delegations[delegation.id] = _FixtureDelegationState(delegation);
+    _appendDelegationEvent(parent, delegation);
+    return delegation;
+  }
+
+  @override
+  Future<SessionDelegation> proposeDelegation(
+    String parentSessionId,
+    DelegationProposalInput input,
+  ) async {
+    input.validate();
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final parent = _sessionState(parentSessionId);
+    _ensureFixtureLease(parent, input.parentLeaseEpoch);
+    // 幂等：相同请求键只返回首次创建的节点。
+    final existing = _delegations.values
+        .where(
+          (state) =>
+              state.delegation.parentSessionId == parentSessionId &&
+              state.proposalKeys.contains(input.idempotencyKey),
+        )
+        .toList();
+    if (existing.isNotEmpty) return existing.first.delegation;
+
+    _delegationSequence += 1;
+    final sequence = _delegationSequence.toString().padLeft(3, '0');
+    final delegation = SessionDelegation(
+      id: 'delegation-fixture-$sequence',
+      parentSessionId: parent.session.id,
+      targetProvider: input.targetProvider,
+      status: DelegationStatus.proposed,
+      // fixture 只使用固定加密 envelope，绝不把 UI 输入的摘要正文当作 ciphertext 落盘。
+      summaryEnvelope: _fixtureDelegationEnvelope(sequence),
+      summaryEnvelopeSha256: _fixtureDelegationHash(sequence),
+    );
+    _delegations[delegation.id] = _FixtureDelegationState(
+      delegation,
+      proposalKeys: {input.idempotencyKey},
+    );
     _appendDelegationEvent(parent, delegation);
     return delegation;
   }
@@ -497,6 +544,9 @@ class FixtureRelayRepository implements RelayRepository {
         _fixtureProvider(
           'codex',
           native: const {
+            'start',
+            'resume',
+            'abort',
             'plan',
             'goal',
             'skill_catalog',
@@ -722,6 +772,16 @@ class FixtureRelayRepository implements RelayRepository {
     state.updateSession(status: MobileSessionStatus.stopped, now: now);
   }
 
+  /// v0.2/P2：resume 在 fixture 中只追加系统通知，不伪造 Provider 唤醒结果。
+  void _appendSystemNotice(_FixtureSessionState state, String text) {
+    final now = _clock();
+    state.append(
+      eventType: 'session.resumed',
+      payload: {'kind': 'system_notice', 'label': '恢复', 'text': text},
+      now: now,
+    );
+  }
+
   // parent 只收到状态和密文摘要；child 的 session timeline 不会被复制到此处。
   void _appendDelegationEvent(
     _FixtureSessionState parent,
@@ -882,6 +942,10 @@ ProviderCapabilityProfile _fixtureProvider(
   Set<String> emulated = const {},
 }) {
   const names = [
+    'start',
+    'resume',
+    'abort',
+    'usage',
     'plan',
     'goal',
     'skill_catalog',
@@ -965,10 +1029,13 @@ String _fixtureDelegationHash(String seed) {
 
 /// fixture 的派发状态只保存 parent 可见元数据和加密摘要，不保存 child timeline 或任务书。
 class _FixtureDelegationState {
-  _FixtureDelegationState(this.delegation);
+  _FixtureDelegationState(this.delegation, {Set<String>? proposalKeys})
+    : proposalKeys = proposalKeys ?? {};
 
   SessionDelegation delegation;
   final Map<String, SessionDelegation> decisions = {};
+  // 记录由 Android 派发入口创建的幂等键，重试返回同一节点。
+  final Set<String> proposalKeys;
 }
 
 /// fixture 内部状态只保存无敏感演示 payload；真实 Relay 仍只保存 event envelope。
@@ -978,6 +1045,7 @@ class _FixtureSessionState {
   MobileSession session;
   SessionControlState controls;
   int leaseEpoch = 0;
+  int resumeCount = 0;
   final List<RelaySessionEvent> events = [];
   final Map<String, SessionCommandReceipt> commandReceipts = {};
 

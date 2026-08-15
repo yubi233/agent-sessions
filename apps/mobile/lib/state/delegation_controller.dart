@@ -182,6 +182,109 @@ class DelegationController extends ChangeNotifier {
     }
   }
 
+  /// 派发入口门控：父 Provider 必须声明 delegate_session；跨 Provider 还要求 delegate_cross_provider。
+  String? proposeBlockedReason({
+    required String targetProvider,
+    required CapabilityMatrix capabilities,
+    required bool canWrite,
+    required String? deviceId,
+    required SessionLease? parentLease,
+    required String? parentProvider,
+  }) {
+    if (!canWrite || deviceId == null || deviceId.trim().isEmpty) {
+      return '当前登录是只读状态';
+    }
+    if (parentLease == null ||
+        parentLease.sessionId != _parentSessionId ||
+        parentLease.epoch <= 0) {
+      return '请先获取父会话控制权';
+    }
+    final parentCapability = capabilities
+        .provider(parentProvider ?? 'unknown')
+        .capability('delegate_session');
+    if (!parentCapability.isSupported) {
+      return parentCapability.reason ?? '当前 Provider 不支持子会话派发。';
+    }
+    if (targetProvider != (parentProvider ?? 'unknown')) {
+      final cross = capabilities
+          .provider(targetProvider)
+          .capability('delegate_cross_provider');
+      if (!cross.isSupported) {
+        return cross.reason ?? '目标 Provider 不支持跨工具派发。';
+      }
+    }
+    return null;
+  }
+
+  /// v0.2/P2：Android 发起子会话派发。任务书/摘要由调用方提供密文 envelope，
+  /// 控制器只提交目标 Provider 与父会话 fencing，成功后把 proposed 节点加入当前图。
+  Future<SessionDelegation?> propose({
+    required String parentSessionId,
+    required String targetWorkspaceId,
+    required String targetProvider,
+    required String? parentProvider,
+    required Map<String, dynamic> taskEnvelope,
+    required Map<String, dynamic> summaryEnvelope,
+    required CapabilityMatrix capabilities,
+    required bool canWrite,
+    required String? deviceId,
+    required SessionLease? parentLease,
+  }) async {
+    final blocked = proposeBlockedReason(
+      targetProvider: targetProvider,
+      capabilities: capabilities,
+      canWrite: canWrite,
+      deviceId: deviceId,
+      parentLease: parentLease,
+      parentProvider: parentProvider,
+    );
+    if (blocked != null) {
+      _message = blocked;
+      notifyListeners();
+      return null;
+    }
+    final actionKey = 'propose:$parentSessionId:$targetProvider';
+    if (_pendingActionKeys.contains(actionKey)) return null;
+    final lease = parentLease!;
+    _pendingActionKeys.add(actionKey);
+    _message = null;
+    notifyListeners();
+    try {
+      final result = await relay.proposeDelegation(
+        parentSessionId,
+        DelegationProposalInput(
+          targetWorkspaceId: targetWorkspaceId,
+          targetProvider: targetProvider,
+          taskEnvelope: taskEnvelope,
+          summaryEnvelope: summaryEnvelope,
+          idempotencyKey: _idempotencyKeyFor('$actionKey:${lease.epoch}'),
+          parentLeaseEpoch: lease.epoch,
+          deviceId: deviceId!.trim(),
+        ),
+      );
+      if (result.parentSessionId != parentSessionId) {
+        throw const RelayFailure(
+          RelayFailureKind.protocol,
+          'Relay 返回了另一父会话的派发节点。',
+        );
+      }
+      _delegations = [
+        result,
+        ..._delegations.where((item) => item.id != result.id),
+      ];
+      return result;
+    } on RelayFailure catch (failure) {
+      _message = failure.message;
+      return null;
+    } catch (_) {
+      _message = '子会话派发未完成，请稍后重试。';
+      return null;
+    } finally {
+      _pendingActionKeys.remove(actionKey);
+      notifyListeners();
+    }
+  }
+
   void clearMessage() {
     if (_message == null) return;
     _message = null;

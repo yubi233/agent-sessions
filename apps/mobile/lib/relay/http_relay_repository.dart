@@ -281,6 +281,35 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<SessionDelegation> proposeDelegation(
+    String parentSessionId,
+    DelegationProposalInput input,
+  ) async {
+    input.validate();
+    if (parentSessionId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '父会话标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/sessions/$parentSessionId/delegations',
+      // device_id 不进 wire body；Relay 必须从 bearer 绑定的 Android 写设备推导。
+      data: {
+        'target_workspace_id': input.targetWorkspaceId,
+        'target_provider': input.targetProvider,
+        'task_envelope': input.taskEnvelope,
+        'summary_envelope': input.summaryEnvelope,
+        'idempotency_key': input.idempotencyKey,
+        'lease_epoch': input.parentLeaseEpoch,
+      },
+    );
+    final delegation = SessionDelegation.fromRelayJson(_asMap(response.data));
+    if (delegation.parentSessionId != parentSessionId) {
+      throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了另一父会话的派发节点。');
+    }
+    return delegation;
+  }
+
+  @override
   Future<SessionDelegation> decideDelegation(
     String delegationId,
     DelegationDecisionInput input,

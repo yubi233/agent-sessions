@@ -291,9 +291,12 @@ class _LocalVisualScenarioCoordinatorState
         LocalVisualScenario.sessionAttachments ||
         LocalVisualScenario.sessionDelegationProposed ||
         LocalVisualScenario.sessionDelegationApproved ||
-        LocalVisualScenario.sessionDelegationRestricted => true,
+        LocalVisualScenario.sessionDelegationRestricted ||
+        // 快捷菜单场景持有 lease，让 Resume 入口以可用状态呈现。
+        LocalVisualScenario.sessionQuickMenu => true,
         LocalVisualScenario.sessionGitMain ||
-        LocalVisualScenario.sessionGitRestricted => false,
+        LocalVisualScenario.sessionGitRestricted ||
+        LocalVisualScenario.sessionFilesBrowse => false,
         _ => false,
       };
       if (needsLease && app.canManageDevices) {
@@ -344,6 +347,9 @@ class _LocalVisualScenarioCoordinatorState
       } else if (widget.scenario == LocalVisualScenario.sessionGitMain ||
           widget.scenario == LocalVisualScenario.sessionGitRestricted) {
         router.go('/sessions/$sessionId/git');
+      } else if (widget.scenario == LocalVisualScenario.sessionFilesBrowse) {
+        // 文件浏览是独立只读页面，与 Git 一样不需要 lease。
+        router.go('/sessions/$sessionId/files');
       } else {
         router.go('/sessions/$sessionId');
       }

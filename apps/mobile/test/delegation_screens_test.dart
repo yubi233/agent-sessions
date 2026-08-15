@@ -1,3 +1,4 @@
+import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -123,6 +124,88 @@ void main() {
     );
     expect(await harness.relay.listSessions(), hasLength(1));
   });
+
+  testWidgets('MOBILE-07：父会话内可见派发入口创建 proposed 子会话节点', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'delegation-propose-owner@fixture.test');
+    await _createAndAcquireParent(tester);
+
+    // 打开“新建子会话”底表并提交：只提交密文 envelope 与目标 Provider。
+    await _tapVisible(tester, find.byKey(const Key('delegation-propose-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('delegation-proposal-sheet')),
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('delegation-task-summary-input')),
+      '生成一份只读的迁移方案',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('delegation-propose-submit')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('delegation-node-delegation-fixture-001')),
+    );
+    // 底表退场后再断言摘要不可见，避免动画中的输入框残留被误判。
+    for (var frame = 0; frame < 10; frame += 1) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    // 任务摘要正文绝不能变成 Relay 可见内容：列表只展示 opaque 摘要指纹。
+    expect(find.textContaining('迁移方案'), findsNothing);
+    final nodes = await harness.relay.listSessionDelegations(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(nodes.single.status, DelegationStatus.proposed);
+    expect(nodes.single.summaryEnvelope.containsKey('plaintext'), isFalse);
+    expect(nodes.single.summaryEnvelope.containsKey('text'), isFalse);
+  });
+
+  testWidgets('MOBILE-07：无 parent lease 时派发入口给出中文原因且不创建节点', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'delegation-propose-blocked@fixture.test');
+
+    // 创建父会话但不获取 lease。
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')),
+    );
+
+    await _tapVisible(tester, find.byKey(const Key('delegation-propose-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('delegation-proposal-sheet')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('delegation-propose-blocked')),
+    );
+    expect(find.textContaining('控制权'), findsWidgets);
+    final parentId = (await harness.relay.listSessions()).single.id;
+    expect(
+      await harness.relay.listSessionDelegations(parentId),
+      isEmpty,
+      reason: '无 lease 时必须 fail-closed，不得创建 proposed 节点',
+    );
+  });
 }
 
 Future<void> _createAndAcquireParent(WidgetTester tester) async {
@@ -168,7 +251,10 @@ Future<void> _waitForVisible(
 Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
   await _waitForVisible(tester, finder);
   await tester.ensureVisible(finder);
-  await tester.pump();
+  // ensureVisible 可能触发滚动/布局；多 pump 几帧让 RenderBox 完成布局，避免陈旧偏移被吞。
+  for (var frame = 0; frame < 3; frame += 1) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
   await tester.tap(finder);
 }
 

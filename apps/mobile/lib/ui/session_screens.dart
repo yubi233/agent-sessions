@@ -338,6 +338,11 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             onPressed: () => context.push('/sessions/${widget.sessionId}/git'),
             icon: const Icon(Icons.difference_outlined),
           ),
+          _SessionQuickMenu(
+            sessions: sessions,
+            canWrite: app.canManageDevices,
+            deviceId: app.currentDevice?.id,
+          ),
           IconButton(
             key: const Key('session-acquire-lease-button'),
             tooltip: sessions.hasSelectedLease ? '已获得控制权' : '获取会话控制权',
@@ -465,6 +470,185 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
   }
 }
 
+/// Happy 风格会话快捷菜单：details / resume / fork / archive。
+/// 入口按 capability 显示或禁用（fail-closed）；resume 只提交带 lease 与幂等键的命令。
+class _SessionQuickMenu extends StatelessWidget {
+  const _SessionQuickMenu({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+  });
+
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+
+  @override
+  Widget build(BuildContext context) {
+    final resumeBlocked = sessions.resumeBlockedReason(canWrite: canWrite);
+    return PopupMenuButton<String>(
+      key: const Key('session-quick-menu-button'),
+      tooltip: '会话操作',
+      onSelected: (value) {
+        switch (value) {
+          case 'details':
+            _showDetailsSheet(context, sessions);
+          case 'resume':
+            sessions.resumeSelectedSession(
+              deviceId: deviceId,
+              canWrite: canWrite,
+            );
+          case 'files':
+            // 文件浏览是只读页面，与 Git 入口一样不依赖 lease。
+            context.push('/sessions/${sessions.selectedSessionId}/files');
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          key: Key('session-quick-details'),
+          value: 'details',
+          child: ListTile(
+            leading: Icon(Icons.info_outline),
+            title: Text('会话详情'),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          key: const Key('session-quick-resume'),
+          value: 'resume',
+          enabled: resumeBlocked == null && !sessions.isBusy,
+          child: ListTile(
+            leading: Icon(
+              Icons.play_circle_outline,
+              color: resumeBlocked == null
+                  ? null
+                  : Theme.of(context).disabledColor,
+            ),
+            title: Text('恢复会话'),
+            subtitle: resumeBlocked == null
+                ? null
+                : Text(
+                    resumeBlocked,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          key: const Key('session-quick-files'),
+          value: 'files',
+          child: const ListTile(
+            leading: Icon(Icons.folder_open_outlined),
+            title: Text('浏览工作区文件'),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          key: Key('session-quick-fork'),
+          value: 'fork',
+          enabled: false,
+          child: ListTile(
+            leading: Icon(Icons.copy_outlined),
+            title: Text('Fork 会话'),
+            subtitle: Text(
+              'Provider 未声明 fork 能力',
+              style: TextStyle(fontSize: 11),
+            ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          key: Key('session-quick-archive'),
+          value: 'archive',
+          enabled: false,
+          child: ListTile(
+            leading: Icon(Icons.archive_outlined),
+            title: Text('归档会话'),
+            subtitle: Text(
+              'Provider 未声明归档能力',
+              style: TextStyle(fontSize: 11),
+            ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 详情底表只展示 Relay 白名单元数据，不读取、不展示密文正文。
+  void _showDetailsSheet(BuildContext context, SessionController sessions) {
+    final session = sessions.selectedSession;
+    if (session == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            key: const Key('session-details-sheet'),
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('会话详情', style: Theme.of(sheetContext).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              _DetailRow(label: '会话 ID', value: session.id),
+              _DetailRow(label: 'Provider', value: session.provider),
+              _DetailRow(label: '工作区', value: session.workspaceLabel),
+              _DetailRow(
+                label: '状态',
+                value: _sessionStatusPresentation(session.status).label,
+              ),
+              _DetailRow(
+                label: '事件序号',
+                value: '${session.lastSequence}',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '展示内容仅来自 Relay 白名单元数据；消息正文与密文不会显示。',
+                style: Theme.of(sheetContext).textTheme.labelSmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 详情底表的单行字段。
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 72,
+          child: Text(label, style: Theme.of(context).textTheme.labelMedium),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: Theme.of(context).textTheme.bodyMedium,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 /// Happy 风格父子图保持为一条紧凑控制带：父页只展示安全摘要与状态，child 正文永不嵌入这里。
 class _DelegationPanel extends StatelessWidget {
   const _DelegationPanel({
@@ -491,7 +675,15 @@ class _DelegationPanel extends StatelessWidget {
         child: LinearProgressIndicator(key: Key('delegation-loading')),
       );
     }
-    if (controller.delegations.isEmpty && controller.message == null) {
+    // v0.2/P2：父 Provider 声明 delegate_session 时即使无节点也保留“新建子会话”入口；
+    // 未声明且无节点时整条控制带隐藏（fail-closed）。
+    final parentCapability = sessions.selectedProviderCapabilities.capability(
+      'delegate_session',
+    );
+    final hasProposeEntry = parentCapability.isSupported;
+    if (controller.delegations.isEmpty &&
+        controller.message == null &&
+        !hasProposeEntry) {
       return const SizedBox.shrink();
     }
     return Container(
@@ -521,6 +713,14 @@ class _DelegationPanel extends StatelessWidget {
                 '${controller.delegations.length} 个节点',
                 style: Theme.of(context).textTheme.labelMedium,
               ),
+              // v0.2/P2：可见派发入口。按下后由底表按 capability 选目标 Provider。
+              IconButton(
+                key: const Key('delegation-propose-button'),
+                tooltip: '新建子会话',
+                iconSize: 19,
+                onPressed: () => _showDelegationProposalSheet(context),
+                icon: const Icon(Icons.add_circle_outline),
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -540,30 +740,240 @@ class _DelegationPanel extends StatelessWidget {
           ],
           if (controller.message != null) ...[
             const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    controller.message!,
-                    key: const Key('delegation-message'),
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: '关闭提示',
-                  onPressed: controller.clearMessage,
-                  icon: const Icon(Icons.close, size: 18),
-                ),
-              ],
-            ),
-          ],
+             Row(
+               children: [
+                 Expanded(
+                   child: Text(
+                     controller.message!,
+                     key: const Key('delegation-message'),
+                     style: TextStyle(
+                       color: Theme.of(context).colorScheme.error,
+                     ),
+                   ),
+                 ),
+                 IconButton(
+                   tooltip: '关闭提示',
+                   onPressed: controller.clearMessage,
+                   icon: const Icon(Icons.close, size: 18),
+                 ),
+               ],
+             ),
+           ],
         ],
       ),
     );
   }
+
+  /// 打开“新建子会话”底表：目标 Provider 只从 capability matrix 中筛选可派发项，
+  /// 提交走 parent lease + 幂等键；任务摘要正文绝不会变成密文或进入 Relay。
+  void _showDelegationProposalSheet(BuildContext context) {
+    final parentSession = sessions.selectedSession;
+    if (parentSession == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => _DelegationProposalSheet(
+        parentSession: parentSession,
+        parentProvider: parentSession.provider,
+        capabilities: sessions.capabilityMatrix,
+        controller: controller,
+        canWrite: canWrite,
+        deviceId: deviceId,
+        parentLease: sessions.selectedLease,
+        onProposed: (delegation) {
+          if (delegation.hasChildSession == true) {
+            unawaited(sessions.refreshSessions());
+          }
+        },
+      ),
+    );
+  }
 }
+
+/// 新建子会话派发底表：只提交密文 envelope 与目标 Provider。
+class _DelegationProposalSheet extends ConsumerStatefulWidget {
+  const _DelegationProposalSheet({
+    required this.parentSession,
+    required this.parentProvider,
+    required this.capabilities,
+    required this.controller,
+    required this.canWrite,
+    required this.deviceId,
+    required this.parentLease,
+    required this.onProposed,
+  });
+
+  final MobileSession parentSession;
+  final String parentProvider;
+  final CapabilityMatrix capabilities;
+  final DelegationController controller;
+  final bool canWrite;
+  final String? deviceId;
+  final SessionLease? parentLease;
+  final void Function(SessionDelegation) onProposed;
+
+  @override
+  ConsumerState<_DelegationProposalSheet> createState() =>
+      _DelegationProposalSheetState();
+}
+
+class _DelegationProposalSheetState
+    extends ConsumerState<_DelegationProposalSheet> {
+  final _summaryController = TextEditingController();
+  String? _targetProvider;
+
+  @override
+  void initState() {
+    super.initState();
+    _targetProvider = _selectableProviders().firstOrNull;
+  }
+
+  @override
+  void dispose() {
+    _summaryController.dispose();
+    super.dispose();
+  }
+
+  /// 可派发目标：父 Provider 必须声明 delegate_session；跨 Provider 还要求目标声明 delegate_cross_provider。
+  List<String> _selectableProviders() {
+    final parentCapability = widget.capabilities
+        .provider(widget.parentProvider)
+        .capability('delegate_session');
+    if (!parentCapability.isSupported) return const [];
+    final cross = widget.capabilities
+        .provider(widget.parentProvider)
+        .capability('delegate_cross_provider');
+    final supportsCross = cross.isSupported;
+    return widget.capabilities.providers
+        .map((profile) => profile.kind)
+        .where((kind) => kind == widget.parentProvider || supportsCross)
+        .toList(growable: false);
+  }
+
+  String? get _blockedReason => widget.controller.proposeBlockedReason(
+    targetProvider: _targetProvider ?? widget.parentProvider,
+    capabilities: widget.capabilities,
+    canWrite: widget.canWrite,
+    deviceId: widget.deviceId,
+    parentLease: widget.parentLease,
+    parentProvider: widget.parentProvider,
+  );
+
+  Future<void> _submit() async {
+    if (_targetProvider == null || _summaryController.text.trim().isEmpty) {
+      return;
+    }
+    // 任务书/摘要都是 opaque 密文 envelope；摘要正文只用于本地 UX，绝不进入 ciphertext。
+    final taskEnvelope = _opaqueDelegationEnvelope(
+      'task:${widget.parentSession.id}:$_targetProvider',
+    );
+    final summaryEnvelope = _opaqueDelegationEnvelope(
+      'summary:${widget.parentSession.id}:$_targetProvider',
+    );
+    final delegation = await widget.controller.propose(
+      parentSessionId: widget.parentSession.id,
+      targetWorkspaceId: widget.parentSession.workspaceId,
+      targetProvider: _targetProvider!,
+      parentProvider: widget.parentProvider,
+      taskEnvelope: taskEnvelope,
+      summaryEnvelope: summaryEnvelope,
+      capabilities: widget.capabilities,
+      canWrite: widget.canWrite,
+      deviceId: widget.deviceId,
+      parentLease: widget.parentLease,
+    );
+    if (delegation == null || !mounted) return;
+    widget.onProposed(delegation);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final providers = _selectableProviders();
+    final blocked = _blockedReason;
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          16,
+          20,
+          24 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          key: const Key('delegation-proposal-sheet'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '新建子会话',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '任务书将加密提交给已授权 Daemon；当前界面只展示状态与摘要指纹。',
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+            const SizedBox(height: 12),
+            if (blocked != null) ...[
+              Text(
+                blocked,
+                key: const Key('delegation-propose-blocked'),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+              const SizedBox(height: 8),
+            ],
+            DropdownButtonFormField<String>(
+              key: const Key('delegation-target-provider'),
+              initialValue: _targetProvider,
+              decoration: const InputDecoration(
+                labelText: '目标 Provider',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final kind in providers)
+                  DropdownMenuItem(value: kind, child: Text(kind)),
+              ],
+              onChanged: providers.isEmpty
+                  ? null
+                  : (value) => setState(() => _targetProvider = value),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('delegation-task-summary-input'),
+              controller: _summaryController,
+              maxLines: 3,
+              // 输入变化时刷新提交按钮可用态。
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: '任务摘要（仅用于本地确认）',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 14),
+            FilledButton(
+              key: const Key('delegation-propose-submit'),
+              onPressed:
+                  blocked == null && _summaryController.text.trim().isNotEmpty
+                  ? () => unawaited(_submit())
+                  : null,
+              child: const Text('创建子会话'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 构造 opaque 派发 envelope：只含固定结构的占位密文，不含摘要正文。
+Map<String, dynamic> _opaqueDelegationEnvelope(String seed) => {
+  'alg': 'v1-aes256gcm-hkdfsha256',
+  'key_id': 'client-opaque-dek',
+  'nonce': 'client-nonce',
+  'ciphertext': 'client-opaque-$seed',
+  'aad_hash': 'client-aad-hash',
+  'payload_version': 1,
+};
 
 class _DelegationNode extends StatelessWidget {
   const _DelegationNode({
@@ -1575,9 +1985,49 @@ class _SessionComposer extends StatefulWidget {
 
 class _SessionComposerState extends State<_SessionComposer> {
   final _controller = TextEditingController();
+  String? _draftSessionId;
+
+  @override
+  void initState() {
+    super.initState();
+    // 切换会话后恢复该会话的跨页内存草稿（不落明文盘）。
+    _restoreDraft();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SessionComposer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessions.selectedSessionId !=
+        widget.sessions.selectedSessionId) {
+      _restoreDraft();
+    }
+  }
+
+  void _restoreDraft() {
+    final sessionId = widget.sessions.selectedSessionId;
+    if (sessionId == null) {
+      _draftSessionId = null;
+      return;
+    }
+    if (_draftSessionId == sessionId) return;
+    _draftSessionId = sessionId;
+    final draft = widget.sessions.composerDraftFor(sessionId);
+    if (draft != null && draft != _controller.text) {
+      _controller.text = draft;
+      // 光标移到末尾，让用户直接继续输入。
+      _controller.selection = TextSelection.fromPosition(
+        TextPosition(offset: _controller.text.length),
+      );
+    }
+  }
 
   @override
   void dispose() {
+    // 页面销毁前把当前输入保存为内存草稿，保证跨页返回后内容不丢失。
+    final sessionId = widget.sessions.selectedSessionId;
+    if (sessionId != null) {
+      widget.sessions.saveComposerDraft(sessionId, _controller.text);
+    }
     _controller.dispose();
     super.dispose();
   }
@@ -1658,7 +2108,14 @@ class _SessionComposerState extends State<_SessionComposer> {
                       minLines: 1,
                       maxLines: 5,
                       textInputAction: TextInputAction.newline,
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (value) {
+                        setState(() {});
+                        // 每次输入都写内存草稿；发送成功后由 controller 清除。
+                        final sessionId = widget.sessions.selectedSessionId;
+                        if (sessionId != null) {
+                          widget.sessions.saveComposerDraft(sessionId, value);
+                        }
+                      },
                       decoration: const InputDecoration(
                         hintText: '给会话发送消息',
                         border: InputBorder.none,
@@ -1694,9 +2151,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     if (!mounted || widget.sessions.errorMessage != null) return;
     _controller.clear();
     setState(() {});
-  }
-
-  Future<void> _stop() => widget.sessions.stopStreaming(
+  }  Future<void> _stop() => widget.sessions.stopStreaming(
     deviceId: widget.deviceId,
     canWrite: widget.canWrite,
   );

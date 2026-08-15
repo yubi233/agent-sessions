@@ -113,6 +113,42 @@ enum DelegationDecision {
   final String wireValue;
 }
 
+/// Android 发起子会话派发的最小输入：任务书与摘要都是客户端密文 envelope，
+/// 名称与正文永不进入本层 wire 契约；Relay 只保存密文、目标 Provider 与父会话 fencing。
+class DelegationProposalInput {
+  const DelegationProposalInput({
+    required this.targetWorkspaceId,
+    required this.targetProvider,
+    required this.taskEnvelope,
+    required this.summaryEnvelope,
+    required this.idempotencyKey,
+    required this.parentLeaseEpoch,
+    required this.deviceId,
+  });
+
+  final String targetWorkspaceId;
+  final String targetProvider;
+  final Map<String, dynamic> taskEnvelope;
+  final Map<String, dynamic> summaryEnvelope;
+  final String idempotencyKey;
+  final int parentLeaseEpoch;
+  final String deviceId;
+
+  void validate() {
+    if (targetWorkspaceId.trim().isEmpty ||
+        targetProvider.trim().isEmpty ||
+        idempotencyKey.trim().isEmpty ||
+        deviceId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '派发请求缺少目标或身份信息。');
+    }
+    if (parentLeaseEpoch <= 0) {
+      throw const RelayFailure(RelayFailureKind.validation, '父会话控制权已失效，请重新获取。');
+    }
+    _validateOpaqueSummaryEnvelope(taskEnvelope);
+    _validateOpaqueSummaryEnvelope(summaryEnvelope);
+  }
+}
+
 /// 所有确认、拒绝和取消都沿用 parent 当前 lease；child 进入后必须通过它自己的 Session lease 写入。
 class DelegationDecisionInput {
   const DelegationDecisionInput({

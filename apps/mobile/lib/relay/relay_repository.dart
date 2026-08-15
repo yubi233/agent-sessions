@@ -59,6 +59,13 @@ abstract interface class RelayRepository {
     String parentSessionId,
   );
 
+  /// v0.2/P2：Android 在父会话内发起子会话派发，只提交密文任务书/摘要与目标 Provider。
+  /// 返回 proposed 节点；批准前不创建 child Session、不启动 Provider。
+  Future<SessionDelegation> proposeDelegation(
+    String parentSessionId,
+    DelegationProposalInput input,
+  );
+
   /// Android 用 parent lease 批准、拒绝或取消 Delegation。child 的后续控制必须重新获取 child lease。
   Future<SessionDelegation> decideDelegation(
     String delegationId,

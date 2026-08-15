@@ -27,6 +27,9 @@ enum LocalVisualScenario {
   sessionDelegationApproved,
   sessionDelegationRestricted,
   sessionLifecycleRecovery,
+  // v0.2/P2 视觉场景：快捷菜单/Resume 与只读文件浏览。
+  sessionQuickMenu,
+  sessionFilesBrowse,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(
@@ -49,6 +52,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'session-delegation-restricted' =>
     LocalVisualScenario.sessionDelegationRestricted,
   'session-lifecycle-recovery' => LocalVisualScenario.sessionLifecycleRecovery,
+  'session-quick-menu' => LocalVisualScenario.sessionQuickMenu,
+  'session-files-browse' => LocalVisualScenario.sessionFilesBrowse,
   _ => LocalVisualScenario.none,
 };
 
@@ -190,7 +195,9 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionDelegationProposed ||
       LocalVisualScenario.sessionDelegationApproved ||
       LocalVisualScenario.sessionDelegationRestricted ||
-      LocalVisualScenario.sessionLifecycleRecovery => true,
+      LocalVisualScenario.sessionLifecycleRecovery ||
+      LocalVisualScenario.sessionQuickMenu ||
+      LocalVisualScenario.sessionFilesBrowse => true,
       _ => false,
     };
     if (!needsSession) return null;

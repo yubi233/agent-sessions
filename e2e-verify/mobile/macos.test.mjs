@@ -118,6 +118,8 @@ test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前
       "VISUAL-MOBILE-12",
       "VISUAL-MOBILE-13",
       "VISUAL-MOBILE-14",
+      "VISUAL-MOBILE-15",
+      "VISUAL-MOBILE-16",
     ],
   );
 });

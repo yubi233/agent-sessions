@@ -43,6 +43,8 @@ class SessionController extends ChangeNotifier {
   final Map<String, String> _idempotencyKeys = {};
   // cursor 只在内存保存为会话序号；生命周期恢复不接触消息正文、密文或待发送内容。
   final Map<String, int> _sessionCursors = {};
+  // v0.2/P2：composer 草稿只保存在内存（不落明文盘）；按会话隔离，切换页面/会话后仍可恢复。
+  final Map<String, String> _composerDrafts = {};
   String? _errorMessage;
   int _idempotencyCounter = 0;
   int _selectionGeneration = 0;
@@ -263,6 +265,8 @@ class SessionController extends ChangeNotifier {
         'fixture_payload': {'message': trimmed},
       },
     );
+    // 发送成功后清除草稿，避免页面重建时把已发送内容重新填回输入框。
+    clearComposerDraft(sessionId);
   }
 
   Future<void> stopStreaming({
@@ -281,6 +285,36 @@ class SessionController extends ChangeNotifier {
       kind: SessionCommandKind.abort,
       deviceId: deviceId!,
     );
+  }
+
+  /// v0.2/P2：断线/离线后显式恢复 Provider 会话。
+  /// 写命令仍携带正数 lease_epoch 与幂等键；唤醒结果由 Daemon 映射为
+  /// resumed / restarted_with_context / unsupported，客户端不在此处伪造结果。
+  Future<void> resumeSelectedSession({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('resume', canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'resume:$sessionId:${selectedSession?.lastSequence ?? 0}',
+      kind: SessionCommandKind.resume,
+      deviceId: deviceId!,
+    );
+  }
+
+  /// resume 入口的阻断原因；离线状态也允许发起（与发送不同），只要求 capability 与 lease。
+  String? resumeBlockedReason({required bool canWrite}) {
+    final declared = selectedProviderCapabilities.capability('resume');
+    if (!declared.isSupported) {
+      return declared.reason ?? '恢复会话当前不可用。';
+    }
+    return controlBlockedReason('resume', canWrite: canWrite);
   }
 
   Future<void> resolvePermission({
@@ -632,6 +666,26 @@ class SessionController extends ChangeNotifier {
     if (_errorMessage == null) return;
     _errorMessage = null;
     notifyListeners();
+  }
+
+  /// 读取指定会话的草稿（仅内存；真实写入仍只在用户显式发送时发生）。
+  String? composerDraftFor(String sessionId) => _composerDrafts[sessionId];
+
+  /// 保存 composer 草稿。空文本与超过 8 KiB 的超长内容直接清除，防止内存被垃圾内容占用。
+  void saveComposerDraft(String sessionId, String text) {
+    final normalized = text.length > 8192 ? text.substring(0, 8192) : text;
+    if (normalized.isEmpty) {
+      _composerDrafts.remove(sessionId);
+    } else {
+      _composerDrafts[sessionId] = normalized;
+    }
+  }
+
+  /// 发送成功后清除该会话草稿；草稿绝不落明文盘。
+  void clearComposerDraft(String sessionId) {
+    if (_composerDrafts.remove(sessionId) != null) {
+      notifyListeners();
+    }
   }
 
   Future<void> _loadSelectedSession(String sessionId) async {
