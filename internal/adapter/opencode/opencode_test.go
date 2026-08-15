@@ -361,10 +361,10 @@ func TestDetectUpgradesCapabilitiesFromHealth(t *testing.T) {
 			t.Fatalf("%s status = %q, want native", name, byName[name].Status)
 		}
 	}
-	// 未实现能力保持 unsupported 且带中文原因。
-	for _, name := range []string{"permission", "question", "plan", "goal", "skill_catalog",
-		"invoke_skill", "model_select", "effort_select", "attachments", "file_read", "git_read",
-		"delegate_session", "delegate_cross_provider"} {
+	// 未实现能力保持 unsupported 且带中文原因（ADPT-OPENCODE-07：permission_mode 未实现必须 fail-closed）。
+	for _, name := range []string{"permission", "permission_mode", "question", "plan", "goal",
+		"skill_catalog", "invoke_skill", "model_select", "effort_select", "attachments",
+		"file_read", "git_read", "delegate_session", "delegate_cross_provider"} {
 		if byName[name].Status != adapter.CapabilityUnsupported {
 			t.Fatalf("%s status = %q, want unsupported", name, byName[name].Status)
 		}
@@ -643,12 +643,53 @@ func TestCapabilityMatrixExplicitStates(t *testing.T) {
 		}
 	}
 	// 明确声明：permission/plan/goal/skill/attachments 均未实现。
-	for _, name := range []string{"permission", "plan", "goal", "skill_catalog", "invoke_skill",
-		"model_select", "effort_select", "attachments"} {
+	for _, name := range []string{"permission", "permission_mode", "plan", "goal", "skill_catalog",
+		"invoke_skill", "model_select", "effort_select", "attachments"} {
 		if byName[name] != adapter.CapabilityUnsupported {
 			t.Fatalf("%s = %q, want unsupported", name, byName[name])
 		}
 	}
+}
+
+// ADPT-OPENCODE-07：Detect 能力清单必须与 SPI CapabilityNames 完全一致（含 permission_mode）。
+func TestCapabilityListMatchesSPI(t *testing.T) {
+	f := newFixtureServer(t, true)
+	c := newFixtureClient(t, f)
+	a := NewWithClient(c)
+	caps, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if len(caps.Capabilities) != len(adapter.CapabilityNames) {
+		t.Fatalf("capabilities len = %d, want %d（与 SPI 一致）", len(caps.Capabilities), len(adapter.CapabilityNames))
+	}
+	seen := map[string]bool{}
+	for _, cap := range caps.Capabilities {
+		if seen[cap.Name] {
+			t.Fatalf("duplicate capability %q", cap.Name)
+		}
+		seen[cap.Name] = true
+	}
+	for _, name := range adapter.CapabilityNames {
+		if !seen[name] {
+			t.Fatalf("missing capability %q", name)
+		}
+	}
+	// permission_mode 尚未实现：必须 unsupported 且带中文原因。
+	entry := byCapabilityName(caps, "permission_mode")
+	if entry.Status != adapter.CapabilityUnsupported || entry.Reason == "" {
+		t.Fatalf("permission_mode = %q/%q, want unsupported with reason", entry.Status, entry.Reason)
+	}
+}
+
+// byCapabilityName 按名称取能力项。
+func byCapabilityName(caps adapter.Capabilities, name string) adapter.Capability {
+	for _, cap := range caps.Capabilities {
+		if cap.Name == name {
+			return cap
+		}
+	}
+	return adapter.Capability{}
 }
 
 // SSE 行解析器验证：多 data 行事件与 heartbeat 被正确忽略/解析。

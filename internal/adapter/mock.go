@@ -34,7 +34,8 @@ func (m *MockAdapter) Detect(ctx context.Context) (Capabilities, error) {
 	_ = ctx
 	byName := map[string]string{
 		"start": CapabilityNative, "resume": CapabilityNative, "abort": CapabilityNative,
-		"permission": CapabilityNative, "question": CapabilityNative, "plan": CapabilityNative,
+		"permission": CapabilityNative, "permission_mode": CapabilityNative,
+		"question": CapabilityNative, "plan": CapabilityNative,
 		"goal": CapabilityNative, "skill_catalog": CapabilityNative, "invoke_skill": CapabilityNative,
 		"model_select": CapabilityNative, "effort_select": CapabilityNative,
 		"attachments": CapabilityNative, "file_read": CapabilityNative, "git_read": CapabilityNative,

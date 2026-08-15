@@ -249,26 +249,49 @@ class SessionSkillDescriptor {
 }
 
 /// 脱敏 usage 摘要：只展示计数，不渲染 prompt 或回复正文。
+/// v0.3/P1：扩展 cache 计数与 context 窗口，用于上下文占用警告。
 class SessionUsageSummary {
   const SessionUsageSummary({
     required this.inputTokens,
     required this.outputTokens,
     required this.contextTokens,
+    this.cacheReadTokens = 0,
+    this.cacheCreationTokens = 0,
+    this.contextWindowTokens = 0,
   });
 
   final int inputTokens;
   final int outputTokens;
   final int contextTokens;
+  final int cacheReadTokens;
+  final int cacheCreationTokens;
+  final int contextWindowTokens;
+
+  /// 上下文占用比例；无窗口信息时返回 null（不触发警告）。
+  double? get contextRatio {
+    if (contextWindowTokens <= 0) return null;
+    if (contextTokens <= 0) return 0;
+    return contextTokens / contextWindowTokens;
+  }
 
   /// 展示文案只含计数。
-  String get label =>
-      '↑${_compact(inputTokens)} · ↓${_compact(outputTokens)} · 上下文 ${_compact(contextTokens)}';
+  String get label {
+    final base =
+        '↑${_compact(inputTokens)} · ↓${_compact(outputTokens)} · 上下文 ${_compact(contextTokens)}';
+    if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
+      return '$base · 缓存 ${_compact(cacheReadTokens + cacheCreationTokens)}';
+    }
+    return base;
+  }
 
   static String _compact(int value) {
     if (value < 1000) return '$value';
     if (value < 1000 * 1000) return '${(value / 1000).toStringAsFixed(1)}k';
     return '${(value / (1000 * 1000)).toStringAsFixed(1)}m';
   }
+
+  /// UI 展示用（与 _compact 相同逻辑，供 warning 文案复用）。
+  static String compactForDisplay(int value) => _compact(value);
 }
 
 /// 会话控制面由已解密事件或 fixture 填充；空状态明确说明尚未获得该类事件。
@@ -283,6 +306,9 @@ class SessionControlState {
     this.models = const [],
     this.efforts = const [],
     this.usage,
+    // v0.3/P0：permission mode 选择器（Happy sessionSetAgentModes 对齐）。
+    this.permissionMode,
+    this.availablePermissionModes = const [],
   });
 
   const SessionControlState.empty()
@@ -293,7 +319,9 @@ class SessionControlState {
       skills = const [],
       models = const [],
       efforts = const [],
-      usage = null;
+      usage = null,
+      permissionMode = null,
+      availablePermissionModes = const [];
 
   final String? model;
   final String? effort;
@@ -303,6 +331,8 @@ class SessionControlState {
   final List<String> models;
   final List<String> efforts;
   final SessionUsageSummary? usage;
+  final String? permissionMode;
+  final List<String> availablePermissionModes;
 
   SessionControlState copyWith({
     String? model,
@@ -313,6 +343,8 @@ class SessionControlState {
     List<String>? models,
     List<String>? efforts,
     SessionUsageSummary? usage,
+    String? permissionMode,
+    List<String>? availablePermissionModes,
   }) => SessionControlState(
     model: model ?? this.model,
     effort: effort ?? this.effort,
@@ -322,6 +354,9 @@ class SessionControlState {
     models: models ?? this.models,
     efforts: efforts ?? this.efforts,
     usage: usage ?? this.usage,
+    permissionMode: permissionMode ?? this.permissionMode,
+    availablePermissionModes:
+        availablePermissionModes ?? this.availablePermissionModes,
   );
 }
 

@@ -773,6 +773,71 @@ class SessionController extends ChangeNotifier {
     );
   }
 
+  /// v0.3/P0：composer 内切换 permission mode（Happy sessionSetAgentModes 对齐）。
+  Future<void> selectPermissionMode({
+    required String mode,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('permission_mode', canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    final controls = _controls;
+    if (!controls.availablePermissionModes.contains(mode)) {
+      _setError('目标 permission mode 不在当前目录中。');
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'permission-mode:$sessionId:$mode',
+      kind: SessionCommandKind.permissionModeSelect,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'permission_mode': mode},
+      },
+      onAccepted: () => _controls = controls.copyWith(permissionMode: mode),
+    );
+  }
+
+  /// v0.3/P0：编辑当前目标文本（goal capability 门控；不泄漏密文正文）。
+  Future<void> editGoal({
+    required String objective,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final goal = _controls.goal;
+    final blocked = controlBlockedReason('goal', canWrite: canWrite);
+    if (sessionId == null || goal == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    final trimmed = objective.trim();
+    if (trimmed.isEmpty) {
+      _setError('目标文本不能为空。');
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'goal-edit:$sessionId:${trimmed.hashCode}',
+      kind: SessionCommandKind.goalEdit,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'objective': trimmed},
+      },
+      onAccepted: () => _controls = controls.copyWith(
+        goal: SessionGoalSummary(
+          title: trimmed,
+          progressLabel: goal.progressLabel,
+          phase: goal.phase,
+        ),
+      ),
+    );
+  }
+
   String? composerBlockedReason({required bool canWrite}) {
     if (!canWrite) return '当前登录是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';

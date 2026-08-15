@@ -1304,24 +1304,45 @@ class _SessionControlPanel extends StatelessWidget {
             subtitle: goal == null
                 ? '等待已解密 Goal 事件'
                 : '${goal.phase.label} · ${goal.progressLabel}',
-            action: IconButton(
-              key: const Key('session-goal-toggle-button'),
-              tooltip: goal?.phase == GoalPhase.active ? '暂停 Goal' : '恢复 Goal',
-              onPressed:
-                  goal != null &&
-                      goal.phase != GoalPhase.completed &&
-                      goalBlocked == null &&
-                      !sessions.isBusy
-                  ? () => sessions.toggleGoal(
-                      deviceId: deviceId,
-                      canWrite: canWrite,
-                    )
-                  : null,
-              icon: Icon(
-                goal?.phase == GoalPhase.active
-                    ? Icons.pause_circle_outline
-                    : Icons.play_circle_outline,
-              ),
+            action: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // v0.3/P0：goal 文本编辑（Happy AgentGoalBar 对齐）。
+                IconButton(
+                  key: const Key('session-goal-edit-button'),
+                  tooltip: '编辑目标',
+                  onPressed:
+                      goal != null && goalBlocked == null && !sessions.isBusy
+                      ? () => _showGoalEditDialog(
+                          context,
+                          sessions,
+                          goal.title,
+                          deviceId: deviceId,
+                          canWrite: canWrite,
+                        )
+                      : null,
+                  icon: const Icon(Icons.edit_outlined, size: 20),
+                ),
+                IconButton(
+                  key: const Key('session-goal-toggle-button'),
+                  tooltip: goal?.phase == GoalPhase.active ? '暂停 Goal' : '恢复 Goal',
+                  onPressed:
+                      goal != null &&
+                          goal.phase != GoalPhase.completed &&
+                          goalBlocked == null &&
+                          !sessions.isBusy
+                      ? () => sessions.toggleGoal(
+                          deviceId: deviceId,
+                          canWrite: canWrite,
+                        )
+                      : null,
+                  icon: Icon(
+                    goal?.phase == GoalPhase.active
+                        ? Icons.pause_circle_outline
+                        : Icons.play_circle_outline,
+                  ),
+                ),
+              ],
             ),
           ),
           if (skill.isNotEmpty) ...[
@@ -1349,6 +1370,85 @@ class _SessionControlPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+/// v0.3/P0：goal 编辑对话框入口。只提交目标文本，不读取、不展示密文正文。
+Future<void> _showGoalEditDialog(
+  BuildContext context,
+  SessionController sessions,
+  String currentTitle, {
+  required String? deviceId,
+  required bool canWrite,
+}) async {
+  final objective = await showDialog<Object>(
+    context: context,
+    builder: (dialogContext) =>
+        _GoalEditDialog(initialTitle: currentTitle),
+  );
+  if (objective is String && objective.isNotEmpty) {
+    sessions.editGoal(
+      objective: objective,
+      deviceId: deviceId,
+      canWrite: canWrite,
+    );
+  }
+}
+
+/// goal 编辑对话框：controller 生命周期由 State 管理，避免对话框退场动画期被 dispose。
+class _GoalEditDialog extends StatefulWidget {
+  const _GoalEditDialog({required this.initialTitle});
+
+  final String initialTitle;
+
+  @override
+  State<_GoalEditDialog> createState() => _GoalEditDialogState();
+}
+
+class _GoalEditDialogState extends State<_GoalEditDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialTitle);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const Key('goal-edit-dialog'),
+    title: const Text('编辑目标'),
+    content: TextField(
+      key: const Key('goal-edit-input'),
+      controller: _controller,
+      maxLines: 3,
+      decoration: const InputDecoration(
+        labelText: '目标文本',
+        border: OutlineInputBorder(),
+      ),
+    ),
+    actions: [
+      TextButton(
+        key: const Key('goal-edit-cancel'),
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        key: const Key('goal-edit-submit'),
+        onPressed: () {
+          final value = _controller.text.trim();
+          if (value.isEmpty) return;
+          Navigator.of(context).pop(value);
+        },
+        child: const Text('保存'),
+      ),
+    ],
+  );
 }
 
 class _CapabilityStateLabel extends StatelessWidget {
@@ -2342,117 +2442,198 @@ class _ComposerControlStrip extends StatelessWidget {
       'effort_select',
       canWrite: canWrite,
     );
+    final permissionModeBlocked = sessions.controlBlockedReason(
+      'permission_mode',
+      canWrite: canWrite,
+    );
     final usageSupported = sessions.selectedProviderCapabilities
         .capability('usage')
         .isSupported;
-    // 三种能力都不可用时整条控制条隐藏，避免无意义的禁用控件占满输入区。
+    // 四种能力都不可用时整条控制条隐藏，避免无意义的禁用控件占满输入区。
     final hasContent =
         controls.models.isNotEmpty ||
         controls.efforts.isNotEmpty ||
+        controls.availablePermissionModes.isNotEmpty ||
         controls.usage != null ||
         usageSupported;
     if (!hasContent) return const SizedBox.shrink();
 
+    // v0.3/P1：上下文占用超过 80% 窗口时显示脱敏警告（MOBILE-12）。
+    final usage = controls.usage;
+    final ratio = usage?.contextRatio;
+    final showContextWarning =
+        usageSupported && usage != null && ratio != null && ratio >= 0.8;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        key: const Key('composer-control-strip'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: DropdownButtonFormField<String>(
-              key: const Key('composer-model-select'),
-              initialValue: controls.model,
-              isDense: true,
-              // 在受限宽度内收缩并用省略号截断，避免整条控制条横向溢出。
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: '模型',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
+          Row(
+            key: const Key('composer-control-strip'),
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  key: const Key('composer-model-select'),
+                  initialValue: controls.model,
+                  isDense: true,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: '模型',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                  ),
+                  items: [
+                    for (final model in controls.models)
+                      DropdownMenuItem(value: model, child: Text(model)),
+                  ],
+                  onChanged:
+                      modelBlocked == null && controls.models.isNotEmpty
+                      ? (value) {
+                          if (value != null) {
+                            sessions.selectModel(
+                              model: value,
+                              deviceId: deviceId,
+                              canWrite: canWrite,
+                            );
+                          }
+                        }
+                      : null,
                 ),
               ),
-              items: [
-                for (final model in controls.models)
-                  DropdownMenuItem(value: model, child: Text(model)),
-              ],
-              onChanged: modelBlocked == null && controls.models.isNotEmpty
-                  ? (value) {
-                      if (value != null) {
-                        sessions.selectModel(
-                          model: value,
-                          deviceId: deviceId,
-                          canWrite: canWrite,
-                        );
-                      }
-                    }
-                  : null,
-            ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  key: const Key('composer-effort-select'),
+                  initialValue: controls.effort,
+                  isDense: true,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: 'Effort',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                  ),
+                  items: [
+                    for (final effort in controls.efforts)
+                      DropdownMenuItem(value: effort, child: Text(effort)),
+                  ],
+                  onChanged:
+                      effortBlocked == null && controls.efforts.isNotEmpty
+                      ? (value) {
+                          if (value != null) {
+                            sessions.selectEffort(
+                              effort: value,
+                              deviceId: deviceId,
+                              canWrite: canWrite,
+                            );
+                          }
+                        }
+                      : null,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: DropdownButtonFormField<String>(
-              key: const Key('composer-effort-select'),
-              initialValue: controls.effort,
-              isDense: true,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: 'Effort',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
+          const SizedBox(height: 6),
+          Wrap(
+            key: const Key('composer-control-strip-row2'),
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              SizedBox(
+                width: 190,
+                child: DropdownButtonFormField<String>(
+                  key: const Key('composer-permission-mode-select'),
+                  initialValue: controls.permissionMode,
+                  isDense: true,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: '权限',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                  ),
+                  items: [
+                    for (final mode in controls.availablePermissionModes)
+                      DropdownMenuItem(value: mode, child: Text(mode)),
+                  ],
+                  onChanged:
+                      permissionModeBlocked == null &&
+                          controls.availablePermissionModes.isNotEmpty
+                      ? (value) {
+                          if (value != null) {
+                            sessions.selectPermissionMode(
+                              mode: value,
+                              deviceId: deviceId,
+                              canWrite: canWrite,
+                            );
+                          }
+                        }
+                      : null,
                 ),
               ),
-              items: [
-                for (final effort in controls.efforts)
-                  DropdownMenuItem(value: effort, child: Text(effort)),
+              if (controls.usage != null && usageSupported) ...[
+                Tooltip(
+                  message: '仅展示脱敏计数，不包含 prompt 或回复正文。',
+                  child: Container(
+                    key: const Key('composer-usage-chip'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: Theme.of(context).dividerColor,
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      controls.usage!.label,
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ),
+                ),
               ],
-              onChanged: effortBlocked == null && controls.efforts.isNotEmpty
-                  ? (value) {
-                      if (value != null) {
-                        sessions.selectEffort(
-                          effort: value,
-                          deviceId: deviceId,
-                          canWrite: canWrite,
-                        );
-                      }
-                    }
-                  : null,
-            ),
+            ],
           ),
-          if (controls.usage != null && usageSupported) ...[
-            const SizedBox(width: 8),
-            Tooltip(
-              message: '仅展示脱敏计数，不包含 prompt 或回复正文。',
-              child: Container(
-                key: const Key('composer-usage-chip'),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 6,
+          // v0.3/P1：上下文占用超过 80% 窗口时显示脱敏警告（MOBILE-12）。
+          if (showContextWarning) ...[
+            const SizedBox(height: 6),
+            Row(
+              key: const Key('composer-context-warning'),
+              children: [
+                const Icon(Icons.warning_amber_outlined, size: 15),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '上下文占用 ${(ratio * 100).toStringAsFixed(0)}%（${SessionUsageSummary.compactForDisplay(usage.contextTokens)} / ${SessionUsageSummary.compactForDisplay(usage.contextWindowTokens)}），接近窗口上限。',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
                 ),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Theme.of(context).dividerColor),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  controls.usage!.label,
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-              ),
+              ],
             ),
           ],
         ],
       ),
     );
   }
+
 }
 
 /// v0.2/P3：@ / 自动补全面板。候选为空时展示空态说明（fail-closed）。

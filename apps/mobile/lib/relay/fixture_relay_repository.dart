@@ -386,6 +386,10 @@ class FixtureRelayRepository implements RelayRepository {
         _applyModelSelect(state, input.ciphertext);
       case SessionCommandKind.effortSelect:
         _applyEffortSelect(state, input.ciphertext);
+      case SessionCommandKind.permissionModeSelect:
+        _applyPermissionModeSelect(state, input.ciphertext);
+      case SessionCommandKind.goalEdit:
+        _applyGoalEdit(state, input.ciphertext);
     }
     _commandSequence += 1;
     final receipt = SessionCommandReceipt(
@@ -562,6 +566,7 @@ class FixtureRelayRepository implements RelayRepository {
             'model_select',
             'effort_select',
             'attachments',
+            'permission_mode',
             'delegate_session',
           },
           emulated: const {'delegate_cross_provider'},
@@ -826,6 +831,52 @@ class FixtureRelayRepository implements RelayRepository {
     );
   }
 
+  /// v0.3/P0：permission mode 切换只更新 controls 并追加通知；不伪造 Provider 已切换成功的证据。
+  void _applyPermissionModeSelect(
+    _FixtureSessionState state,
+    Map<String, dynamic>? ciphertext,
+  ) {
+    final mode = (ciphertext?['fixture_payload'] as Map?)?['permission_mode']
+        as String?;
+    if (mode == null || !state.controls.availablePermissionModes.contains(mode)) {
+      throw const RelayFailure(RelayFailureKind.validation, '目标 permission mode 不在目录中。');
+    }
+    state.controls = state.controls.copyWith(permissionMode: mode);
+    final now = _clock();
+    state.append(
+      eventType: 'session.permission_mode_selected',
+      payload: {
+        'kind': 'system_notice',
+        'label': '权限模式',
+        'text': '已切换 permission mode：$mode',
+      },
+      now: now,
+    );
+  }
+
+  /// v0.3/P0：goal 文本编辑只更新 controls 并追加通知；正文不进入任何密文外字段。
+  void _applyGoalEdit(_FixtureSessionState state, Map<String, dynamic>? ciphertext) {
+    final objective = (ciphertext?['fixture_payload'] as Map?)?['objective']
+        as String?;
+    final goal = state.controls.goal;
+    if (goal == null || objective == null || objective.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '目标文本无效。');
+    }
+    state.controls = state.controls.copyWith(
+      goal: SessionGoalSummary(
+        title: objective.trim(),
+        progressLabel: goal.progressLabel,
+        phase: goal.phase,
+      ),
+    );
+    final now = _clock();
+    state.append(
+      eventType: 'session.goal_edited',
+      payload: {'kind': 'system_notice', 'label': '目标', 'text': '已更新目标'},
+      now: now,
+    );
+  }
+
   // parent 只收到状态和密文摘要；child 的 session timeline 不会被复制到此处。
   void _appendDelegationEvent(
     _FixtureSessionState parent,
@@ -990,6 +1041,9 @@ ProviderCapabilityProfile _fixtureProvider(
     'resume',
     'abort',
     'usage',
+    'permission',
+    'permission_mode',
+    'question',
     'plan',
     'goal',
     'skill_catalog',
@@ -997,6 +1051,8 @@ ProviderCapabilityProfile _fixtureProvider(
     'model_select',
     'effort_select',
     'attachments',
+    'file_read',
+    'git_read',
     'delegate_session',
     'delegate_cross_provider',
   ];
@@ -1048,11 +1104,18 @@ SessionControlState _fixtureControlsForProvider(String provider) =>
       // v0.2/P3：模型/effort 目录与 usage 均来自 deterministic fixture；真实 Relay 无此通道时为空。
       models: const ['fixture-model-a', 'fixture-model-b'],
       efforts: const ['低', '中', '高'],
+      // v0.3/P1：usage 深度——cache 计数与 context 窗口（用于上下文警告）。
       usage: const SessionUsageSummary(
         inputTokens: 12480,
         outputTokens: 3840,
         contextTokens: 92000,
+        cacheReadTokens: 61000,
+        cacheCreationTokens: 800,
+        contextWindowTokens: 100000,
       ),
+      // v0.3/P0：permission mode 目录（Happy permissionMode 对齐）。
+      permissionMode: 'default',
+      availablePermissionModes: const ['default', 'plan', 'acceptEdits'],
     );
 
 bool _sameBytes(Uint8List left, Uint8List right) {

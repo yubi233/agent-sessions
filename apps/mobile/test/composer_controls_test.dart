@@ -165,6 +165,73 @@ void main() {
     // 原因通过 tooltip 表达；队列保持为空。
     expect(find.byKey(const Key('session-attachment-queue')), findsNothing);
   });
+
+  testWidgets('MOBILE-10：permission mode 切换走 lease 命令并落事件', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'permission-mode@fixture.test');
+    await _createAndAcquireLease(tester);
+
+    // 控制条第二行出现权限下拉。
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
+    await _waitForVisible(tester, find.text('acceptEdits').last);
+    await tester.tap(find.text('acceptEdits').last);
+    await _waitForVisible(tester, find.textContaining('已切换 permission mode'));
+
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(
+      snapshot.events.any(
+        (event) => event.eventType == 'session.permission_mode_selected',
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('MOBILE-10：无 permission_mode capability 时下拉禁用且不提交命令', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'permission-mode-blocked@fixture.test');
+    // opencode 未声明 permission_mode：选择器不可交互。
+    await _createAndAcquireLease(tester, provider: 'opencode');
+
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
+    final dropdown = tester.widget<DropdownButtonFormField<String>>(
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
+    expect(dropdown.onChanged, isNull);
+    expect(harness.relay.submittedCommandCount, 0);
+  });
+
+  testWidgets('MOBILE-12：usage 展示 cache 计数并在 context 超阈值时给出警告', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'usage-depth@fixture.test');
+    await _createAndAcquireLease(tester);
+
+    // cache 计数合并展示。
+    await _waitForVisible(tester, find.byKey(const Key('composer-usage-chip')));
+    expect(find.textContaining('缓存 61.8k'), findsOneWidget);
+    // fixture context 92000/100000 = 92%：显示脱敏警告。
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-context-warning')),
+    );
+    expect(find.textContaining('上下文占用 92%'), findsOneWidget);
+    // 不渲染 prompt 或回复正文。
+    expect(find.textContaining('提示词'), findsNothing);
+  });
 }
 
 Future<void> _registerOwner(WidgetTester tester, String email) async {

@@ -400,6 +400,53 @@ void main() {
     await _waitForVisible(tester, find.byKey(const Key('workspace-files-screen')));
     await _waitForVisible(tester, find.byKey(const Key('workspace-files-list')));
   });
+
+  testWidgets('MOBILE-11：goal 文本编辑提交 goal.edit 命令并乐观更新', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _registerOwner(tester, 'goal-edit-owner@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+
+    // goal 编辑需要当前 lease（与其它写命令一致）。
+    await _tapVisible(tester, find.byKey(const Key('session-acquire-lease-button')));
+    await _waitForVisible(tester, find.text('已获得控制权'));
+
+    // 打开编辑对话框，修改目标文本并保存。
+    await _waitForVisible(tester, find.byKey(const Key('session-goal-edit-button')));
+    await _tapVisible(tester, find.byKey(const Key('session-goal-edit-button')));
+    await _waitForVisible(tester, find.byKey(const Key('goal-edit-dialog')));
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('goal-edit-input')),
+      '先交付回归再优化文案',
+    );
+    await _tapVisible(tester, find.byKey(const Key('goal-edit-submit')));
+    await _waitForVisible(tester, find.textContaining('已更新目标'));
+    // 目标卡片标题乐观更新。
+    await _waitForVisible(tester, find.text('先交付回归再优化文案'));
+
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(
+      snapshot.events.any((event) => event.eventType == 'session.goal_edited'),
+      isTrue,
+    );
+  });
 }
 
 Future<void> _registerOwner(WidgetTester tester, String email) async {

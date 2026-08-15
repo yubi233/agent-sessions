@@ -220,7 +220,10 @@ enum SessionCommandKind {
   skillInvoke('skill.invoke'),
   // v0.2/P3：composer 内的模型/effort 切换。
   modelSelect('session.model_select'),
-  effortSelect('session.effort_select');
+  effortSelect('session.effort_select'),
+  // v0.3/P0：permission mode 选择与 goal 文本编辑（Happy sessionSetAgentModes / goal 编辑对齐）。
+  permissionModeSelect('session.permission_mode'),
+  goalEdit('goal.edit');
 
   const SessionCommandKind(this.wireValue);
 

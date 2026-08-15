@@ -14,7 +14,7 @@ const (
 
 // 能力清单（与 packages/protocol 对齐）。客户端按此消费入口。
 var CapabilityNames = []string{
-	"start", "resume", "abort", "permission", "question", "plan", "goal",
+	"start", "resume", "abort", "permission", "permission_mode", "question", "plan", "goal",
 	"skill_catalog", "invoke_skill", "model_select", "effort_select",
 	"attachments", "file_read", "git_read", "usage",
 	"delegate_session", "delegate_cross_provider",
