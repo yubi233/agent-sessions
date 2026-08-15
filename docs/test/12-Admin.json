@@ -1,6 +1,6 @@
 {
   "suite": "admin",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "ADMIN",
   "description": "Admin 运维元数据、脱敏与 headed 只读。服务器权限仍由 Relay 定义。",
@@ -22,16 +22,17 @@
     {
       "id": "ADMIN-01",
       "title": "只显示运维元数据",
-      "status": "passed",
-      "phase": "P4",
+      "status": "planned",
+      "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
       "test_layer": "component + headed E2E",
-      "precondition": "有设备与会话。",
+      "precondition": "P4 Admin 分区和 Relay 白名单 DTO 已实现；当前应用是健康、登录、设备、会话的单页只读投影。",
       "steps": [
-        "打开设备/Terminal/健康页"
+        "打开 overview、设备/Terminal、会话元数据和健康分区",
+        "检查 loading、empty、error、offline 与无权状态"
       ],
-      "expected": "无消息、文件、diff、附件、工具参数。",
+      "expected": "无消息、文件、diff、附件、工具参数、密钥或完整路径；当前缺少的分区不能标 passed。",
       "cleanup": [
         "清理浏览器 profile"
       ],
@@ -42,8 +43,8 @@
     {
       "id": "ADMIN-02",
       "title": "字段白名单与 redaction",
-      "status": "passed",
-      "phase": "P4",
+      "status": "planned",
+      "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
       "test_layer": "component + integration",
@@ -97,8 +98,8 @@
     {
       "id": "ADMIN-05",
       "title": "无配对/撤销写入口",
-      "status": "passed",
-      "phase": "P4",
+      "status": "planned",
+      "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
       "test_layer": "headed E2E",
@@ -116,8 +117,8 @@
     {
       "id": "E2E-ADMIN-01",
       "title": "headed 运维只读旅程",
-      "status": "passed",
-      "phase": "P4",
+      "status": "planned",
+      "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
       "test_layer": "headed E2E",
@@ -130,6 +131,52 @@
       "cleanup": [],
       "evidence": [
         "e2e-verify/traces/admin/E2E-ADMIN-01/"
+      ]
+    },
+    {
+      "id": "ADMIN-06",
+      "title": "Admin 设计令牌、响应式、键盘与无障碍",
+      "status": "planned",
+      "phase": "v0.4/P1-P4",
+      "category": "Admin UI",
+      "priority": "P0",
+      "test_layer": "Vue component + headed browser",
+      "precondition": "P1 语义 token 与 P4 Admin 分区已实现，白名单元数据 fixture 包含长名称、空数据、错误和离线状态。",
+      "steps": [
+        "在 overview、健康、设备/Terminal、会话元数据和审计分区切换主题、缩放 200% 并改变视口。",
+        "用键盘遍历表格、筛选、分页和错误重试，检查焦点可见、弹层关闭后的焦点恢复和 reduced motion。",
+        "扫描语义树、网络响应与 DOM 的敏感字段。"
+      ],
+      "expected": "信息可扫描、不重叠；控件可由键盘/读屏理解；不渲染正文、diff、附件、密钥、完整路径或原始错误日志。",
+      "cleanup": [
+        "清理浏览器 storage、测试登录态和 fixture"
+      ],
+      "evidence": [
+        "apps/admin-web/src/App.test.ts",
+        "e2e-verify/reports/<ts>/ADMIN/admin-06.json"
+      ]
+    },
+    {
+      "id": "E2E-ADMIN-02",
+      "title": "多视口 headed Chrome 的 Admin 只读完整旅程",
+      "status": "planned",
+      "phase": "v0.4/P4",
+      "category": "Admin E2E",
+      "priority": "P0",
+      "test_layer": "headed Chrome E2E",
+      "precondition": "隔离 Relay、只读 Admin 测试身份、P4 Admin 分区和可见 Chrome 已启动。",
+      "steps": [
+        "在桌面和窄屏 Chrome 登录后浏览健康、设备/Terminal、会话元数据和审计。",
+        "覆盖空、错误、离线、无权、长文本、分页和键盘导航。",
+        "尝试调用配对、撤销、会话控制和其它写 API，并保存脱敏 trace。"
+      ],
+      "expected": "报告标记 `real_browser=true`、`headless=false`；页面无写控件，服务端拒绝写请求；所有网络和 DOM 字段均遵循白名单/redaction。",
+      "cleanup": [
+        "退出测试身份，清理浏览器 profile、Relay 测试数据和 trace"
+      ],
+      "evidence": [
+        "e2e-verify/admin/v04-admin-readonly.mjs",
+        "e2e-verify/reports/<ts>/ADMIN/e2e-admin-02.json"
       ]
     }
   ]

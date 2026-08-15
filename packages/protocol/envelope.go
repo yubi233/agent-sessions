@@ -8,7 +8,7 @@ import (
 // 当前冻结的协议主版本。未知版本必须被拒绝，不得静默降级。
 const ProtocolVersion = 1
 
-// 支持的消息类型。hello/challenge 仅用于 WebSocket 首帧协商。
+// 支持的消息类型。hello/challenge 预留给未来 Daemon 协商；当前 Relay 不提供 WebSocket 首帧协议。
 const (
 	MessageTypeCommand   = "command"
 	MessageTypeEvent     = "event"

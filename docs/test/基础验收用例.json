@@ -1,6 +1,6 @@
 {
   "suite": "agent-sessions-foundation",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "planned",
   "description": "Agent Sessions 跨项目关键验收用例。覆盖 Relay、Daemon、Provider Adapter、Android、Web 和 Admin 的高风险用户旅程；当前只登记可追溯契约，尚未绑定运行环境或执行。",
   "id_registry": "docs/test/测试套件索引.json",
@@ -11,8 +11,8 @@
     "web": "not-configured",
     "admin": "not-configured",
     "android": "emulator-or-device-not-configured",
-    "database": "test-postgresql-not-configured",
-    "redis": "test-redis-not-configured"
+    "database": "test-sqlite-not-configured",
+    "presence": "in-memory-rebuildable"
   },
   "verification_defaults": {
     "report_kind": "not_run",
@@ -65,8 +65,8 @@
       "test_layer": "Relay integration + Daemon integration + Android integration",
       "route_api": ["pairing.request", "pairing.approve", "terminal.connect"],
       "precondition": "已有 owner Android，PC Daemon 显示待批准二维码。",
-      "steps": ["PC 发起配对请求", "Android 扫描并批准", "PC 建立 Terminal WebSocket"],
-      "expected": "Terminal 出现在设备列表并显示在线，未授权设备不能订阅会话或项目。",
+      "steps": ["PC 发起配对请求", "Android 扫描并批准", "P2 Daemon 通过 REST hello 与专用 SSE 命令流建立认证连接"],
+      "expected": "Terminal 出现在设备列表并显示在线，未授权设备不能订阅会话或项目；当前命令流未实现时本用例保持 planned。",
       "observable_state": {
         "client": ["Android 显示已批准 Terminal 及在线状态", "未授权设备显示配对或授权失败"],
         "events": ["Terminal hello 和 presence 绑定已批准设备身份"],
@@ -183,16 +183,16 @@
       "priority": "P0",
       "owner_plan": "RELAY-REALTIME",
       "test_layer": "Relay integration + Android integration",
-      "route_api": ["events.sse", "events.websocket", "sessions.snapshot"],
+      "route_api": ["events.sse", "sessions.snapshot"],
       "precondition": "会话正在产生多个事件。",
-      "steps": ["断开 Android WebSocket", "在断线期间产生事件", "携带 Last-Event-ID 重新连接"],
+      "steps": ["断开 Android SSE", "在断线期间产生事件", "携带 Last-Event-ID 或 after_seq 重新连接"],
       "expected": "客户端只补齐缺失事件，不重复渲染已确认事件。",
       "observable_state": {
         "client": ["断线指示后恢复在线", "每个 event_seq 仅渲染一次，cursor 前进到最后事件"],
         "events": ["重连请求包含 last_event_id 或 after cursor", "服务端仅重放缺口序列"],
         "persistence": ["本地密文缓存保存最后确认 cursor", "Relay 事件历史可按 cursor 查询"]
       },
-      "cleanup": ["终止并删除测试会话", "清理 Android 测试缓存、WebSocket 连接和事件夹具"],
+      "cleanup": ["终止并删除测试会话", "清理 Android 测试缓存、SSE 连接和事件夹具"],
       "evidence": ["e2e-verify/reports/relay-<date>.json", "e2e-verify/traces/relay/SESS-02/", "重连前后 cursor 断言"],
       "verification_profile": {
         "report_kind": "full_gate",
@@ -250,7 +250,7 @@
       "observable_state": {
         "client": ["当前实例仍保持原状态", "旧命令显示明确的冲突或过期错误"],
         "events": ["拒绝事件带当前或被围栏的目标信息，不触发 Abort"],
-        "persistence": ["PostgreSQL 中当前 ControlLease epoch 未变化", "旧 Command 标记 rejected 且不关联新的 Provider 动作"]
+        "persistence": ["SQLite 中当前 ControlLease epoch 未变化", "旧 Command 标记 rejected 且不关联新的 Provider 动作"]
       },
       "cleanup": ["释放测试 lease", "终止并删除测试会话、实例和命令记录"],
       "evidence": ["e2e-verify/reports/relay-<date>.json", "e2e-verify/traces/relay/CTRL-02/", "脱敏 lease/command 事务断言"],
@@ -490,7 +490,7 @@
       "observable_state": {
         "client": ["用户可见会话仍可由授权设备解密显示"],
         "events": ["Relay 仅处理密文 envelope 和允许元数据"],
-        "persistence": ["测试明文探针不出现在 PostgreSQL、Redis 持久化导出或 Relay 日志", "无 token、私钥或完整正文"]
+        "persistence": ["测试明文探针不出现在 SQLite 导出、进程内状态快照或 Relay 日志", "无 token、私钥或完整正文"]
       },
       "cleanup": ["销毁包含明文探针的测试账号、数据库备份和日志副本", "清理测试设备本地缓存"],
       "evidence": ["e2e-verify/reports/security-<date>.json", "e2e-verify/traces/security/SEC-01/", "脱敏明文扫描摘要"],

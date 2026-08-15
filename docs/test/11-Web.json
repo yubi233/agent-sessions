@@ -1,6 +1,6 @@
 {
   "suite": "web",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "WEB",
   "description": "Vue Web 只读页面、SSE cursor、PWA 与 headed 浏览器。写权限仍由 Relay 测试定义。",
@@ -22,17 +22,17 @@
     {
       "id": "WEB-01",
       "title": "只读列表与详情",
-      "status": "passed",
-      "phase": "P4",
+      "status": "planned",
+      "phase": "v0.4/P4",
       "category": "Web",
       "priority": "P0",
       "test_layer": "component + headed E2E",
-      "precondition": "fixture 会话。",
+      "precondition": "P4 会话列表/详情只读路由、账户 scoped fixture 或真实只读 API 已实现；当前 Web 只有首页与 capabilities。",
       "steps": [
-        "打开项目/会话",
-        "检查无写控件"
+        "打开项目/会话列表与详情",
+        "检查 loading、empty、error、offline、forbidden 和无写控件"
       ],
-      "expected": "可看消息与状态；无 prompt/审批入口。",
+      "expected": "只显示授权的白名单会话状态；无 prompt、审批、终止或设备管理入口；当前缺路由时本用例不能标 passed。",
       "cleanup": [
         "清理浏览器存储"
       ],
@@ -103,8 +103,8 @@
     {
       "id": "WEB-05",
       "title": "headed 只读旅程",
-      "status": "in_progress",
-      "phase": "P4",
+      "status": "planned",
+      "phase": "v0.4/P4",
       "category": "Web",
       "priority": "P0",
       "test_layer": "headed E2E",
@@ -121,8 +121,8 @@
     {
       "id": "E2E-WEB-01",
       "title": "跨层只读回归",
-      "status": "in_progress",
-      "phase": "P4",
+      "status": "planned",
+      "phase": "v0.4/P4",
       "category": "Web",
       "priority": "P0",
       "test_layer": "headed E2E",
@@ -135,6 +135,52 @@
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/WEB/e2e-web-01.json"
+      ]
+    },
+    {
+      "id": "WEB-06",
+      "title": "Web 设计令牌、主题、响应式与键盘无障碍",
+      "status": "planned",
+      "phase": "v0.4/P1-P4",
+      "category": "Web UI",
+      "priority": "P0",
+      "test_layer": "Vue component + headed browser",
+      "precondition": "P1 语义 CSS token、浅/深色方案、稳定 data-testid 和 P4 路由已实现。",
+      "steps": [
+        "在首页、capabilities、会话、机器、文件和 Git 只读页面切换主题并缩放至 200%。",
+        "在窄/宽视口、长 Provider 名、多行错误、键盘 Tab/Shift+Tab 和 reduced motion 下执行导航。",
+        "检查按钮、链接、表格/列表、状态消息和 focus 的语义与最小可点击区域。"
+      ],
+      "expected": "内容不重叠或截断；主题不改变只读授权语义；键盘和读屏可完成导航；稳定选择器在视觉重构后仍可用。",
+      "cleanup": [
+        "清理浏览器 storage、主题偏好和测试会话"
+      ],
+      "evidence": [
+        "apps/web/src/App.test.ts",
+        "e2e-verify/reports/<ts>/WEB/web-06.json"
+      ]
+    },
+    {
+      "id": "E2E-WEB-02",
+      "title": "多视口 headed Chrome 的 Web 只读完整旅程",
+      "status": "planned",
+      "phase": "v0.4/P4",
+      "category": "Web E2E",
+      "priority": "P0",
+      "test_layer": "headed Chrome E2E",
+      "precondition": "隔离 Relay、只读测试账号、P4 Web 路由和 Chrome 可见窗口已启动。",
+      "steps": [
+        "在桌面和移动宽度的可见 Chrome 登录、查看 capabilities、会话、机器、文件/Git，并模拟 SSE 断线恢复。",
+        "访问空、错误、无权、stale 与 offline 状态，再尝试构造写请求。",
+        "执行键盘导航并保存脱敏 trace/report。"
+      ],
+      "expected": "报告标记 `real_browser=true`、`headless=false`；所有页面保持只读；写请求由 Relay 拒绝；SSE cursor 不重复渲染且不把正文写入 PWA 缓存。",
+      "cleanup": [
+        "退出测试账号，清理浏览器 profile、Service Worker、测试会话和 Relay 数据"
+      ],
+      "evidence": [
+        "e2e-verify/web/v04-web-readonly.mjs",
+        "e2e-verify/reports/<ts>/WEB/e2e-web-02.json"
       ]
     }
   ]

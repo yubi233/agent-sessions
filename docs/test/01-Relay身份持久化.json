@@ -1,15 +1,15 @@
 {
   "suite": "relay-identity",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "RELAY-IDENTITY",
-  "description": "账号、token、配对、设备撤销、Goose 迁移与 Redis 可重建状态。消费 SEC-02/SEC-03，不重新定义密码学根因。",
+  "description": "账号、token、配对、设备撤销、SQLite 编号迁移与进程内 presence 可重建状态。消费 SEC-02/SEC-03，不重新定义密码学根因。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Relay Server",
   "environment": {
     "relay": "not-configured",
-    "database": "test-postgresql-not-configured",
-    "redis": "test-redis-not-configured"
+    "database": "test-sqlite-not-configured",
+    "presence": "in-memory-rebuildable"
   },
   "verification_defaults": {
     "report_kind": "not_run",
@@ -138,9 +138,9 @@
       "category": "迁移",
       "priority": "P0",
       "test_layer": "Relay integration",
-      "precondition": "空 PostgreSQL 测试库。",
+      "precondition": "空 SQLite 测试库。",
       "steps": [
-        "运行 Goose up",
+        "运行项目编号 SQLite migration",
         "核对表与约束"
       ],
       "expected": "账号/设备/配对等基础表存在；密文列无明文默认值。",
@@ -159,7 +159,7 @@
       "category": "迁移",
       "priority": "P0",
       "test_layer": "Relay integration",
-      "precondition": "已恢复上一发布 schema 的测试库。",
+      "precondition": "已恢复上一发布 schema 的 SQLite 测试库。",
       "steps": [
         "运行 additive migration",
         "核对双读旧列"
@@ -200,12 +200,13 @@
       "category": "迁移",
       "priority": "P1",
       "test_layer": "static + integration",
-      "precondition": "deploy/migrations 有至少一次 expand 变更。",
+      "precondition": "internal/store 的编号 SQLite migration 含至少一次 expand/additive 变更。",
       "steps": [
-        "检查命名规则",
+        "检查迁移编号与事务规则",
+        "在包含旧数据的 SQLite 副本上升级",
         "验证无未演练的 drop column"
       ],
-      "expected": "仅 additive；删除/重命名必须有双写窗口记录。",
+      "expected": "仅 additive；删除/重命名必须有兼容窗口、备份和回滚记录。",
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/RELAY-IDENTITY/mig-01.json"
@@ -213,23 +214,47 @@
     },
     {
       "id": "RELAY-REDIS-01",
-      "title": "Redis 清空后可由 DB 重建 presence",
+      "title": "Relay 重启后进程内 presence 可由 SQLite 设备状态重建",
       "status": "in_progress",
       "phase": "P1",
-      "category": "Redis",
+      "category": "in-memory presence",
       "priority": "P0",
       "test_layer": "Relay integration",
-      "precondition": "设备在线且 Redis 有 presence。",
+      "precondition": "设备已配对，Relay 的进程内 presence 有在线投影，SQLite 中保存设备白名单元数据。",
       "steps": [
-        "FLUSHDB 测试 Redis",
-        "等待心跳或重连"
+        "停止并重启隔离 Relay 进程",
+        "等待 Daemon/客户端重新 heartbeat 或连接",
+        "查询设备与会话历史"
       ],
-      "expected": "PostgreSQL 真相不变；presence 可重建；无业务数据丢失。",
+      "expected": "SQLite 权威数据不变；presence 可重建；无会话、命令、lease 或事件数据丢失。",
       "cleanup": [
         "停止测试连接"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/RELAY-IDENTITY/redis-01.json"
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/presence-01.json"
+      ]
+    },
+    {
+      "id": "MIG-02",
+      "title": "v0.4 SQLite 状态表升级、重启与失败恢复",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "迁移",
+      "priority": "P0",
+      "test_layer": "SQLite integration + deploy recovery",
+      "precondition": "准备含设备、会话、命令、lease、outbox 和事件的旧版本 SQLite 副本，以及可注入磁盘/约束失败的隔离环境。",
+      "steps": [
+        "备份旧库并执行 v0.4 additive migration。",
+        "重启 Relay，读取旧记录并写入新字段，再重复执行 migration。",
+        "在中途失败时停止进程，从备份恢复并运行完整性检查。"
+      ],
+      "expected": "升级和重复执行均无数据丢失；失败不会留下半迁移可运行状态；恢复后旧客户端仍可读取 N/N-1 支持的字段。",
+      "cleanup": [
+        "删除隔离数据库、备份副本和测试日志"
+      ],
+      "evidence": [
+        "internal/store/migrate_test.go",
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/mig-02.json"
       ]
     }
   ]

@@ -1,0 +1,48 @@
+{
+  "suite": "usage-privacy",
+  "suite_version": 1,
+  "status": "planned",
+  "plan_id": "USAGE",
+  "description": "验证 ADR-010 规定的 Daemon usage 白名单数值、UTC 日桶、去重、保留和账户 scope。图表 fixture 不能代替该 suite。",
+  "id_registry": "docs/test/测试套件索引.json",
+  "owner": "Relay / Daemon Usage",
+  "environment": {
+    "relay": "isolated-sqlite-not-configured",
+    "daemon": "deterministic-provider-not-configured"
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": false,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "USAGE-01",
+      "title": "用量去重、UTC 聚合、最小披露与保留",
+      "status": "planned",
+      "phase": "v0.4/P3",
+      "category": "usage/privacy",
+      "priority": "P0",
+      "test_layer": "Daemon/Relay SQLite integration + API contract",
+      "precondition": "ADR-010 的 usage schema、Daemon outbox、Relay SQLite 表、账户读取 API 和可控 UTC 时钟已实现；准备两个账户和多个 Provider usage fixture。",
+      "steps": [
+        "上传同一 usage_id 多次，并上传跨 UTC 日、不同 Provider、零计数和有效 cache 计数的事件。",
+        "提交负数、超大值、未知 Provider、错误账户、prompt/回复/路径字段和超过保留期的记录。",
+        "查询账户的 today/7d/30d 聚合，运行保留清理后重放旧 usage_id，并检查 SQLite、日志和 API 响应字段。"
+      ],
+      "expected": "每个 usage key 最多计入一次；聚合按 UTC 日桶且仅在账户 scope 内可见；无效或额外敏感字段被拒绝；去重账本和日聚合按 ADR 保留期处理，任何输出不含正文、路径、原始会话 ID、费用或精确时间。",
+      "cleanup": [
+        "删除两个测试账户的 usage 聚合、去重账本、SQLite 副本、Daemon outbox 和脱敏 trace"
+      ],
+      "evidence": [
+        "internal/usage/usage_test.go",
+        "packages/protocol/testdata/usage-v04.json",
+        "e2e-verify/reports/<ts>/USAGE/usage-01.json"
+      ]
+    }
+  ]
+}

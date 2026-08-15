@@ -113,6 +113,12 @@ tasks:
     cmds:
       - python3 tools/docs_verify.py
 
+  test:v04:p0:
+    desc: v0.4 P0 文档、生成物与格式门禁
+    cmds:
+      - task: check
+      - git diff --check
+
   compose:up:
     desc: 启动本机 Relay（SQLite，不依赖 Docker）
     cmds:

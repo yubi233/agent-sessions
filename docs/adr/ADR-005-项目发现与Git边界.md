@@ -1,6 +1,6 @@
 # ADR-005：项目发现与 Git 只读边界
 
-- 状态：Accepted
+- 状态：Accepted（本地 Daemon 边界）；经 Relay 的远程 Git/文件请求为 P2 计划
 - 日期：2026-08-13
 
 ## 背景
@@ -14,9 +14,9 @@ Android 需要查看 PC 项目的 Git diff，但不能获得任意文件系统�
 - 手机只能请求已登记 Workspace。
 - Git 服务使用 `exec.CommandContext` 的参数数组，不拼接 shell。
 - 所有路径先做 canonical root、realpath、符号链接和 repo-relative 校验。
-- Git RPC 只读，支持 status、changes、file diff、all diff、分页、压缩、大小限制和 snapshot token。
+- Daemon 本地 Git 服务只读，支持 status、changes、file diff、all diff、分页、压缩、大小限制和 snapshot token。经 Relay 的远程 Git/文件 command contract 尚未实现，必须按 ADR-009 先进入 OpenAPI/JSON Schema。
 - 首版不提供 stage、unstage、discard、commit、push 或任意 shell。
 
 ## 后果
 
-项目发现体验依赖 PC 端确认流程；跨平台 Git 输出必须使用结构化解析并覆盖特殊文件名、rename、binary、submodule、LFS 和 untracked。Git diff 只在线实时生成，不在服务器缓存。
+项目发现体验依赖 PC 端确认流程；跨平台 Git 输出必须使用结构化解析并覆盖特殊文件名、rename、binary、submodule、LFS 和 untracked。P2 实现远程只读链路后，Git diff 只在线实时生成或以密文/受限摘要流转，不在 Relay 缓存明文。

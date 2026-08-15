@@ -1,6 +1,6 @@
 {
   "suite": "protocol-crypto",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "PROTO-CRYPTO",
   "description": "工程工具链、OpenAPI/JSON Schema 生成无漂移、跨语言 E2EE golden vectors。本 suite 拥有 P0-TOOL/SCHEMA/CRYPTO 与 SEC-02..04。P0-DEPLOY-01 归 RELIABILITY-RELEASE。",
@@ -104,6 +104,30 @@
       "expected": "仅有受限密钥包装与短期缓存；解密正文不落盘。",
       "cleanup": ["清理测试浏览器存储"],
       "evidence": ["e2e-verify/reports/<ts>/PROTO-CRYPTO/sec-04.json"]
+    },
+    {
+      "id": "P0-SCHEMA-02",
+      "title": "Daemon RPC、机器与会话事件 schema 的 N/N-1 兼容",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "协议",
+      "priority": "P0",
+      "test_layer": "OpenAPI/JSON Schema contract + generated DTO",
+      "precondition": "ADR-009 的 Daemon hello、command delivery、ack/result、event upload 和 protocol_version 字段已进入唯一 schema 源。",
+      "steps": [
+        "从 schema 生成 Go、TypeScript 和 Dart DTO，并检查生成物无漂移。",
+        "分别用协议 N、N-1、低于最小版本和高于当前版本的 hello/ack/event fixture 解析。",
+        "提交未知 command kind、未知可选字段、重复 event_id 与缺少 target terminal 的 payload。"
+      ],
+      "expected": "N/N-1 的 additive 字段双读成功；不支持版本返回稳定错误；未知 command kind fail-closed；客户端不依赖手写 DTO 或隐式 WebSocket 帧。",
+      "cleanup": [
+        "丢弃生成物试跑和临时 fixture"
+      ],
+      "evidence": [
+        "packages/protocol/schema/openapi.yaml",
+        "packages/protocol/testdata/daemon-rpc-v04.json",
+        "e2e-verify/reports/<ts>/PROTO-CRYPTO/p0-schema-02.json"
+      ]
     }
   ]
 }

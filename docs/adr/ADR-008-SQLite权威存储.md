@@ -10,11 +10,11 @@
 
 ## 决策
 
-- Relay 与 Daemon 都使用纯 Go 的 `modernc.org/sqlite`。
-- SQLite 文件是账号、设备、事件、命令、ControlLease 和 outbox 的唯一权威。
-- presence、限流、短租约提示放在进程内存；丢失后由心跳和 SQLite `last_seen` 重建。
-- 迁移使用仓库内 SQL + 轻量 Goose 兼容编号，部署时复制 `.db` 文件备份。
-- WAL 模式、busy_timeout、外键和单写者队列由 store 层统一配置。
+- Relay 与 Daemon 都使用纯 Go 的 `modernc.org/sqlite`，但各自维护独立的本地数据库文件。
+- Relay SQLite 是账号、设备、事件、命令、ControlLease 和 Relay outbox 的唯一权威；Daemon SQLite 只保存本机状态和本机 outbox。
+- presence、限流和广播提示放在进程内存；丢失后由新连接/heartbeat 和 SQLite `last_seen` 重建。ControlLease epoch 必须保存在 Relay SQLite，不能只依赖内存提示。
+- 迁移使用 `internal/store/migrate.go` 中的编号 SQL，部署前复制 `.db` 文件备份。
+- WAL、busy_timeout 和外键由 store 层统一配置。
 
 ## 取舍
 
@@ -23,6 +23,6 @@
 
 ## 后果
 
-- Compose 不再强制 Postgres/Redis；P0 健康检查验证 Relay + SQLite 文件即可。
+- 本地启动不强制 Postgres/Redis；P0 健康检查验证 Relay + SQLite 文件即可。
 - 备份改为 SQLite 热备/文件拷贝，不再使用 `pg_dump`。
 - 测试用例 `RELAY-REDIS-01` 语义改为“内存 presence 丢失后可由 SQLite 重建”。

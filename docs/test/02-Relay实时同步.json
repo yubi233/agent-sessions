@@ -1,9 +1,9 @@
 {
   "suite": "relay-realtime",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "RELAY-REALTIME",
-  "description": "Gin REST、SSE、WebSocket、Session、ControlLease、outbox 与密文扫描。SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。",
+  "description": "Gin REST、账号级 SSE、Session、ControlLease、outbox 与密文扫描。Daemon 专用 REST + SSE 命令流由 ADR-009/P2 计划；当前没有 WebSocket。SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Relay Server",
   "environment": {
@@ -65,18 +65,21 @@
     {
       "id": "HTTP-03",
       "title": "Git 路由只转发密文 RPC",
-      "status": "in_progress",
-      "phase": "P1",
+      "status": "planned",
+      "phase": "v0.4/P2",
       "category": "HTTP",
       "priority": "P1",
-      "test_layer": "Relay integration",
-      "precondition": "mock Daemon 实现加密 Git RPC。",
+      "test_layer": "Relay/Daemon integration",
+      "precondition": "ADR-009 命令流和受限 Git 只读 command contract 已进入 OpenAPI；当前没有 Git HTTP 路由。",
       "steps": [
-        "POST git/status",
-        "检查 Relay 存储与日志"
+        "通过已授权 Daemon command channel 请求 Git status/diff 摘要。",
+        "检查 Relay SQLite、事件 envelope 和日志。",
+        "用越权设备、未确认 Workspace 和路径逃逸请求重复测试。"
       ],
-      "expected": "Relay 不解析或缓存 diff 明文。",
-      "cleanup": [],
+      "expected": "Relay 不解析或缓存 diff 明文；只路由密文/白名单摘要；无契约时返回 unsupported 而非伪造 Git 数据。",
+      "cleanup": [
+        "删除临时 Git 仓库、测试命令、事件和本地缓存"
+      ],
       "evidence": [
         "e2e-verify/reports/<ts>/RELAY-REALTIME/http-03.json"
       ]
@@ -124,20 +127,20 @@
     },
     {
       "id": "WS-01",
-      "title": "WebSocket hello 与版本协商",
-      "status": "in_progress",
-      "phase": "P1",
-      "category": "WebSocket",
+      "title": "WebSocket hello 与版本协商（当前排除）",
+      "status": "excluded",
+      "phase": "v0.4/P0",
+      "category": "已排除传输",
       "priority": "P0",
-      "test_layer": "Relay integration",
-      "precondition": "设备已认证。",
+      "test_layer": "architecture guard",
+      "precondition": "当前 Relay 仅实现 REST + 账号级 SSE，ADR-009 已明确 P2 不引入 WebSocket。",
       "steps": [
-        "首帧 challenge/hello",
-        "提交不匹配 protocol_version"
+        "检查 Gin 路由和 OpenAPI 不存在 WebSocket endpoint。",
+        "检查 Daemon 版本协商测试已由 P0-SCHEMA-02 与 DAEMON-RPC-01 覆盖。"
       ],
-      "expected": "协商成功或稳定拒绝；不信任客户端目标前缀。",
+      "expected": "不启动或假设 WebSocket 服务；任何未来 WebSocket 提议都需要新的 ADR、迁移和专属用例。",
       "cleanup": [
-        "关闭连接"
+        "不启动额外传输进程"
       ],
       "evidence": [
         "e2e-verify/reports/<ts>/RELAY-REALTIME/ws-01.json"
@@ -145,19 +148,21 @@
     },
     {
       "id": "WS-02",
-      "title": "心跳与断线",
-      "status": "in_progress",
-      "phase": "P1",
-      "category": "WebSocket",
+      "title": "WebSocket 心跳与断线（当前排除）",
+      "status": "excluded",
+      "phase": "v0.4/P0",
+      "category": "已排除传输",
       "priority": "P1",
-      "test_layer": "Relay integration",
-      "precondition": "Terminal 已连接。",
+      "test_layer": "architecture guard",
+      "precondition": "当前不存在 WebSocket Terminal 连接；Daemon heartbeat/断线恢复归 ADR-009 的 REST + SSE 设计。",
       "steps": [
-        "停止心跳",
-        "等待超时"
+        "检查当前实现只对账号 SSE 运行读取流。",
+        "检查 P2 计划将 heartbeat/ack/reconnect 放入 DAEMON-RPC-01 与 SYNC-05。"
       ],
-      "expected": "连接关闭；presence 可重建。",
-      "cleanup": [],
+      "expected": "不把未实现的 WebSocket 心跳作为测试通过或 presence 证据。",
+      "cleanup": [
+        "不创建 WebSocket fixture"
+      ],
       "evidence": [
         "e2e-verify/reports/<ts>/RELAY-REALTIME/ws-02.json"
       ]
@@ -165,15 +170,15 @@
     {
       "id": "TERM-01",
       "title": "多 Terminal 独立在线",
-      "status": "in_progress",
-      "phase": "P1",
+      "status": "planned",
+      "phase": "v0.4/P2",
       "category": "Terminal",
       "priority": "P0",
       "test_layer": "Relay integration",
-      "precondition": "两台 mock Terminal 已配对。",
+      "precondition": "两台 Daemon 已配对且 ADR-009 hello/heartbeat 实现完成。",
       "steps": [
-        "同时注册",
-        "查看列表与心跳"
+        "同时执行 daemon.hello",
+        "查看列表、heartbeat 和各自 capability"
       ],
       "expected": "身份、心跳、能力互不覆盖。",
       "cleanup": [
@@ -186,15 +191,15 @@
     {
       "id": "TERM-02",
       "title": "Terminal 重连保持同一身份",
-      "status": "in_progress",
-      "phase": "P1",
+      "status": "planned",
+      "phase": "v0.4/P2",
       "category": "Terminal",
       "priority": "P0",
       "test_layer": "Relay integration",
-      "precondition": "Terminal 已注册。",
+      "precondition": "Terminal 已通过 daemon.hello 注册并保留目标终端游标。",
       "steps": [
-        "断开",
-        "用同一设备身份重连"
+        "断开专用 SSE 命令流",
+        "用同一设备身份与 Last-Event-ID/after_delivery_seq 重连"
       ],
       "expected": "terminal_id 不变；旧连接 fencing。",
       "cleanup": [],
@@ -374,18 +379,18 @@
     },
     {
       "id": "RELAY-LEASE-01",
-      "title": "PostgreSQL 是 lease 权威",
+      "title": "SQLite 是 lease 权威",
       "status": "in_progress",
       "phase": "P1",
       "category": "lease",
       "priority": "P0",
       "test_layer": "Relay integration",
-      "precondition": "Redis hint 与 PG lease 可被分别破坏。",
+      "precondition": "进程内 presence/hint 与 SQLite lease 记录可被分别重建或检查。",
       "steps": [
-        "清空 Redis lease hint",
+        "重启 Relay 清除进程内 hint",
         "提交合法 Android 命令"
       ],
-      "expected": "命令仍按 PG epoch 接受；Redis 不能单独批准。",
+      "expected": "命令仍按 SQLite 当前 epoch 接受；进程内 hint 不能单独批准写操作。",
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/RELAY-REALTIME/lease-01.json"
@@ -428,6 +433,100 @@
       ],
       "evidence": [
         "e2e-verify/reports/<ts>/RELAY-REALTIME/sec-01.json"
+      ]
+    },
+    {
+      "id": "CTRL-04",
+      "title": "远程命令派发遵守 owner、lease 与幂等",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "控制权",
+      "priority": "P0",
+      "test_layer": "Relay transaction + Daemon integration",
+      "precondition": "ADR-009 的 daemon.hello、命令投递、ack 以及确定性 Adapter 已实现；存在 owner Android、只读 Web/Admin 和已配对 Daemon。",
+      "steps": [
+        "owner 使用当前 lease 与幂等键提交目标 Daemon 命令，并观察 accepted 与 delivery 记录。",
+        "以相同幂等键、旧 epoch、非 owner、撤销设备和错误 terminal_id 分别提交。",
+        "让 Daemon 对合法命令发送 received/started/result ack，并查询命令终态。"
+      ],
+      "expected": "只投递一次合法命令；重复请求返回同一 command；旧 epoch、撤销、只读客户端和错误目标无执行副作用；ack/result 可审计且不含正文。",
+      "cleanup": [
+        "停止测试 Daemon/Adapter，删除测试会话、lease、命令、投递和事件记录"
+      ],
+      "evidence": [
+        "internal/relay/daemon_command_test.go",
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-04.json"
+      ]
+    },
+    {
+      "id": "SESS-05",
+      "title": "spawn、resume、abort、kill 映射为 canonical event 与 snapshot",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "会话",
+      "priority": "P0",
+      "test_layer": "Relay/Daemon/Adapter integration",
+      "precondition": "确定性 Adapter 支持 start、resume、abort、kill 终态，Relay-Daemon command/event 契约已实现。",
+      "steps": [
+        "创建会话并依次提交 spawn、resume、abort、kill，记录 command、delivery、ack、event 与 snapshot。",
+        "在每个动作期间断开 SSE、重启 Relay 或 Daemon，并从 cursor 恢复。",
+        "以 Adapter unsupported 和异常退出路径重复执行。"
+      ],
+      "expected": "每个动作有明确 canonical 状态、单调事件与一致 snapshot；unsupported/异常不伪造成功；恢复不重复启动进程或重复写事件。",
+      "cleanup": [
+        "终止所有测试 Provider 子进程，删除测试会话、事件、outbox 与本地 state"
+      ],
+      "evidence": [
+        "internal/relay/session_lifecycle_test.go",
+        "internal/daemon/session_runner_test.go",
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-05.json"
+      ]
+    },
+    {
+      "id": "SYNC-05",
+      "title": "Daemon 重连、cursor/outbox 与重复命令抑制",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "同步",
+      "priority": "P0",
+      "test_layer": "Relay/Daemon integration",
+      "precondition": "目标终端命令 SSE、SQLite delivery cursor、Daemon 本地 outbox 和可计数确定性 Adapter 已实现。",
+      "steps": [
+        "在 Daemon 收到命令前、received 后、started 后和 result 上传前分别断线。",
+        "重连并使用最后确认 delivery cursor，重复投递相同 command_id。",
+        "重启 Relay 与 Daemon 后检查最终 command、event、outbox 和 Adapter 调用计数。"
+      ],
+      "expected": "至少一次投递不造成至少两次执行；cursor 单调前进；缺口可恢复；重复 ack/result 是幂等的；损坏或过期 cursor 返回可诊断错误。",
+      "cleanup": [
+        "停止测试服务并删除隔离 SQLite、outbox、临时 trace 和 Adapter 计数"
+      ],
+      "evidence": [
+        "internal/relay/daemon_sync_test.go",
+        "internal/daemon/reconnect_test.go",
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sync-05.json"
+      ]
+    },
+    {
+      "id": "RELAY-LEASE-03",
+      "title": "旧 epoch、撤销设备与并发 owner 写入均被拒绝",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "lease",
+      "priority": "P0",
+      "test_layer": "Relay security + transaction integration",
+      "precondition": "至少两个设备、可轮换 lease epoch 的会话、已配对 Daemon 和并发请求屏障。",
+      "steps": [
+        "并发取得或续租 lease，并在成功后用旧 epoch 发送 start/abort。",
+        "撤销当前或历史 controller 后重放其 bearer/refresh 与已签名 command。",
+        "在 Relay 重启与 in-memory presence 丢失后重复合法/非法请求。"
+      ],
+      "expected": "SQLite 中只有一个当前 epoch；旧 epoch 和撤销设备没有 Daemon 投递或 Provider 副作用；重启不放宽 fencing 或授权。",
+      "cleanup": [
+        "撤销测试设备，删除测试账号、会话、lease、命令和 SQLite 副本"
+      ],
+      "evidence": [
+        "internal/relay/lease_fencing_test.go",
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/relay-lease-03.json"
       ]
     }
   ]

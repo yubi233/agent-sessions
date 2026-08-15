@@ -1,6 +1,6 @@
 {
   "suite": "daemon-core",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "DAEMON-CORE",
   "description": "Daemon 安装、SQLite/Keychain、Terminal 重连 outbox 与 Workspace 路径安全。消费 TERM-02，拥有 SYNC-03。",
@@ -124,6 +124,53 @@
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/DAEMON-CORE/proc-01.json"
+      ]
+    },
+    {
+      "id": "DAEMON-RPC-01",
+      "title": "Daemon 注册、heartbeat、取命令、ack 与断线恢复",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "Daemon RPC",
+      "priority": "P0",
+      "test_layer": "Daemon/Relay integration",
+      "precondition": "ADR-009 schema、隔离 Relay、已配对 terminal 凭据、Daemon 本地 SQLite 和确定性时钟均可用。",
+      "steps": [
+        "启动 Daemon，执行 hello 并建立专用 SSE 命令流，检查协商版本、terminal_id 和 heartbeat 周期。",
+        "由 Relay 投递命令，依次回传 received、started、result ack；断开流并从 delivery cursor 重连。",
+        "使用撤销凭据、N-2/N+1 版本、错误 terminal、过期 cursor 和重复 ack 重复请求。"
+      ],
+      "expected": "Daemon 只接收自己的命令；heartbeat/presence 可恢复；ack/result 幂等；撤销、版本和目标错误 fail-closed；日志不含 bearer、正文或工作区路径。",
+      "cleanup": [
+        "停止 Daemon/Relay，删除隔离 SQLite、凭据、SSE 流和临时日志"
+      ],
+      "evidence": [
+        "internal/daemon/relay_client_test.go",
+        "e2e-verify/reports/<ts>/DAEMON-CORE/daemon-rpc-01.json"
+      ]
+    },
+    {
+      "id": "DAEMON-PROC-02",
+      "title": "Provider 子进程启动、停止、异常退出与清理",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "进程",
+      "priority": "P0",
+      "test_layer": "Daemon/Adapter integration",
+      "precondition": "确定性 Adapter 可启动受控子进程并注入正常退出、超时、崩溃和输出上限；命令来自 ADR-009 投递链。",
+      "steps": [
+        "提交 start，观察进程创建、started ack 与 canonical event。",
+        "提交 abort/kill，观察进程组退出、result 和资源清理。",
+        "分别注入崩溃、超时、重复 delivery 与 Daemon 重启后恢复。"
+      ],
+      "expected": "每个 command_id 最多启动一次进程；终止和异常产生明确终态；子进程、文件描述符和临时目录被清理；不使用 shell 拼接或泄漏输出正文。",
+      "cleanup": [
+        "终止残留测试进程，删除临时目录、本地 outbox、SQLite 与 trace"
+      ],
+      "evidence": [
+        "internal/daemon/process_supervisor_test.go",
+        "internal/daemon/session_runner_test.go",
+        "e2e-verify/reports/<ts>/DAEMON-CORE/daemon-proc-02.json"
       ]
     }
   ]

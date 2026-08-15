@@ -1,9 +1,9 @@
 {
   "suite": "reliability-release",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "RELIABILITY-RELEASE",
-  "description": "Compose、备份恢复、升级回滚、性能与跨层 full gate。真实 Provider gate 仍由各 ADAPTER_* 授权。",
+  "description": "本地 Relay + SQLite 启停、备份恢复、升级回滚、性能与跨层 full gate。真实 Provider gate 仍由各 ADAPTER_* 授权。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Deployment / Release",
   "environment": {
@@ -22,21 +22,21 @@
   "cases": [
     {
       "id": "P0-DEPLOY-01",
-      "title": "Compose 健康检查",
+      "title": "Relay + SQLite 健康检查",
       "status": "planned",
       "phase": "P0",
       "category": "部署",
       "priority": "P0",
       "test_layer": "local integration",
-      "precondition": "Docker 可用。",
+      "precondition": "隔离 Relay 数据目录可写，`tools/relayctl.sh` 和 SQLite 文件路径已配置。",
       "steps": [
         "task compose:up",
-        "检查 Relay/Postgres/Redis",
+        "检查 Relay /healthz、/readyz 与 SQLite 可读写",
         "task compose:down"
       ],
-      "expected": "健康检查可区分组件；down 不删未授权卷。",
+      "expected": "健康检查可区分 Relay 进程与 SQLite 就绪；down 不删除用户数据库或未授权备份。",
       "cleanup": [
-        "停止本轮容器"
+        "停止本轮 Relay 进程"
       ],
       "evidence": [
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/p0-deploy-01.json"
@@ -44,20 +44,20 @@
     },
     {
       "id": "DEPLOY-01",
-      "title": "隔离 Compose 可重建",
+      "title": "隔离 Relay + SQLite 可重建",
       "status": "planned",
       "phase": "P5",
       "category": "部署",
       "priority": "P0",
       "test_layer": "integration",
-      "precondition": "镜像与 .env.example。",
+      "precondition": "隔离数据目录与最小环境配置。",
       "steps": [
-        "全新 up",
-        "readyz"
+        "全新启动 Relay",
+        "检查 /readyz 并重启一次"
       ],
-      "expected": "单租户栈可重复拉起。",
+      "expected": "单租户 Relay 与 SQLite 可重复拉起，未授权数据不被覆盖。",
       "cleanup": [
-        "compose down"
+        "停止隔离 Relay 并删除测试数据目录"
       ],
       "evidence": [
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-01.json"
@@ -73,7 +73,7 @@
       "test_layer": "integration",
       "precondition": "有密文事件的测试库。",
       "steps": [
-        "pg_dump",
+        "运行 deployctl SQLite backup",
         "检查产物不含明文"
       ],
       "expected": "备份可校验且脱敏。",
@@ -141,7 +141,7 @@
         "重连",
         "回滚应用"
       ],
-      "expected": "事件不丢；不回退 PG epoch。",
+      "expected": "事件不丢；不回退 SQLite 中的 lease epoch。",
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/sync-04.json"
@@ -223,6 +223,75 @@
       ],
       "evidence": [
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/e2e-relay-01.json"
+      ]
+    },
+    {
+      "id": "E2E-RELAY-02",
+      "title": "本地真实 Relay + Daemon + 确定性 Adapter 全闭环",
+      "status": "planned",
+      "phase": "v0.4/P2",
+      "category": "跨层",
+      "priority": "P0",
+      "test_layer": "local integration full gate",
+      "precondition": "ADR-009 命令流、隔离 Relay SQLite、已配对 Daemon、确定性 Adapter、已确认临时 Workspace 和可清理测试账号已就绪。",
+      "steps": [
+        "启动 Relay 和 Daemon，完成 owner/terminal 配对、hello、heartbeat 和 capability 发现。",
+        "创建会话，执行 start/send/abort 或 kill，观察 delivery、ack、canonical event、snapshot 与账号 SSE。",
+        "在 command/ack/event 边界断线重连、重启进程、重放幂等键、使用旧 lease 和撤销设备。"
+      ],
+      "expected": "真实本地进程完成端到端闭环；不重复执行、不丢关键状态、不越过 Workspace；报告标记 `local_test=true`、`fixture_data=true`、`real_upstream=false`，不声称真实 Provider。",
+      "cleanup": [
+        "停止 Relay、Daemon、Adapter 和 SSE；删除测试账号、SQLite、Workspace、outbox、trace 和日志"
+      ],
+      "evidence": [
+        "e2e-verify/relay/run-v04-local.mjs",
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/e2e-relay-02.json"
+      ]
+    },
+    {
+      "id": "DEPLOY-05",
+      "title": "签名更新清单、版本选择与回滚",
+      "status": "decision_gated",
+      "phase": "v0.4/P6",
+      "category": "发布",
+      "priority": "P1",
+      "test_layer": "release integration",
+      "precondition": "更新签名者、清单发布源、渠道、平台包来源、密钥轮换和回滚策略已获授权；当前没有更新端点。",
+      "steps": [
+        "验证有效、过期、撤销、错误渠道和错误平台的签名清单。",
+        "从旧版本、当前版本和候选版本计算可升级性并尝试回滚。",
+        "检查 Android/Web 的链接、缓存、日志和失败页。"
+      ],
+      "expected": "只有受信任清单可触发更新路径；无授权发布源时安全停用；回滚不降级安全协议或泄漏签名材料。",
+      "cleanup": [
+        "删除测试清单、签名副本、下载缓存和隔离发布目录"
+      ],
+      "evidence": [
+        "internal/deploy/update_manifest_test.go",
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/deploy-05.json"
+      ]
+    },
+    {
+      "id": "PERF-04",
+      "title": "Daemon 命令/事件延迟与长列表代码视图基线",
+      "status": "planned",
+      "phase": "v0.4/P7",
+      "category": "性能",
+      "priority": "P1",
+      "test_layer": "profile + load + visible-client diagnostic",
+      "precondition": "P2 命令流与 P3/P4 长列表、代码阅读界面已实现；测试数据含 1000 条消息、500 个文件条目和受限大 diff。",
+      "steps": [
+        "测量 enqueue-to-ack、event ingest-to-client、heartbeat age、重连次数和队列深度。",
+        "在 Android AVD/物理设备和 headed Web 滚动长列表、搜索文件并打开大 diff。",
+        "记录 frame timing、峰值内存、布局跳动与降级行为。"
+      ],
+      "expected": "报告给出 p50/p95、硬件/数据 seed 与失败阈值；超预算时先降级/分页，不以关闭断言或减少数据量伪造通过。",
+      "cleanup": [
+        "停止负载，清理测试数据、性能 trace 和临时报告"
+      ],
+      "evidence": [
+        "e2e-verify/perf/v04-baseline.mjs",
+        "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-04.json"
       ]
     }
   ]

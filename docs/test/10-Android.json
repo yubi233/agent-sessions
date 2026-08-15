@@ -417,253 +417,431 @@
     {
       "id": "MOBILE-15",
       "title": "主题系统：浅色/深色/跟随系统与 accent 切换",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "planned",
+      "phase": "v0.4/P1",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Dart unit + Flutter widget + visible macOS fixture + AVD",
+      "precondition": "P1 语义 design token 与本机非敏感外观偏好存储已实现；测试设备可切换系统浅深色。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "清空测试账户的外观偏好，以系统浅色启动应用并记录语义颜色、间距和稳定 Key。",
+        "依次选择 light、dark、system 与允许的 accent，重启应用后检查选择与当前主题。",
+        "在 system 模式下切换系统浅深色，并在 200% 文本和 reduced motion 下检查同一页面。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "偏好只保存在本机且不含密钥/正文；所有状态使用语义 token，长文案不溢出，主题切换不改变业务能力或稳定选择器。",
       "cleanup": [
-        "清理 fixture 状态"
+        "恢复系统主题并清理测试外观偏好"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "apps/mobile/test/theme_controller_test.dart",
+        "apps/mobile/test/theme_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-16",
       "title": "设置中心：账户/外观/用量/连接设置页",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "planned",
+      "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Dart unit + Flutter widget + visible macOS fixture + AVD",
+      "precondition": "P1 主题基础已完成；Relay/Provider capability 和账户白名单元数据可由受控 fixture 或真实只读接口提供。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "从设置入口依次打开账户、外观、用量和连接分区，覆盖 loading、empty、error、offline 与已撤销设备状态。",
+        "修改本机外观偏好并重启应用；查看 Provider/连接条目和无 capability 时的不可用原因。",
+        "尝试从设置页访问写控制、恢复码明文、token 或未实现的用量详情。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "页面只展示可兑现的白名单状态；偏好可恢复，敏感值不可见；无 capability 或无真实数据时明确降级且不制造写入口。",
       "cleanup": [
-        "清理 fixture 状态"
+        "清理本机偏好、测试登录态和 fixture"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "apps/mobile/test/settings_controller_test.dart",
+        "apps/mobile/test/settings_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-17",
       "title": "机器/终端状态页：版本、状态与重启入口",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "decision_gated",
+      "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Relay/Daemon integration + Flutter widget + visible AVD",
+      "precondition": "ADR-009 的 Daemon hello/heartbeat 契约和 `daemon.restart` 的授权、审计与进程监督决策已通过；当前实现仅验证不可用状态。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "在无 Daemon 命令流或 capability 的情况下打开机器页，检查版本、last-seen、offline 和 unsupported 展示。",
+        "在受控 Relay-Daemon fixture 中使 heartbeat 过期、重连并变更 capability，核对状态与绝对路径/原始日志脱敏。",
+        "仅当 `daemon.restart` 契约已实现时，以 owner、当前 lease 和明确确认执行一次重启并查询 command 终态。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "当前未实现重启时不存在可执行入口；实现后只允许已授权目标终端执行一次幂等重启，旧 epoch、撤销设备和 Web/Admin 请求均被拒绝。",
       "cleanup": [
-        "清理 fixture 状态"
+        "停止测试 Daemon，清理测试 lease、command 和本地状态"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "internal/daemon/daemon_rpc_test.go",
+        "apps/mobile/test/machine_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-18",
       "title": "代码查看器：语法高亮只读视图与受限摘要",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "planned",
+      "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Daemon integration + Flutter widget + visible AVD",
+      "precondition": "P2 已提供经过 Workspace 路径校验的只读 file/code RPC；临时 Git 仓库含文本、二进制、超大文件、符号链接与越界路径。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "从会话或项目打开文本文件，检查行号、语法类型、长行滚动、搜索和跳行。",
+        "打开二进制、超大、未知编码、无权和 snapshot stale 文件。",
+        "请求 `..`、仓外符号链接和未确认 Workspace 路径。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "文本仅以只读形式展示；受限文件显示安全摘要；越界请求被 Daemon 拒绝且 Relay、日志和客户端缓存不保存文件正文。",
       "cleanup": [
-        "清理 fixture 状态"
+        "删除临时仓库、清空代码缓存并停止测试 Daemon"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "internal/gitread/git_test.go",
+        "apps/mobile/test/code_viewer_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-19",
       "title": "会话 info 页增强：机器/复制/终止/分享入口",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "planned",
+      "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P1",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Flutter widget + Relay/Daemon integration + visible AVD",
+      "precondition": "P2 已有真实会话、目标终端和 capability；分享领域仍未决时必须能返回明确状态。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "打开会话 info，检查机器、Provider、状态、白名单复制字段与 capability。",
+        "以 owner/current lease 发起终止，重复提交同一幂等键并检查 command 终态。",
+        "检查无 share capability、无 lease、撤销设备和 Web/Admin 访问时的入口与服务端响应。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "复制不包含正文、token 或完整路径；终止遵守 owner/lease/capability；分享在独立安全 ADR 通过前显示 unavailable，不产生链接或外泄数据。",
       "cleanup": [
-        "清理 fixture 状态"
+        "终止测试会话，清理剪贴板、lease、command 和本地缓存"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "apps/mobile/test/session_info_screens_test.dart",
+        "internal/relay/session_command_test.go",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-20",
       "title": "用量统计页：7/30 天脱敏图表",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "decision_gated",
+      "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P1",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "usage integration + Flutter widget + visible AVD",
+      "precondition": "ADR-010 的 usage 上传、去重、UTC 日桶、保留和权限契约已实现；当前仅验证无数据/不可用状态。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "为同一 usage key 重放上传并跨 UTC 日桶、Provider 和连续 7/30 天查询聚合。",
+        "在移动端切换 7 天和 30 天视图，检查缺失 Provider、零值、错误与离线缓存提示。",
+        "检查网络、SQLite、日志、图表语义标签和导出内容。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "重复上传不重复计数；图表明确标识 UTC，只显示白名单整数聚合；不出现 prompt、回复、路径、原始会话 ID、费用或精确时间。",
       "cleanup": [
-        "清理 fixture 状态"
+        "删除测试账号 usage 聚合、去重账本和本地缓存"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "internal/usage/usage_test.go",
+        "apps/mobile/test/usage_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-21",
       "title": "更新提示与 changelog（fixture）",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "decision_gated",
+      "phase": "v0.4/P6",
       "category": "Android",
       "priority": "P1",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "release integration + Flutter widget + visible AVD",
+      "precondition": "签名更新清单、发布源、版本比较、平台链接与回滚 ADR 已通过；在此之前只允许显式标注 `fixture_data=true` 的视觉状态。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "对有效签名、过期签名、错误渠道、低版本、相同版本和回滚版本的清单执行版本解析。",
+        "在更新页查看 changelog、下载/商店跳转与离线错误状态。",
+        "在未配置签名源时打开入口，并检查 fixture 标识和网络请求。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "只有验证签名且匹配平台/渠道的清单可提示更新；失败时不跳转或安装；fixture 只能验证版式，不能称为真实更新完成。",
       "cleanup": [
-        "清理 fixture 状态"
+        "清理测试清单、下载缓存和应用偏好"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "apps/mobile/test/update_screens_test.dart",
+        "internal/deploy/update_manifest_test.go",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-22",
       "title": "命令面板：capability 门控命令入口",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "planned",
+      "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P1",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Dart unit + Flutter widget + visible macOS fixture + AVD",
+      "precondition": "已有路由、当前 session/lease 和 Provider capability；命令面板只索引已存在的安全动作。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "打开命令面板，按路由、会话和 capability 搜索并以键盘选择项目。",
+        "选择只读导航、支持的控制动作和 unsupported/无 lease 动作。",
+        "在长列表、屏幕阅读器和 reduced motion 下关闭、返回并恢复焦点。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "面板只显示已注册的路由和已授权动作；unsupported 或无 lease 项不可执行且说明原因；不会绕过服务端授权或创建隐藏命令。",
       "cleanup": [
-        "清理 fixture 状态"
+        "清空搜索历史、关闭面板并清理测试 lease"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "apps/mobile/test/command_palette_test.dart",
+        "apps/mobile/test/command_palette_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-23",
       "title": "会话分享入口（fixture 链路）",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "decision_gated",
+      "phase": "v0.4/P6",
       "category": "Android",
       "priority": "P2",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "security integration + Flutter widget + headed/AVD E2E",
+      "precondition": "分享的受众、认证、密钥封装、撤销、到期、下载控制和泄漏响应均已通过独立 ADR；当前没有服务端分享领域模型。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "在当前无分享 contract 时打开会话菜单，检查 unavailable 状态且不生成链接。",
+        "未来 contract 就绪后，创建最短授权分享、以未授权和已撤销身份访问、使其到期并撤销。",
+        "扫描链接、日志、剪贴板、数据库和通知的敏感字段。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "未决状态不会产生分享 URL 或泄漏正文；实现后只有授权受众可解密，撤销和到期立即失效，证据中不保留分享密钥或正文。",
       "cleanup": [
-        "清理 fixture 状态"
+        "撤销测试分享、清理测试账号、浏览器/设备缓存和剪贴板"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "docs/test/待定-分享安全.json",
+        "apps/mobile/test/session_share_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-24",
       "title": "Artifacts 产物列表与查看（fixture）",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "decision_gated",
+      "phase": "v0.4/P6",
       "category": "Android",
       "priority": "P2",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "security integration + Flutter widget + visible AVD",
+      "precondition": "Artifact 的所有权、E2EE、MIME/大小、配额、保留、删除和审计 ADR 已通过；当前没有 API 或持久化模型。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "在当前无 Artifact contract 时检查入口的 unavailable 状态和无网络写请求。",
+        "未来 contract 就绪后，创建文本、二进制和超限产物，读取列表、预览、删除和过期状态。",
+        "以越权、撤销和过期身份请求同一 artifact，并检查 Relay 存储与日志。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "未决状态不产生假列表；实现后仅授权设备可读取，受限类型安全降级，删除/过期后不可访问，Relay 不保存明文内容。",
       "cleanup": [
-        "清理 fixture 状态"
+        "删除测试 artifacts、缓存、密钥包装和临时文件"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "docs/test/待定-Artifact安全.json",
+        "apps/mobile/test/artifact_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-25",
       "title": "最近会话页",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "planned",
+      "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P2",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Relay integration + Flutter widget + visible AVD",
+      "precondition": "会话列表 API 具备稳定排序、cursor 分页和账户 scope；测试账号包含空列表、同时间戳和多页会话。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "打开 recent，首屏加载后下拉刷新、向下分页并进入一条会话。",
+        "制造离线、cursor 失效、撤销设备和跨账号会话 ID 请求。",
+        "刷新应用并从深链打开已存在、已删除和无权会话。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "排序和分页无重复/跳项；深链受账户 scope 保护；空、离线、stale、删除和无权均有明确状态且不泄漏其它会话元数据。",
       "cleanup": [
-        "清理 fixture 状态"
+        "删除测试会话并清理本地 cursor/cache"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "apps/mobile/test/recent_sessions_controller_test.dart",
+        "apps/mobile/test/recent_sessions_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {
       "id": "MOBILE-26",
       "title": "Apple 风格 UI 全屏打磨回归（稳定 Key 保持）",
-      "status": "in_progress",
-      "phase": "v0.4",
+      "status": "planned",
+      "phase": "v0.4/P1-P4",
       "category": "Android",
       "priority": "P2",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
-      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "test_layer": "Flutter widget + visible macOS fixture + AVD + physical-device acceptance",
+      "precondition": "P1 设计 token 已定义；每个现有和新增路由都有稳定 Key、状态 fixture 与明确的状态归属。",
       "steps": [
-        "按 v0.4 计划步骤执行"
+        "逐屏覆盖登录、配对、会话、文件、Git、设置、机器、info、recent、usage 和命令面板的 loading、empty、error、offline、forbidden、unsupported、stale、success。",
+        "在最小/最大目标视口、浅深色、长 Provider 名、多行错误、200% 文本、键盘导航、读屏和 reduced motion 下运行可见验收。",
+        "比对每个路由的稳定 Key、语义角色和可执行动作；在 UI 改造后运行受影响的功能回归。"
       ],
-      "expected": "见 v0.4 计划",
+      "expected": "内容不遮挡、不裁切、不重叠；稳定 Key 和授权语义不因样式改动漂移；视觉证据只在实际 runner/AVD/真机通过后登记，不能以文档预留代替。",
       "cleanup": [
-        "清理 fixture 状态"
+        "恢复系统设置，清理截图/录屏中的敏感测试数据和临时 profile"
       ],
       "evidence": [
-        "apps/mobile/test/",
+        "apps/mobile/test/accessibility_screens_test.dart",
+        "e2e-verify/mobile/run-macos.mjs",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-27",
+      "title": "单消息深链、文本选择与复制",
+      "status": "planned",
+      "phase": "v0.4/P3",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Flutter widget + Relay integration + visible AVD",
+      "precondition": "会话事件具有稳定 message ID，客户端已实现账户 scoped 深链和受控的文本选择/复制。",
+      "steps": [
+        "从一条有权限的消息生成并打开深链，刷新应用后再次打开。",
+        "选择并复制允许显示的消息文本，检查焦点、读屏标签和剪贴板内容。",
+        "用跨账号、已删除、过期或无权 message ID 打开深链。"
+      ],
+      "expected": "只定位授权会话中的目标消息；无权或失效 ID 不泄漏存在性；复制不添加 token、内部 ID 或隐藏正文，深链状态可恢复。",
+      "cleanup": [
+        "清理剪贴板、测试会话、深链历史和本地缓存"
+      ],
+      "evidence": [
+        "apps/mobile/test/message_deeplink_test.dart",
+        "apps/mobile/test/message_selection_screens_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-27-android.json"
+      ]
+    },
+    {
+      "id": "MOBILE-28",
+      "title": "可见端远程 spawn/control/stop 用户旅程",
+      "status": "planned",
+      "phase": "v0.4/P5",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Relay/Daemon integration + Flutter widget + visible AVD",
+      "precondition": "ADR-009 命令流、确定性 Adapter、已确认 Workspace、Android owner 与测试 Daemon 均可启动。",
+      "steps": [
+        "在可见 Android 端选择已在线终端和已确认 Workspace，创建会话并发送一个确定性命令。",
+        "观察 command accepted、Daemon ack、canonical event、会话状态和输出摘要，然后以当前 lease 执行 stop。",
+        "重复提交、断开/重连、使用旧 lease 和撤销设备后再次尝试控制。"
+      ],
+      "expected": "每条命令最多执行一次；Android 可见地显示状态迁移；重连按 cursor 补齐事件；旧 lease/撤销/重复请求不能启动或停止 Provider。",
+      "cleanup": [
+        "停止测试 Daemon/Adapter，删除测试 Workspace、会话、lease、outbox 和 Android 测试数据"
+      ],
+      "evidence": [
+        "apps/mobile/integration_test/remote_control_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-28-android.json",
+        "e2e-verify/traces/MOBILE/MOBILE-28/"
+      ]
+    },
+    {
+      "id": "MOBILE-29",
+      "title": "Android Push、后台恢复与深链",
+      "status": "planned",
+      "phase": "v0.4/P5",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Android integration + visible AVD + physical-device gate",
+      "precondition": "Push provider、最小通知内容、token 注册/撤销、后台限制与深链契约已实现；外部服务凭据已获授权。",
+      "steps": [
+        "在前台、后台和被系统回收后分别产生允许通知的 session 事件。",
+        "点击通知进入目标会话/消息，验证 cursor 恢复、无权限和已删除目标状态。",
+        "注销、撤销设备和关闭通知权限后再次发送事件，并在物理设备上切换网络。"
+      ],
+      "expected": "通知不含正文、密钥、diff 或完整路径；点击只打开已授权目标；注销/撤销后 token 无效且不再送达；AVD 与物理设备证据分开报告。",
+      "cleanup": [
+        "注销测试账号、撤销测试 Push token、清理通知、后台任务和测试设备数据"
+      ],
+      "evidence": [
+        "apps/mobile/integration_test/push_lifecycle_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-29-avd.json",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-29-device.json"
+      ]
+    },
+    {
+      "id": "MOBILE-30",
+      "title": "动态字体、语义、焦点、44px 目标与 reduced motion",
+      "status": "planned",
+      "phase": "v0.4/P1-P5",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Flutter widget + accessibility audit + visible AVD + physical-device acceptance",
+      "precondition": "P1 语义 token/组件已落地，路由具备稳定 Key，测试设备可设置最大字体、键盘和减少动画。",
+      "steps": [
+        "在登录、配对、会话、设置、机器、代码和命令面板页面启用最大字体、TalkBack/语义树、键盘导航和 reduced motion。",
+        "测量可操作控件的目标区域，验证焦点顺序、可见焦点和弹层关闭后的焦点恢复。",
+        "在小屏、横屏和长错误文案下执行关键只读和写控制流程。"
+      ],
+      "expected": "文本不截断主要内容，交互目标不小于 44px，所有图标按钮有可读名称，动画可降低且不影响状态完成，焦点不丢失或陷入。",
+      "cleanup": [
+        "恢复设备无障碍和显示设置，清理测试 profile"
+      ],
+      "evidence": [
+        "apps/mobile/test/accessibility_screens_test.dart",
+        "apps/mobile/integration_test/accessibility_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-30-device.json"
+      ]
+    },
+    {
+      "id": "E2E-ANDROID-01",
+      "title": "可见 AVD 的 v0.4 核心旅程",
+      "status": "planned",
+      "phase": "v0.4/P5",
+      "category": "Android E2E",
+      "priority": "P0",
+      "test_layer": "visible Android AVD E2E",
+      "precondition": "隔离 Relay、测试 Daemon、确定性 Adapter、Android AVD 和测试账号已按固定 seed 启动。",
+      "steps": [
+        "在可见 AVD 完成登录/配对、机器查看、会话创建、确定性事件观察、stop、recent 和深链。",
+        "覆盖离线重连、旧 lease、错误、无权和 unsupported 状态。",
+        "保存脱敏报告、截图/trace 与环境信息。"
+      ],
+      "expected": "用户可见流程与跨层状态一致；报告标记 `simulated_device=true`、`real_device=false`、`headless=false`，不把 AVD 说成真机。",
+      "cleanup": [
+        "停止测试服务，删除测试账号/会话/Workspace，并重置 AVD snapshot"
+      ],
+      "evidence": [
+        "e2e-verify/mobile/run-android.mjs",
+        "e2e-verify/reports/<ts>/ANDROID/e2e-android-01.json"
+      ]
+    },
+    {
+      "id": "E2E-ANDROID-02",
+      "title": "物理 Android 的 v0.4 核心旅程",
+      "status": "planned",
+      "phase": "v0.4/P5",
+      "category": "Android E2E",
+      "priority": "P0",
+      "test_layer": "physical Android device E2E",
+      "precondition": "用户已授权物理设备、Push/Provider 所需凭据和网络；设备型号、系统版本与测试账号已记录且不含敏感信息。",
+      "steps": [
+        "完成登录/配对、会话控制、后台恢复、通知深链和网络切换。",
+        "在 Keystore、权限拒绝、设备撤销和 Provider 不可用条件下重复核心流程。",
+        "收集 frame timing、内存、通知与脱敏 trace。"
+      ],
+      "expected": "报告标记 `real_device=true`、`headless=false`，单独列出真实 Provider/Push 是否调用；任何未授权外部链路保持 blocked，不用 AVD/fixture 补齐。",
+      "cleanup": [
+        "注销并撤销测试设备，清理通知、token、会话、缓存和临时测试数据"
+      ],
+      "evidence": [
+        "e2e-verify/mobile/run-android-device.mjs",
+        "e2e-verify/reports/<ts>/ANDROID/e2e-android-02.json"
       ]
     }
   ]
