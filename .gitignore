@@ -33,6 +33,7 @@ e2e-verify/screencasts/*/frames/
 e2e-verify/traces/**/trace.zip
 playwright-report/
 test-results/
+e2e-verify/
 
 # Flutter
 apps/mobile/.dart_tool/

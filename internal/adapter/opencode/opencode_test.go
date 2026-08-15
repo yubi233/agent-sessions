@@ -29,6 +29,8 @@ type fixtureServer struct {
 type fixtureSession struct {
 	id       string
 	messages int
+	// 最近一次 prompt_async 收到的 model（验证透传）。
+	lastModel string
 }
 
 // newFixtureServer 构造 fixture server；authRequired 为 true 时校验 Basic Auth。
@@ -158,9 +160,14 @@ func (f *fixtureServer) handlePromptAsync(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	// 记录消息数（Resume 判断上下文用），并追加流式事件。
+	// 记录消息数与模型透传（Resume 判断上下文用）。
+	var body struct {
+		Model map[string]string `json:"model"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	s.messages++
+	s.lastModel = body.Model["providerID"] + "/" + body.Model["modelID"]
 	f.sessions[id] = s
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
@@ -401,6 +408,7 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 
 	h, err := a.Start(context.Background(), adapter.StartRequest{
 		WorkspaceRoot: "/tmp/ws", Provider: "opencode", Prompt: "初始消息",
+		Model: "opencode-go/deepseek-v4-flash",
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -411,10 +419,23 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 	if handle.sessionID == "" || !strings.HasPrefix(handle.sessionID, "ses_fixture_") {
 		t.Fatalf("unexpected session id %q", handle.sessionID)
 	}
+	// Start 的初始 prompt 必须把模型选择透传给服务端。
+	f.mu.Lock()
+	startModel := f.sessions[handle.sessionID].lastModel
+	f.mu.Unlock()
+	if startModel != "opencode-go/deepseek-v4-flash" {
+		t.Fatalf("start model = %q, want 透传 opencode-go/deepseek-v4-flash", startModel)
+	}
 
-	// Send 命中 prompt_async（204）。
+	// Send 命中 prompt_async（204）且保持模型透传。
 	if err := h.Send(context.Background(), "继续"); err != nil {
 		t.Fatalf("send: %v", err)
+	}
+	f.mu.Lock()
+	sendModel := f.sessions[handle.sessionID].lastModel
+	f.mu.Unlock()
+	if sendModel != "opencode-go/deepseek-v4-flash" {
+		t.Fatalf("send model = %q, want 保持模型透传", sendModel)
 	}
 
 	// 注入流式事件序列：busy -> part.delta -> part.updated(text) -> tool -> step-finish -> session.error。

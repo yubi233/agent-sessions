@@ -136,9 +136,11 @@ func TestLiveTransport(t *testing.T) {
 	}
 
 	// Start + 初始 prompt：最小算术契约，证明 Adapter 而非仅 CLI。
+	// 显式指定已授权模型（避免落到服务端默认模型，保证 live gate 可复现）。
 	handle, err := a.Start(context.Background(), adapter.StartRequest{
 		WorkspaceRoot: t.TempDir(),
 		Provider:      "opencode",
+		Model:         "opencode-go/deepseek-v4-flash",
 		Prompt:        "只输出数字：1+1 等于多少？",
 	})
 	if err != nil {
@@ -174,7 +176,7 @@ collected:
 	// 输出脱敏摘要供编排脚本写入报告（只含计数，不含正文/凭据）。
 	fmt.Printf("LIVE_SUMMARY %s\n", liveSummary(observed, usageEvent.Payload))
 
-	// Send：追加一条消息（204 受理即可，不校验模型回复正文）。
+	// Send：追加一条消息（204 受理即可，不校验模型回复正文），模型透传保持。
 	if err := handle.Send(context.Background(), "只输出数字：2+2 等于多少？"); err != nil {
 		t.Fatalf("send: %v", err)
 	}

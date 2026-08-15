@@ -173,15 +173,16 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	if err != nil {
 		return nil, fmt.Errorf("opencode create session: %w", err)
 	}
-	h := a.newHandle(session.ID)
+	h := a.newHandle(session.ID, req.Model)
 	if err := h.attach(ctx); err != nil {
 		_ = client.Abort(context.Background(), session.ID)
 		a.detach(h)
 		return nil, fmt.Errorf("opencode subscribe events: %w", err)
 	}
 	// 首个 turn：如果 StartRequest 带初始 prompt，异步发送；失败不回滚会话（可重试）。
+	// 显式透传模型选择，避免 live gate 落到服务端默认模型而不可复现。
 	if req.Prompt != "" {
-		if err := client.PromptAsync(ctx, session.ID, []Part{TextPart(req.Prompt)}); err != nil {
+		if err := client.PromptAsync(ctx, session.ID, []Part{TextPart(req.Prompt)}, req.Model); err != nil {
 			_ = h.Dispose(context.Background())
 			return nil, fmt.Errorf("opencode initial prompt: %w", err)
 		}
@@ -224,7 +225,8 @@ func (a *Adapter) Resume(ctx context.Context, req adapter.ResumeRequest) (adapte
 		// 服务端上下文已丢失：只能带上下文重启新会话，明确返回 restarted_with_context。
 		result = adapter.WakeRestartedWithContext
 	}
-	h := a.newHandle(session.ID)
+	// Resume 不改变会话模型选择：保持服务端已有模型。
+	h := a.newHandle(session.ID, "")
 	if err := h.attach(ctx); err != nil {
 		a.detach(h)
 		return adapter.ResumeResult{Result: adapter.WakeUnsupported}, nil
@@ -233,7 +235,7 @@ func (a *Adapter) Resume(ctx context.Context, req adapter.ResumeRequest) (adapte
 }
 
 // newHandle 创建会话句柄并登记。
-func (a *Adapter) newHandle(sessionID string) *handle {
+func (a *Adapter) newHandle(sessionID, model string) *handle {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	h := &handle{
@@ -242,6 +244,7 @@ func (a *Adapter) newHandle(sessionID string) *handle {
 		events:    make(chan adapter.Event, 256),
 		done:      make(chan struct{}),
 		seq:       1,
+		model:     model,
 	}
 	a.handles[sessionID] = h
 	return h
@@ -298,6 +301,8 @@ type handle struct {
 	events    chan adapter.Event
 	seq       int64
 	done      chan struct{}
+	// model 是创建/恢复时透传的模型选择；Send 时随 prompt_async 一起提交。
+	model string
 }
 
 // ID 返回会话 ID（仅 daemon 本地使用；不进 Relay/Flutter 卡片）。
@@ -309,7 +314,10 @@ func (h *handle) Send(ctx context.Context, text string) error {
 	if client == nil {
 		return errors.New("opencode client 未配置")
 	}
-	return client.PromptAsync(ctx, h.sessionID, []Part{TextPart(text)})
+	h.mu.Lock()
+	model := h.model
+	h.mu.Unlock()
+	return client.PromptAsync(ctx, h.sessionID, []Part{TextPart(text)}, model)
 }
 
 // Abort 中止当前 turn（POST /session/{id}/abort）。
