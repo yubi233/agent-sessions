@@ -26,17 +26,23 @@ func New() *Adapter {
 // Detect 返回能力矩阵。
 func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	_ = ctx
-	// OpenCode 原生支持会话与工具、文件/Git 读取；跨 Provider 派发 unsupported。
-	native := map[string]bool{"start": true, "resume": true, "abort": true, "permission": true, "git_read": true, "file_read": true}
+	// 本机地址的存在只能说明未来可尝试建立传输，不能证明 SPI 的 Start/Resume
+	// 已经可用。当前 transport 尚未实现，必须让客户端 fail-closed，避免暴露
+	// 实际会返回 unsupported 的会话控制入口。
+	reason := "OpenCode 本地服务未配置，控制能力已安全禁用。"
+	if a.url != "" {
+		reason = "OpenCode transport 尚未接入，控制能力已安全禁用。"
+	}
 	caps := make([]adapter.Capability, 0, len(adapter.CapabilityNames))
 	for _, name := range adapter.CapabilityNames {
-		c := adapter.Capability{Name: name, Status: adapter.CapabilityUnsupported}
-		if a.url != "" && native[name] {
-			c.Status = adapter.CapabilityNative
-		}
-		caps = append(caps, c)
+		caps = append(caps, adapter.Capability{
+			Name:   name,
+			Status: adapter.CapabilityUnsupported,
+			Reason: reason,
+		})
 	}
-	return adapter.Capabilities{Provider: "opencode", Version: "unknown", Capabilities: caps}, nil
+	// 未连接并确认本地服务版本前不声明 Provider available；Registry 会据此保持入口关闭。
+	return adapter.Capabilities{Provider: "opencode", Capabilities: caps}, nil
 }
 
 // Capabilities 返回能力矩阵。

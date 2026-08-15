@@ -1,14 +1,15 @@
 {
   "suite": "adapter-opencode",
-  "suite_version": 1,
+  "suite_version": 2,
   "status": "in_progress",
   "plan_id": "ADAPTER-OPENCODE",
-  "description": "OpenCode 本地 API/WS/SSE fixture 与授权 live smoke。恢复不足必须明确降级。",
+  "description": "OpenCode 本地 API/WS/SSE fixture、fail-closed capability contract 与授权 CLI live smoke。真实 CLI 通过不等于移动端 Adapter transport 已打通。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "OpenCode Adapter",
   "environment": {
-    "opencode": "not-installed",
-    "live_authorized": false
+    "opencode": "macos-local-validated",
+    "live_authorized": true,
+    "live_model": "opencode-go/deepseek-v4-flash"
   },
   "verification_defaults": {
     "report_kind": "not_run",
@@ -22,18 +23,19 @@
   "cases": [
     {
       "id": "ADPT-OPENCODE-01",
-      "title": "本地服务发现与传输",
-      "status": "passed",
+      "title": "本地服务发现与 fail-closed 传输声明",
+      "status": "in_progress",
       "phase": "P3",
       "category": "OpenCode",
       "priority": "P0",
       "test_layer": "contract",
-      "precondition": "连接 fixture。",
+      "precondition": "可选 AGENT_SESSIONS_OPENCODE_URL；当前 transport 尚未实现。",
       "steps": [
-        "detect",
-        "HTTP/SSE/WS 取消"
+        "配置本地 URL 后调用 Detect",
+        "验证全部能力仍为 unsupported，并带出不可用原因",
+        "验证 Start/Resume 与能力声明一致"
       ],
-      "expected": "版本与 endpoint 可记录。",
+      "expected": "未建立 HTTP/SSE/WS client 前不宣称 native，Start 返回不可用错误且 Resume 返回 unsupported。",
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/01.json"
@@ -78,23 +80,48 @@
     },
     {
       "id": "ADPT-OPENCODE-04",
-      "title": "授权 live smoke",
-      "status": "blocked",
+      "title": "授权 OpenCode CLI 模型 live smoke",
+      "status": "passed",
       "phase": "P3",
       "category": "OpenCode",
       "priority": "P1",
       "test_layer": "authorized upstream",
-      "precondition": "用户授权。",
+      "precondition": "用户授权；本机 OpenCode CLI 可发现 opencode-go/deepseek-v4-flash。",
       "steps": [
-        "临时 repo 最小交互",
-        "cleanup"
+        "运行 task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --retries 3",
+        "在临时空目录以 --pure 和 JSON event 执行最小算术契约",
+        "清理临时目录，仅保存事件类型、哈希和 usage 摘要"
       ],
-      "expected": "无授权则 blocked。",
+      "expected": "真实模型与真实上游均为 true；最小 JSON 响应契约通过，但不能据此宣称 Adapter Start/Resume 或移动端真实会话已通过。",
       "cleanup": [
-        "停止本地 OpenCode 测试实例"
+        "删除本轮临时目录"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04.json"
+        "e2e-verify/real/opencode-live.mjs",
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04-live-smoke.json"
+      ]
+    },
+    {
+      "id": "HAPPY-OPENCODE-01",
+      "title": "Happy Mobile 功能差距的真实模型一致性检查",
+      "status": "passed",
+      "phase": "P2 follow-up",
+      "category": "Product Validation",
+      "priority": "P0",
+      "test_layer": "authorized real model smoke",
+      "precondition": "固定 Happy 源码版本与本仓库代码事实已完成对照；用户授权真实 OpenCode 调用。",
+      "steps": [
+        "向同一 OpenCode 模型提交封闭选项的优先级审阅",
+        "仅接受 provider_transport、voice、social 三个可选值之一",
+        "记录结构化结果、响应哈希和用量，不保存原始 prompt 或回复"
+      ],
+      "expected": "返回 provider_transport。该结果仅校验优先级一致性，功能事实仍以 Happy 固定源码和本仓库实现为准。",
+      "cleanup": [
+        "删除本轮临时目录"
+      ],
+      "evidence": [
+        "docs/zh/实施记录/07-HappyMobile功能对比与OpenCode验证.md",
+        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04-live-smoke.json"
       ]
     }
   ]

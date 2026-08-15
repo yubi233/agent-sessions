@@ -9,12 +9,27 @@
 | `task test:e2e`                                      | Web/Admin headed Playwright 回归                                  | 默认启动系统 Chrome，`real_browser=true`、`headless=false`                                |
 | `node e2e-verify/run.mjs --suite p0-health`          | 单个 headed Web smoke                                             | 报告写入 `e2e-verify/reports/<timestamp>/<plan_id>/`                                      |
 | `task test:record`                                   | 已通过 browser gate 后的 CDP 录屏                                 | 帧、manifest、mp4 写入 `e2e-verify/screencasts/<timestamp>/`                              |
+| `task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --retries 3` | 经授权的 OpenCode Go 真实模型 smoke 与 Happy 对比一致性检查 | `real_model=true`、`real_upstream=true`；无浏览器，不代表移动端 Adapter transport 已通过 |
 | `task test:flutter:local`                            | v0.1 MacBook Flutter macOS integration gate                       | 启动可见桌面窗口；不能由 headless 或 widget 测试替代                                      |
 | `task test:flutter:record -- --gate-report <report>` | 已通过 Flutter macOS full gate 后的 P6 fixture 录屏               | 固定 5fps，验证 `VISUAL-MOBILE-11/12/14` 的帧、manifest 与 MP4                            |
 | `task test:android:e2e`                              | 后续 Android AVD integration diagnostic                           | 不属于本轮 v0.1 gate                                                                      |
 | `e2e-verify/mobile/`                                 | MacBook Flutter macOS full gate、P6 录屏、后续 AVD 诊断和报告脚本 | 本轮 `run-macos.mjs` 与 `record-macos.mjs` 启动可见桌面窗口；Android 原生验收留待后续阶段 |
 
 不要使用不存在的`pnpm --filter @agent-sessions/e2e-verify test`命令；当前 package 公开的是`test:e2e`，推荐始终从根目录`task test:e2e`运行。
+
+## 经授权的 OpenCode 真实模型 smoke
+
+`e2e-verify/real/opencode-live.mjs`是唯一的 OpenCode Go 真实调用入口，长期回归由同目录的`opencode-live.test.mjs`管理，对应`ADPT-OPENCODE-04`和`HAPPY-OPENCODE-01`。运行前必须有用户授权；默认模型为`opencode-go/deepseek-v4-flash`，不限制 token，但仅对`provider_timeout`和`provider_http_error`最多重试三次。
+
+运行命令：
+
+```bash
+task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --retries 3
+```
+
+脚本先用`opencode models`确认模型，再在新建的临时空目录中以`opencode run --pure --format json`执行两个无工具、无文件写入的最小请求：一个校验 JSON 算术响应，另一个校验 Happy 功能差距的封闭优先级选项。每个 case 的首次请求加最多三次可恢复重试，因此本次入口的上限为八次真实请求。临时目录会在退出时删除；报告只记录模型发现哈希、事件类型、响应/输出哈希、脱敏请求标识和 token 用量，绝不保存凭据、原始 prompt、原始回复或 session ID。
+
+该 gate 不是浏览器或录屏入口，因此固定标记`real_browser=false`、`headless=false`。它证明本机 CLI 可真实请求 OpenCode Go；当前`internal/adapter/opencode`的`Start`/`Resume`传输尚未实现，不能据此将 Flutter 移动端描述为已控制真实 OpenCode 会话。
 
 ## 已注册浏览器场景
 

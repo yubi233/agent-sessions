@@ -106,13 +106,13 @@
       "plan_id": "ADAPTER-OPENCODE",
       "suite_path": "docs/test/08-Adapter-OpenCode.json",
       "owner": "OpenCode Adapter",
-      "id_prefix": ["ADPT-OPENCODE-"],
-      "owned_ids": ["ADPT-OPENCODE-01", "ADPT-OPENCODE-02", "ADPT-OPENCODE-03", "ADPT-OPENCODE-04"],
+      "id_prefix": ["ADPT-OPENCODE-", "HAPPY-OPENCODE-"],
+      "owned_ids": ["ADPT-OPENCODE-01", "ADPT-OPENCODE-02", "ADPT-OPENCODE-03", "ADPT-OPENCODE-04", "HAPPY-OPENCODE-01"],
       "consumed_ids": ["ADPT-01", "MODE-01", "MODE-02", "MODE-03", "MODE-04"],
       "dependencies": ["ADAPTER-PLATFORM", "DAEMON-CORE"],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": true,
-      "uniqueness_rule": "只定义 OpenCode 本地 API/WS/SSE/session fixture 和授权 live smoke；恢复不足时必须保留明确降级结果。"
+      "uniqueness_rule": "只定义 OpenCode 本地 API/WS/SSE/session fixture、fail-closed capability contract、授权 CLI live smoke 与 Happy 对比一致性检查；真实 CLI 通过不能替代 Adapter transport，恢复不足时必须保留明确降级结果。"
     },
     {
       "plan_id": "ADAPTER-OPENCLAW",

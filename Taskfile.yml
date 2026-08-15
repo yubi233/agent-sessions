@@ -72,6 +72,12 @@ tasks:
     cmds:
       - node e2e-verify/record.mjs
 
+  test:real:
+    desc: 经授权的 OpenCode Go 真实模型 gate（默认 deepseek-v4-flash）
+    cmds:
+      - node e2e-verify/real/opencode-live.test.mjs
+      - node e2e-verify/real/opencode-live.mjs {{.CLI_ARGS}}
+
   test:android:
     desc: Flutter 分析与 widget 测试（单 worker，规避当前 macOS Flutter listener 清理竞态）
     cmds:

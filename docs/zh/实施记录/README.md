@@ -12,3 +12,5 @@
 6. P5：安全、性能、部署、备份恢复与发布门禁。
 
 每份记录必须链接对应的实施计划、测试 ID、命令、报告目录和回滚点。真实 Provider、真实模型与生产端点没有明确凭据时保持 `blocked`，不得用 fixture 标记为通过。
+
+专题记录：[Happy Mobile 功能对比与 OpenCode 验证](07-HappyMobile功能对比与OpenCode验证.md)补充了本机 OpenCode Go 的授权 live smoke、能力 fail-closed 修复和下一阶段的 Provider transport 优先级。
