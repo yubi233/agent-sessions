@@ -1,9 +1,28 @@
 # Happy Mobile 功能对比与 OpenCode 验证
 
-> 状态：`completed`（功能审计与 OpenCode CLI smoke；Adapter transport 仍为 `blocked`）
+> 状态：`completed`（v0.1 功能审计 + OpenCode CLI smoke；v0.2 已实现真实 Adapter transport 并复测对照）
 > 日期：2026-08-15
-> 输入：[v0.1 迭代计划](../迭代计划/迭代计划v0.1.md)、[项目文档](../项目文档.md)、[OpenCode 测试 suite](../../test/08-Adapter-OpenCode.json)
-> 相关实现：[OpenCode Adapter](../../../internal/adapter/opencode/opencode.go)、[真实模型 gate](../../../e2e-verify/real/opencode-live.mjs)
+> 输入：[v0.1 迭代计划](../迭代计划/迭代计划v0.1.md)、[v0.2 迭代计划](../迭代计划/迭代计划v0.2.md)、[项目文档](../项目文档.md)、[OpenCode 测试 suite](../../test/08-Adapter-OpenCode.json)
+> 相关实现：[OpenCode Adapter](../../../internal/adapter/opencode/)、[真实模型 gate](../../../e2e-verify/real/opencode-live.mjs)、[transport live gate](../../../e2e-verify/real/opencode-transport.mjs)
+
+## v0.2 复测结论（2026-08-15 全流程对照）
+
+在 v0.1 审计基础上，v0.2 完成真实 transport 后对同一固定提交 `eb980a5c9eea25b1c145c06cd6241a0a365c2b6d` 重新对照。**v0.1 标注为缺口的项，v0.2 已交付**：OpenCode 真实 HTTP/SSE transport（health/session/prompt_async/abort/SSE 映射）、Resume 三态、通用只读文件浏览、会话快捷操作（details/resume/fork/archive 按 capability fail-closed）、composer 模型/effort 选择与脱敏 usage 计数、`@`/`/` 自动补全、真实选附件（DEK 密封）、草稿自动保存、Delegation 可见派发入口。全流程复测证据见[实施记录 08](08-v0.2-Android会话能力对齐Happy.md)与[自动化测试文档](../自动化测试文档.md)。
+
+### v0.2 后仍存在的差距（对照固定提交实测代码）
+
+| 能力域 | Happy Mobile 基线（固定提交） | Agent Sessions v0.2 | 差距 | 后续动作 |
+| --- | --- | --- | --- | --- |
+| permission mode 选择器 | `getAvailablePermissionModes` + `sessionSetAgentModes({permissionMode})` | 只有 permission 确认卡，无 mode 选择器 | 缺口 | 新增 `permission_mode` 命令与选择器（按 capability） |
+| goal 编辑 | `AgentGoalBar` 支持编辑目标文本（Modal.prompt + `sessionGoalAction`） | 只有 goal toggle（active/paused），无文本编辑 | 缺口 | 新增 goal 编辑命令与 UI |
+| usage 深度 | input/output/cacheCreation/cacheRead/contextSize/contextWindow + 上下文警告 | 只有 input/output/context 计数 | 局部 | 补 cache 计数与 context 窗口警告 |
+| CLI 版本过旧警告 | `MINIMUM_CLI_VERSION` 比较 + acknowledgedCliVersions 条 | 移动端无版本警告条（Web 能力矩阵有版本展示） | 缺口 | 移动端状态条接 Detect 版本与 fail-closed 原因 |
+| duplicate / 复制元数据/日志 | quick actions：duplicate sheet、copySessionMetadata | 无入口 | 缺口 | 与 fork/archive 一起按 capability 规划 |
+| fork / archive | `canFork`/`canArchive` 真实动作 | 入口禁用（capability 未声明，fail-closed） | 符合计划 | 数据模型与迁移立项后兑现 |
+| 连接态展示 | realtimeStatus + ConnectButton | 状态条有会话状态/lease，无 Provider 连接态 | 局部 | 接 Detect 连接态展示 |
+| 实时语音 / Inbox/Friends | 明确能力 | 明确排除 | 排除 | 不纳入远程编码会话 gate |
+
+### v0.1 原文（保留，作为审计轨迹）
 
 ## P2 Todo
 
