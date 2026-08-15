@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import '../attachments/attachment_picker.dart';
 import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
@@ -16,15 +18,26 @@ class SessionController extends ChangeNotifier {
     required RelayRepository relay,
     DateTime Function()? clock,
     Random? random,
-  }) => SessionController._(relay, clock: clock, random: random);
+    AttachmentPicker? picker,
+  }) => SessionController._(
+    relay,
+    clock: clock,
+    random: random,
+    picker: picker,
+  );
 
-  SessionController._(this._relay, {DateTime Function()? clock, Random? random})
-    : _clock = clock ?? DateTime.now,
-      _random = random ?? Random.secure();
+  SessionController._(
+    this._relay, {
+    DateTime Function()? clock,
+    Random? random,
+    this._picker,
+  }) : _clock = clock ?? DateTime.now,
+       _random = random ?? Random.secure();
 
   final RelayRepository _relay;
   final DateTime Function() _clock;
   final Random _random;
+  final AttachmentPicker? _picker;
 
   SessionListPhase _phase = SessionListPhase.loading;
   List<MobileSession> _sessions = const [];
@@ -45,6 +58,8 @@ class SessionController extends ChangeNotifier {
   final Map<String, int> _sessionCursors = {};
   // v0.2/P2：composer 草稿只保存在内存（不落明文盘）；按会话隔离，切换页面/会话后仍可恢复。
   final Map<String, String> _composerDrafts = {};
+  // v0.2/P3：会话内容密钥（DEK）可用性；false 时附件选文件入口 fail-closed。
+  bool _contentKeyAvailable = false;
   String? _errorMessage;
   int _idempotencyCounter = 0;
   int _selectionGeneration = 0;
@@ -499,8 +514,7 @@ class SessionController extends ChangeNotifier {
   }
 
   /// 添加前的 MIME/大小/密文块预检在本机完成。拒绝项仅显示在内存 composer，不会发出 HTTP 请求。
-  bool addAttachmentDraft(AttachmentDraft draft) {
-    try {
+  bool addAttachmentDraft(AttachmentDraft draft) {    try {
       draft.validate();
     } on RelayFailure catch (failure) {
       _attachmentRejections = [
@@ -655,6 +669,110 @@ class SessionController extends ChangeNotifier {
   bool isAttachmentPending(String attachmentId) =>
       _pendingActionKeys.any((key) => key.endsWith(':$attachmentId'));
 
+  /// v0.2/P3：附件选文件入口的阻断原因；DEK 缺失时保持 fail-closed。
+  String? attachmentPickBlockedReason({required bool canWrite}) {
+    final blocked = controlBlockedReason('attachments', canWrite: canWrite);
+    if (blocked != null) return blocked;
+    if (!_contentKeyAvailable) return '等待会话附件密钥';
+    if (_picker == null) return '附件选择器不可用';
+    return null;
+  }
+
+  /// v0.2/P3：真实选附件：选择 -> 本地校验 -> DEK 密封（SystemAttachmentPicker）-> 密文队列。
+  /// fixture 模式由注入的确定性 picker 返回预密封草稿。
+  Future<bool> pickAttachment({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = attachmentPickBlockedReason(canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return false;
+    }
+    final picker = _picker!;
+    final actionKey = 'pick:$sessionId';
+    if (_pendingActionKeys.contains(actionKey)) return false;
+    _errorMessage = null;
+    _pendingActionKeys.add(actionKey);
+    notifyListeners();
+    try {
+      final draft = await picker.pickAttachment(
+        sessionId: sessionId,
+        dekId: 'session-dek:$sessionId',
+      );
+      if (draft == null) return false;
+      return addAttachmentDraft(draft);
+    } on RelayFailure catch (failure) {
+      _errorMessage = failure.message;
+      return false;
+    } catch (_) {
+      _errorMessage = '附件选择未完成，请稍后重试。';
+      return false;
+    } finally {
+      _pendingActionKeys.remove(actionKey);
+      notifyListeners();
+    }
+  }
+
+  /// v0.2/P3：composer 内切换模型；目标必须在 controls.models 目录中，命令走 lease+幂等。
+  Future<void> selectModel({
+    required String model,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('model_select', canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    final controls = _controls;
+    if (!controls.models.contains(model)) {
+      _setError('目标模型不在当前目录中。');
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'model:$sessionId:$model',
+      kind: SessionCommandKind.modelSelect,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'model': model},
+      },
+      onAccepted: () => _controls = controls.copyWith(model: model),
+    );
+  }
+
+  /// v0.2/P3：composer 内切换 effort。
+  Future<void> selectEffort({
+    required String effort,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('effort_select', canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    final controls = _controls;
+    if (!controls.efforts.contains(effort)) {
+      _setError('目标 effort 不在当前目录中。');
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'effort:$sessionId:$effort',
+      kind: SessionCommandKind.effortSelect,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'effort': effort},
+      },
+      onAccepted: () => _controls = controls.copyWith(effort: effort),
+    );
+  }
+
   String? composerBlockedReason({required bool canWrite}) {
     if (!canWrite) return '当前登录是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
@@ -697,6 +815,7 @@ class SessionController extends ChangeNotifier {
     _errorMessage = null;
     _selectedSessionId = sessionId;
     _selectedLease = null;
+    _contentKeyAvailable = false;
     // 在读取新会话前先清空上一会话 timeline。否则首次 snapshot 的 cursor 推导会误用旧序号，
     // 并可能遗漏新会话恢复事件或短暂展示错误的会话内容。
     _timeline = const [];
@@ -708,6 +827,8 @@ class SessionController extends ChangeNotifier {
     _isDetailLoading = true;
     notifyListeners();
     try {
+      // 会话 DEK 可用性只影响附件选文件入口；异步读取不阻塞快照。
+      unawaited(_loadContentKeyAvailability(sessionId, selectionGeneration));
       final snapshot = await _relay.getSessionSnapshot(sessionId);
       if (_selectedSessionId != sessionId ||
           _selectionGeneration != selectionGeneration) {
@@ -810,6 +931,25 @@ class SessionController extends ChangeNotifier {
       }
     }
     return highest;
+  }
+
+  /// 会话切换后异步确认 DEK 可用性；迟到的旧会话响应会被 generation 丢弃。
+  Future<void> _loadContentKeyAvailability(
+    String sessionId,
+    int selectionGeneration,
+  ) async {
+    var available = false;
+    try {
+      available = await _relay.sessionContentKeyAvailable(sessionId);
+    } catch (_) {
+      available = false;
+    }
+    if (_selectedSessionId != sessionId ||
+        _selectionGeneration != selectionGeneration) {
+      return;
+    }
+    _contentKeyAvailable = available;
+    notifyListeners();
   }
 
   AttachmentTransfer? _attachmentByID(String attachmentId) {

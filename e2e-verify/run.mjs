@@ -34,8 +34,15 @@ async function main() {
 
   const report = (payload) => {
     const base = baseReport(payload);
+    // 场景自定义字段（如 opencode_observed 探测快照）原样透传，不作为敏感正文处理；
+    // 字段由 report.mjs 的 sanitizeReport 统一脱敏后再落盘。
+    const extras = Object.fromEntries(
+      Object.entries(payload).filter(([key]) => !(key in base) && key !== "planId"),
+    );
     // 将运行元信息与真实浏览器口径写入报告。
-    const full = { ...base, relay_base: relay.base };
+    // relay_base 优先采用场景自带的专用 Relay（如接真实 opencode serve 的实例），
+    // 未提供时回退到共享 Relay，保证报告不误标本轮实际验证的服务地址。
+    const full = { ...base, ...extras, relay_base: payload.relay_base || relay.base };
     writeReport({ planId: payload.planId || "PROTO-CRYPTO", name: payload.suite, report: full });
     results.push({ id: payload.suite, status: payload.status });
     return full;

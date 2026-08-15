@@ -31,6 +31,17 @@ class CryptoEnvelope {
   final String ciphertext;
   final String aadHash;
   final int payloadVersion;
+
+  Map<String, dynamic> toJson() => {
+    'alg': alg,
+    'key_id': keyId,
+    'nonce': nonce,
+    'ciphertext': ciphertext,
+    'aad_hash': aadHash,
+    'payload_version': payloadVersion,
+  };
+
+  String toJsonString() => jsonEncode(toJson());
 }
 
 /// AAD 绑定实体、事件类型、协议版本、序号和 key id，避免密文跨范围重放。
@@ -86,6 +97,53 @@ class CryptoBox {
   static final _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
   static final _sha256 = Sha256();
 
+  /// 与 Go `Seal` 对齐：HKDF 派生内容密钥 -> AES-256-GCM 加密 -> ciphertext||tag。
+  /// 密文使用无填充 base64（Go RawStdEncoding 兼容），nonce 必须 96-bit 且不重复。
+  static Future<CryptoEnvelope> seal({
+    required Uint8List dek,
+    required String keyId,
+    required int payloadVersion,
+    required AssociatedData aad,
+    required Uint8List plaintext,
+    required Uint8List nonce,
+  }) async {
+    if (nonce.length != 12) {
+      throw StateError('nonce must be 12 bytes');
+    }
+    final contentKey = await _deriveContentKey(dek);
+    final scopedAad = aad.withKeyId(keyId).encode();
+    final aadHashBytes = await _sha256.hash(scopedAad);
+    final box = await _aesGcm.encrypt(
+      plaintext,
+      secretKey: contentKey,
+      nonce: nonce,
+      aad: scopedAad,
+    );
+    // Go 的 GCM 输出为 ciphertext||tag；Dart 将 tag 单独表达为 Mac，这里拼接还原。
+    final combined = Uint8List.fromList([...box.cipherText, ...box.mac.bytes]);
+    return CryptoEnvelope(
+      alg: algorithmVersion,
+      keyId: keyId,
+      nonce: _encodeNoPadding(nonce),
+      ciphertext: _encodeNoPadding(combined),
+      aadHash: _hex(aadHashBytes.bytes),
+      payloadVersion: payloadVersion,
+    );
+  }
+
+  static Future<SecretKey> _deriveContentKey(Uint8List dek) async {
+    final contentKey = await _hkdf.deriveKey(
+      secretKey: SecretKey(dek),
+      nonce: utf8.encode('agent-sessions-v1'),
+      info: utf8.encode('content'),
+    );
+    return contentKey;
+  }
+
+  /// 无填充 base64（Go RawStdEncoding 兼容）；open 侧的 decode 也能消费。
+  static String _encodeNoPadding(Uint8List bytes) =>
+      base64.encode(bytes).replaceAll('=', '');
+
   static Future<Uint8List> open({
     required Uint8List dek,
     required CryptoEnvelope envelope,
@@ -99,11 +157,7 @@ class CryptoBox {
     if (_hex(aadHash.bytes) != envelope.aadHash) {
       throw StateError('aad mismatch');
     }
-    final contentKey = await _hkdf.deriveKey(
-      secretKey: SecretKey(dek),
-      nonce: utf8.encode('agent-sessions-v1'),
-      info: utf8.encode('content'),
-    );
+    final contentKey = await _deriveContentKey(dek);
     final combined = _decodeBase64Url(envelope.ciphertext);
     if (combined.length < 16) {
       throw StateError('ciphertext too short');

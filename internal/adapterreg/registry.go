@@ -39,6 +39,10 @@ func New() *Registry {
 }
 
 // List 返回全部 Provider 的能力快照（按 kind 排序，稳定输出）。
+// 能力矩阵不是静态配置：每次请求都调用各 Adapter 的 Detect 重新探测，
+// 与 docs/zh/项目文档.md「8. 统一能力模型」的三态口径保持一致——
+// opencode provider 只有在真实 /global/health 探测通过后才写 Version，
+// 否则 fail-closed（available=false、全部 unsupported、带中文原因、无 Version）。
 func (r *Registry) List(ctx context.Context) ([]Provider, error) {
 	out := []Provider{}
 	for kind, a := range r.adapters {

@@ -75,6 +75,10 @@ abstract interface class RelayRepository {
   /// Relay capability matrix 是会话控制入口的唯一依据；未知能力由客户端按 unsupported 展示。
   Future<CapabilityMatrix> getCapabilities();
 
+  /// v0.2/P3：会话内容密钥（DEK）可用性。fixture 表示本机已持有该会话内容密钥；
+  /// 真实 Relay 尚未部署 E2EE 内容密钥通道时保持 false（附件入口 fail-closed）。
+  Future<bool> sessionContentKeyAvailable(String sessionId);
+
   /// Plan/Goal/Skill 摘要只来自本地已解密事件或 deterministic fixture；Relay 不返回明文控制内容。
   Future<SessionControlState> getSessionControls(String sessionId);
 

@@ -293,7 +293,8 @@ class _LocalVisualScenarioCoordinatorState
         LocalVisualScenario.sessionDelegationApproved ||
         LocalVisualScenario.sessionDelegationRestricted ||
         // 快捷菜单场景持有 lease，让 Resume 入口以可用状态呈现。
-        LocalVisualScenario.sessionQuickMenu => true,
+        LocalVisualScenario.sessionQuickMenu ||
+        LocalVisualScenario.sessionComposerControls => true,
         LocalVisualScenario.sessionGitMain ||
         LocalVisualScenario.sessionGitRestricted ||
         LocalVisualScenario.sessionFilesBrowse => false,

@@ -217,7 +217,10 @@ enum SessionCommandKind {
   // P3 控制面命令仍经同一 lease/idempotency 链路，避免绕过 Android 写端授权。
   planApprove('plan.approve'),
   goalToggle('goal.toggle'),
-  skillInvoke('skill.invoke');
+  skillInvoke('skill.invoke'),
+  // v0.2/P3：composer 内的模型/effort 切换。
+  modelSelect('session.model_select'),
+  effortSelect('session.effort_select');
 
   const SessionCommandKind(this.wireValue);
 

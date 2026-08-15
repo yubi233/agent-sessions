@@ -248,6 +248,29 @@ class SessionSkillDescriptor {
   final SkillRisk risk;
 }
 
+/// 脱敏 usage 摘要：只展示计数，不渲染 prompt 或回复正文。
+class SessionUsageSummary {
+  const SessionUsageSummary({
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.contextTokens,
+  });
+
+  final int inputTokens;
+  final int outputTokens;
+  final int contextTokens;
+
+  /// 展示文案只含计数。
+  String get label =>
+      '↑${_compact(inputTokens)} · ↓${_compact(outputTokens)} · 上下文 ${_compact(contextTokens)}';
+
+  static String _compact(int value) {
+    if (value < 1000) return '$value';
+    if (value < 1000 * 1000) return '${(value / 1000).toStringAsFixed(1)}k';
+    return '${(value / (1000 * 1000)).toStringAsFixed(1)}m';
+  }
+}
+
 /// 会话控制面由已解密事件或 fixture 填充；空状态明确说明尚未获得该类事件。
 class SessionControlState {
   const SessionControlState({
@@ -256,6 +279,10 @@ class SessionControlState {
     this.plan,
     this.goal,
     this.skills = const [],
+    // v0.2/P3：模型/effort 目录与 usage 只来自已解密事件或 deterministic fixture。
+    this.models = const [],
+    this.efforts = const [],
+    this.usage,
   });
 
   const SessionControlState.empty()
@@ -263,13 +290,19 @@ class SessionControlState {
       effort = null,
       plan = null,
       goal = null,
-      skills = const [];
+      skills = const [],
+      models = const [],
+      efforts = const [],
+      usage = null;
 
   final String? model;
   final String? effort;
   final SessionPlanSummary? plan;
   final SessionGoalSummary? goal;
   final List<SessionSkillDescriptor> skills;
+  final List<String> models;
+  final List<String> efforts;
+  final SessionUsageSummary? usage;
 
   SessionControlState copyWith({
     String? model,
@@ -277,12 +310,18 @@ class SessionControlState {
     SessionPlanSummary? plan,
     SessionGoalSummary? goal,
     List<SessionSkillDescriptor>? skills,
+    List<String>? models,
+    List<String>? efforts,
+    SessionUsageSummary? usage,
   }) => SessionControlState(
     model: model ?? this.model,
     effort: effort ?? this.effort,
     plan: plan ?? this.plan,
     goal: goal ?? this.goal,
     skills: skills ?? this.skills,
+    models: models ?? this.models,
+    efforts: efforts ?? this.efforts,
+    usage: usage ?? this.usage,
   );
 }
 

@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 // P1 仍由 ChangeNotifier 承载单一应用状态；Riverpod 3 将该 provider 移到显式 legacy 入口。
 import 'package:flutter_riverpod/legacy.dart';
 
+import '../attachments/attachment_picker.dart';
 import '../relay/fixture_relay_repository.dart';
 import '../relay/http_relay_repository.dart';
 import '../relay/relay_repository.dart';
@@ -83,10 +85,21 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
 ) {
   final controller = SessionController(
     relay: ref.read(relayRepositoryProvider),
+    // 真实运行使用系统文件选择器；会话 DEK 通道未部署时内部 fail-closed。
+    picker: const SystemAttachmentPicker(
+      contentKeyProvider: _sessionContentKeyFromStore,
+    ),
   );
   unawaited(controller.initialize());
   return controller;
 });
+
+/// 会话内容密钥提供方：当前无 Keystore 内容密钥通道，固定返回 null（fail-closed）。
+/// fixture 模式由 FixtureRelayRepository.sessionContentKeyAvailable 放行入口，
+/// 但真实密封只会发生在真实 DEK 通道部署之后。
+Future<Uint8List?> _sessionContentKeyFromStore(String sessionId) async {
+  return null;
+}
 
 /// 生命周期适配层只消费该 controller；它通过 SessionController 的只读 cursor 恢复接口补齐事件，
 /// 不拥有 token、lease 或任何待发送命令，避免前后台恢复意外重放写入。

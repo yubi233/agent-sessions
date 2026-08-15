@@ -1,4 +1,4 @@
-// Package main 是 PC Daemon 的 CLI 入口：status/project/session/doctor/run。
+// Package main 是 PC Daemon 的 CLI 入口：status/project/session/doctor/run/runner。
 // 真实 Provider、service 安装与 keyring 属于平台/发布 gate，此处提供本地可验证子集。
 package main
 
@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/yubi233/agent-sessions/internal/adapter"
+	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
 	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 )
@@ -51,11 +53,14 @@ func run(args []string) error {
 	case "run":
 		// mock terminal 前台运行，连接 Relay。
 		return cmdRun(st)
+	case "runner":
+		// 本地 outbox -> Adapter 兑现演示（Relay 连接未实现，不假装已连）。
+		return cmdRunner(st)
 	case "doctor-path":
 		// 校验指定工作区路径安全。
 		return cmdDoctorPath(fs.Arg(0))
 	default:
-		return fmt.Errorf("unknown command %q (支持 status/doctor/run)", sub)
+		return fmt.Errorf("unknown command %q (支持 status/doctor/run/runner)", sub)
 	}
 }
 
@@ -84,6 +89,44 @@ func cmdRun(st *daemon.Store) error {
 	defer ticker.Stop()
 	<-ctx.Done()
 	_ = ticker
+	return nil
+}
+
+// cmdRunner 把 outbox 中 pending 的 Relay 命令兑现到 OpenCode Adapter（ADPT-OPENCODE-06）。
+// 对应项目文档 docs/zh/项目文档.md 的「PC Daemon」：启动/恢复/停止本地 Session Instance，
+// 统一为 canonical event stream。
+// Relay 连接尚未实现（cmdRun 只是 mock 心跳），因此本命令只做「读取 outbox 并消费」
+// 的本地演示：消费成功的标记 delivered，失败的保持 pending 等待重试，不假装已连 Relay。
+// 未配置 AGENT_SESSIONS_OPENCODE_URL 时 opencode adapter Detect 全 unsupported，
+// session.start/resume 对 runner 返回 fail-closed 错误（「统一能力模型」章节）。
+func cmdRunner(st *daemon.Store) error {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger.Info("daemon runner starting (local outbox loop)")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	runner := daemon.NewSessionRunner(st, map[string]adapter.Adapter{
+		"opencode": opencode.New(),
+	}, logger)
+	defer func() { _ = runner.Close(context.Background()) }()
+
+	pending, err := st.PendingCommands()
+	if err != nil {
+		return fmt.Errorf("pending commands: %w", err)
+	}
+	consumed := 0
+	for _, cmd := range pending {
+		if err := runner.ConsumeCommand(ctx, cmd); err != nil {
+			// 消费失败：保持 pending，等待下轮重试；不把失败标记为 delivered。
+			logger.Warn("daemon runner deferred", "command", cmd.ID, "kind", cmd.Kind, "error", err)
+			continue
+		}
+		if err := st.MarkDelivered(cmd.ID); err != nil {
+			logger.Error("daemon runner mark delivered", "command", cmd.ID, "error", err)
+			continue
+		}
+		consumed++
+	}
+	logger.Info("daemon runner pass", "consumed", consumed, "pending", len(pending))
 	return nil
 }
 

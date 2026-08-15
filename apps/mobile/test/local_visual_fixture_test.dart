@@ -217,5 +217,20 @@ void main() {
       );
       expect(snapshot.events, isNotEmpty);
     });
+
+    test('v0.2 P3 composer 控制面场景预置模型/effort 目录与脱敏 usage', () async {
+      final fixture = await LocalVisualFixture.create('session-composer-controls');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionComposerControls);
+      final controls = await fixture.relay.getSessionControls(
+        fixture.sessionId!,
+      );
+      expect(controls.models, isNotEmpty);
+      expect(controls.efforts, isNotEmpty);
+      expect(controls.usage, isNotNull);
+      expect(controls.models.contains(controls.model), isTrue,
+          reason: '当前模型必须属于目录，否则 composer 下拉断言失败');
+    });
   });
 }

@@ -342,6 +342,15 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<bool> sessionContentKeyAvailable(String sessionId) async {
+    if (sessionId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '会话标识无效。');
+    }
+    // 真实 Relay 尚未部署端到端内容密钥交付通道；必须 fail-closed，禁止附件选文件入口。
+    return false;
+  }
+
+  @override
   Future<SessionControlState> getSessionControls(String sessionId) async {
     if (sessionId.trim().isEmpty) {
       throw const RelayFailure.validation('会话标识无效。');

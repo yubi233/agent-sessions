@@ -87,7 +87,7 @@ void main() {
     );
   });
 
-  testWidgets('ATTACH-01：附件 chip 显示预检拒绝、分块失败与重试，不启用未提供 DEK 的本地选取', (
+  testWidgets('ATTACH-01：附件 chip 显示预检拒绝、分块失败与重试；fixture 已声明 DEK 可用', (
     tester,
   ) async {
     final harness = MobileAppHarness();
@@ -136,7 +136,8 @@ void main() {
             find.byKey(const Key('session-attachment-add-button')),
           )
           .onPressed,
-      isNull,
+      // v0.2/P3：fixture 声明会话 DEK 可用，选附件入口启用；无 DEK 的禁用断言见 MOBILE-08。
+      isNotNull,
     );
 
     await _tapVisible(tester, find.byKey(Key('attachment-upload-${valid.id}')));

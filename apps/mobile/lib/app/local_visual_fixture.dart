@@ -30,6 +30,8 @@ enum LocalVisualScenario {
   // v0.2/P2 视觉场景：快捷菜单/Resume 与只读文件浏览。
   sessionQuickMenu,
   sessionFilesBrowse,
+  // v0.2/P3 视觉场景：composer 模型/effort/usage 控制面。
+  sessionComposerControls,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(
@@ -54,6 +56,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'session-lifecycle-recovery' => LocalVisualScenario.sessionLifecycleRecovery,
   'session-quick-menu' => LocalVisualScenario.sessionQuickMenu,
   'session-files-browse' => LocalVisualScenario.sessionFilesBrowse,
+  'session-composer-controls' => LocalVisualScenario.sessionComposerControls,
   _ => LocalVisualScenario.none,
 };
 
@@ -197,7 +200,8 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionDelegationRestricted ||
       LocalVisualScenario.sessionLifecycleRecovery ||
       LocalVisualScenario.sessionQuickMenu ||
-      LocalVisualScenario.sessionFilesBrowse => true,
+      LocalVisualScenario.sessionFilesBrowse ||
+      LocalVisualScenario.sessionComposerControls => true,
       _ => false,
     };
     if (!needsSession) return null;

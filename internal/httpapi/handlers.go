@@ -678,6 +678,9 @@ func (a *API) handleGetCommand(c *gin.Context) {
 }
 
 // handleCapabilities 返回四类 Provider 的能力矩阵（客户端据此渲染入口）。
+// 每次请求都实时执行 Detect（见 adapterreg.Registry.List），因此反映真实探测结果：
+// opencode 未健康时 fail-closed，绝不把 mock/静态矩阵伪造成可用。
+// 口径见 docs/zh/项目文档.md「8. 统一能力模型」；Web 只读消费方式见「Vue Web App」章节。
 func (a *API) handleCapabilities(c *gin.Context) {
 	providers, err := a.Capabilities.List(c.Request.Context())
 	if err != nil {

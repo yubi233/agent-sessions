@@ -27,6 +27,10 @@ class FixtureRelayRepository implements RelayRepository {
   bool _repeatCursorEventOnNextSnapshot = false;
   final Map<String, List<int>> _snapshotAfterSequences = {};
 
+  /// v0.2/P3：fixture 默认模拟「本机已持有会话内容密钥」（真实 Keystore 通道未部署）。
+  /// 置为 false 可复现「无 DEK」时附件入口 fail-closed 的行为。
+  bool contentKeysReady = true;
+
   /// 供 ATTACH-01 注入一次可恢复失败；下一次相同幂等键重试必须能够继续。
   void failNextAttachmentChunk() => _failNextAttachmentChunk = true;
 
@@ -378,6 +382,10 @@ class FixtureRelayRepository implements RelayRepository {
         _appendGoalToggle(state);
       case SessionCommandKind.skillInvoke:
         _appendSkillInvocation(state, input);
+      case SessionCommandKind.modelSelect:
+        _applyModelSelect(state, input.ciphertext);
+      case SessionCommandKind.effortSelect:
+        _applyEffortSelect(state, input.ciphertext);
     }
     _commandSequence += 1;
     final receipt = SessionCommandReceipt(
@@ -540,13 +548,13 @@ class FixtureRelayRepository implements RelayRepository {
   Future<CapabilityMatrix> getCapabilities() async {
     _requireFixtureNetwork();
     return CapabilityMatrix(
-      providers: [
-        _fixtureProvider(
+      providers: [        _fixtureProvider(
           'codex',
           native: const {
             'start',
             'resume',
             'abort',
+            'usage',
             'plan',
             'goal',
             'skill_catalog',
@@ -573,6 +581,12 @@ class FixtureRelayRepository implements RelayRepository {
   Future<SessionControlState> getSessionControls(String sessionId) async {
     _requireFixtureNetwork();
     return _sessionState(sessionId).controls;
+  }
+
+  @override
+  Future<bool> sessionContentKeyAvailable(String sessionId) async {
+    _sessionState(sessionId);
+    return contentKeysReady;
   }
 
   @override
@@ -782,6 +796,36 @@ class FixtureRelayRepository implements RelayRepository {
     );
   }
 
+  /// v0.2/P3：模型切换只更新 controls 并追加系统通知；不伪造 Provider 已切换成功的证据。
+  void _applyModelSelect(_FixtureSessionState state, Map<String, dynamic>? ciphertext) {
+    final model = (ciphertext?['fixture_payload'] as Map?)?['model'] as String?;
+    if (model == null || !state.controls.models.contains(model)) {
+      throw const RelayFailure(RelayFailureKind.validation, '目标模型不在目录中。');
+    }
+    state.controls = state.controls.copyWith(model: model);
+    final now = _clock();
+    state.append(
+      eventType: 'session.model_selected',
+      payload: {'kind': 'system_notice', 'label': '模型', 'text': '已切换模型：$model'},
+      now: now,
+    );
+  }
+
+  /// v0.2/P3：effort 切换同上。
+  void _applyEffortSelect(_FixtureSessionState state, Map<String, dynamic>? ciphertext) {
+    final effort = (ciphertext?['fixture_payload'] as Map?)?['effort'] as String?;
+    if (effort == null || !state.controls.efforts.contains(effort)) {
+      throw const RelayFailure(RelayFailureKind.validation, '目标 effort 不在目录中。');
+    }
+    state.controls = state.controls.copyWith(effort: effort);
+    final now = _clock();
+    state.append(
+      eventType: 'session.effort_selected',
+      payload: {'kind': 'system_notice', 'label': 'Effort', 'text': '已切换 effort：$effort'},
+      now: now,
+    );
+  }
+
   // parent 只收到状态和密文摘要；child 的 session timeline 不会被复制到此处。
   void _appendDelegationEvent(
     _FixtureSessionState parent,
@@ -980,7 +1024,8 @@ ProviderCapabilityProfile _fixtureProvider(
 
 SessionControlState _fixtureControlsForProvider(String provider) =>
     SessionControlState(
-      model: provider == 'claude' ? 'Claude fixture' : 'Codex fixture',
+      // 当前模型必须属于下面的 models 目录，否则 composer 下拉会断言失败。
+      model: 'fixture-model-a',
       effort: '高',
       plan: const SessionPlanSummary(
         title: '检查并收口会话控制',
@@ -1000,6 +1045,14 @@ SessionControlState _fixtureControlsForProvider(String provider) =>
           risk: SkillRisk.high,
         ),
       ],
+      // v0.2/P3：模型/effort 目录与 usage 均来自 deterministic fixture；真实 Relay 无此通道时为空。
+      models: const ['fixture-model-a', 'fixture-model-b'],
+      efforts: const ['低', '中', '高'],
+      usage: const SessionUsageSummary(
+        inputTokens: 12480,
+        outputTokens: 3840,
+        contextTokens: 92000,
+      ),
     );
 
 bool _sameBytes(Uint8List left, Uint8List right) {

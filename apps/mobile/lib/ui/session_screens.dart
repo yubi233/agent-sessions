@@ -460,6 +460,17 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                   sessions: sessions,
                   canWrite: app.canManageDevices,
                   deviceId: app.currentDevice?.id,
+                  // @ 补全的文件名目录：只读 repository 根列表；失败返回空（fail-closed）。
+                  fileCompletionCatalog: () async {
+                    try {
+                      final entries = await ref
+                          .read(workspaceFilesRepositoryProvider)
+                          .listDirectory('');
+                      return entries.map((entry) => entry.name).toList();
+                    } catch (_) {
+                      return const [];
+                    }
+                  },
                 ),
               ],
             ),
@@ -1973,19 +1984,43 @@ class _SessionComposer extends StatefulWidget {
     required this.sessions,
     required this.canWrite,
     required this.deviceId,
+    this.fileCompletionCatalog,
   });
 
   final SessionController sessions;
   final bool canWrite;
   final String? deviceId;
 
+  /// v0.2/P3：@ 补全的文件名目录；fixture 返回安全名，真实 Daemon RPC 未部署时为空（fail-closed）。
+  final Future<List<String>> Function()? fileCompletionCatalog;
+
   @override
   State<_SessionComposer> createState() => _SessionComposerState();
+}
+
+/// 补全候选：type 区分文件与 Skill。
+enum _CompletionKind { file, skill }
+
+class _CompletionSuggestion {
+  const _CompletionSuggestion({
+    required this.kind,
+    required this.label,
+    required this.insertText,
+  });
+
+  final _CompletionKind kind;
+  final String label;
+  final String insertText;
 }
 
 class _SessionComposerState extends State<_SessionComposer> {
   final _controller = TextEditingController();
   String? _draftSessionId;
+  // v0.2/P3：@ 与 / 自动补全只在内存生成；候选为空或查询越权时展示空态（fail-closed）。
+  List<_CompletionSuggestion> _suggestions = const [];
+  bool _suggestionsLoading = false;
+  // 最近一次输入是否以 @ 或 / 触发补全；即使候选为空也展示空态说明（fail-closed）。
+  bool _completionActive = false;
 
   @override
   void initState() {
@@ -2032,6 +2067,109 @@ class _SessionComposerState extends State<_SessionComposer> {
     super.dispose();
   }
 
+  /// 根据输入末尾 token 更新补全候选。
+  void _updateSuggestions(String value) {
+    final parts = value.split(RegExp(r'\s+'));
+    final token = parts.isEmpty ? '' : parts.last;
+    _completionActive = token.startsWith('@') || token.startsWith('/');
+    if (token.startsWith('/')) {
+      // Skill 建议：只使用 controls.skills 的标题，不读取任何参数或 Provider payload。
+      final query = token.substring(1).toLowerCase();
+      final skills = widget.sessions.controls.skills
+          .where((skill) => skill.title.toLowerCase().contains(query))
+          .map(
+            (skill) => _CompletionSuggestion(
+              kind: _CompletionKind.skill,
+              label: 'Skill · ${skill.title}',
+              insertText: '/${skill.title} ',
+            ),
+          )
+          .toList(growable: false);
+      _setSuggestions(skills);
+    } else if (token.startsWith('@')) {
+      final query = token.substring(1).toLowerCase();
+      // 越权路径（绝对路径、..、路径分隔）不产生任何建议。
+      if (query.contains('/') ||
+          query.contains('..') ||
+          query.startsWith('.')) {
+        _setSuggestions(const []);
+        return;
+      }
+      final catalog = widget.fileCompletionCatalog;
+      if (catalog == null) {
+        _setSuggestions(const []);
+        return;
+      }
+      _suggestionsLoading = true;
+      setState(() {});
+      unawaited(_loadFileSuggestions(query));
+    } else {
+      _setSuggestions(const []);
+    }
+  }
+
+  /// 异步加载文件补全候选（目录不可用或越权查询时返回空）。
+  Future<void> _loadFileSuggestions(String query) async {
+    List<String> names = const [];
+    final catalog = widget.fileCompletionCatalog;
+    if (catalog != null) {
+      try {
+        names = await catalog();
+      } catch (_) {
+        names = const [];
+      }
+    }
+    if (!mounted) return;
+    final filtered = names
+        .where(
+          (name) =>
+              name.toLowerCase().contains(query) && _isSafeSuggestionName(name),
+        )
+        .map(
+          (name) => _CompletionSuggestion(
+            kind: _CompletionKind.file,
+            label: '文件 · $name',
+            insertText: '@$name ',
+          ),
+        )
+        .toList(growable: false);
+    _suggestionsLoading = false;
+    _setSuggestions(filtered);
+  }
+
+  /// 补全候选名安全校验：拒绝绝对路径、分隔符与隐藏文件（与 Daemon workspacesafe 语义一致）。
+  bool _isSafeSuggestionName(String name) {
+    if (name.trim().isEmpty || name.startsWith('/') || name.contains(':')) {
+      return false;
+    }
+    if (name.contains('/') || name.contains('..')) return false;
+    if (name.startsWith('.')) return false;
+    return true;
+  }
+
+  void _setSuggestions(List<_CompletionSuggestion> next) {
+    if (!mounted) return;
+    setState(() => _suggestions = next);
+  }
+
+  /// 应用补全：替换输入末尾的 token。
+  void _applySuggestion(_CompletionSuggestion suggestion) {
+    final text = _controller.text;
+    final lastSpace = text.lastIndexOf(' ');
+    final prefix = lastSpace < 0 ? '' : text.substring(0, lastSpace + 1);
+    final next = prefix + suggestion.insertText;
+    _controller.text = next;
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: next.length),
+    );
+    setState(() {});
+    widget.sessions.saveComposerDraft(
+      widget.sessions.selectedSessionId ?? '',
+      next,
+    );
+    _updateSuggestions(next);
+  }
+
   @override
   Widget build(BuildContext context) {
     final blocked = widget.sessions.composerBlockedReason(
@@ -2069,6 +2207,18 @@ class _SessionComposerState extends State<_SessionComposer> {
                   deviceId: widget.deviceId,
                 ),
               ),
+            _ComposerControlStrip(
+              sessions: widget.sessions,
+              canWrite: widget.canWrite,
+              deviceId: widget.deviceId,
+            ),
+            if (_completionActive || _suggestionsLoading)
+              _ComposerSuggestions(
+                suggestions: _suggestions,
+                loading: _suggestionsLoading,
+                onApply: _applySuggestion,
+                onDismiss: () => _setSuggestions(const []),
+              ),
             if (blocked != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -2089,15 +2239,22 @@ class _SessionComposerState extends State<_SessionComposer> {
                 children: [
                   IconButton(
                     key: const Key('session-attachment-add-button'),
-                    tooltip:
-                        widget.sessions.controlBlockedReason(
-                          'attachments',
+                    tooltip: widget.sessions.attachmentPickBlockedReason(
                           canWrite: widget.canWrite,
                         ) ??
-                        '等待会话附件密钥',
-                    // 文件选择后的 session DEK 密封必须由安全密钥链路提供；当前没有 DEK 时 fail-closed，
-                    // 不允许把未加密文件或显示名偷塞进 Relay。fixture 场景通过 controller 预置密文 draft。
-                    onPressed: null,
+                        '选择图片或文本附件',
+                    // v0.2/P3：capability + 会话 DEK 均就绪后启用真实选附件；
+                    // 无 DEK 时保持 fail-closed，不允许把明文文件或显示名放进 Relay。
+                    onPressed:
+                        widget.sessions.attachmentPickBlockedReason(
+                              canWrite: widget.canWrite,
+                            ) ==
+                            null && !widget.sessions.isBusy
+                        ? () => widget.sessions.pickAttachment(
+                            deviceId: widget.deviceId,
+                            canWrite: widget.canWrite,
+                          )
+                        : null,
                     icon: const Icon(Icons.attach_file),
                   ),
                   Expanded(
@@ -2115,6 +2272,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                         if (sessionId != null) {
                           widget.sessions.saveComposerDraft(sessionId, value);
                         }
+                        _updateSuggestions(value);
                       },
                       decoration: const InputDecoration(
                         hintText: '给会话发送消息',
@@ -2150,11 +2308,226 @@ class _SessionComposerState extends State<_SessionComposer> {
     );
     if (!mounted || widget.sessions.errorMessage != null) return;
     _controller.clear();
+    _setSuggestions(const []);
     setState(() {});
-  }  Future<void> _stop() => widget.sessions.stopStreaming(
+  }
+
+  Future<void> _stop() => widget.sessions.stopStreaming(
     deviceId: widget.deviceId,
     canWrite: widget.canWrite,
   );
+}
+
+/// v0.2/P3：composer 控制条：模型/effort 选择器与脱敏 usage 计数。
+/// 所有入口按 capability fail-closed；无 capability 时禁用并展示中文原因。
+class _ComposerControlStrip extends StatelessWidget {
+  const _ComposerControlStrip({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+  });
+
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+
+  @override
+  Widget build(BuildContext context) {
+    final controls = sessions.controls;
+    final modelBlocked = sessions.controlBlockedReason(
+      'model_select',
+      canWrite: canWrite,
+    );
+    final effortBlocked = sessions.controlBlockedReason(
+      'effort_select',
+      canWrite: canWrite,
+    );
+    final usageSupported = sessions.selectedProviderCapabilities
+        .capability('usage')
+        .isSupported;
+    // 三种能力都不可用时整条控制条隐藏，避免无意义的禁用控件占满输入区。
+    final hasContent =
+        controls.models.isNotEmpty ||
+        controls.efforts.isNotEmpty ||
+        controls.usage != null ||
+        usageSupported;
+    if (!hasContent) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        key: const Key('composer-control-strip'),
+        children: [
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              key: const Key('composer-model-select'),
+              initialValue: controls.model,
+              isDense: true,
+              // 在受限宽度内收缩并用省略号截断，避免整条控制条横向溢出。
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: '模型',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+              ),
+              items: [
+                for (final model in controls.models)
+                  DropdownMenuItem(value: model, child: Text(model)),
+              ],
+              onChanged: modelBlocked == null && controls.models.isNotEmpty
+                  ? (value) {
+                      if (value != null) {
+                        sessions.selectModel(
+                          model: value,
+                          deviceId: deviceId,
+                          canWrite: canWrite,
+                        );
+                      }
+                    }
+                  : null,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              key: const Key('composer-effort-select'),
+              initialValue: controls.effort,
+              isDense: true,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Effort',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+              ),
+              items: [
+                for (final effort in controls.efforts)
+                  DropdownMenuItem(value: effort, child: Text(effort)),
+              ],
+              onChanged: effortBlocked == null && controls.efforts.isNotEmpty
+                  ? (value) {
+                      if (value != null) {
+                        sessions.selectEffort(
+                          effort: value,
+                          deviceId: deviceId,
+                          canWrite: canWrite,
+                        );
+                      }
+                    }
+                  : null,
+            ),
+          ),
+          if (controls.usage != null && usageSupported) ...[
+            const SizedBox(width: 8),
+            Tooltip(
+              message: '仅展示脱敏计数，不包含 prompt 或回复正文。',
+              child: Container(
+                key: const Key('composer-usage-chip'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Theme.of(context).dividerColor),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  controls.usage!.label,
+                  style: Theme.of(context).textTheme.labelSmall,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// v0.2/P3：@ / 自动补全面板。候选为空时展示空态说明（fail-closed）。
+class _ComposerSuggestions extends StatelessWidget {
+  const _ComposerSuggestions({
+    required this.suggestions,
+    required this.loading,
+    required this.onApply,
+    required this.onDismiss,
+  });
+
+  final List<_CompletionSuggestion> suggestions;
+  final bool loading;
+  final void Function(_CompletionSuggestion suggestion) onApply;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      key: const Key('composer-suggestions'),
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHigh,
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (loading)
+            const Padding(
+              padding: EdgeInsets.all(8),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 8),
+                  Text('正在加载建议…'),
+                ],
+              ),
+            )
+          else if (suggestions.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                '没有可用的补全建议（目录不可用或查询越权）。',
+                key: const Key('composer-suggestions-empty'),
+                style: theme.textTheme.labelSmall,
+              ),
+            )
+          else
+            for (final suggestion in suggestions)
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  key: Key('completion-suggestion-${suggestion.label}'),
+                  dense: true,
+                  leading: Icon(
+                    suggestion.kind == _CompletionKind.skill
+                        ? Icons.bolt_outlined
+                        : Icons.description_outlined,
+                    size: 18,
+                  ),
+                  title: Text(suggestion.label),
+                  onTap: () => onApply(suggestion),
+                ),
+              ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 附件队列只绘制内存中的 localName 和最小进度；密文、元数据和原始文件不会被放入 Widget 文本或日志。

@@ -10,13 +10,15 @@ import { dirname } from "node:path";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 // startRelay 启动一个隔离的 Relay 实例（独立临时 SQLite），返回控制句柄。
-export async function startRelay({ port = 8787, addr = "127.0.0.1" } = {}) {
+// options.env 可在进程环境之上追加覆盖项（如 AGENT_SESSIONS_OPENCODE_URL），
+// 供需要把 Relay 接到真实 opencode serve 的回归场景使用；默认保持与 runner 环境一致。
+export async function startRelay({ port = 8787, addr = "127.0.0.1", env = {} } = {}) {
   const dbPath = join(mkdtempSync(join(tmpdir(), "agent-sessions-relay-")), "relay.db");
   const bin = await buildRelay();
   const args = ["--addr", `${addr}:${port}`, "--db", dbPath];
   const child = spawn(bin, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env: { ...process.env, ...env },
   });
 
   let logs = "";

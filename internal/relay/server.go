@@ -48,6 +48,7 @@ func NewServer(db *sql.DB, logger *slog.Logger) *gin.Engine {
 }
 
 // localHealthCORS 只允许本地 P0 Web 状态页读取健康端点。
+// 与业务 API 的 localAPICORS 保持同一本地开发端口白名单（5173/5174 为 Vite Web/Admin 端口）。
 // 业务 API 在 P1 以设备令牌和更严格的来源策略保护，不能复用该宽松边界。
 func localHealthCORS() gin.HandlerFunc {
 	allowedOrigins := map[string]bool{
@@ -55,6 +56,10 @@ func localHealthCORS() gin.HandlerFunc {
 		"http://localhost:15173": true,
 		"http://127.0.0.1:15174": true,
 		"http://localhost:15174": true,
+		"http://127.0.0.1:5173":  true,
+		"http://localhost:5173":  true,
+		"http://127.0.0.1:5174":  true,
+		"http://localhost:5174":  true,
 	}
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")

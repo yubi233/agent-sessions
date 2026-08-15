@@ -37,9 +37,7 @@
       ],
       "expected": "只有 GET /global/health 返回 healthy+version 后才允许声明 Version；Start/Resume 未实现或探测失败时保持 unsupported。",
       "cleanup": [],
-      "evidence": [
-        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/01.json"
-      ]
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCODE/01.json"]
     },
     {
       "id": "ADPT-OPENCODE-02",
@@ -58,9 +56,7 @@
       ],
       "expected": "不伪造 resumed；事件不含 OpenCode 私有正文进入公共协议；取消/断线/Dispose 回收 SSE。",
       "cleanup": [],
-      "evidence": [
-        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/02.json"
-      ]
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCODE/02.json"]
     },
     {
       "id": "ADPT-OPENCODE-03",
@@ -71,14 +67,10 @@
       "priority": "P1",
       "test_layer": "contract",
       "precondition": "能力 fixture。",
-      "steps": [
-        "permission/plan/goal/skill/model"
-      ],
+      "steps": ["permission/plan/goal/skill/model"],
       "expected": "三态明确。",
       "cleanup": [],
-      "evidence": [
-        "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/03.json"
-      ]
+      "evidence": ["e2e-verify/reports/<ts>/ADAPTER-OPENCODE/03.json"]
     },
     {
       "id": "ADPT-OPENCODE-04",
@@ -95,9 +87,7 @@
         "清理临时目录，仅保存事件类型、哈希和 usage 摘要"
       ],
       "expected": "真实模型与真实上游均为 true；最小 JSON 响应契约通过，但不能据此宣称 Adapter Start/Resume 或移动端真实会话已通过。",
-      "cleanup": [
-        "删除本轮临时目录"
-      ],
+      "cleanup": ["删除本轮临时目录"],
       "evidence": [
         "e2e-verify/real/opencode-live.mjs",
         "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04-live-smoke.json"
@@ -118,9 +108,7 @@
         "记录结构化结果、响应哈希和用量，不保存原始 prompt 或回复"
       ],
       "expected": "返回 provider_transport。该结果仅校验优先级一致性，功能事实仍以 Happy 固定源码和本仓库实现为准。",
-      "cleanup": [
-        "删除本轮临时目录"
-      ],
+      "cleanup": ["删除本轮临时目录"],
       "evidence": [
         "docs/zh/实施记录/07-HappyMobile功能对比与OpenCode验证.md",
         "e2e-verify/reports/<ts>/ADAPTER-OPENCODE/04-live-smoke.json"
@@ -164,9 +152,7 @@
       ],
       "expected": "命令被消费；失败保持 fail-closed；报告不含 session 正文。",
       "cleanup": ["停止 runner", "清理隔离 SQLite"],
-      "evidence": [
-        "internal/daemon/opencode_runner_test.go"
-      ]
+      "evidence": ["internal/daemon/opencode_runner_test.go"]
     },
     {
       "id": "E2E-OPENCODE-01",
@@ -185,7 +171,8 @@
       "expected": "real_browser=true、headless=false；不把 fixture 写成真实模型通过。",
       "cleanup": ["关闭浏览器", "停止本轮 Relay"],
       "evidence": [
-        "e2e-verify/suites/p1-web-readonly.mjs"
+        "e2e-verify/suites/p1-web-readonly.mjs",
+        "e2e-verify/suites/p5-opencode-capabilities.mjs"
       ]
     }
   ]
