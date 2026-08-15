@@ -197,6 +197,25 @@
         "e2e-verify/suites/p1-web-readonly.mjs",
         "e2e-verify/suites/p5-opencode-capabilities.mjs"
       ]
+    },
+    {
+      "id": "ADPT-OPENCODE-07",
+      "title": "permission_mode 能力契约与 fail-closed",
+      "status": "in_progress",
+      "phase": "v0.3/P0",
+      "category": "OpenCode",
+      "priority": "P1",
+      "test_layer": "contract",
+      "precondition": "能力 fixture。",
+      "steps": [
+        "Detect 必须把 permission_mode 声明为 unsupported 并带中文原因",
+        "capability 列表与 SPI 名称保持一致"
+      ],
+      "expected": "真实 Adapter 未实现前 fail-closed；fixture/mock 可声明 native。",
+      "cleanup": [],
+      "evidence": [
+        "internal/adapter/opencode/opencode_test.go"
+      ]
     }
   ]
 }

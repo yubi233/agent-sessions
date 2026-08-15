@@ -302,6 +302,117 @@
         "apps/mobile/test/workspace_files_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
+    },
+    {
+      "id": "MOBILE-10",
+      "title": "composer permission mode 选择器",
+      "status": "in_progress",
+      "phase": "v0.3/P0",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "capability 声明 permission_mode 三态。",
+      "steps": [
+        "composer 内切换 permission mode，命令携带 lease 与幂等键",
+        "无 capability 时禁用并说明原因，不发送命令"
+      ],
+      "expected": "未知能力 fail-closed；切换落为 session.permission_mode 事件。",
+      "cleanup": [
+        "清空 fixture mode 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/composer_controls_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-11",
+      "title": "goal 文本编辑",
+      "status": "in_progress",
+      "phase": "v0.3/P0",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "controls.goal 存在且 goal capability 可用。",
+      "steps": [
+        "打开 goal 编辑并修改目标文本",
+        "提交 goal.edit 命令并乐观更新",
+        "无 capability 时禁用并说明原因"
+      ],
+      "expected": "目标文本更新落为事件；编辑不泄漏密文正文。",
+      "cleanup": [
+        "清空 fixture goal 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-12",
+      "title": "usage 深度与 context 警告",
+      "status": "in_progress",
+      "phase": "v0.3/P1",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget",
+      "precondition": "usage 摘要含 cache 与 context 窗口字段。",
+      "steps": [
+        "展示 input/output/cache 计数",
+        "context 占用超阈值时显示警告条",
+        "不渲染 prompt 或回复正文"
+      ],
+      "expected": "只展示脱敏计数；警告由阈值驱动。",
+      "cleanup": [
+        "清空 fixture usage 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/composer_controls_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-13",
+      "title": "Provider 版本与连接提示",
+      "status": "in_progress",
+      "phase": "v0.3/P1",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "capability matrix 含 version/available/reason。",
+      "steps": [
+        "状态条展示 Provider 版本与连接态",
+        "探测失败时展示 fail-closed 中文原因",
+        "不展示密文或会话正文"
+      ],
+      "expected": "版本与连接态只来自 capability 白名单。",
+      "cleanup": [
+        "清空 fixture capability 注入"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-14",
+      "title": "duplicate 入口与复制元数据",
+      "status": "in_progress",
+      "phase": "v0.3/P2",
+      "category": "Android",
+      "priority": "P2",
+      "test_layer": "Dart unit + Flutter widget",
+      "precondition": "快捷菜单与详情底表存在。",
+      "steps": [
+        "菜单 duplicate 项按 capability 显示或禁用",
+        "details 底表复制会话 ID/Provider 白名单字段"
+      ],
+      "expected": "复制只含白名单元数据；duplicate 未声明时 fail-closed。",
+      "cleanup": [
+        "清除剪贴板测试值"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
     }
   ]
 }
