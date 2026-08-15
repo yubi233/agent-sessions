@@ -413,6 +413,258 @@
       "evidence": [
         "apps/mobile/test/session_screens_test.dart"
       ]
+    },
+    {
+      "id": "MOBILE-15",
+      "title": "主题系统：浅色/深色/跟随系统与 accent 切换",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-16",
+      "title": "设置中心：账户/外观/用量/连接设置页",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-17",
+      "title": "机器/终端状态页：版本、状态与重启入口",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-18",
+      "title": "代码查看器：语法高亮只读视图与受限摘要",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-19",
+      "title": "会话 info 页增强：机器/复制/终止/分享入口",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-20",
+      "title": "用量统计页：7/30 天脱敏图表",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-21",
+      "title": "更新提示与 changelog（fixture）",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-22",
+      "title": "命令面板：capability 门控命令入口",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-23",
+      "title": "会话分享入口（fixture 链路）",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P2",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-24",
+      "title": "Artifacts 产物列表与查看（fixture）",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P2",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-25",
+      "title": "最近会话页",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P2",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-26",
+      "title": "Apple 风格 UI 全屏打磨回归（稳定 Key 保持）",
+      "status": "in_progress",
+      "phase": "v0.4",
+      "category": "Android",
+      "priority": "P2",
+      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture",
+      "precondition": "fixture 数据与既有稳定 Key 契约。",
+      "steps": [
+        "按 v0.4 计划步骤执行"
+      ],
+      "expected": "见 v0.4 计划",
+      "cleanup": [
+        "清理 fixture 状态"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
     }
   ]
 }
