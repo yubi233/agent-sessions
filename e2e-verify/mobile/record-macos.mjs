@@ -26,7 +26,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MOBILE_ROOT = join(ROOT, "apps", "mobile");
 const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
 export const FLUTTER_RECORDING_FPS = 5;
-// 录屏范围：P6 生命周期恢复、v0.2 快捷菜单/Resume、文件浏览、composer 控制面与 P3 终端状态。
+// 录屏范围：P6 生命周期恢复、v0.2 快捷菜单/Resume、文件浏览、composer 控制面、
+// P3 终端状态与 P3-A 设置中心/会话信息。
 export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-11",
   "VISUAL-MOBILE-12",
@@ -35,6 +36,8 @@ export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-16",
   "VISUAL-MOBILE-17",
   "VISUAL-MOBILE-21",
+  "VISUAL-MOBILE-22",
+  "VISUAL-MOBILE-23",
 ]);
 
 class RecordingError extends Error {

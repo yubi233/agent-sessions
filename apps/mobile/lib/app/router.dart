@@ -5,7 +5,9 @@ import '../state/app_controller.dart';
 import '../ui/git_diff_screens.dart';
 import '../ui/pairing_scanner.dart';
 import '../ui/screens.dart';
+import '../ui/session_info_screens.dart';
 import '../ui/session_screens.dart';
+import '../ui/settings_screens.dart';
 import '../ui/terminal_status_screens.dart';
 import '../ui/workspace_files_screens.dart';
 import 'providers.dart';
@@ -76,6 +78,36 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/sessions/:id',
         builder: (context, state) =>
             SessionDetailScreen(sessionId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/sessions/:id/info',
+        builder: (context, state) => SessionInfoScreen(
+          sessionId: state.pathParameters['id']!,
+        ),
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/account',
+        builder: (context, state) => const SettingsAccountScreen(),
+      ),
+      GoRoute(
+        path: '/settings/appearance',
+        builder: (context, state) => const SettingsAppearanceScreen(),
+      ),
+      GoRoute(
+        path: '/settings/agents',
+        builder: (context, state) => const SettingsAgentsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/usage',
+        builder: (context, state) => const SettingsUsageScreen(),
+      ),
+      GoRoute(
+        path: '/settings/connect',
+        builder: (context, state) => const SettingsConnectScreen(),
       ),
       GoRoute(
         path: '/pairing',

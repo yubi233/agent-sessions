@@ -38,6 +38,9 @@ enum LocalVisualScenario {
   sessionProviderUnavailable,
   // v0.4/P3 视觉场景：只读 Relay Terminal 状态，不模拟 Daemon 命令。
   terminalStatus,
+  // v0.4/P3-A 视觉场景：设置中心与会话 info 只读白名单展示。
+  settingsIndex,
+  sessionInfo,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(
@@ -67,6 +70,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'session-provider-unavailable' =>
     LocalVisualScenario.sessionProviderUnavailable,
   'terminal-status' => LocalVisualScenario.terminalStatus,
+  'settings-index' => LocalVisualScenario.settingsIndex,
+  'session-info' => LocalVisualScenario.sessionInfo,
   _ => LocalVisualScenario.none,
 };
 
@@ -124,7 +129,9 @@ class LocalVisualFixture {
       // 探测失败场景：能力矩阵全部 unavailable，状态条展示 fail-closed 原因。
       relay.providersUnavailable = true;
     }
-    if (scenario == LocalVisualScenario.terminalStatus) {
+    if (scenario == LocalVisualScenario.terminalStatus ||
+        scenario == LocalVisualScenario.settingsIndex ||
+        scenario == LocalVisualScenario.sessionInfo) {
       relay.replaceTerminals([
         TerminalSummary(
           id: 'term_visual_online',
@@ -239,7 +246,8 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionFilesBrowse ||
       LocalVisualScenario.sessionComposerControls ||
       LocalVisualScenario.sessionGoalEdit ||
-      LocalVisualScenario.sessionProviderUnavailable => true,
+      LocalVisualScenario.sessionProviderUnavailable ||
+      LocalVisualScenario.sessionInfo => true,
       _ => false,
     };
     if (!needsSession) return null;

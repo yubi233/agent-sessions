@@ -282,5 +282,39 @@ void main() {
         TerminalAvailability.online,
       );
     });
+
+    test('v0.4 P3 设置中心场景预置设备、能力矩阵与终端白名单', () async {
+      final fixture = await LocalVisualFixture.create('settings-index');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.settingsIndex);
+      final devices = await fixture.relay.listDevices();
+      expect(devices, hasLength(1));
+      expect(devices.first.isOwner, isTrue);
+      final terminals = await fixture.relay.listTerminals();
+      expect(terminals, hasLength(2));
+      final capabilities = await fixture.relay.getCapabilities();
+      expect(capabilities.providers, isNotEmpty);
+      // 设置中心场景不预置会话，避免与账户/连接分区数据纠缠。
+      expect(fixture.sessionId, isNull);
+    });
+
+    test('v0.4 P3 会话 info 场景预置会话与终端白名单，但不预置正文', () async {
+      final fixture = await LocalVisualFixture.create('session-info');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionInfo);
+      expect(fixture.sessionId, isNotNull);
+      final terminals = await fixture.relay.listTerminals();
+      expect(terminals, hasLength(2));
+      // info 场景的会话只经过 send 链路，不写入消息正文明文。
+      final snapshot = await fixture.relay.getSessionSnapshot(
+        fixture.sessionId!,
+      );
+      expect(snapshot.events, isNotEmpty);
+      for (final event in snapshot.events) {
+        expect(event.envelope, isNotEmpty);
+      }
+    });
   });
 }

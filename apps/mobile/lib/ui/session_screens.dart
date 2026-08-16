@@ -510,6 +510,9 @@ class _SessionQuickMenu extends StatelessWidget {
         switch (value) {
           case 'details':
             _showDetailsSheet(context, sessions);
+          case 'info':
+            // P3 会话 info 是独立只读页面，展示机器/Provider/终止恢复能力三态。
+            context.push('/sessions/${sessions.selectedSessionId}/info');
           case 'resume':
             sessions.resumeSelectedSession(
               deviceId: deviceId,
@@ -527,6 +530,16 @@ class _SessionQuickMenu extends StatelessWidget {
           child: ListTile(
             leading: Icon(Icons.info_outline),
             title: Text('会话详情'),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          key: Key('session-quick-info'),
+          value: 'info',
+          child: ListTile(
+            leading: Icon(Icons.description_outlined),
+            title: Text('会话信息'),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),

@@ -442,24 +442,30 @@
     {
       "id": "MOBILE-16",
       "title": "设置中心：账户/外观/用量/连接设置页",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P0",
       "test_layer": "Dart unit + Flutter widget + visible macOS fixture + AVD",
-      "precondition": "P1 主题基础已完成；Relay/Provider capability 和账户白名单元数据可由受控 fixture 或真实只读接口提供。",
+      "precondition": "P1 主题基础已完成；Relay/Provider capability 与账户白名单元数据由受控 fixture 提供；ADR-010 服务端 usage 聚合尚未部署。",
       "steps": [
-        "从设置入口依次打开账户、外观、用量和连接分区，覆盖 loading、empty、error、offline 与已撤销设备状态。",
-        "修改本机外观偏好并重启应用；查看 Provider/连接条目和无 capability 时的不可用原因。",
-        "尝试从设置页访问写控制、恢复码明文、token 或未实现的用量详情。"
+        "打开 /settings 索引，确认账户/外观/Agent 能力/用量/连接五个分区均有可兑现入口。",
+        "账户分区核对当前设备与 owner 状态；外观分区切换 system/light/dark 与强调色后重启验证持久化。",
+        "Agent 能力分区核对 Provider 三态（native/emulated/unsupported）与探测失败降级。",
+        "用量分区核对 ADR-010 未部署时的 unavailable 降级，确认不出现伪造统计。",
+        "连接分区核对终端白名单与配对入口；尝试寻找 token、恢复码明文、重启或工作区写入口，确认不存在。",
+        "以受控 Relay 故障/空列表覆盖 loading、empty、error、offline 与重试。"
       ],
-      "expected": "页面只展示可兑现的白名单状态；偏好可恢复，敏感值不可见；无 capability 或无真实数据时明确降级且不制造写入口。",
+      "expected": "五个分区只展示可兑现的白名单状态；外观偏好本机持久化且重启后可恢复；token、恢复码明文与写控制不出现；无 capability 明确降级不制造写入口；usage 在 ADR-010 落地前显示「暂不可用」且不估算。",
       "cleanup": [
-        "清理本机偏好、测试登录态和 fixture"
+        "清理 fixture 状态与内存偏好存储"
       ],
       "evidence": [
+        "apps/mobile/lib/state/settings_controller.dart",
+        "apps/mobile/lib/ui/settings_screens.dart",
         "apps/mobile/test/settings_controller_test.dart",
         "apps/mobile/test/settings_screens_test.dart",
+        "e2e-verify/mobile/run-macos.mjs",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
@@ -518,24 +524,28 @@
     {
       "id": "MOBILE-19",
       "title": "会话 info 页增强：机器/复制/终止/分享入口",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P1",
       "test_layer": "Flutter widget + Relay/Daemon integration + visible AVD",
-      "precondition": "P2 已有真实会话、目标终端和 capability；分享领域仍未决时必须能返回明确状态。",
+      "precondition": "已有真实或 fixture 会话、能力矩阵与终端白名单；分享领域未决时返回明确 unavailable。",
       "steps": [
-        "打开会话 info，检查机器、Provider、状态、白名单复制字段与 capability。",
-        "以 owner/current lease 发起终止，重复提交同一幂等键并检查 command 终态。",
-        "检查无 share capability、无 lease、撤销设备和 Web/Admin 访问时的入口与服务端响应。"
+        "打开 /sessions/:id/info，核对会话状态/Provider/事件序号/工作区与机器白名单字段。",
+        "核对机器卡只显示 hostname/平台/Daemon 版本，不显示 terminal ID、路径或日志。",
+        "核对终止/恢复能力三态：无 lease、未声明 capability 时 fail-closed 并显示原因。",
+        "核对复制按钮只复制会话 ID 与 Provider，剪贴板不含 token/正文/完整路径。",
+        "核对分享在独立安全 ADR 前恒为 unavailable。",
+        "用无效/跨账号 sessionId 打开 info 页，确认不泄漏存在性。"
       ],
-      "expected": "复制不包含正文、token 或完整路径；终止遵守 owner/lease/capability；分享在独立安全 ADR 通过前显示 unavailable，不产生链接或外泄数据。",
+      "expected": "info 页只展示 Relay 白名单元数据；复制不含正文/token/完整路径；终止/恢复遵守 owner+lease+capability；分享显示 unavailable；无权或不存在会话显示 empty 且不展示复制入口。",
       "cleanup": [
-        "终止测试会话，清理剪贴板、lease、command 和本地缓存"
+        "关闭 info 页并清理选中会话状态"
       ],
       "evidence": [
+        "apps/mobile/lib/state/session_info_controller.dart",
+        "apps/mobile/lib/ui/session_info_screens.dart",
         "apps/mobile/test/session_info_screens_test.dart",
-        "internal/relay/session_command_test.go",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },

@@ -17,6 +17,8 @@ import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
+import '../state/session_info_controller.dart';
+import '../state/settings_controller.dart';
 import '../state/terminal_status_controller.dart';
 import '../state/workspace_files_controller.dart';
 import '../storage/encrypted_cache.dart';
@@ -159,4 +161,30 @@ final terminalStatusControllerProvider =
       );
       unawaited(controller.initialize());
       return controller;
+    });
+
+/// P3 设置中心只读聚合：设备/能力矩阵/终端状态均来自 Relay 白名单投影，
+/// 与认证、会话控制隔离，避免设置页刷新影响已打开的时间线。
+final settingsControllerProvider = ChangeNotifierProvider<SettingsController>((
+  ref,
+) {
+  final relay = ref.read(relayRepositoryProvider);
+  final controller = SettingsController(
+    relay: relay,
+    clock: relay is FixtureRelayRepository ? relay.fixtureNow : null,
+  );
+  unawaited(controller.initialize());
+  return controller;
+});
+
+/// P3 会话 info 页投影：按会话 id 聚合 SessionController 与终端白名单状态。
+/// 不在此处调用 selectSession —— provider 初始化期间修改其他 provider 会违反
+/// Riverpod 初始化规则，深链/通知跳转时会在 debug 构建直接崩溃；
+/// 会话选中由 SessionInfoScreen 的 initState 显式发起。
+final sessionInfoControllerProvider =
+    Provider.family<SessionInfoController, String>((ref, sessionId) {
+      return SessionInfoController(
+        sessionController: ref.read(sessionControllerProvider),
+        terminalStatusController: ref.read(terminalStatusControllerProvider),
+      );
     });

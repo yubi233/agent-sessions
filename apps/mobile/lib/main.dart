@@ -259,8 +259,21 @@ class _LocalVisualScenarioCoordinatorState
       _openPairingWhenOwnerReady();
     } else if (widget.scenario == LocalVisualScenario.terminalStatus) {
       _openTerminalsWhenReady();
+    } else if (widget.scenario == LocalVisualScenario.settingsIndex) {
+      _openSettingsWhenReady();
     } else if (widget.sessionId != null) {
       _openSessionWhenReady();
+    }
+  }
+
+  Future<void> _openSettingsWhenReady() async {
+    for (var attempt = 0; attempt < 80; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      if (app.isAuthenticated) {
+        ref.read(appRouterProvider).go('/settings');
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
     }
   }
 
@@ -374,6 +387,9 @@ class _LocalVisualScenarioCoordinatorState
       } else if (widget.scenario == LocalVisualScenario.sessionFilesBrowse) {
         // 文件浏览是独立只读页面，与 Git 一样不需要 lease。
         router.go('/sessions/$sessionId/files');
+      } else if (widget.scenario == LocalVisualScenario.sessionInfo) {
+        // 会话 info 是独立只读页面，不需要 lease；控制器只做白名单聚合。
+        router.go('/sessions/$sessionId/info');
       } else {
         router.go('/sessions/$sessionId');
       }
