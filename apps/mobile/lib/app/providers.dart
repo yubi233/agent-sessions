@@ -17,6 +17,7 @@ import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
+import '../state/terminal_status_controller.dart';
 import '../state/workspace_files_controller.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
@@ -146,4 +147,16 @@ final workspaceFilesControllerProvider =
       return WorkspaceFilesController(
         repository: ref.read(workspaceFilesRepositoryProvider),
       );
+    });
+
+/// P3 机器状态只消费现有 Relay 白名单字段；不接入 Daemon command stream 或本机路径。
+final terminalStatusControllerProvider =
+    ChangeNotifierProvider<TerminalStatusController>((ref) {
+      final relay = ref.read(relayRepositoryProvider);
+      final controller = TerminalStatusController(
+        relay: relay,
+        clock: relay is FixtureRelayRepository ? relay.fixtureNow : null,
+      );
+      unawaited(controller.initialize());
+      return controller;
     });

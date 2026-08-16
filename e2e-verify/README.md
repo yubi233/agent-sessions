@@ -10,8 +10,9 @@
 | `node e2e-verify/run.mjs --suite p0-health`          | 单个 headed Web smoke                                             | 报告写入 `e2e-verify/reports/<timestamp>/<plan_id>/`                                      |
 | `task test:record`                                   | 已通过 browser gate 后的 CDP 录屏                                 | 帧、manifest、mp4 写入 `e2e-verify/screencasts/<timestamp>/`                              |
 | `task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --retries 3` | 经授权的 OpenCode Go 真实模型 smoke 与 Happy 对比一致性检查 | `real_model=true`、`real_upstream=true`；无浏览器，不代表移动端 Adapter transport 已通过 |
-| `task test:flutter:local`                            | v0.1 MacBook Flutter macOS integration gate                       | 启动可见桌面窗口；不能由 headless 或 widget 测试替代                                      |
-| `task test:flutter:record -- --gate-report <report>` | 已通过 Flutter macOS full gate 后的 P6 fixture 录屏               | 固定 5fps，验证 `VISUAL-MOBILE-11/12/14` 的帧、manifest 与 MP4                            |
+| `task test:flutter:local`                            | MacBook Flutter macOS fixture full gate                           | 启动可见桌面窗口；不能由 headless 或 widget 测试替代                                      |
+| `node e2e-verify/mobile/run-macos.mjs --test <path> --case <id> --visual-scenario <registered-id>` | 已登记的单场景 macOS 定向诊断 | 报告标为 `targeted_diagnostic`，不能替代 full gate或 Android 验收 |
+| `task test:flutter:record -- --gate-report <report>` | 已通过 Flutter macOS full gate 后的 fixture 录屏                  | 固定 5fps，验证全部 recording allowlist 的帧、manifest 与 MP4                            |
 | `task test:android:e2e`                              | 后续 Android AVD integration diagnostic                           | 不属于本轮 v0.1 gate                                                                      |
 | `e2e-verify/mobile/`                                 | MacBook Flutter macOS full gate、P6 录屏、后续 AVD 诊断和报告脚本 | 本轮 `run-macos.mjs` 与 `record-macos.mjs` 启动可见桌面窗口；Android 原生验收留待后续阶段 |
 
@@ -53,9 +54,9 @@ task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --re
 
 ## MacBook Flutter macOS gate
 
-`task test:flutter:local`先运行`e2e-verify/mobile/macos*.test.mjs`的纯 Node 编排回归，再执行一次`flutter build macos --debug --no-pub`。随后运行`apps/mobile/test/`长期 unit/widget 套件；全部断言通过后，runner 直接启动固定 debug 可执行文件，按已登记 fixture 场景在真实 macOS 窗口以 5fps 连续抓取 1 秒 PNG。当前场景为`VISUAL-MOBILE-01..14`与`VISUAL-PAIR-01`，必须在录制前由`MACOS_SCREENSHOT_SCENARIOS`固定登记。启动器只给 debug macOS 进程注入`LOCAL_FIXTURE_MODE=true`和固定场景名，并只终止本轮 CoreGraphics 已观测到的 PID；它不再依赖当前 macOS 26/Xcode 26 上不稳定的`flutter run -d macos`设备发现链路。
+`task test:flutter:local`先运行`e2e-verify/mobile/macos*.test.mjs`的纯 Node 编排回归，再执行一次`flutter build macos --debug --no-pub`。随后运行`apps/mobile/test/`长期 unit/widget 套件；全部断言通过后，runner 直接启动固定 debug 可执行文件，按已登记 fixture 场景在真实 macOS 窗口以 5fps 连续抓取 1 秒 PNG，即每个场景 5 帧。当前场景为`VISUAL-MOBILE-01..21`与`VISUAL-PAIR-01`，必须在录制前由`MACOS_SCREENSHOT_SCENARIOS`固定登记。`--visual-scenario <id>`仅允许选择其中已登记的场景，报告固定为`targeted_diagnostic`，不能代替 full gate。启动器只给 debug macOS 进程注入`LOCAL_FIXTURE_MODE=true`和固定场景名，并只终止本轮 CoreGraphics 已观测到的 PID；它不再依赖当前 macOS 26/Xcode 26 上不稳定的`flutter run -d macos`设备发现链路。
 
-`task test:flutter:record -- --gate-report <passed-report>`只在`task test:flutter:local`通过后运行。录屏器校验报告包含可见窗口与`VISUAL-MOBILE-14`的五帧证据，重新构建固定 debug App，再依次记录`VISUAL-MOBILE-11`、`VISUAL-MOBILE-12`和`VISUAL-MOBILE-14`。每段录屏固定为 5fps、五帧、`480x960` MP4；Screen Recording 未授权时仍使用同一可见窗口的`flutter-render-boundary-fallback`，manifest 必须如实声明 capture mode，不能表述为系统窗口截屏。
+`task test:flutter:record -- --gate-report <passed-report>`只在`task test:flutter:local`通过后运行。录屏器校验报告包含可见窗口及 recording allowlist 中每个场景的五帧证据，重新构建固定 debug App，再依次记录`VISUAL-MOBILE-11`、`VISUAL-MOBILE-12`、`VISUAL-MOBILE-14..17`和`VISUAL-MOBILE-21`。每段录屏固定为 5fps、五帧、`480x960` MP4；Screen Recording 未授权时仍使用同一可见窗口的`flutter-render-boundary-fallback`，manifest 必须如实声明 capture mode，不能表述为系统窗口截屏。
 
 报告标记`real_browser=false`、`visible_desktop_app=true`、`headless=false`、`host_platform="macos"`、`real_device=false`、`simulated_device=false`。本轮按用户约束可以保存 deterministic fixture 的 QR 与请求标识截图，但绝不启动真实账号、token、恢复码、会话正文、附件或 diff；macOS 结果也不能写成 Android Keystore/Drift 原生通过。`flutter test -d macos`的 native integration 仍因 Flutter open/VM 握手回归留待工具链修复后重启。浏览器验收仍由`task test:e2e`的 headed Chrome 提供。
 

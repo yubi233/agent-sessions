@@ -34,6 +34,7 @@ import {
   MACOS_SCREENSHOT_SCENARIOS,
   parseArgs,
   recordMacosVisualScenario,
+  resolveMacosVisualScenarios,
   summarizeFlutterFailure,
 } from "./run-macos.mjs";
 import { FLUTTER_RENDER_BOUNDARY_FALLBACK } from "./macos-screenshot.mjs";
@@ -95,8 +96,34 @@ test("macOS Flutter 命令固定设备、禁止隐式 pub 解析", () => {
 test("macOS gate 拒绝 headless 和外部设备参数", () => {
   assert.equal(parseArgs([]).diagnostic, false);
   assert.equal(parseArgs(["--diagnostic"]).diagnostic, true);
+  assert.deepEqual(
+    parseArgs([
+      "--test",
+      "test/machine_screens_test.dart",
+      "--case",
+      "MOBILE-17",
+      "--visual-scenario",
+      "VISUAL-MOBILE-21",
+    ]),
+    {
+      tests: ["test/machine_screens_test.dart"],
+      cases: ["MOBILE-17"],
+      visualScenarios: ["VISUAL-MOBILE-21"],
+      diagnostic: false,
+      help: false,
+      testTimeoutMs: 300000,
+    },
+  );
   assert.throws(() => parseArgs(["--headless"]), /不支持 --headless/);
   assert.throws(() => parseArgs(["--device-id", "android-device"]), /固定使用 macOS/);
+  assert.throws(() => parseArgs(["--visual-scenario"]), /缺少/);
+  assert.deepEqual(
+    resolveMacosVisualScenarios(["VISUAL-MOBILE-21", "VISUAL-MOBILE-21"]).map(
+      (scenario) => scenario.id,
+    ),
+    ["VISUAL-MOBILE-21"],
+  );
+  assert.throws(() => resolveMacosVisualScenarios(["VISUAL-MOBILE-UNKNOWN"]), /未登记/);
 });
 
 test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
@@ -124,6 +151,7 @@ test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前
       "VISUAL-MOBILE-18",
       "VISUAL-MOBILE-19",
       "VISUAL-MOBILE-20",
+      "VISUAL-MOBILE-21",
     ],
   );
 });

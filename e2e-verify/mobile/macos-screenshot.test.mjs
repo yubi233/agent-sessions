@@ -52,6 +52,7 @@ test("截图 manifest 只保留 fixture 元数据、哈希和窗口尺寸", () =
       "VISUAL-MOBILE-18",
       "VISUAL-MOBILE-19",
       "VISUAL-MOBILE-20",
+      "VISUAL-MOBILE-21",
     ],
     artifacts: [{
       captureMode: FLUTTER_RENDER_BOUNDARY_FALLBACK,

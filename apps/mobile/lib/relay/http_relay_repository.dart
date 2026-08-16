@@ -6,6 +6,7 @@ import '../domain/control_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import '../domain/terminal_models.dart';
 import 'relay_repository.dart';
 
 /// 真实 Relay REST 适配器。密码登录不提交角色或设备 id，只能获得 Relay 默认的只读 token。
@@ -97,6 +98,15 @@ class HttpRelayRepository implements RelayRepository {
   @override
   Future<void> revokeDevice(String deviceId) async {
     await _authenticatedSend('DELETE', '/v1/devices/$deviceId');
+  }
+
+  @override
+  Future<List<TerminalSummary>> listTerminals() async {
+    final response = await _authenticatedSend('GET', '/v1/terminals');
+    return _asList(
+      response.data,
+      wrappedKey: 'terminals',
+    ).map(TerminalSummary.fromRelayJson).toList(growable: false);
   }
 
   @override
@@ -304,7 +314,10 @@ class HttpRelayRepository implements RelayRepository {
     );
     final delegation = SessionDelegation.fromRelayJson(_asMap(response.data));
     if (delegation.parentSessionId != parentSessionId) {
-      throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了另一父会话的派发节点。');
+      throw const RelayFailure(
+        RelayFailureKind.protocol,
+        'Relay 返回了另一父会话的派发节点。',
+      );
     }
     return delegation;
   }

@@ -466,24 +466,28 @@
     {
       "id": "MOBILE-17",
       "title": "机器/终端状态页：版本、状态与重启入口",
-      "status": "decision_gated",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Relay/Daemon integration + Flutter widget + visible AVD",
-      "precondition": "ADR-009 的 Daemon hello/heartbeat 契约和 `daemon.restart` 的授权、审计与进程监督决策已通过；当前实现仅验证不可用状态。",
+      "test_layer": "Relay HTTP contract + Flutter controller/widget + visible macOS fixture + AVD",
+      "precondition": "ADR-009 的 `GET /v1/terminals` 白名单元数据、Daemon hello/heartbeat 契约已实现；`daemon.restart` 的授权、审计与进程监督仍未决。",
       "steps": [
-        "在无 Daemon 命令流或 capability 的情况下打开机器页，检查版本、last-seen、offline 和 unsupported 展示。",
-        "在受控 Relay-Daemon fixture 中使 heartbeat 过期、重连并变更 capability，核对状态与绝对路径/原始日志脱敏。",
-        "仅当 `daemon.restart` 契约已实现时，以 owner、当前 lease 和明确确认执行一次重启并查询 command 终态。"
+        "打开只读终端页，覆盖 loading、empty、Relay error、online、offline、stale、unknown 与协议 unsupported。",
+        "以受控 Relay/fixture 返回 hostname、platform、Daemon version、last-seen 和 protocol version，核对 UI 不显示 terminal ID、绝对路径、原始日志、workspace 或命令 payload。",
+        "尝试寻找重启、工作区关联和活跃会话写入口，确认当前只显示明确 unavailable，且不发送 Daemon 命令。",
+        "在可见 macOS fixture 窗口采集 `VISUAL-MOBILE-21`；Android AVD 另行验证，不将 macOS 结果写成 Android。"
       ],
-      "expected": "当前未实现重启时不存在可执行入口；实现后只允许已授权目标终端执行一次幂等重启，旧 epoch、撤销设备和 Web/Admin 请求均被拒绝。",
+      "expected": "当前实现只显示 Relay 白名单终端状态，协议未知或不兼容安全降级；重启、workspace/活跃会话关联在独立契约通过前不可用且不产生命令。未来重启实现后才允许 owner/current lease/capability 的幂等控制，并必须拒绝旧 epoch、撤销设备和 Web/Admin 请求。",
       "cleanup": [
         "停止测试 Daemon，清理测试 lease、command 和本地状态"
       ],
       "evidence": [
-        "internal/daemon/daemon_rpc_test.go",
+        "internal/relay/p2_daemon_contract_test.go",
+        "apps/mobile/test/http_relay_repository_test.dart",
         "apps/mobile/test/machine_screens_test.dart",
+        "apps/mobile/test/local_visual_fixture_test.dart",
+        "e2e-verify/mobile/run-macos.mjs",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },

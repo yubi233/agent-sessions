@@ -5,6 +5,7 @@ import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
+import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/relay/http_relay_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -302,6 +303,46 @@ void main() {
       expect(
         matrix.provider('codex').capability('attachments').availability,
         CapabilityAvailability.unsupported,
+      );
+    });
+
+    test('终端状态只读取账号白名单元数据，不请求或保留工作区路径', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/terminals');
+        expect(options.method, 'GET');
+        expect(options.data, isNull);
+        expect(
+          options.headers['Authorization'],
+          'Bearer fixture-owner-access-token',
+        );
+        return _jsonResponse({
+          'terminals': [
+            {
+              'id': 'term_opaque_fixture',
+              'hostname': 'Fixture Mac',
+              'platform': 'macos',
+              'status': 'online',
+              'last_seen_unix_ms': 1786665600000,
+              'protocol_version': 1,
+              'daemon_version': '0.4.0-fixture',
+              // 服务端即便意外加入未白名单字段，客户端 DTO 也不会持有或显示它。
+              'canonical_root': 'untrusted-path-omitted',
+              'daemon_log': 'not for Android',
+            },
+          ],
+        });
+      });
+
+      final terminals = await _authenticatedRepository(adapter).listTerminals();
+
+      expect(terminals, hasLength(1));
+      expect(terminals.single.hostname, 'Fixture Mac');
+      expect(terminals.single.platform, 'macos');
+      expect(terminals.single.protocolVersion, 1);
+      expect(terminals.single.daemonVersion, '0.4.0-fixture');
+      expect(
+        terminals.single.availabilityAt(DateTime.utc(2026, 8, 14)),
+        TerminalAvailability.online,
       );
     });
 

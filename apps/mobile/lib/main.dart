@@ -257,8 +257,21 @@ class _LocalVisualScenarioCoordinatorState
     super.initState();
     if (widget.scenario == LocalVisualScenario.pairingPending) {
       _openPairingWhenOwnerReady();
+    } else if (widget.scenario == LocalVisualScenario.terminalStatus) {
+      _openTerminalsWhenReady();
     } else if (widget.sessionId != null) {
       _openSessionWhenReady();
+    }
+  }
+
+  Future<void> _openTerminalsWhenReady() async {
+    for (var attempt = 0; attempt < 80; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      if (app.isAuthenticated) {
+        ref.read(appRouterProvider).go('/terminals');
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
     }
   }
 

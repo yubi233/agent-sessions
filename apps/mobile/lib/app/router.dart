@@ -6,6 +6,7 @@ import '../ui/git_diff_screens.dart';
 import '../ui/pairing_scanner.dart';
 import '../ui/screens.dart';
 import '../ui/session_screens.dart';
+import '../ui/terminal_status_screens.dart';
 import '../ui/workspace_files_screens.dart';
 import 'providers.dart';
 
@@ -68,9 +69,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/sessions/:id/files',
-        builder: (context, state) => WorkspaceFilesScreen(
-          sessionId: state.pathParameters['id']!,
-        ),
+        builder: (context, state) =>
+            WorkspaceFilesScreen(sessionId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: '/sessions/:id',
@@ -88,6 +88,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/devices',
         builder: (context, state) => const DevicesScreen(),
+      ),
+      GoRoute(
+        path: '/terminals',
+        builder: (context, state) => const TerminalStatusScreen(),
       ),
     ],
   );

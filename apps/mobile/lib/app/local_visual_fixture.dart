@@ -4,6 +4,7 @@ import '../domain/control_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import '../domain/terminal_models.dart';
 import '../git/git_diff_repository.dart';
 import '../relay/fixture_relay_repository.dart';
 import '../state/lifecycle_recovery_controller.dart';
@@ -35,6 +36,8 @@ enum LocalVisualScenario {
   // v0.3/P3 视觉场景：goal 编辑入口与 Provider 探测失败提示。
   sessionGoalEdit,
   sessionProviderUnavailable,
+  // v0.4/P3 视觉场景：只读 Relay Terminal 状态，不模拟 Daemon 命令。
+  terminalStatus,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(
@@ -61,7 +64,9 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'session-files-browse' => LocalVisualScenario.sessionFilesBrowse,
   'session-composer-controls' => LocalVisualScenario.sessionComposerControls,
   'session-goal-edit' => LocalVisualScenario.sessionGoalEdit,
-  'session-provider-unavailable' => LocalVisualScenario.sessionProviderUnavailable,
+  'session-provider-unavailable' =>
+    LocalVisualScenario.sessionProviderUnavailable,
+  'terminal-status' => LocalVisualScenario.terminalStatus,
   _ => LocalVisualScenario.none,
 };
 
@@ -118,6 +123,28 @@ class LocalVisualFixture {
     if (scenario == LocalVisualScenario.sessionProviderUnavailable) {
       // 探测失败场景：能力矩阵全部 unavailable，状态条展示 fail-closed 原因。
       relay.providersUnavailable = true;
+    }
+    if (scenario == LocalVisualScenario.terminalStatus) {
+      relay.replaceTerminals([
+        TerminalSummary(
+          id: 'term_visual_online',
+          hostname: 'MacBook Fixture',
+          platform: 'macos',
+          status: TerminalConnectionStatus.online,
+          protocolVersion: 1,
+          daemonVersion: '0.4.0-fixture',
+          lastSeen: DateTime.utc(2026, 8, 14, 11, 59, 30),
+        ),
+        TerminalSummary(
+          id: 'term_visual_stale',
+          hostname: 'Linux Fixture',
+          platform: 'linux',
+          status: TerminalConnectionStatus.online,
+          protocolVersion: 1,
+          daemonVersion: '0.3.9-fixture',
+          lastSeen: DateTime.utc(2026, 8, 14, 11, 54),
+        ),
+      ]);
     }
     final tokens = InMemorySecureTokenStore();
     final identities = InMemoryDeviceIdentityStore();

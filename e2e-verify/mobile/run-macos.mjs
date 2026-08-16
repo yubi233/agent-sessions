@@ -137,6 +137,11 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-20-provider-unavailable",
     localVisualScenario: "session-provider-unavailable",
   }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-21",
+    directory: "visual-mobile-21-terminal-status",
+    localVisualScenario: "terminal-status",
+  }),
 ]);
 
 function wait(milliseconds) {
@@ -245,6 +250,7 @@ export function parseArgs(argv) {
   const args = {
     tests: [],
     cases: [],
+    visualScenarios: [],
     diagnostic: false,
     help: false,
     testTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -254,6 +260,7 @@ export function parseArgs(argv) {
     if (value === "--help" || value === "-h") args.help = true;
     else if (value === "--test") args.tests.push(argv[++index] || "");
     else if (value === "--case") args.cases.push(argv[++index] || "");
+    else if (value === "--visual-scenario") args.visualScenarios.push(argv[++index] || "");
     else if (value === "--diagnostic") args.diagnostic = true;
     else if (value === "--test-timeout-ms") {
       args.testTimeoutMs = positiveInteger(argv[++index], "--test-timeout-ms");
@@ -271,6 +278,9 @@ export function parseArgs(argv) {
   }
   if (args.tests.some((test) => !test)) throw new GateError("--test 缺少路径。");
   if (args.cases.some((testCase) => !testCase)) throw new GateError("--case 缺少稳定 ID。");
+  if (args.visualScenarios.some((scenario) => !scenario)) {
+    throw new GateError("--visual-scenario 缺少已登记场景 ID。");
+  }
   return args;
 }
 
@@ -279,11 +289,25 @@ export function usage() {
     "用法：node e2e-verify/mobile/run-macos.mjs [options]",
     "  --test <relative-path>      指定 apps/mobile/test 下的 widget/契约用例，可重复",
     "  --case <stable-test-id>     写入报告的稳定测试 ID，可重复",
+    "  --visual-scenario <id>      只采集已登记场景，报告标记为 targeted diagnostic，可重复",
     "  --test-timeout-ms <ms>      单个 Flutter widget/契约测试等待上限",
     "  --diagnostic                仅即时输出 Flutter 原始诊断，不写入报告",
     "  --help, -h                  显示帮助",
     "  --headless                  明确拒绝；本 gate 必须观测可见 macOS 窗口",
   ].join("\n");
+}
+
+/// 定向可见验收只能使用长期登记场景；未知 ID 不得临时写入报告或启动任意 fixture。
+export function resolveMacosVisualScenarios(requestedScenarioIds = []) {
+  if (requestedScenarioIds.length === 0) return MACOS_SCREENSHOT_SCENARIOS;
+  const byId = new Map(MACOS_SCREENSHOT_SCENARIOS.map((scenario) => [scenario.id, scenario]));
+  return [...new Set(requestedScenarioIds)].map((scenarioId) => {
+    const scenario = byId.get(scenarioId);
+    if (scenario == null) {
+      throw new GateError(`视觉场景未登记：${scenarioId}`);
+    }
+    return scenario;
+  });
 }
 
 function safeError(error) {
@@ -328,6 +352,7 @@ async function main() {
   let remainingRisk = "";
   let testResults = [];
   let smoke = null;
+  let visualScenarios = [];
   let visualScenarioRuns = [];
   let screenshotArtifacts = [];
   let screenshotEntries = [];
@@ -356,6 +381,7 @@ async function main() {
     }
 
     tests = resolveMacosWidgetTests(MOBILE_ROOT, args.tests);
+    visualScenarios = resolveMacosVisualScenarios(args.visualScenarios);
     windowObserver = await createMacosWindowObserver();
     const existingWindow = await windowObserver.observe();
     if (existingWindow.count > 0) {
@@ -395,7 +421,7 @@ async function main() {
       const passed = result.code === 0 && !result.timedOut && testSuccessOutputObserved;
       testResults.push({
         path: testPath,
-        test_ids: DEFAULT_CASES,
+        test_ids: args.cases.length ? args.cases : DEFAULT_CASES,
         requires_visible_window: false,
         passed,
         exit_code: result.code,
@@ -417,7 +443,7 @@ async function main() {
       // 业务断言全部通过后才开始 5fps 可见窗口采样，截图是补充证据而非提前替代 gate。
       process.stdout.write("[macos-e2e] 启动预构建 App 并采集 5fps 视觉证据\n");
       screenshotDirectory = join(ROOT, "e2e-verify", "screenshots", timestamp, "MOBILE");
-      for (const scenario of MACOS_SCREENSHOT_SCENARIOS) {
+      for (const scenario of visualScenarios) {
         process.stdout.write(`[macos-e2e] 录制 5fps 视觉场景：${scenario.id}\n`);
         const visualRun = await recordMacosVisualScenario({
           scenario,
@@ -438,7 +464,7 @@ async function main() {
       const capturedScenarioIds = new Set(
         screenshotEntries.map((artifact) => artifact.scenarioId).filter(Boolean),
       );
-      const missingScenarios = MACOS_SCREENSHOT_SCENARIOS
+      const missingScenarios = visualScenarios
         .map((scenario) => scenario.id)
         .filter((scenarioId) => !capturedScenarioIds.has(scenarioId));
       if (missingScenarios.length > 0) {
@@ -449,7 +475,9 @@ async function main() {
       }
       status = "passed";
       failureClass = null;
-      remainingRisk = "macOS 26 + Flutter 3.47 的 flutter test -d macos 存在官方 open/VM 握手回归；integration_test 保留给后续 Android 原生或工具链修复后的 macOS gate。";
+      remainingRisk = args.visualScenarios.length > 0
+        ? "这是已登记场景的定向本地 fixture 验收，不能替代完整 macOS gate；Android AVD/真机、真实上游和真实 Provider 未覆盖。"
+        : "macOS 26 + Flutter 3.47 的 flutter test -d macos 存在官方 open/VM 握手回归；integration_test 保留给后续 Android 原生或工具链修复后的 macOS gate。";
     }
   } catch (error) {
     status = "failed";
@@ -465,7 +493,7 @@ async function main() {
           screenshotManifestPath = writeMacosScreenshotManifest({
             outputDirectory: screenshotDirectory,
             timestamp,
-            declaredScenarioIds: MACOS_SCREENSHOT_SCENARIOS.map(
+            declaredScenarioIds: visualScenarios.map(
               (scenario) => scenario.id,
             ),
             artifacts: screenshotEntries,
@@ -512,12 +540,16 @@ async function main() {
       report: {
         timestamp,
         ...report,
-        gate_kind: "flutter_macos_visible_widget_gate",
+        gate_kind: args?.visualScenarios.length
+          ? "flutter_macos_visible_widget_targeted_diagnostic"
+          : "flutter_macos_visible_widget_gate",
+        report_kind: args?.visualScenarios.length ? "targeted_diagnostic" : "full_gate",
         host_platform: "macos",
         real_device: false,
         simulated_device: false,
         visible_desktop_app: visibleDesktopApp,
         test_ids: args?.cases.length ? args.cases : DEFAULT_CASES,
+        visual_scenario_ids: visualScenarios.map((scenario) => scenario.id),
         functional_widget_tests: tests,
         deferred_native_integration_tests: MACOS_INTEGRATION_TESTS.map((entry) => entry.path),
         native_integration_status: "deferred_due_to_flutter_macos_open_vm_handshake_regression",

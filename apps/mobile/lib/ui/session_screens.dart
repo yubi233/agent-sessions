@@ -3048,6 +3048,16 @@ class _SecurityControls extends StatelessWidget {
             ? () => context.go('/devices')
             : null,
       ),
+      const Divider(height: 1),
+      ListTile(
+        key: const Key('terminal-status-page-link'),
+        enabled: !app.isBusy,
+        leading: const Icon(Icons.terminal_outlined),
+        title: const Text('终端状态'),
+        subtitle: const Text('查看已确认终端的在线状态与版本'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: app.isBusy ? null : () => context.go('/terminals'),
+      ),
       if (app.requiresRecovery) ...[
         const Divider(height: 1),
         ListTile(

@@ -2,6 +2,7 @@ import 'package:agent_sessions_mobile/app/local_visual_fixture.dart';
 import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
+import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/git/git_diff_repository.dart';
 import 'package:agent_sessions_mobile/state/lifecycle_recovery_controller.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
@@ -219,7 +220,9 @@ void main() {
     });
 
     test('v0.2 P3 composer 控制面场景预置模型/effort 目录与脱敏 usage', () async {
-      final fixture = await LocalVisualFixture.create('session-composer-controls');
+      final fixture = await LocalVisualFixture.create(
+        'session-composer-controls',
+      );
 
       expect(fixture, isNotNull);
       expect(fixture!.scenario, LocalVisualScenario.sessionComposerControls);
@@ -229,8 +232,11 @@ void main() {
       expect(controls.models, isNotEmpty);
       expect(controls.efforts, isNotEmpty);
       expect(controls.usage, isNotNull);
-      expect(controls.models.contains(controls.model), isTrue,
-          reason: '当前模型必须属于目录，否则 composer 下拉断言失败');
+      expect(
+        controls.models.contains(controls.model),
+        isTrue,
+        reason: '当前模型必须属于目录，否则 composer 下拉断言失败',
+      );
     });
 
     test('v0.3 P3 goal 编辑场景预置 goal 与 lease 链路', () async {
@@ -260,6 +266,21 @@ void main() {
           CapabilityAvailability.unsupported,
         );
       }
+    });
+
+    test('v0.4 P3 终端状态场景只预置白名单元数据', () async {
+      final fixture = await LocalVisualFixture.create('terminal-status');
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.terminalStatus);
+      expect(fixture.sessionId, isNull);
+      final terminals = await fixture.relay.listTerminals();
+      expect(terminals, hasLength(2));
+      expect(terminals.first.hostname, 'MacBook Fixture');
+      expect(
+        terminals.first.availabilityAt(DateTime.utc(2026, 8, 14, 12)),
+        TerminalAvailability.online,
+      );
     });
   });
 }

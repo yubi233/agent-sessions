@@ -4,6 +4,7 @@ import '../domain/control_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import '../domain/terminal_models.dart';
 import 'relay_repository.dart';
 
 /// 可重复的本地 Relay fixture。它只模拟白名单元数据，绝不生成会话正文。
@@ -13,6 +14,7 @@ class FixtureRelayRepository implements RelayRepository {
 
   final DateTime Function() _clock;
   final List<Device> _devices = [];
+  final List<TerminalSummary> _terminals = [];
   final Map<String, PairingRequest> _pairings = {};
   final Map<String, _FixtureSessionState> _sessions = {};
   final Map<String, _FixtureAttachmentState> _attachments = {};
@@ -30,6 +32,9 @@ class FixtureRelayRepository implements RelayRepository {
   /// v0.2/P3：fixture 默认模拟「本机已持有会话内容密钥」（真实 Keystore 通道未部署）。
   /// 置为 false 可复现「无 DEK」时附件入口 fail-closed 的行为。
   bool contentKeysReady = true;
+
+  /// 仅供 deterministic fixture 控制器注入时钟；生产 Relay 不暴露该能力。
+  DateTime fixtureNow() => _clock();
 
   /// v0.3/P1：置为 true 模拟「Provider 探测失败」——能力矩阵 available=false 且带中文原因，
   /// 用于验证状态条 fail-closed 展示（MOBILE-13）。
@@ -49,6 +54,13 @@ class FixtureRelayRepository implements RelayRepository {
 
   /// P6 测试只用这个开关模拟 Relay 不可达；远端事件注入仍可发生，表示应用离线期间服务端继续推进。
   void setNetworkAvailable(bool value) => _networkAvailable = value;
+
+  /// 终端元数据只供 P3 状态页 fixture 使用；它不模拟 Daemon 命令、日志或工作区根。
+  void replaceTerminals(Iterable<TerminalSummary> terminals) {
+    _terminals
+      ..clear()
+      ..addAll(terminals);
+  }
 
   List<int> snapshotAfterSequencesFor(String sessionId) =>
       List<int>.unmodifiable(_snapshotAfterSequences[sessionId] ?? const []);
@@ -160,6 +172,12 @@ class FixtureRelayRepository implements RelayRepository {
       platform: device.platform,
       lastSeen: device.lastSeen,
     );
+  }
+
+  @override
+  Future<List<TerminalSummary>> listTerminals() async {
+    _requireFixtureNetwork();
+    return List<TerminalSummary>.unmodifiable(_terminals);
   }
 
   @override
@@ -371,10 +389,7 @@ class FixtureRelayRepository implements RelayRepository {
         // v0.2/P2：resume 只更新会话状态并追加一条系统通知；不伪造 Provider 唤醒结果，
         // 真实结果只能来自 Daemon 的 Adapter 三态映射。
         state.resumeCount += 1;
-        _appendSystemNotice(
-          state,
-          '已提交恢复请求（第 ${state.resumeCount} 次）',
-        );
+        _appendSystemNotice(state, '已提交恢复请求（第 ${state.resumeCount} 次）');
       case SessionCommandKind.permissionApprove:
       case SessionCommandKind.permissionReject:
         _appendPermissionDecision(state, input);
@@ -577,7 +592,8 @@ class FixtureRelayRepository implements RelayRepository {
       );
     }
     return CapabilityMatrix(
-      providers: [        _fixtureProvider(
+      providers: [
+        _fixtureProvider(
           'codex',
           native: const {
             'start',
@@ -827,7 +843,10 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   /// v0.2/P3：模型切换只更新 controls 并追加系统通知；不伪造 Provider 已切换成功的证据。
-  void _applyModelSelect(_FixtureSessionState state, Map<String, dynamic>? ciphertext) {
+  void _applyModelSelect(
+    _FixtureSessionState state,
+    Map<String, dynamic>? ciphertext,
+  ) {
     final model = (ciphertext?['fixture_payload'] as Map?)?['model'] as String?;
     if (model == null || !state.controls.models.contains(model)) {
       throw const RelayFailure(RelayFailureKind.validation, '目标模型不在目录中。');
@@ -842,8 +861,12 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   /// v0.2/P3：effort 切换同上。
-  void _applyEffortSelect(_FixtureSessionState state, Map<String, dynamic>? ciphertext) {
-    final effort = (ciphertext?['fixture_payload'] as Map?)?['effort'] as String?;
+  void _applyEffortSelect(
+    _FixtureSessionState state,
+    Map<String, dynamic>? ciphertext,
+  ) {
+    final effort =
+        (ciphertext?['fixture_payload'] as Map?)?['effort'] as String?;
     if (effort == null || !state.controls.efforts.contains(effort)) {
       throw const RelayFailure(RelayFailureKind.validation, '目标 effort 不在目录中。');
     }
@@ -851,7 +874,11 @@ class FixtureRelayRepository implements RelayRepository {
     final now = _clock();
     state.append(
       eventType: 'session.effort_selected',
-      payload: {'kind': 'system_notice', 'label': 'Effort', 'text': '已切换 effort：$effort'},
+      payload: {
+        'kind': 'system_notice',
+        'label': 'Effort',
+        'text': '已切换 effort：$effort',
+      },
       now: now,
     );
   }
@@ -861,10 +888,14 @@ class FixtureRelayRepository implements RelayRepository {
     _FixtureSessionState state,
     Map<String, dynamic>? ciphertext,
   ) {
-    final mode = (ciphertext?['fixture_payload'] as Map?)?['permission_mode']
-        as String?;
-    if (mode == null || !state.controls.availablePermissionModes.contains(mode)) {
-      throw const RelayFailure(RelayFailureKind.validation, '目标 permission mode 不在目录中。');
+    final mode =
+        (ciphertext?['fixture_payload'] as Map?)?['permission_mode'] as String?;
+    if (mode == null ||
+        !state.controls.availablePermissionModes.contains(mode)) {
+      throw const RelayFailure(
+        RelayFailureKind.validation,
+        '目标 permission mode 不在目录中。',
+      );
     }
     state.controls = state.controls.copyWith(permissionMode: mode);
     final now = _clock();
@@ -880,9 +911,12 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   /// v0.3/P0：goal 文本编辑只更新 controls 并追加通知；正文不进入任何密文外字段。
-  void _applyGoalEdit(_FixtureSessionState state, Map<String, dynamic>? ciphertext) {
-    final objective = (ciphertext?['fixture_payload'] as Map?)?['objective']
-        as String?;
+  void _applyGoalEdit(
+    _FixtureSessionState state,
+    Map<String, dynamic>? ciphertext,
+  ) {
+    final objective =
+        (ciphertext?['fixture_payload'] as Map?)?['objective'] as String?;
     final goal = state.controls.goal;
     if (goal == null || objective == null || objective.trim().isEmpty) {
       throw const RelayFailure(RelayFailureKind.validation, '目标文本无效。');
@@ -1058,10 +1092,24 @@ class FixtureRelayRepository implements RelayRepository {
 
 /// fixture 能力名清单（与 SPI CapabilityNames 对齐）。
 List<String> _fixtureCapabilityNames() => const [
-  'start', 'resume', 'abort', 'usage', 'permission', 'permission_mode',
-  'question', 'plan', 'goal', 'skill_catalog', 'invoke_skill',
-  'model_select', 'effort_select', 'attachments', 'file_read', 'git_read',
-  'delegate_session', 'delegate_cross_provider',
+  'start',
+  'resume',
+  'abort',
+  'usage',
+  'permission',
+  'permission_mode',
+  'question',
+  'plan',
+  'goal',
+  'skill_catalog',
+  'invoke_skill',
+  'model_select',
+  'effort_select',
+  'attachments',
+  'file_read',
+  'git_read',
+  'delegate_session',
+  'delegate_cross_provider',
 ];
 
 ProviderCapabilityProfile _fixtureProvider(
