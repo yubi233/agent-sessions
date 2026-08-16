@@ -315,6 +315,47 @@ paths:
                 $ref: "#/components/schemas/TerminalList"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/audit:
+    get:
+      operationId: listAudit
+      description: 账号脱敏审计分页（Admin 只读），limit 上限 100。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            maximum: 100
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: redacted audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [audit]
+                properties:
+                  audit:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, action]
+                      properties:
+                        id:
+                          type: integer
+                        action:
+                          type: string
+                        metadata:
+                          type: string
   /v1/usage/summary:
     get:
       operationId: usageSummary

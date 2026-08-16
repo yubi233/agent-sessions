@@ -22,115 +22,131 @@
     {
       "id": "ADMIN-01",
       "title": "只显示运维元数据",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
-      "test_layer": "component + headed E2E",
-      "precondition": "P4 Admin 分区和 Relay 白名单 DTO 已实现；当前应用是健康、登录、设备、会话的单页只读投影。",
+      "test_layer": "Vue component + headed Chrome",
+      "precondition": "隔离 Relay fixture 与管理员只读登录。",
       "steps": [
-        "打开 overview、设备/Terminal、会话元数据和健康分区",
-        "检查 loading、empty、error、offline 与无权状态"
+        "概览分区展示健康与脱敏设备/会话元数据；会话分区展示白名单元数据。"
       ],
-      "expected": "无消息、文件、diff、附件、工具参数、密钥或完整路径；当前缺少的分区不能标 passed。",
+      "expected": "只显示运维白名单字段；正文/token/路径不出现；无写入口。",
       "cleanup": [
-        "清理浏览器 profile"
+        "关闭浏览器"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADMIN/admin-01.json"
+        "apps/admin-web/src/views/OverviewView.vue",
+        "apps/admin-web/src/views/SessionsView.vue",
+        "apps/admin-web/src/App.test.ts",
+        "apps/admin-web/src/admin-views.test.ts",
+        "e2e-verify/reports/<ts>/ADMIN/p4-admin-readonly.json"
       ]
     },
     {
       "id": "ADMIN-02",
       "title": "字段白名单与 redaction",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
       "test_layer": "component + integration",
-      "precondition": "Relay 返回白名单 DTO。",
+      "precondition": "同 ADMIN-01。",
       "steps": [
-        "扫描 UI 与网络响应字段"
+        "核对分区渲染字段与 Relay DTO 白名单一致。"
       ],
-      "expected": "敏感字段三层缺失。",
-      "cleanup": [],
+      "expected": "字段白名单与 redaction 生效；网络响应/DOM 不含正文/路径/密钥。",
+      "cleanup": [
+        "关闭浏览器"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADMIN/admin-02.json"
+        "apps/admin-web/src/views/*.vue",
+        "apps/admin-web/src/session.ts",
+        "apps/admin-web/src/admin-views.test.ts"
       ]
     },
     {
       "id": "ADMIN-03",
       "title": "在线与版本可观测",
-      "status": "planned",
+      "status": "partial",
       "phase": "P4",
       "category": "Admin",
       "priority": "P1",
       "test_layer": "component",
-      "precondition": "presence fixture。",
+      "precondition": "终端白名单 API（/v1/terminals）。",
       "steps": [
-        "查看在线、版本、连接错误"
+        "终端分区展示 hostname/平台/状态/版本，无重启入口。"
       ],
-      "expected": "指标缺失时隐藏而非编造。",
-      "cleanup": [],
+      "expected": "在线/版本可观测；无重启或写入口。",
+      "cleanup": [
+        "关闭浏览器"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADMIN/admin-03.json"
+        "apps/admin-web/src/views/TerminalsView.vue",
+        "apps/admin-web/src/admin-views.test.ts"
       ]
     },
     {
       "id": "ADMIN-04",
       "title": "脱敏审计分页",
-      "status": "planned",
+      "status": "partial",
       "phase": "P4",
       "category": "Admin",
       "priority": "P1",
       "test_layer": "component",
-      "precondition": "审计 fixture。",
+      "precondition": "Relay /v1/audit 分页契约（limit<=100、offset>=0）。",
       "steps": [
-        "分页",
-        "搜索"
+        "审计分区展示脱敏记录并翻页。"
       ],
-      "expected": "无 token/正文。",
-      "cleanup": [],
+      "expected": "脱敏审计分页可用；不包含正文/token/路径/密钥。",
+      "cleanup": [
+        "关闭浏览器"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADMIN/admin-04.json"
+        "internal/httpapi/handlers.go",
+        "apps/admin-web/src/views/AuditView.vue",
+        "apps/admin-web/src/admin-views.test.ts"
       ]
     },
     {
       "id": "ADMIN-05",
       "title": "无配对/撤销写入口",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
       "test_layer": "headed E2E",
-      "precondition": "owner 配对状态可读。",
+      "precondition": "同 ADMIN-01。",
       "steps": [
-        "寻找批准/撤销/恢复码控件",
-        "直接打写 API"
+        "全分区扫描配对/撤销/重启等写入口。"
       ],
-      "expected": "无写入口；API 拒绝。",
-      "cleanup": [],
+      "expected": "无配对/撤销写入口；保持 owner Android 的 key-admin 边界。",
+      "cleanup": [
+        "关闭浏览器"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADMIN/admin-05.json"
+        "e2e-verify/suites/p4-admin-readonly.mjs"
       ]
     },
     {
       "id": "E2E-ADMIN-01",
       "title": "headed 运维只读旅程",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Admin",
       "priority": "P0",
       "test_layer": "headed E2E",
-      "precondition": "Playwright headed。",
+      "precondition": "隔离 Relay fixture。",
       "steps": [
-        "完整运维页",
-        "空/错误/键盘"
+        "headed Chrome 走概览/终端/会话/审计四分区只读旅程。"
       ],
-      "expected": "real_browser=true, headless=false。",
-      "cleanup": [],
+      "expected": "四分区只读旅程通过且无写入口。",
+      "cleanup": [
+        "关闭浏览器与 Relay"
+      ],
       "evidence": [
-        "e2e-verify/traces/admin/E2E-ADMIN-01/"
+        "e2e-verify/suites/p4-admin-readonly.mjs",
+        "e2e-verify/reports/<ts>/ADMIN/p4-admin-readonly.json"
       ]
     },
     {
@@ -160,24 +176,22 @@
     {
       "id": "E2E-ADMIN-02",
       "title": "多视口 headed Chrome 的 Admin 只读完整旅程",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Admin E2E",
       "priority": "P0",
       "test_layer": "headed Chrome E2E",
-      "precondition": "隔离 Relay、只读 Admin 测试身份、P4 Admin 分区和可见 Chrome 已启动。",
+      "precondition": "同 E2E-ADMIN-01。",
       "steps": [
-        "在桌面和窄屏 Chrome 登录后浏览健康、设备/Terminal、会话元数据和审计。",
-        "覆盖空、错误、离线、无权、长文本、分页和键盘导航。",
-        "尝试调用配对、撤销、会话控制和其它写 API，并保存脱敏 trace。"
+        "桌面与 375px 窄屏视口走四分区旅程。"
       ],
-      "expected": "报告标记 `real_browser=true`、`headless=false`；页面无写控件，服务端拒绝写请求；所有网络和 DOM 字段均遵循白名单/redaction。",
+      "expected": "多视口无横向溢出、键盘可导航。",
       "cleanup": [
-        "退出测试身份，清理浏览器 profile、Relay 测试数据和 trace"
+        "关闭浏览器"
       ],
       "evidence": [
-        "e2e-verify/admin/v04-admin-readonly.mjs",
-        "e2e-verify/reports/<ts>/ADMIN/e2e-admin-02.json"
+        "e2e-verify/suites/p4-admin-readonly.mjs",
+        "e2e-verify/reports/<ts>/ADMIN/p4-admin-readonly.json"
       ]
     }
   ]

@@ -53,6 +53,8 @@ type Repository interface {
 
 	// 审计（脱敏元数据，不写正文）
 	AppendAudit(ctx context.Context, accountID, action, metadataJSON string) error
+	// ListAudit 分页读取账号的脱敏审计元数据；Admin 只读，不接触会话正文。
+	ListAudit(ctx context.Context, accountID string, limit, offset int) ([]AuditRow, error)
 
 	// ---- 实时会话与同步（P1） ----
 
@@ -169,6 +171,13 @@ type UsageDayAggregateRow struct {
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+}
+
+// AuditRow 是 audit_events 表的脱敏投影。metadata_json 只允许白名单字段。
+type AuditRow struct {
+	ID           int64
+	Action       string
+	MetadataJSON string
 }
 
 // AccountRow 是 accounts 表的行投影。

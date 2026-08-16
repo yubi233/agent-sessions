@@ -44,6 +44,7 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.GET("/terminals", a.handleListTerminals)
 		auth.GET("/projects", a.handleListProjects)
 		auth.GET("/sessions", a.handleListSessions)
+		auth.GET("/audit", a.handleListAudit)
 		auth.GET("/sessions/:id/snapshot", a.handleSessionSnapshot)
 		// Delegation 图可由同账号所有已配对端只读；创建和决策仍只允许 Android 写控制端。
 		auth.GET("/sessions/:id/delegations", a.handleListDelegations)
@@ -353,6 +354,45 @@ func (a *API) handleListSessions(c *gin.Context) {
 		views = append(views, newSessionView(session))
 	}
 	writeOK(c, gin.H{"sessions": views})
+}
+
+// handleListAudit 分页返回当前账号的脱敏审计元数据（ADMIN-04）。
+// 只暴露 action/metadata 白名单；limit 上限 100，offset 非负。
+func (a *API) handleListAudit(c *gin.Context) {
+	subj := subject(c)
+	limit := 50
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := parseIntQuery(raw)
+		if err != nil || parsed > 100 {
+			writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "limit must be 1..100"))
+			return
+		}
+		limit = parsed
+	}
+	offset := 0
+	if raw := c.Query("offset"); raw != "" {
+		parsed, err := parseIntQuery(raw)
+		if err != nil {
+			writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "offset must be non-negative"))
+			return
+		}
+		offset = parsed
+	}
+	rows, err := a.Repo.ListAudit(c.Request.Context(), subj.AccountID, limit, offset)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	type auditView struct {
+		ID       int64  `json:"id"`
+		Action   string `json:"action"`
+		Metadata string `json:"metadata"`
+	}
+	views := make([]auditView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, auditView{ID: row.ID, Action: row.Action, Metadata: row.MetadataJSON})
+	}
+	writeOK(c, gin.H{"audit": views})
 }
 
 // handleListTerminals 只返回当前账号的 Terminal 白名单元数据。

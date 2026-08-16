@@ -252,3 +252,35 @@ input {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---- P4 Admin 分区导航与审计分页 ---- */
+.admin-nav {
+  display: flex;
+  gap: 18px;
+}
+
+.admin-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.admin-nav a:hover {
+  color: var(--accent);
+}
+
+.admin-nav a.router-link-active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.pagination {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.pagination span {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}

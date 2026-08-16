@@ -76,7 +76,7 @@ func (a *API) handleUsageSummary(c *gin.Context) {
 	writeOK(c, summary)
 }
 
-// parseIntQuery 解析正整数字符串查询参数。
+// parseIntQuery 解析非负整数字符串查询参数；offset 允许 0，limit 需要 >= 1。
 func parseIntQuery(raw string) (int, error) {
 	var value int
 	for _, ch := range raw {
@@ -84,9 +84,6 @@ func parseIntQuery(raw string) (int, error) {
 			return 0, errors.New("not a number")
 		}
 		value = value*10 + int(ch-'0')
-	}
-	if value <= 0 {
-		return 0, errors.New("not positive")
 	}
 	return value, nil
 }

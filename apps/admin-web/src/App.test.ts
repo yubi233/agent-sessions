@@ -1,7 +1,12 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
+import { router } from "./router";
 import { clearThemePreferenceForTest } from "./theme";
+
+function mountApp() {
+  return mount(App, { global: { plugins: [router] } });
+}
 
 describe("Admin 运维只读控制台", () => {
   afterEach(() => {
@@ -11,7 +16,7 @@ describe("Admin 运维只读控制台", () => {
 
   it("ADMIN-01：就绪后展示健康状态", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
-    const wrapper = mount(App);
+    const wrapper = mountApp();
     await flushPromises();
     expect(wrapper.get('[data-testid="relay-ready"]').text()).toContain("就绪");
   });
@@ -44,7 +49,7 @@ describe("Admin 运维只读控制台", () => {
         }),
       }); // sessions
     vi.stubGlobal("fetch", fetchMock);
-    const wrapper = mount(App);
+    const wrapper = mountApp();
 
     await wrapper.get('[data-testid="login-email"]').setValue("admin@b.dev");
     await wrapper.get('[data-testid="login-password"]').setValue("pw");
@@ -74,7 +79,7 @@ describe("Admin 运维只读控制台", () => {
         json: async () => ({ sessions: [] }),
       }); // sessions
     vi.stubGlobal("fetch", fetchMock);
-    const wrapper = mount(App);
+    const wrapper = mountApp();
     await wrapper.get('[data-testid="login-email"]').setValue("a@b.dev");
     await wrapper.get('[data-testid="login-password"]').setValue("pw");
     await wrapper.get('form[data-testid="login-form"]').trigger("submit");
@@ -85,7 +90,7 @@ describe("Admin 运维只读控制台", () => {
 
   it("ADMIN-06：主题菜单有可访问名称并切换语义主题", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
-    const wrapper = mount(App);
+    const wrapper = mountApp();
     await flushPromises();
 
     const control = wrapper.get('[data-testid="theme-select"]');

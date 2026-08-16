@@ -332,6 +332,34 @@ func (r *sqliteRepo) AppendAudit(ctx context.Context, accountID, action, metadat
 	return err
 }
 
+// ListAudit 分页读取账号的脱敏审计元数据。limit 上限 100、offset 非负；
+// 只返回白名单 action/metadata，绝不包含正文、token 或路径。
+func (r *sqliteRepo) ListAudit(ctx context.Context, accountID string, limit, offset int) ([]AuditRow, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id,action,metadata_json FROM audit_events
+		 WHERE account_id=? ORDER BY id DESC LIMIT ? OFFSET ?`,
+		accountID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AuditRow
+	for rows.Next() {
+		var row AuditRow
+		if err := rows.Scan(&row.ID, &row.Action, &row.MetadataJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // WithTx 在事务中执行 fn；fn 接收绑定到同一事务的 Repository。
 func (r *sqliteRepo) WithTx(ctx context.Context, fn func(ctx context.Context, tx Repository) error) error {
 	db, ok := r.db.(*sql.DB)
