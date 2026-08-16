@@ -765,7 +765,7 @@
     {
       "id": "MOBILE-28",
       "title": "可见端远程 spawn/control/stop 用户旅程",
-      "status": "planned",
+      "status": "blocked",
       "phase": "v0.4/P5",
       "category": "Android",
       "priority": "P0",
@@ -789,7 +789,7 @@
     {
       "id": "MOBILE-29",
       "title": "Android Push、后台恢复与深链",
-      "status": "planned",
+      "status": "blocked",
       "phase": "v0.4/P5",
       "category": "Android",
       "priority": "P0",
@@ -837,7 +837,7 @@
     {
       "id": "E2E-ANDROID-01",
       "title": "可见 AVD 的 v0.4 核心旅程",
-      "status": "planned",
+      "status": "blocked",
       "phase": "v0.4/P5",
       "category": "Android E2E",
       "priority": "P0",
@@ -860,7 +860,7 @@
     {
       "id": "E2E-ANDROID-02",
       "title": "物理 Android 的 v0.4 核心旅程",
-      "status": "planned",
+      "status": "blocked",
       "phase": "v0.4/P5",
       "category": "Android E2E",
       "priority": "P0",
