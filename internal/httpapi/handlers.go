@@ -76,6 +76,16 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 
 		// SSE 账号级事件读取，支持 Last-Event-ID / after_seq 恢复。
 		auth.GET("/events", a.handleSSE(presence, logger))
+
+		// Daemon 使用独立的 Terminal 范围 REST + SSE，绝不复用账号级 /events。
+		daemon := v1.Group("/daemon")
+		daemon.Use(a.RequireAuth(), a.RequireTerminal())
+		daemon.POST("/hello", a.handleDaemonHello)
+		daemon.POST("/heartbeat", a.handleDaemonHeartbeat)
+		daemon.GET("/commands/stream", a.handleDaemonCommandSSE(logger))
+		daemon.POST("/commands/:id/ack", a.handleDaemonCommandAck)
+		daemon.POST("/commands/:id/result", a.handleDaemonCommandResult)
+		daemon.POST("/events", a.handleDaemonEventUpload)
 	}
 }
 
@@ -436,6 +446,7 @@ type submitCommandRequest struct {
 	IdempotencyKey   string          `json:"idempotency_key"`
 	LeaseEpoch       int64           `json:"lease_epoch"`
 	TargetInstanceID string          `json:"target_instance_id"`
+	TargetTerminalID string          `json:"target_terminal_id"`
 	Ciphertext       json.RawMessage `json:"ciphertext"`
 }
 
@@ -458,11 +469,18 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 	cmd, err := a.Sessions.SubmitCommand(c.Request.Context(), domain.CommandInput{
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
 		SessionID: c.Param("id"), Kind: req.Kind, IdempotencyKey: req.IdempotencyKey,
-		LeaseEpoch: req.LeaseEpoch, TargetInstanceID: req.TargetInstanceID, CiphertextJSON: string(req.Ciphertext),
+		LeaseEpoch: req.LeaseEpoch, TargetInstanceID: req.TargetInstanceID, TargetTerminalID: req.TargetTerminalID,
+		CiphertextJSON: string(req.Ciphertext),
 	})
 	if err != nil {
 		writeError(c, err)
 		return
+	}
+	// 投递已经随命令事务提交；Hub 只缩短已连接 Daemon 的可见延迟，断线恢复仍读取 SQLite。
+	if cmd.TargetTerminalID != "" {
+		if delivery, deliveryErr := a.Sessions.DaemonDeliveryForCommand(c.Request.Context(), cmd.ID); deliveryErr == nil {
+			a.DaemonDeliveries.Publish(cmd.TargetTerminalID, delivery)
+		}
 	}
 	c.JSON(http.StatusAccepted, newCommandView(cmd))
 }
@@ -712,6 +730,7 @@ func (a *API) handleAcquireLease(c *gin.Context) {
 
 type createWorkspaceRequest struct {
 	ProjectID     string `json:"project_id"`
+	TerminalID    string `json:"terminal_id"`
 	CanonicalRoot string `json:"canonical_root"`
 	Branch        string `json:"branch"`
 	Status        string `json:"status"`
@@ -751,8 +770,15 @@ func (a *API) handleCreateWorkspace(c *gin.Context) {
 			return
 		}
 	}
+	if req.TerminalID != "" {
+		terminal, terminalErr := a.Repo.TerminalByID(c.Request.Context(), req.TerminalID)
+		if terminalErr != nil || terminal.AccountID != subj.AccountID {
+			writeError(c, domain.ErrScopeDenied)
+			return
+		}
+	}
 	ws := store.WorkspaceRow{
-		ID: "ws_" + projID, ProjectID: projID, TerminalID: "",
+		ID: "ws_" + projID, ProjectID: projID, TerminalID: req.TerminalID,
 		CanonicalRoot: req.CanonicalRoot, Branch: req.Branch, Status: req.Status,
 	}
 	if ws.Status == "" {
@@ -817,18 +843,21 @@ func newPairingView(pairing domain.PairingRequest) pairingView {
 }
 
 type terminalView struct {
-	ID             string `json:"id"`
-	DeviceID       string `json:"device_id"`
-	Hostname       string `json:"hostname,omitempty"`
-	Platform       string `json:"platform,omitempty"`
-	Status         string `json:"status"`
-	LastSeenUnixMS int64  `json:"last_seen_unix_ms,omitempty"`
+	ID              string `json:"id"`
+	DeviceID        string `json:"device_id"`
+	Hostname        string `json:"hostname,omitempty"`
+	Platform        string `json:"platform,omitempty"`
+	Status          string `json:"status"`
+	LastSeenUnixMS  int64  `json:"last_seen_unix_ms,omitempty"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	DaemonVersion   string `json:"daemon_version,omitempty"`
 }
 
 func newTerminalView(terminal store.TerminalRow) terminalView {
 	return terminalView{
 		ID: terminal.ID, DeviceID: terminal.DeviceID, Hostname: terminal.Hostname,
 		Platform: terminal.Platform, Status: terminal.Status, LastSeenUnixMS: terminal.LastSeenUnixMS,
+		ProtocolVersion: terminal.ProtocolVersion, DaemonVersion: terminal.DaemonVersion,
 	}
 }
 
@@ -873,11 +902,12 @@ func newSessionView(session store.SessionRow) sessionView {
 }
 
 type commandView struct {
-	ID             string `json:"id"`
-	Kind           string `json:"kind"`
-	Status         string `json:"status"`
-	IdempotencyKey string `json:"idempotency_key"`
-	LeaseEpoch     int64  `json:"lease_epoch,omitempty"`
+	ID               string `json:"id"`
+	Kind             string `json:"kind"`
+	Status           string `json:"status"`
+	IdempotencyKey   string `json:"idempotency_key"`
+	LeaseEpoch       int64  `json:"lease_epoch,omitempty"`
+	TargetTerminalID string `json:"target_terminal_id,omitempty"`
 }
 
 // delegationView 是 parent 图的安全投影。task_envelope 从不返回；summary_envelope 仍是客户端加密对象。
@@ -920,7 +950,7 @@ func newAttachmentReceiptView(receipt domain.AttachmentReceipt) attachmentReceip
 func newCommandView(command store.CommandRow) commandView {
 	return commandView{
 		ID: command.ID, Kind: command.Kind, Status: command.Status,
-		IdempotencyKey: command.IdempotencyKey, LeaseEpoch: command.LeaseEpoch,
+		IdempotencyKey: command.IdempotencyKey, LeaseEpoch: command.LeaseEpoch, TargetTerminalID: command.TargetTerminalID,
 	}
 }
 

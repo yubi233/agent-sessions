@@ -1,6 +1,6 @@
 # ADR-009：Daemon-Relay 命令流与版本协商
 
-- 状态：Accepted，P2 实施前置契约；当前尚未实现
+- 状态：Accepted，P2 已完成受限本地实现；完整会话/Provider/Android 仍未完成
 - 日期：2026-08-16
 
 ## 背景
@@ -18,7 +18,7 @@ P2 采用 **REST + 专用 SSE**，不新增 WebSocket：
 5. Daemon 只执行已确认 Workspace 内、当前 capability 允许的动作。即使 Relay 已接受命令，Daemon 仍必须拒绝失效授权、旧 epoch、路径逃逸、目标不匹配和不支持的 command kind；拒绝只返回白名单错误元数据。
 6. 协议采用 N/N-1 兼容窗口。请求在 hello 与每个写请求中携带版本；Relay 仅接受当前 N 或 N-1。低于最小版本返回稳定的 `UPGRADE_REQUIRED`，高于当前版本返回 `PROTOCOL_UNSUPPORTED`，不得静默降级新 command kind。
 
-以下接口名称仅是 P2 OpenAPI/JSON Schema 的目标形状，**不是当前 API**：`/v1/daemon/hello`、`/v1/daemon/heartbeat`、`/v1/daemon/commands/stream`、`/v1/daemon/commands/{id}/ack`、`/v1/daemon/events`。实施时必须由生成物和契约测试决定最终路径与字段，不能直接依赖本文文本。
+P2 已将以下接口写入 OpenAPI 和 Gin handler：`/v1/daemon/hello`、`/v1/daemon/heartbeat`、`/v1/daemon/commands/stream`、`/v1/daemon/commands/{id}/ack`、`/v1/daemon/commands/{id}/result`、`/v1/daemon/events`。生成物和契约测试仍是字段的唯一事实来源；本文不能替代 schema。
 
 ## 数据与重连规则
 
@@ -31,5 +31,5 @@ P2 采用 **REST + 专用 SSE**，不新增 WebSocket：
 
 - 命令流不承载明文工作区文件、diff、Provider 正文、私钥或 token。Relay 只保存密文 envelope 与白名单元数据；日志记录脱敏 ID、状态和错误码。
 - Android 继续是唯一远程写控制端；Web/Admin 不获得命令流或 Daemon 写权限。
-- 实施至少要沉淀 `P0-SCHEMA-02`、`CTRL-04`、`SESS-05`、`SYNC-05`、`RELAY-LEASE-03`、`DAEMON-RPC-01`、`DAEMON-PROC-02` 与 `E2E-RELAY-02` 的长期回归。当前这些用例均为 `planned`。
+- 已沉淀 `P0-SCHEMA-02`、`MIG-02`、`CTRL-04`、`SYNC-05`、`RELAY-LEASE-03`、`DAEMON-RPC-01` 与 `GIT-07` 的本地根因回归，以及 `task test:e2e:relay` 的窄纵向 fixture gate。`SESS-05` 仅覆盖确定性 `session.start`，`DAEMON-PROC-02` 和完整 `E2E-RELAY-02` 仍未满足，必须保持 `partial/planned`。
 - WebSocket 的 `WS-01/WS-02` 已被明确排除，不能作为命令流实现证据。

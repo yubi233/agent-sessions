@@ -61,9 +61,12 @@ type Repository interface {
 
 	// Terminal
 	CreateTerminal(ctx context.Context, t TerminalRow) error
+	TerminalByID(ctx context.Context, id string) (TerminalRow, error)
 	TerminalByDeviceID(ctx context.Context, deviceID string) (TerminalRow, error)
 	ListTerminals(ctx context.Context, accountID string) ([]TerminalRow, error)
 	TouchTerminal(ctx context.Context, id string, unixMS int64) error
+	// UpsertDaemonTerminal 只更新 Daemon 声明的白名单元数据；工作区绝对路径和 Provider 正文不允许写入 Relay。
+	UpsertDaemonTerminal(ctx context.Context, t TerminalRow) error
 
 	// Project / Workspace
 	CreateProject(ctx context.Context, p ProjectRow) error
@@ -92,6 +95,17 @@ type Repository interface {
 	CommandByScopeKey(ctx context.Context, scopeHash, idempotencyKey string) (CommandRow, error)
 	UpdateCommandStatus(ctx context.Context, id, status string) error
 	ListCommands(ctx context.Context, sessionID string) ([]CommandRow, error)
+
+	// Daemon 专用投递记录。账号级 outbox 不承担终端命令流，避免客户端 SSE 与 Daemon SSE 混用。
+	CreateDaemonDelivery(ctx context.Context, d DaemonDeliveryRow) (DaemonDeliveryRow, error)
+	DaemonDeliveryByCommandID(ctx context.Context, commandID string) (DaemonDeliveryRow, error)
+	ListDaemonDeliveriesAfter(ctx context.Context, terminalID string, afterDeliverySeq int64) ([]DaemonDeliveryRow, error)
+	UpdateDaemonDelivery(ctx context.Context, d DaemonDeliveryRow) error
+
+	// Daemon canonical event 使用 event_id 去重；事件正文仍只以客户端密文 envelope 进入 session_events。
+	DaemonEventReceiptByID(ctx context.Context, eventID string) (DaemonEventReceiptRow, error)
+	CreateDaemonEventReceipt(ctx context.Context, r DaemonEventReceiptRow) error
+	SetDaemonEventReceiptSeq(ctx context.Context, eventID string, eventSeq int64) error
 
 	// Delegation：父子 Session 图只存密文 envelope 与白名单索引，Relay 不解密任务书或摘要。
 	CreateDelegation(ctx context.Context, d DelegationRow) error
@@ -199,13 +213,17 @@ type RecoveryRow struct {
 
 // TerminalRow 是 terminals 表的行投影。
 type TerminalRow struct {
-	ID             string
-	DeviceID       string
-	AccountID      string
-	Hostname       string
-	Platform       string
-	Status         string
-	LastSeenUnixMS int64
+	ID                  string
+	DeviceID            string
+	AccountID           string
+	Hostname            string
+	Platform            string
+	Status              string
+	LastSeenUnixMS      int64
+	ProtocolVersion     int
+	DaemonVersion       string
+	CapabilitiesJSON    string
+	LastHeartbeatUnixMS int64
 }
 
 // ProjectRow 是 projects 表的行投影。
@@ -265,7 +283,32 @@ type CommandRow struct {
 	IdempotencyKey   string
 	LeaseEpoch       int64
 	TargetInstanceID string
+	TargetTerminalID string
 	CiphertextJSON   string
+}
+
+// DaemonDeliveryRow 是一个仅属于目标 Terminal 的至少一次投递记录。
+// delivery_seq 只在同一 terminal 内单调递增，SSE 恢复不得复用账号事件序号。
+type DaemonDeliveryRow struct {
+	TerminalID      string
+	DeliverySeq     int64
+	CommandID       string
+	AckKind         string
+	ResultStatus    string
+	ErrorCode       string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
+// DaemonEventReceiptRow 记录 event_id 与 Relay 分配的 canonical event_seq，
+// 使 Daemon 重试不会重复追加会话事件。
+type DaemonEventReceiptRow struct {
+	EventID         string
+	TerminalID      string
+	CommandID       string
+	SessionID       string
+	EventSeq        int64
+	CreatedAtUnixMS int64
 }
 
 // DelegationRow 是父子 Session 图的最小持久化投影。两个 envelope 都是客户端密文，

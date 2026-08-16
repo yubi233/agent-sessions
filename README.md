@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-当前仓库包含 Go Relay/Daemon、Vue 只读客户端、Flutter Android 客户端、协议/密码学向量与 SQLite 本地基线。v0.4 正在从 P0 的事实、ADR 与测试契约收口开始推进；权威功能边界和当前实现状态以项目文档为准，不能把 fixture、局部 CLI 或历史报告表述为完整远程控制能力。
+当前仓库包含 Go Relay/Daemon、Vue 只读客户端、Flutter Android 客户端、协议/密码学向量与 SQLite 本地基线。v0.4 已完成 P0 事实/ADR/测试契约与 P1 设计系统基线；P2 已实现受限 Relay-Daemon REST/SSE fixture 切片，仍不能把 fixture、局部 CLI 或历史报告表述为完整远程控制能力。
 
 以下文档是当前实现和后续迭代的事实来源：
 
@@ -25,7 +25,7 @@
 
 ## 目标边界
 
-- Go + Gin 生态：Relay Server 与跨 macOS、Windows、Linux 的 PC Daemon；当前 Relay 只实现 HTTP/REST 与账号级 SSE。Daemon 的认证命令流采用后续 REST + 专用 SSE 契约，当前未实现 WebSocket。
+- Go + Gin 生态：Relay Server 与跨 macOS、Windows、Linux 的 PC Daemon；Relay 实现 HTTP/REST、账号级 SSE 与仅 Terminal 可访问的 Daemon 专用 SSE。当前不实现 WebSocket；生产 E2EE event encoder、真实 Provider 与完整会话控制仍未完成。
 - Vue3 + TypeScript：管理平台和只读简易 Web App。
 - Flutter + Dart：Android 完整编码会话控制端。Flutter 不能使用 TypeScript；若要求所有客户端都使用 TypeScript，必须把 Android 技术栈改为 React Native。
 - 支持 Claude、Codex、OpenCode、OpenClaw，按统一能力模型对原生能力进行声明和降级。

@@ -129,7 +129,7 @@
     {
       "id": "DAEMON-RPC-01",
       "title": "Daemon 注册、heartbeat、取命令、ack 与断线恢复",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "Daemon RPC",
       "priority": "P0",
@@ -145,7 +145,9 @@
         "停止 Daemon/Relay，删除隔离 SQLite、凭据、SSE 流和临时日志"
       ],
       "evidence": [
-        "internal/daemon/relay_client_test.go",
+        "internal/daemon/relay_test.go",
+        "internal/relay/p2_daemon_contract_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/DAEMON-CORE/daemon-rpc-01.json"
       ]
     },

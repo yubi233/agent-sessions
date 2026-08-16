@@ -3,7 +3,7 @@
   "suite_version": 2,
   "status": "in_progress",
   "plan_id": "RELAY-REALTIME",
-  "description": "Gin REST、账号级 SSE、Session、ControlLease、outbox 与密文扫描。Daemon 专用 REST + SSE 命令流由 ADR-009/P2 计划；当前没有 WebSocket。SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。",
+  "description": "Gin REST、账号级 SSE、Session、ControlLease、outbox 与密文扫描。P2 已有受限 Daemon 专用 REST + SSE 命令流；当前没有 WebSocket。SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Relay Server",
   "environment": {
@@ -438,7 +438,7 @@
     {
       "id": "CTRL-04",
       "title": "远程命令派发遵守 owner、lease 与幂等",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "控制权",
       "priority": "P0",
@@ -454,14 +454,16 @@
         "停止测试 Daemon/Adapter，删除测试会话、lease、命令、投递和事件记录"
       ],
       "evidence": [
-        "internal/relay/daemon_command_test.go",
+        "internal/relay/p2_daemon_contract_test.go",
+        "internal/relay/integration_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-04.json"
       ]
     },
     {
       "id": "SESS-05",
       "title": "spawn、resume、abort、kill 映射为 canonical event 与 snapshot",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "会话",
       "priority": "P0",
@@ -477,15 +479,15 @@
         "终止所有测试 Provider 子进程，删除测试会话、事件、outbox 与本地 state"
       ],
       "evidence": [
-        "internal/relay/session_lifecycle_test.go",
-        "internal/daemon/session_runner_test.go",
+        "internal/relay/p2_daemon_contract_test.go",
+        "internal/daemon/runner_test.go",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-05.json"
       ]
     },
     {
       "id": "SYNC-05",
       "title": "Daemon 重连、cursor/outbox 与重复命令抑制",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "同步",
       "priority": "P0",
@@ -501,15 +503,17 @@
         "停止测试服务并删除隔离 SQLite、outbox、临时 trace 和 Adapter 计数"
       ],
       "evidence": [
-        "internal/relay/daemon_sync_test.go",
-        "internal/daemon/reconnect_test.go",
+        "internal/daemon/store_test.go",
+        "internal/daemon/relay_test.go",
+        "internal/relay/p2_daemon_contract_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/sync-05.json"
       ]
     },
     {
       "id": "RELAY-LEASE-03",
       "title": "旧 epoch、撤销设备与并发 owner 写入均被拒绝",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "lease",
       "priority": "P0",
@@ -525,7 +529,9 @@
         "撤销测试设备，删除测试账号、会话、lease、命令和 SQLite 副本"
       ],
       "evidence": [
-        "internal/relay/lease_fencing_test.go",
+        "internal/relay/p2_daemon_contract_test.go",
+        "internal/store/migrate_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/relay-lease-03.json"
       ]
     }

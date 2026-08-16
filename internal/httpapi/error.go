@@ -41,6 +41,12 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusUnauthorized, protocol.NewError(protocol.ErrInvalidRequest, "invalid recovery code")
 	case errors.Is(err, domain.ErrReadOnlyDevice):
 		return http.StatusForbidden, protocol.NewError(protocol.ErrReadOnlyDevice, "read-only device")
+	case errors.Is(err, domain.ErrTerminalRequired):
+		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "terminal device required")
+	case errors.Is(err, domain.ErrProtocolUpgradeRequired):
+		return http.StatusUpgradeRequired, protocol.NewError(protocol.ErrUpgradeRequired, "daemon protocol upgrade required")
+	case errors.Is(err, domain.ErrProtocolUnsupported):
+		return http.StatusConflict, protocol.NewError(protocol.ErrProtocolUnsupported, "daemon protocol unsupported")
 	case errors.Is(err, domain.ErrScopeDenied):
 		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "resource scope denied")
 	case errors.Is(err, domain.ErrBootstrapCompleted):
@@ -53,6 +59,8 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusConflict, protocol.NewError(protocol.ErrLeaseConflict, "lease conflict")
 	case errors.Is(err, domain.ErrTargetStale):
 		return http.StatusConflict, protocol.NewError(protocol.ErrTargetInstanceStale, "target instance stale")
+	case errors.Is(err, domain.ErrDaemonCommandState):
+		return http.StatusConflict, protocol.NewError(protocol.ErrIdempotencyConflict, "daemon command state conflict")
 	case errors.Is(err, domain.ErrIdempotencyUsed), errors.Is(err, domain.ErrDelegationInvalidState):
 		return http.StatusConflict, protocol.NewError(protocol.ErrIdempotencyConflict, "delegation decision conflict")
 	case errors.Is(err, domain.ErrDelegationUnsupported):

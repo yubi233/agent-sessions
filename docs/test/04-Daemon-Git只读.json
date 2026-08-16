@@ -1,9 +1,9 @@
 {
   "suite": "daemon-git",
   "suite_version": 2,
-  "status": "completed",
+  "status": "in_progress",
   "plan_id": "DAEMON-GIT",
-  "description": "Git 只读 RPC、snapshot_token 与路径安全。消费 WORKSPACE-01。",
+  "description": "Git 只读 RPC、snapshot_token 与路径安全。P2 的 Relay command dispatcher 仅完成受限本地切片；消费 WORKSPACE-01。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "PC Daemon",
   "environment": {
@@ -157,7 +157,7 @@
     {
       "id": "GIT-07",
       "title": "真实临时仓库的文件/代码读取与路径逃逸防护",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "Git/代码只读",
       "priority": "P0",
@@ -173,7 +173,10 @@
         "删除临时仓库、符号链接、Daemon 缓存、测试命令和事件记录"
       ],
       "evidence": [
-        "internal/gitread/remote_read_test.go",
+        "internal/daemon/readonly_test.go",
+        "internal/daemon/readonly_dispatcher_test.go",
+        "internal/relay/p2_daemon_contract_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/DAEMON-GIT/git-07.json"
       ]
     }

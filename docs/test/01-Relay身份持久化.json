@@ -237,7 +237,7 @@
     {
       "id": "MIG-02",
       "title": "v0.4 SQLite 状态表升级、重启与失败恢复",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.4/P2",
       "category": "迁移",
       "priority": "P0",
@@ -254,6 +254,8 @@
       ],
       "evidence": [
         "internal/store/migrate_test.go",
+        "internal/daemon/store_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/RELAY-IDENTITY/mig-02.json"
       ]
     }

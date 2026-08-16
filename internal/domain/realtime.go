@@ -53,6 +53,7 @@ type CommandInput struct {
 	IdempotencyKey   string
 	LeaseEpoch       int64
 	TargetInstanceID string
+	TargetTerminalID string
 	CiphertextJSON   string
 }
 
@@ -161,7 +162,8 @@ func (s *SessionService) SubmitCommand(ctx context.Context, in CommandInput) (st
 	cmd := store.CommandRow{
 		ID: id.New("cmd"), AccountID: in.AccountID, SessionID: in.SessionID, Kind: in.Kind,
 		Status: CommandAccepted, ScopeHash: scopeHash, IdempotencyKey: in.IdempotencyKey,
-		LeaseEpoch: in.LeaseEpoch, TargetInstanceID: in.TargetInstanceID, CiphertextJSON: in.CiphertextJSON,
+		LeaseEpoch: in.LeaseEpoch, TargetInstanceID: in.TargetInstanceID, TargetTerminalID: in.TargetTerminalID,
+		CiphertextJSON: in.CiphertextJSON,
 	}
 	var out store.CommandRow
 	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
@@ -197,9 +199,49 @@ func (s *SessionService) SubmitCommand(ctx context.Context, in CommandInput) (st
 			if lease.InstanceID != "" && in.TargetInstanceID != lease.InstanceID {
 				return ErrTargetStale
 			}
+			// Daemon 命令的唯一目标来自会话所属 Workspace，不能由 Android 客户端自由指定。
+			// 历史未绑定 Workspace 仍保留原有 accepted/outbox 语义，但不会进入专用 Daemon 流。
+			workspace, workspaceErr := tx.WorkspaceByID(ctx, session.WorkspaceID)
+			if workspaceErr != nil {
+				if errors.Is(workspaceErr, sql.ErrNoRows) {
+					return ErrWorkspaceNotFound
+				}
+				return workspaceErr
+			}
+			if !workspaceBelongsToAccount(ctx, tx, in.AccountID, workspace.ID) {
+				return ErrScopeDenied
+			}
+			if workspace.TerminalID == "" {
+				if in.TargetTerminalID != "" {
+					return ErrScopeDenied
+				}
+				cmd.TargetTerminalID = ""
+			} else {
+				if in.TargetTerminalID != "" && in.TargetTerminalID != workspace.TerminalID {
+					return ErrScopeDenied
+				}
+				terminal, terminalErr := tx.TerminalByID(ctx, workspace.TerminalID)
+				if terminalErr != nil {
+					if errors.Is(terminalErr, sql.ErrNoRows) {
+						return ErrTerminalOffline
+					}
+					return terminalErr
+				}
+				if terminal.AccountID != in.AccountID {
+					return ErrScopeDenied
+				}
+				cmd.TargetTerminalID = terminal.ID
+			}
 		}
 		if err := tx.CreateCommand(ctx, cmd); err != nil {
 			return err
+		}
+		if cmd.TargetTerminalID != "" {
+			if _, err := tx.CreateDaemonDelivery(ctx, store.DaemonDeliveryRow{
+				TerminalID: cmd.TargetTerminalID, CommandID: cmd.ID, CreatedAtUnixMS: s.now().UnixMilli(),
+			}); err != nil {
+				return err
+			}
 		}
 		return tx.EnqueueOutbox(ctx, store.OutboxRow{Kind: "command.updated", PayloadJSON: `{"command_id":"` + cmd.ID + `"}`, Status: "pending"})
 	})
@@ -214,6 +256,25 @@ func (s *SessionService) SubmitCommand(ctx context.Context, in CommandInput) (st
 		out = cmd
 	}
 	return out, nil
+}
+
+// DaemonDeliveryForCommand 返回已绑定 Daemon 的专用投递记录。没有 target terminal 的历史命令
+// 不能被任何 Daemon stream 取走，调用方应按 sql.ErrNoRows 区分而非猜测目标。
+func (s *SessionService) DaemonDeliveryForCommand(ctx context.Context, commandID string) (store.DaemonDeliveryRow, error) {
+	return s.repo.DaemonDeliveryByCommandID(ctx, commandID)
+}
+
+func workspaceBelongsToAccount(ctx context.Context, repo store.Repository, accountID, workspaceID string) bool {
+	workspaces, err := repo.ListWorkspaces(ctx, accountID)
+	if err != nil {
+		return false
+	}
+	for _, workspace := range workspaces {
+		if workspace.ID == workspaceID {
+			return true
+		}
+	}
+	return false
 }
 
 // checkLease 校验写端是否持有当前 lease 且 epoch 匹配（fencing）。

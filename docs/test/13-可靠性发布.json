@@ -228,7 +228,7 @@
     {
       "id": "E2E-RELAY-02",
       "title": "本地真实 Relay + Daemon + 确定性 Adapter 全闭环",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "跨层",
       "priority": "P0",
@@ -244,7 +244,9 @@
         "停止 Relay、Daemon、Adapter 和 SSE；删除测试账号、SQLite、Workspace、outbox、trace 和日志"
       ],
       "evidence": [
-        "e2e-verify/relay/run-v04-local.mjs",
+        "Taskfile.yml",
+        "internal/relay/p2_daemon_contract_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/e2e-relay-02.json"
       ]
     },

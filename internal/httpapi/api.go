@@ -16,20 +16,23 @@ const subjectKey = "auth_subject"
 
 // API 聚合领域服务与仓储，供 handler 调用。
 type API struct {
-	Auth         *domain.AuthService
-	Pairing      *domain.PairingService
-	Sessions     *domain.SessionService
-	Delegations  *domain.DelegationService
-	Attachments  *domain.AttachmentService
-	Capabilities *adapterreg.Registry
-	Repo         store.Repository
+	Auth             *domain.AuthService
+	Pairing          *domain.PairingService
+	Sessions         *domain.SessionService
+	Delegations      *domain.DelegationService
+	Attachments      *domain.AttachmentService
+	Daemons          *domain.DaemonService
+	DaemonDeliveries *domain.DaemonDeliveryHub
+	Capabilities     *adapterreg.Registry
+	Repo             store.Repository
 }
 
 // New 构造 HTTP API 聚合。
 func New(auth *domain.AuthService, pairing *domain.PairingService, sessions *domain.SessionService, delegations *domain.DelegationService, repo store.Repository) *API {
 	return &API{
 		Auth: auth, Pairing: pairing, Sessions: sessions, Delegations: delegations,
-		Attachments: domain.NewAttachmentService(repo), Capabilities: adapterreg.New(), Repo: repo,
+		Attachments: domain.NewAttachmentService(repo), Daemons: domain.NewDaemonService(repo),
+		DaemonDeliveries: domain.NewDaemonDeliveryHub(), Capabilities: adapterreg.New(), Repo: repo,
 	}
 }
 
@@ -103,6 +106,19 @@ func (a *API) RequireWrite() gin.HandlerFunc {
 		subj := subject(c)
 		if !subj.CanWrite() {
 			writeError(c, domain.ErrReadOnlyDevice)
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireTerminal 收紧 Daemon 专用端点：只有已绑定且仍活动的 terminal device bearer 能访问。
+// Web/Admin/Android 即使属于同一账号，也不能订阅或确认任意 Terminal 的命令流。
+func (a *API) RequireTerminal() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		subj := subject(c)
+		if subj.Role != domain.RoleTerminal || subj.DeviceID == "" {
+			writeError(c, domain.ErrTerminalRequired)
 			return
 		}
 		c.Next()

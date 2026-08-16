@@ -488,6 +488,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/daemon/hello": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 已配对 terminal 以设备 bearer 协商 N/N-1 协议并登记白名单 Daemon 元数据；不得包含 Workspace 绝对路径、Provider 正文或密钥。 */
+        post: operations["daemonHello"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅已协商的 terminal 更新在线状态；Relay 只保留 heartbeat 时间与版本摘要。 */
+        post: operations["daemonHeartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/commands/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 仅目标 terminal 的专用 SSE 命令流。每个 command 均携带由 Relay 从 Session 推导的 opaque workspace_id，Daemon 必须再与本机已确认工作区匹配；不得传输 canonical_root。Last-Event-ID / after_delivery_seq 使用 terminal 范围的 delivery_seq，不能与账号级 /v1/events cursor 混用。 */
+        get: operations["streamDaemonCommands"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/commands/{id}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 目标 terminal 对 received/started/rejected 的幂等确认。started 会重新校验 command 的 lease epoch、instance 与 terminal 归属。 */
+        post: operations["acknowledgeDaemonCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/commands/{id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 目标 terminal 回写命令终态；详细结果必须通过独立、幂等的密文 canonical event 上传，不回显 Provider 正文。 */
+        post: operations["resolveDaemonCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 目标 terminal 上传与命令绑定的 canonical event；Relay 只存 opaque ciphertext envelope 与白名单索引，event_id 可安全重试。 */
+        post: operations["uploadDaemonEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -619,6 +721,7 @@ export interface components {
         };
         CreateWorkspaceRequest: {
             project_id: string;
+            terminal_id?: string;
             canonical_root: string;
             branch?: string;
             status?: string;
@@ -692,6 +795,7 @@ export interface components {
             /** Format: int64 */
             lease_epoch: number;
             target_instance_id?: string;
+            target_terminal_id?: string;
             ciphertext?: Record<string, never>;
         };
         Command: {
@@ -701,6 +805,97 @@ export interface components {
             idempotency_key: string;
             /** Format: int64 */
             lease_epoch?: number;
+            target_terminal_id?: string;
+        };
+        DaemonHelloRequest: {
+            protocol_version: number;
+            daemon_version: string;
+            hostname: string;
+            platform: string;
+            capabilities: string[];
+        };
+        DaemonHelloResponse: {
+            terminal_id: string;
+            protocol_version: number;
+            min_protocol_version: number;
+            heartbeat_interval_seconds: number;
+            /** Format: int64 */
+            after_delivery_seq: number;
+        };
+        DaemonHeartbeatRequest: {
+            protocol_version: number;
+        };
+        DaemonHeartbeatResponse: {
+            terminal_id: string;
+            /** Format: int64 */
+            server_time_unix_ms: number;
+        };
+        DaemonCommandDelivery: {
+            /** Format: int64 */
+            delivery_seq: number;
+            command: components["schemas"]["DaemonDeliveredCommand"];
+        };
+        DaemonDeliveredCommand: {
+            id: string;
+            session_id: string;
+            /** @description Relay 从 Session 推导的 opaque ID；不是本机路径，也不能替代 Daemon 本机确认。 */
+            workspace_id: string;
+            kind: string;
+            /** Format: int64 */
+            lease_epoch: number;
+            target_instance_id?: string;
+            target_terminal_id: string;
+            ciphertext: Record<string, never>;
+        };
+        DaemonCommandAckRequest: {
+            protocol_version: number;
+            /** Format: int64 */
+            delivery_seq: number;
+            /** @enum {string} */
+            ack_kind: "received" | "started" | "rejected";
+            error_code?: string;
+        };
+        DaemonCommandResultRequest: {
+            protocol_version: number;
+            /** Format: int64 */
+            delivery_seq: number;
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "cancelled";
+            error_code?: string;
+        };
+        DaemonCommandReceipt: {
+            command_id: string;
+            /** Format: int64 */
+            delivery_seq: number;
+            ack_kind: string;
+            status: string;
+            error_code?: string;
+        };
+        DaemonEventUploadRequest: {
+            protocol_version: number;
+            event_id: string;
+            command_id: string;
+            session_id: string;
+            /** @enum {string} */
+            event_type: "session.lifecycle" | "turn.started" | "message.delta" | "message.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated";
+            envelope: components["schemas"]["OpaqueCipherEnvelope"];
+        };
+        DaemonEventUploadResponse: {
+            event_id: string;
+            /** Format: int64 */
+            event_seq: number;
+            idempotent: boolean;
+        };
+        /** @description Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。 */
+        OpaqueCipherEnvelope: {
+            alg: string;
+            key_id: string;
+            nonce: string;
+            ciphertext: string;
+            aad_hash: string;
+            payload_version: number;
+        } & {
+            [key: string]: unknown;
         };
         /** @description 不包含 filename 或明文内容；metadata_ciphertext 与 ciphertext 均为客户端加密后的 base64 字节串。 */
         AttachmentChunkUploadRequest: {
@@ -1634,6 +1829,184 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    daemonHello: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonHelloRequest"];
+            };
+        };
+        responses: {
+            /** @description negotiated terminal state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonHelloResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            /** @description terminal protocol is below the supported compatibility window */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    daemonHeartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonHeartbeatRequest"];
+            };
+        };
+        responses: {
+            /** @description heartbeat accepted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonHeartbeatResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description terminal protocol is below the supported compatibility window */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    streamDaemonCommands: {
+        parameters: {
+            query?: {
+                after_delivery_seq?: number;
+            };
+            header?: {
+                "Last-Event-ID"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description daemon command SSE stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["DaemonCommandDelivery"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    acknowledgeDaemonCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonCommandAckRequest"];
+            };
+        };
+        responses: {
+            /** @description ack state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonCommandReceipt"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    resolveDaemonCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonCommandResultRequest"];
+            };
+        };
+        responses: {
+            /** @description result state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonCommandReceipt"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    uploadDaemonEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonEventUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description event accepted or idempotently replayed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonEventUploadResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
         };
     };
 }

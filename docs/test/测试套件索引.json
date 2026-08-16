@@ -61,7 +61,7 @@
       "dependencies": [
         "PROTO-CRYPTO"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "认证、配对、设备撤销、持久化迁移和进程内 presence 重建根因测试只能由此 suite 定义；历史 ID RELAY-REDIS-01 保留但不表示 Redis 运行时依赖；密码学安全 ID 仅消费。"
     },
@@ -110,7 +110,7 @@
         "PROTO-CRYPTO",
         "RELAY-IDENTITY"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "HTTP、账号 SSE、Terminal、Session、控制租约和 Relay 侧 outbox/cursor 的根因测试归此 suite；WS-01/02 是明确排除的历史 ID；SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。"
     },
@@ -138,7 +138,7 @@
         "PROTO-CRYPTO",
         "RELAY-REALTIME"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "Daemon 生命周期、本地 SQLite、Keychain、重连 outbox、项目登记和 Workspace 路径安全由此 suite 定义；Terminal 协议仅消费。"
     },
@@ -164,7 +164,7 @@
       "dependencies": [
         "DAEMON-CORE"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "Git parser、只读 RPC、snapshot drift、特殊文件和大 diff 的根因测试只由此 suite 定义。"
     },

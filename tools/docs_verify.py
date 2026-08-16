@@ -86,8 +86,8 @@ def main() -> None:
     for name in ("ADR-009-Daemon-Relay命令流与版本协商.md", "ADR-010-用量聚合与隐私边界.md"):
         if not (ROOT / "docs" / "adr" / name).exists():
             fail(f"缺少 {name}")
-    if "当前实现的实时传输：REST + 账号级 SSE；未实现 WebSocket" not in project_doc:
-        fail("项目文档未回填当前 REST + SSE 传输事实")
+    if "当前实现的实时传输：REST + 账号级 SSE + Terminal 专用 Daemon SSE；未实现 WebSocket" not in project_doc:
+        fail("项目文档未回填当前 REST + Daemon SSE 传输事实")
     print("docs:verify PASS")
 
 

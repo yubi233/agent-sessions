@@ -57,6 +57,7 @@ func (e *testEnv) do(t *testing.T, method, path string, body any, token string) 
 
 type authPair struct {
 	AccountID    string
+	DeviceID     string
 	AccessToken  string
 	RefreshToken string
 }

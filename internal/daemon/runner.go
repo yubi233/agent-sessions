@@ -70,6 +70,11 @@ type SessionRunner struct {
 	mu      sync.Mutex
 	handles map[string]*runningSession // key: sessionID
 
+	// eventSink 仅接收 Daemon 本机已规范化事件；是否加密/上传由连接层决定。
+	// 未配置 sink 时仍保留本地状态，但绝不伪造 Relay event 成功。
+	eventSinkMu sync.RWMutex
+	eventSink   func(sessionID string, event adapter.Event)
+
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
 }
@@ -89,6 +94,14 @@ func NewSessionRunner(store *Store, adapters map[string]adapter.Adapter, logger 
 		rootCtx:    ctx,
 		rootCancel: cancel,
 	}
+}
+
+// SetEventSink 设置 canonical event 的本机出口。连接层必须先把正文编码为密文 envelope，
+// 再进入 Relay outbox；runner 不持有账户密钥，也不直接发 HTTP。
+func (r *SessionRunner) SetEventSink(sink func(sessionID string, event adapter.Event)) {
+	r.eventSinkMu.Lock()
+	defer r.eventSinkMu.Unlock()
+	r.eventSink = sink
 }
 
 // ConsumeCommand 消费 outbox 中的一条 Relay 命令。
@@ -348,6 +361,12 @@ func (r *SessionRunner) writeEvent(sessionID string, count int, ev adapter.Event
 	if err := r.store.Set(eventKey(sessionID), string(raw)); err != nil {
 		r.logger.Warn("daemon runner persist event", "error", err)
 	}
+	r.eventSinkMu.RLock()
+	sink := r.eventSink
+	r.eventSinkMu.RUnlock()
+	if sink != nil {
+		sink(sessionID, ev)
+	}
 }
 
 // awaitFirstEvent 等待 handle 事件流的第一条事件；超时或提前关闭视为启动失败。
@@ -411,11 +430,15 @@ type fixtureCiphertext struct {
 
 // fixturePayload 是 fixture 场景的明文负载；真实密文不携带此结构。
 type fixturePayload struct {
-	Message  string `json:"message"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort"`
-	Prompt   string `json:"prompt"`
+	Message       string `json:"message"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	Effort        string `json:"effort"`
+	Prompt        string `json:"prompt"`
+	Path          string `json:"path"`
+	SnapshotToken string `json:"snapshot_token"`
+	Offset        int    `json:"offset"`
+	Limit         int    `json:"limit"`
 }
 
 // parseEnvelope 解析 payload_json；JSON 不合法或 payload 为空时返回错误。

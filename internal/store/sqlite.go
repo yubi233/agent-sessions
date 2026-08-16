@@ -360,18 +360,35 @@ func (r *sqliteRepo) TouchDeviceLastSeen(ctx context.Context, deviceID string, u
 
 func (r *sqliteRepo) CreateTerminal(ctx context.Context, t TerminalRow) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO terminals(id,device_id,account_id,hostname,platform,status,last_seen_unix_ms)
-		 VALUES(?,?,?,?,?,?,?)`,
-		t.ID, t.DeviceID, t.AccountID, t.Hostname, t.Platform, t.Status, t.LastSeenUnixMS)
+		`INSERT INTO terminals(
+			id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.DeviceID, t.AccountID, t.Hostname, t.Platform, t.Status, t.LastSeenUnixMS,
+		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS)
 	return err
 }
 
+func (r *sqliteRepo) TerminalByID(ctx context.Context, id string) (TerminalRow, error) {
+	return scanTerminal(r.db.QueryRowContext(ctx,
+		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
+		 FROM terminals WHERE id=?`, id))
+}
+
 func (r *sqliteRepo) TerminalByDeviceID(ctx context.Context, deviceID string) (TerminalRow, error) {
+	return scanTerminal(r.db.QueryRowContext(ctx,
+		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
+		 FROM terminals WHERE device_id=?`, deviceID))
+}
+
+func scanTerminal(row *sql.Row) (TerminalRow, error) {
 	var t TerminalRow
-	if err := r.db.QueryRowContext(ctx,
-		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms
-		 FROM terminals WHERE device_id=?`, deviceID).
-		Scan(&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS); err != nil {
+	if err := row.Scan(
+		&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
+		&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
+	); err != nil {
 		return TerminalRow{}, err
 	}
 	return t, nil
@@ -379,7 +396,8 @@ func (r *sqliteRepo) TerminalByDeviceID(ctx context.Context, deviceID string) (T
 
 func (r *sqliteRepo) ListTerminals(ctx context.Context, accountID string) ([]TerminalRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms
+		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
 		 FROM terminals WHERE account_id=? ORDER BY last_seen_unix_ms DESC`, accountID)
 	if err != nil {
 		return nil, err
@@ -388,7 +406,10 @@ func (r *sqliteRepo) ListTerminals(ctx context.Context, accountID string) ([]Ter
 	var out []TerminalRow
 	for rows.Next() {
 		var t TerminalRow
-		if err := rows.Scan(&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS); err != nil {
+		if err := rows.Scan(
+			&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
+			&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -397,7 +418,31 @@ func (r *sqliteRepo) ListTerminals(ctx context.Context, accountID string) ([]Ter
 }
 
 func (r *sqliteRepo) TouchTerminal(ctx context.Context, id string, unixMS int64) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE terminals SET last_seen_unix_ms=? WHERE id=?`, unixMS, id)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE terminals SET status='online', last_seen_unix_ms=?, last_heartbeat_unix_ms=? WHERE id=?`,
+		unixMS, unixMS, id)
+	return err
+}
+
+// UpsertDaemonTerminal 以 device_id 作为 Terminal 身份锚点。Daemon 只能声明自身版本、
+// capabilities 与脱敏主机信息，不能借此覆盖账号、设备或 Workspace 归属。
+func (r *sqliteRepo) UpsertDaemonTerminal(ctx context.Context, t TerminalRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO terminals(
+			id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(device_id) DO UPDATE SET
+			hostname=excluded.hostname,
+			platform=excluded.platform,
+			status=excluded.status,
+			last_seen_unix_ms=excluded.last_seen_unix_ms,
+			protocol_version=excluded.protocol_version,
+			daemon_version=excluded.daemon_version,
+			capabilities_json=excluded.capabilities_json,
+			last_heartbeat_unix_ms=excluded.last_heartbeat_unix_ms`,
+		t.ID, t.DeviceID, t.AccountID, t.Hostname, t.Platform, t.Status, t.LastSeenUnixMS,
+		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS)
 	return err
 }
 
@@ -568,15 +613,21 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 
 func (r *sqliteRepo) CreateCommand(ctx context.Context, c CommandRow) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO commands(id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,target_instance_id,ciphertext_json)
-		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.AccountID, c.SessionID, c.Kind, c.Status, c.ScopeHash, c.IdempotencyKey, c.LeaseEpoch, c.TargetInstanceID, c.CiphertextJSON)
+		`INSERT INTO commands(
+			id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
+			target_instance_id,target_terminal_id,ciphertext_json
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		c.ID, c.AccountID, c.SessionID, c.Kind, c.Status, c.ScopeHash, c.IdempotencyKey, c.LeaseEpoch,
+		c.TargetInstanceID, c.TargetTerminalID, c.CiphertextJSON)
 	return err
 }
 
 func scanCommand(row *sql.Row) (CommandRow, error) {
 	var c CommandRow
-	if err := row.Scan(&c.ID, &c.AccountID, &c.SessionID, &c.Kind, &c.Status, &c.ScopeHash, &c.IdempotencyKey, &c.LeaseEpoch, &c.TargetInstanceID, &c.CiphertextJSON); err != nil {
+	if err := row.Scan(
+		&c.ID, &c.AccountID, &c.SessionID, &c.Kind, &c.Status, &c.ScopeHash, &c.IdempotencyKey, &c.LeaseEpoch,
+		&c.TargetInstanceID, &c.TargetTerminalID, &c.CiphertextJSON,
+	); err != nil {
 		return CommandRow{}, err
 	}
 	return c, nil
@@ -584,13 +635,15 @@ func scanCommand(row *sql.Row) (CommandRow, error) {
 
 func (r *sqliteRepo) CommandByID(ctx context.Context, id string) (CommandRow, error) {
 	return scanCommand(r.db.QueryRowContext(ctx,
-		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,target_instance_id,ciphertext_json
+		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
+			target_instance_id,target_terminal_id,ciphertext_json
 		 FROM commands WHERE id=?`, id))
 }
 
 func (r *sqliteRepo) CommandByScopeKey(ctx context.Context, scopeHash, idempotencyKey string) (CommandRow, error) {
 	return scanCommand(r.db.QueryRowContext(ctx,
-		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,target_instance_id,ciphertext_json
+		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
+			target_instance_id,target_terminal_id,ciphertext_json
 		 FROM commands WHERE scope_hash=? AND idempotency_key=?`, scopeHash, idempotencyKey))
 }
 
@@ -601,7 +654,8 @@ func (r *sqliteRepo) UpdateCommandStatus(ctx context.Context, id, status string)
 
 func (r *sqliteRepo) ListCommands(ctx context.Context, sessionID string) ([]CommandRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,target_instance_id,ciphertext_json
+		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
+			target_instance_id,target_terminal_id,ciphertext_json
 		 FROM commands WHERE session_id=? ORDER BY id`, sessionID)
 	if err != nil {
 		return nil, err
@@ -610,12 +664,115 @@ func (r *sqliteRepo) ListCommands(ctx context.Context, sessionID string) ([]Comm
 	var out []CommandRow
 	for rows.Next() {
 		var c CommandRow
-		if err := rows.Scan(&c.ID, &c.AccountID, &c.SessionID, &c.Kind, &c.Status, &c.ScopeHash, &c.IdempotencyKey, &c.LeaseEpoch, &c.TargetInstanceID, &c.CiphertextJSON); err != nil {
+		if err := rows.Scan(
+			&c.ID, &c.AccountID, &c.SessionID, &c.Kind, &c.Status, &c.ScopeHash, &c.IdempotencyKey, &c.LeaseEpoch,
+			&c.TargetInstanceID, &c.TargetTerminalID, &c.CiphertextJSON,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// CreateDaemonDelivery 在同一 Terminal 范围内分配单调 delivery_seq。
+// 调用者必须和 commands 写入处于同一事务，确保 command 可见时必有且仅有一条投递记录。
+func (r *sqliteRepo) CreateDaemonDelivery(ctx context.Context, d DaemonDeliveryRow) (DaemonDeliveryRow, error) {
+	if d.CreatedAtUnixMS == 0 {
+		d.CreatedAtUnixMS = time.Now().UnixMilli()
+	}
+	if d.UpdatedAtUnixMS == 0 {
+		d.UpdatedAtUnixMS = d.CreatedAtUnixMS
+	}
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(delivery_seq), 0) + 1 FROM daemon_command_deliveries WHERE terminal_id=?`,
+		d.TerminalID).Scan(&d.DeliverySeq); err != nil {
+		return DaemonDeliveryRow{}, err
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO daemon_command_deliveries(
+			terminal_id,delivery_seq,command_id,ack_kind,result_status,error_code,created_at_unix_ms,updated_at_unix_ms
+		) VALUES(?,?,?,?,?,?,?,?)`,
+		d.TerminalID, d.DeliverySeq, d.CommandID, d.AckKind, d.ResultStatus, d.ErrorCode,
+		d.CreatedAtUnixMS, d.UpdatedAtUnixMS)
+	if err != nil {
+		return DaemonDeliveryRow{}, err
+	}
+	return d, nil
+}
+
+func scanDaemonDelivery(row *sql.Row) (DaemonDeliveryRow, error) {
+	var d DaemonDeliveryRow
+	if err := row.Scan(
+		&d.TerminalID, &d.DeliverySeq, &d.CommandID, &d.AckKind, &d.ResultStatus, &d.ErrorCode,
+		&d.CreatedAtUnixMS, &d.UpdatedAtUnixMS,
+	); err != nil {
+		return DaemonDeliveryRow{}, err
+	}
+	return d, nil
+}
+
+func (r *sqliteRepo) DaemonDeliveryByCommandID(ctx context.Context, commandID string) (DaemonDeliveryRow, error) {
+	return scanDaemonDelivery(r.db.QueryRowContext(ctx,
+		`SELECT terminal_id,delivery_seq,command_id,ack_kind,result_status,error_code,created_at_unix_ms,updated_at_unix_ms
+		 FROM daemon_command_deliveries WHERE command_id=?`, commandID))
+}
+
+func (r *sqliteRepo) ListDaemonDeliveriesAfter(ctx context.Context, terminalID string, afterDeliverySeq int64) ([]DaemonDeliveryRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT terminal_id,delivery_seq,command_id,ack_kind,result_status,error_code,created_at_unix_ms,updated_at_unix_ms
+		 FROM daemon_command_deliveries
+		 WHERE terminal_id=? AND delivery_seq>? ORDER BY delivery_seq`, terminalID, afterDeliverySeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DaemonDeliveryRow{}
+	for rows.Next() {
+		var d DaemonDeliveryRow
+		if err := rows.Scan(
+			&d.TerminalID, &d.DeliverySeq, &d.CommandID, &d.AckKind, &d.ResultStatus, &d.ErrorCode,
+			&d.CreatedAtUnixMS, &d.UpdatedAtUnixMS,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (r *sqliteRepo) UpdateDaemonDelivery(ctx context.Context, d DaemonDeliveryRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE daemon_command_deliveries
+		 SET ack_kind=?, result_status=?, error_code=?, updated_at_unix_ms=?
+		 WHERE terminal_id=? AND command_id=?`,
+		d.AckKind, d.ResultStatus, d.ErrorCode, d.UpdatedAtUnixMS, d.TerminalID, d.CommandID)
+	return err
+}
+
+func (r *sqliteRepo) DaemonEventReceiptByID(ctx context.Context, eventID string) (DaemonEventReceiptRow, error) {
+	var row DaemonEventReceiptRow
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT event_id,terminal_id,command_id,session_id,event_seq,created_at_unix_ms
+		 FROM daemon_event_receipts WHERE event_id=?`, eventID).
+		Scan(&row.EventID, &row.TerminalID, &row.CommandID, &row.SessionID, &row.EventSeq, &row.CreatedAtUnixMS); err != nil {
+		return DaemonEventReceiptRow{}, err
+	}
+	return row, nil
+}
+
+func (r *sqliteRepo) CreateDaemonEventReceipt(ctx context.Context, receipt DaemonEventReceiptRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO daemon_event_receipts(event_id,terminal_id,command_id,session_id,event_seq,created_at_unix_ms)
+		 VALUES(?,?,?,?,?,?)`,
+		receipt.EventID, receipt.TerminalID, receipt.CommandID, receipt.SessionID, receipt.EventSeq, receipt.CreatedAtUnixMS)
+	return err
+}
+
+func (r *sqliteRepo) SetDaemonEventReceiptSeq(ctx context.Context, eventID string, eventSeq int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE daemon_event_receipts SET event_seq=? WHERE event_id=?`, eventSeq, eventID)
+	return err
 }
 
 // CreateDelegation 持久化父子会话图。调用方必须已经完成同一事务内的账号、workspace 与 lease 校验。

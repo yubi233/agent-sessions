@@ -4,10 +4,15 @@ package daemon
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 
 	_ "modernc.org/sqlite"
 )
@@ -27,12 +32,54 @@ CREATE TABLE IF NOT EXISTS command_outbox (
 	attempts INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
 );
+-- Relay 下行命令与本机处理状态分开存放，不能与 Daemon 发起的本地 outbox 混用。
+CREATE TABLE IF NOT EXISTS relay_commands (
+	command_id TEXT PRIMARY KEY,
+	delivery_seq INTEGER NOT NULL,
+	session_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL,
+	lease_epoch INTEGER NOT NULL,
+	target_instance_id TEXT NOT NULL DEFAULT '',
+	target_terminal_id TEXT NOT NULL DEFAULT '',
+	payload_json TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'received',
+	result_status TEXT NOT NULL DEFAULT '',
+	error_code TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS relay_commands_pending_idx
+	ON relay_commands(status, delivery_seq);
+-- Provider canonical event 在本机 outbox 内等待可靠上传；payload 只能是已加密 envelope。
+CREATE TABLE IF NOT EXISTS relay_event_outbox (
+	event_id TEXT PRIMARY KEY,
+	command_id TEXT NOT NULL,
+	session_id TEXT NOT NULL,
+	event_type TEXT NOT NULL,
+	envelope_json TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'pending',
+	created_at INTEGER NOT NULL
+);
 `
 
 // Store 是 Daemon 本地状态仓储（SQLite）。
 type Store struct {
 	db *sql.DB
 	mu sync.Mutex
+}
+
+const confirmedWorkspaceStatePrefix = "confirmed_workspace:"
+
+// ErrWorkspaceNotConfirmed 表示 Relay 所引用的 Workspace 尚未由本机用户确认。Daemon 不会因为
+// Relay 已接受命令就自动授予本机目录读取权限。
+var ErrWorkspaceNotConfirmed = errors.New("workspace is not locally confirmed")
+
+// ConfirmedWorkspace 是本机确认后的 opaque Workspace ID 与 canonical Git 根映射。绝对路径只
+// 保留在 Daemon 本机状态中，绝不上传到 Relay、事件、日志或测试报告。
+type ConfirmedWorkspace struct {
+	ID   string `json:"id"`
+	Root string `json:"root"`
 }
 
 // OpenStore 打开或创建本地状态库。
@@ -57,7 +104,38 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(localSchema); err != nil {
 		return err
 	}
-	return nil
+	// P2 新增 workspace_id 时，已有 Daemon 本地库仍可能包含旧版 relay_commands。
+	// 这里采用 additive ALTER，保留已落盘的命令、游标和 outbox，避免升级后重放失去状态。
+	return s.ensureRelayCommandWorkspaceIDColumn()
+}
+
+func (s *Store) ensureRelayCommandWorkspaceIDColumn() error {
+	rows, err := s.db.Query(`PRAGMA table_info(relay_commands)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return err
+		}
+		if name == "workspace_id" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE relay_commands ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 // Close 关闭本地状态库。
@@ -87,6 +165,64 @@ func (s *Store) Set(key, value string) error {
 		"INSERT INTO local_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 		key, value)
 	return err
+}
+
+// ConfirmWorkspace 把用户明确确认的 Git 根绑定到 Relay Workspace ID。确认时和每次读取时都做
+// realpath/Git 根校验，避免目录移动、符号链接替换或 Relay payload 伪造扩大本机读取范围。
+func (s *Store) ConfirmWorkspace(workspaceID, root string) (ConfirmedWorkspace, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	root = strings.TrimSpace(root)
+	if workspaceID == "" || len(workspaceID) > 128 || strings.ContainsAny(workspaceID, "\x00\r\n") {
+		return ConfirmedWorkspace{}, errors.New("invalid workspace id")
+	}
+	if !filepath.IsAbs(root) {
+		return ConfirmedWorkspace{}, workspacesafe.ErrNotAbsolute
+	}
+	if !workspacesafe.IsGitRoot(root) {
+		return ConfirmedWorkspace{}, workspacesafe.ErrNotAGitRoot
+	}
+	canonicalRoot, err := workspacesafe.ResolveRepoRelative(root, ".")
+	if err != nil {
+		return ConfirmedWorkspace{}, err
+	}
+	if !workspacesafe.IsGitRoot(canonicalRoot) {
+		return ConfirmedWorkspace{}, workspacesafe.ErrNotAGitRoot
+	}
+	confirmed := ConfirmedWorkspace{ID: workspaceID, Root: canonicalRoot}
+	raw, err := json.Marshal(confirmed)
+	if err != nil {
+		return ConfirmedWorkspace{}, err
+	}
+	if err := s.Set(confirmedWorkspaceStatePrefix+workspaceID, string(raw)); err != nil {
+		return ConfirmedWorkspace{}, err
+	}
+	return confirmed, nil
+}
+
+// ConfirmedWorkspaceByID 只返回仍然是同一 Git 根的本机映射。工作区被移动、删除或替换时返回
+// workspacesafe 的稳定错误，调用方必须 fail-closed 而不是尝试按旧路径继续读取。
+func (s *Store) ConfirmedWorkspaceByID(workspaceID string) (ConfirmedWorkspace, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return ConfirmedWorkspace{}, ErrWorkspaceNotConfirmed
+	}
+	raw, err := s.Get(confirmedWorkspaceStatePrefix + workspaceID)
+	if err != nil {
+		return ConfirmedWorkspace{}, ErrWorkspaceNotConfirmed
+	}
+	var confirmed ConfirmedWorkspace
+	if err := json.Unmarshal([]byte(raw), &confirmed); err != nil || confirmed.ID != workspaceID || confirmed.Root == "" {
+		return ConfirmedWorkspace{}, ErrWorkspaceNotConfirmed
+	}
+	canonicalRoot, err := workspacesafe.ResolveRepoRelative(confirmed.Root, ".")
+	if err != nil {
+		return ConfirmedWorkspace{}, err
+	}
+	if !workspacesafe.IsGitRoot(canonicalRoot) {
+		return ConfirmedWorkspace{}, workspacesafe.ErrNotAGitRoot
+	}
+	confirmed.Root = canonicalRoot
+	return confirmed, nil
 }
 
 // EnqueueCommand 把离线命令写入 outbox；幂等键用 request_id 去重。
@@ -142,6 +278,167 @@ type Command struct {
 	PayloadJSON string
 	Status      string
 	Attempts    int
+}
+
+// RelayCommand 是专用 SSE 下行命令在 Daemon 本机的持久化投影。命令 ID 是执行去重键，
+// delivery_seq 仅作为重连游标，二者不能互相替代。
+type RelayCommand struct {
+	CommandID        string
+	DeliverySeq      int64
+	SessionID        string
+	WorkspaceID      string
+	Kind             string
+	LeaseEpoch       int64
+	TargetInstanceID string
+	TargetTerminalID string
+	PayloadJSON      string
+	Status           string
+	ResultStatus     string
+	ErrorCode        string
+}
+
+// RelayEvent 是等待上传的 canonical event。envelope_json 已在调用方加密，Store 不解析它。
+type RelayEvent struct {
+	EventID      string
+	CommandID    string
+	SessionID    string
+	EventType    string
+	EnvelopeJSON string
+}
+
+// RecordRelayCommand 原子记录一个 SSE delivery。相同 command_id 即使因至少一次投递再次到达，
+// 也不能再次触发 Provider 进程；成功写入后才推进本机 delivery cursor。
+func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if command.CommandID == "" || command.DeliverySeq <= 0 || command.Kind == "" || command.SessionID == "" {
+		return false, errors.New("invalid relay command")
+	}
+	now := time.Now().UnixMilli()
+	result, err := s.db.Exec(
+		`INSERT OR IGNORE INTO relay_commands(
+			command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
+			payload_json,status,result_status,error_code,created_at,updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,'','',?,?)`,
+		command.CommandID, command.DeliverySeq, command.SessionID, command.WorkspaceID, command.Kind, command.LeaseEpoch,
+		command.TargetInstanceID, command.TargetTerminalID, command.PayloadJSON, "received", now, now)
+	if err != nil {
+		return false, err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil || inserted == 0 {
+		return false, err
+	}
+	var current int64
+	_ = s.db.QueryRow("SELECT CAST(value AS INTEGER) FROM local_state WHERE key='relay_delivery_seq'").Scan(&current)
+	if command.DeliverySeq > current {
+		_, err = s.db.Exec(
+			`INSERT INTO local_state(key,value) VALUES('relay_delivery_seq',?)
+			 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, strconv.FormatInt(command.DeliverySeq, 10))
+		if err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// RelayDeliveryCursor 返回已安全落盘的最大 delivery_seq。Daemon 仅在持久化后推进，
+// 因而进程崩溃时 Relay 可以重投最近一条而不会丢命令。
+func (s *Store) RelayDeliveryCursor() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var value string
+	err := s.db.QueryRow("SELECT value FROM local_state WHERE key='relay_delivery_seq'").Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(value, 10, 64)
+}
+
+func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
+			payload_json,status,result_status,error_code
+		 FROM relay_commands WHERE status IN ('received','started') ORDER BY delivery_seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var commands []RelayCommand
+	for rows.Next() {
+		var command RelayCommand
+		if err := rows.Scan(
+			&command.CommandID, &command.DeliverySeq, &command.SessionID, &command.WorkspaceID, &command.Kind, &command.LeaseEpoch,
+			&command.TargetInstanceID, &command.TargetTerminalID, &command.PayloadJSON, &command.Status,
+			&command.ResultStatus, &command.ErrorCode,
+		); err != nil {
+			return nil, err
+		}
+		commands = append(commands, command)
+	}
+	return commands, rows.Err()
+}
+
+func (s *Store) MarkRelayCommandStarted(commandID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`UPDATE relay_commands SET status='started', updated_at=? WHERE command_id=?`, time.Now().UnixMilli(), commandID)
+	return err
+}
+
+func (s *Store) MarkRelayCommandResult(commandID, status, errorCode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`UPDATE relay_commands SET status='completed', result_status=?, error_code=?, updated_at=? WHERE command_id=?`,
+		status, errorCode, time.Now().UnixMilli(), commandID)
+	return err
+}
+
+func (s *Store) EnqueueRelayEvent(event RelayEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event.EventID == "" || event.CommandID == "" || event.SessionID == "" || event.EventType == "" || event.EnvelopeJSON == "" {
+		return errors.New("invalid relay event")
+	}
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO relay_event_outbox(event_id,command_id,session_id,event_type,envelope_json,status,created_at)
+		 VALUES(?,?,?,?,?,'pending',?)`,
+		event.EventID, event.CommandID, event.SessionID, event.EventType, event.EnvelopeJSON, time.Now().UnixMilli())
+	return err
+}
+
+func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT event_id,command_id,session_id,event_type,envelope_json
+		 FROM relay_event_outbox WHERE status='pending' ORDER BY created_at,event_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []RelayEvent
+	for rows.Next() {
+		var event RelayEvent
+		if err := rows.Scan(&event.EventID, &event.CommandID, &event.SessionID, &event.EventType, &event.EnvelopeJSON); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) MarkRelayEventDelivered(eventID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`UPDATE relay_event_outbox SET status='delivered' WHERE event_id=?`, eventID)
+	return err
 }
 
 // DefaultStatePath 返回默认本地状态库路径。

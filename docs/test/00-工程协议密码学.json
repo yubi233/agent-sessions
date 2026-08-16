@@ -108,7 +108,7 @@
     {
       "id": "P0-SCHEMA-02",
       "title": "Daemon RPC、机器与会话事件 schema 的 N/N-1 兼容",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "协议",
       "priority": "P0",
@@ -125,7 +125,11 @@
       ],
       "evidence": [
         "packages/protocol/schema/openapi.yaml",
-        "packages/protocol/testdata/daemon-rpc-v04.json",
+        "packages/protocol/generated/openapi.gen.go",
+        "packages/protocol-ts/src/openapi.ts",
+        "internal/relay/p2_daemon_contract_test.go",
+        "internal/daemon/relay_test.go",
+        "task test:v04:p2 (2026-08-16)",
         "e2e-verify/reports/<ts>/PROTO-CRYPTO/p0-schema-02.json"
       ]
     }

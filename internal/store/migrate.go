@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
+	"strings"
 
 	// 使用纯 Go SQLite 驱动，保证 Relay 和 Daemon 无需 CGO 或外部数据库服务。
 	_ "modernc.org/sqlite"
@@ -216,15 +218,57 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS delegations_parent_session_idx
 		ON delegations(parent_session_id, updated_at_unix_ms DESC);`,
+	// P2 Daemon-Relay 命令流。所有变更均为 additive，旧客户端创建的未绑定
+	// Workspace/Command 可以继续读取，但不会被投递给任意 Terminal。
+	`ALTER TABLE terminals ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 0;`,
+	`ALTER TABLE terminals ADD COLUMN daemon_version TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE terminals ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]';`,
+	`ALTER TABLE terminals ADD COLUMN last_heartbeat_unix_ms INTEGER NOT NULL DEFAULT 0;`,
+	`ALTER TABLE commands ADD COLUMN target_terminal_id TEXT NOT NULL DEFAULT '';`,
+	`CREATE TABLE IF NOT EXISTS daemon_command_deliveries (
+		terminal_id TEXT NOT NULL,
+		delivery_seq INTEGER NOT NULL,
+		command_id TEXT NOT NULL UNIQUE,
+		ack_kind TEXT NOT NULL DEFAULT '',
+		result_status TEXT NOT NULL DEFAULT '',
+		error_code TEXT NOT NULL DEFAULT '',
+		created_at_unix_ms INTEGER NOT NULL,
+		updated_at_unix_ms INTEGER NOT NULL,
+		PRIMARY KEY(terminal_id, delivery_seq),
+		FOREIGN KEY(terminal_id) REFERENCES terminals(id),
+		FOREIGN KEY(command_id) REFERENCES commands(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS daemon_deliveries_terminal_pending_idx
+		ON daemon_command_deliveries(terminal_id, delivery_seq);`,
+	`CREATE TABLE IF NOT EXISTS daemon_event_receipts (
+		event_id TEXT PRIMARY KEY,
+		terminal_id TEXT NOT NULL,
+		command_id TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		event_seq INTEGER NOT NULL DEFAULT 0,
+		created_at_unix_ms INTEGER NOT NULL,
+		FOREIGN KEY(terminal_id) REFERENCES terminals(id),
+		FOREIGN KEY(command_id) REFERENCES commands(id),
+		FOREIGN KEY(session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS daemon_event_receipts_command_idx
+		ON daemon_event_receipts(command_id, event_seq);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。
 func Open(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn, err := relaySQLiteDSN(path)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`); err != nil {
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// journal_mode 是文件级设置；busy_timeout、foreign_keys 与 BEGIN IMMEDIATE 则由 DSN
+	// 注入每一条池连接。后者不能只在首条连接执行 PRAGMA，否则并发 HTTP 请求新开连接时会
+	// 回退到 SQLite 默认的无等待 deferred transaction，产生 SQLITE_BUSY_SNAPSHOT。
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -235,25 +279,65 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Migrate 按编号执行尚未应用的 SQL。
+const relaySQLiteBusyTimeoutMS = 5000
+
+// relaySQLiteDSN 将连接级安全与并发配置固定在 SQLite 驱动 DSN。Relay 的领域事务普遍是
+// “读校验 -> 写状态机”，使用 IMMEDIATE 可在事务开始时串行短暂写者，避免延迟事务在提交前
+// 遇到已更新 snapshot 后把用户可重试命令错误地报成内部 500。
+func relaySQLiteDSN(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("sqlite path is required")
+	}
+	if !strings.HasPrefix(path, "file:") {
+		path = "file:" + path
+	}
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("parse sqlite path: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("_busy_timeout", fmt.Sprintf("%d", relaySQLiteBusyTimeoutMS))
+	query.Set("_foreign_keys", "on")
+	query.Set("_txlock", "immediate")
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+// Migrate 按编号执行尚未应用的 SQL。所有 pending migration 在同一 SQLite transaction 内提交：
+// 任意一条失败时 schema_migrations 和表结构一起回滚，进程重启可从完整旧状态重新演练。
 func Migrate(db *sql.DB) error {
+	return migrateWith(db, migrations)
+}
+
+// migrateWith 为 Migrate 的可注入实现。生产只传 migrations；迁移回归会传入带故障尾项的列表，
+// 验证出现磁盘/SQL 失败时不会留下可被误认为成功的半迁移状态。
+func migrateWith(db *sql.DB, statements []string) error {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`); err != nil {
 		return err
 	}
-	for i, stmt := range migrations {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	rollback := func(cause error) error {
+		_ = tx.Rollback()
+		return cause
+	}
+	for i, stmt := range statements {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(1) FROM schema_migrations WHERE version=?`, i).Scan(&n); err != nil {
-			return err
+		if err := tx.QueryRow(`SELECT COUNT(1) FROM schema_migrations WHERE version=?`, i).Scan(&n); err != nil {
+			return rollback(err)
 		}
 		if n > 0 {
 			continue
 		}
-		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("migration %d: %w", i, err)
+		if _, err := tx.Exec(stmt); err != nil {
+			return rollback(fmt.Errorf("migration %d: %w", i, err))
 		}
-		if _, err := db.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i); err != nil {
-			return err
+		if _, err := tx.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i); err != nil {
+			return rollback(err)
 		}
 	}
-	return nil
+	return tx.Commit()
 }

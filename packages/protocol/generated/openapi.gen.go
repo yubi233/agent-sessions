@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -90,6 +91,90 @@ func (e CapabilityItemStatus) Valid() bool {
 	case Native:
 		return true
 	case Unsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonCommandAckRequestAckKind.
+const (
+	DaemonCommandAckRequestAckKindReceived DaemonCommandAckRequestAckKind = "received"
+	DaemonCommandAckRequestAckKindRejected DaemonCommandAckRequestAckKind = "rejected"
+	DaemonCommandAckRequestAckKindStarted  DaemonCommandAckRequestAckKind = "started"
+)
+
+// Valid indicates whether the value is a known member of the DaemonCommandAckRequestAckKind enum.
+func (e DaemonCommandAckRequestAckKind) Valid() bool {
+	switch e {
+	case DaemonCommandAckRequestAckKindReceived:
+		return true
+	case DaemonCommandAckRequestAckKindRejected:
+		return true
+	case DaemonCommandAckRequestAckKindStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonCommandResultRequestStatus.
+const (
+	DaemonCommandResultRequestStatusCancelled DaemonCommandResultRequestStatus = "cancelled"
+	DaemonCommandResultRequestStatusFailed    DaemonCommandResultRequestStatus = "failed"
+	DaemonCommandResultRequestStatusSucceeded DaemonCommandResultRequestStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the DaemonCommandResultRequestStatus enum.
+func (e DaemonCommandResultRequestStatus) Valid() bool {
+	switch e {
+	case DaemonCommandResultRequestStatusCancelled:
+		return true
+	case DaemonCommandResultRequestStatusFailed:
+		return true
+	case DaemonCommandResultRequestStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonEventUploadRequestEventType.
+const (
+	CommandUpdated   DaemonEventUploadRequestEventType = "command.updated"
+	FileChanged      DaemonEventUploadRequestEventType = "file.changed"
+	GitSnapshot      DaemonEventUploadRequestEventType = "git.snapshot"
+	MessageCompleted DaemonEventUploadRequestEventType = "message.completed"
+	MessageDelta     DaemonEventUploadRequestEventType = "message.delta"
+	SessionLifecycle DaemonEventUploadRequestEventType = "session.lifecycle"
+	ToolCall         DaemonEventUploadRequestEventType = "tool.call"
+	ToolResult       DaemonEventUploadRequestEventType = "tool.result"
+	TurnStarted      DaemonEventUploadRequestEventType = "turn.started"
+	UsageUpdated     DaemonEventUploadRequestEventType = "usage.updated"
+)
+
+// Valid indicates whether the value is a known member of the DaemonEventUploadRequestEventType enum.
+func (e DaemonEventUploadRequestEventType) Valid() bool {
+	switch e {
+	case CommandUpdated:
+		return true
+	case FileChanged:
+		return true
+	case GitSnapshot:
+		return true
+	case MessageCompleted:
+		return true
+	case MessageDelta:
+		return true
+	case SessionLifecycle:
+		return true
+	case ToolCall:
+		return true
+	case ToolResult:
+		return true
+	case TurnStarted:
+		return true
+	case UsageUpdated:
 		return true
 	default:
 		return false
@@ -338,11 +423,12 @@ type CipherEvent struct {
 
 // Command defines model for Command.
 type Command struct {
-	Id             string `json:"id"`
-	IdempotencyKey string `json:"idempotency_key"`
-	Kind           string `json:"kind"`
-	LeaseEpoch     *int64 `json:"lease_epoch,omitempty"`
-	Status         string `json:"status"`
+	Id               string  `json:"id"`
+	IdempotencyKey   string  `json:"idempotency_key"`
+	Kind             string  `json:"kind"`
+	LeaseEpoch       *int64  `json:"lease_epoch,omitempty"`
+	Status           string  `json:"status"`
+	TargetTerminalId *string `json:"target_terminal_id,omitempty"`
 }
 
 // CreateDelegationRequest 任务书与摘要必须为完整加密 envelope；不得包含任务正文、路径、子会话消息或附件正文。
@@ -368,6 +454,109 @@ type CreateWorkspaceRequest struct {
 	CanonicalRoot string  `json:"canonical_root"`
 	ProjectId     string  `json:"project_id"`
 	Status        *string `json:"status,omitempty"`
+	TerminalId    *string `json:"terminal_id,omitempty"`
+}
+
+// DaemonCommandAckRequest defines model for DaemonCommandAckRequest.
+type DaemonCommandAckRequest struct {
+	AckKind         DaemonCommandAckRequestAckKind `json:"ack_kind"`
+	DeliverySeq     int64                          `json:"delivery_seq"`
+	ErrorCode       *string                        `json:"error_code,omitempty"`
+	ProtocolVersion int                            `json:"protocol_version"`
+}
+
+// DaemonCommandAckRequestAckKind defines model for DaemonCommandAckRequest.AckKind.
+type DaemonCommandAckRequestAckKind string
+
+// DaemonCommandDelivery defines model for DaemonCommandDelivery.
+type DaemonCommandDelivery struct {
+	Command     DaemonDeliveredCommand `json:"command"`
+	DeliverySeq int64                  `json:"delivery_seq"`
+}
+
+// DaemonCommandReceipt defines model for DaemonCommandReceipt.
+type DaemonCommandReceipt struct {
+	AckKind     string  `json:"ack_kind"`
+	CommandId   string  `json:"command_id"`
+	DeliverySeq int64   `json:"delivery_seq"`
+	ErrorCode   *string `json:"error_code,omitempty"`
+	Status      string  `json:"status"`
+}
+
+// DaemonCommandResultRequest defines model for DaemonCommandResultRequest.
+type DaemonCommandResultRequest struct {
+	DeliverySeq     int64                            `json:"delivery_seq"`
+	ErrorCode       *string                          `json:"error_code,omitempty"`
+	ProtocolVersion int                              `json:"protocol_version"`
+	Status          DaemonCommandResultRequestStatus `json:"status"`
+}
+
+// DaemonCommandResultRequestStatus defines model for DaemonCommandResultRequest.Status.
+type DaemonCommandResultRequestStatus string
+
+// DaemonDeliveredCommand defines model for DaemonDeliveredCommand.
+type DaemonDeliveredCommand struct {
+	Ciphertext       map[string]interface{} `json:"ciphertext"`
+	Id               string                 `json:"id"`
+	Kind             string                 `json:"kind"`
+	LeaseEpoch       int64                  `json:"lease_epoch"`
+	SessionId        string                 `json:"session_id"`
+	TargetInstanceId *string                `json:"target_instance_id,omitempty"`
+	TargetTerminalId string                 `json:"target_terminal_id"`
+
+	// WorkspaceId Relay 从 Session 推导的 opaque ID；不是本机路径，也不能替代 Daemon 本机确认。
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// DaemonEventUploadRequest defines model for DaemonEventUploadRequest.
+type DaemonEventUploadRequest struct {
+	CommandId string `json:"command_id"`
+
+	// Envelope Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。
+	Envelope        OpaqueCipherEnvelope              `json:"envelope"`
+	EventId         string                            `json:"event_id"`
+	EventType       DaemonEventUploadRequestEventType `json:"event_type"`
+	ProtocolVersion int                               `json:"protocol_version"`
+	SessionId       string                            `json:"session_id"`
+}
+
+// DaemonEventUploadRequestEventType defines model for DaemonEventUploadRequest.EventType.
+type DaemonEventUploadRequestEventType string
+
+// DaemonEventUploadResponse defines model for DaemonEventUploadResponse.
+type DaemonEventUploadResponse struct {
+	EventId    string `json:"event_id"`
+	EventSeq   int64  `json:"event_seq"`
+	Idempotent bool   `json:"idempotent"`
+}
+
+// DaemonHeartbeatRequest defines model for DaemonHeartbeatRequest.
+type DaemonHeartbeatRequest struct {
+	ProtocolVersion int `json:"protocol_version"`
+}
+
+// DaemonHeartbeatResponse defines model for DaemonHeartbeatResponse.
+type DaemonHeartbeatResponse struct {
+	ServerTimeUnixMs int64  `json:"server_time_unix_ms"`
+	TerminalId       string `json:"terminal_id"`
+}
+
+// DaemonHelloRequest defines model for DaemonHelloRequest.
+type DaemonHelloRequest struct {
+	Capabilities    []string `json:"capabilities"`
+	DaemonVersion   string   `json:"daemon_version"`
+	Hostname        string   `json:"hostname"`
+	Platform        string   `json:"platform"`
+	ProtocolVersion int      `json:"protocol_version"`
+}
+
+// DaemonHelloResponse defines model for DaemonHelloResponse.
+type DaemonHelloResponse struct {
+	AfterDeliverySeq         int64  `json:"after_delivery_seq"`
+	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
+	MinProtocolVersion       int    `json:"min_protocol_version"`
+	ProtocolVersion          int    `json:"protocol_version"`
+	TerminalId               string `json:"terminal_id"`
 }
 
 // Delegation parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。
@@ -459,6 +648,17 @@ type LoginRequest struct {
 
 // LoginRequestDeviceRole 仅允许 web 或 admin；省略时服务端按 web 只读 token 处理。
 type LoginRequestDeviceRole string
+
+// OpaqueCipherEnvelope Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。
+type OpaqueCipherEnvelope struct {
+	AadHash              string                 `json:"aad_hash"`
+	Alg                  string                 `json:"alg"`
+	Ciphertext           string                 `json:"ciphertext"`
+	KeyId                string                 `json:"key_id"`
+	Nonce                string                 `json:"nonce"`
+	PayloadVersion       int                    `json:"payload_version"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // PairingCreateRequest defines model for PairingCreateRequest.
 type PairingCreateRequest struct {
@@ -558,6 +758,7 @@ type SubmitCommandRequest struct {
 	Kind             string                  `json:"kind"`
 	LeaseEpoch       int64                   `json:"lease_epoch"`
 	TargetInstanceId *string                 `json:"target_instance_id,omitempty"`
+	TargetTerminalId *string                 `json:"target_terminal_id,omitempty"`
 }
 
 // Terminal defines model for Terminal.
@@ -619,6 +820,12 @@ type TooManyRequests = ErrorResponse
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = ErrorResponse
 
+// StreamDaemonCommandsParams defines parameters for StreamDaemonCommands.
+type StreamDaemonCommandsParams struct {
+	AfterDeliverySeq *int64  `form:"after_delivery_seq,omitempty" json:"after_delivery_seq,omitempty"`
+	LastEventID      *string `json:"Last-Event-ID,omitempty"`
+}
+
 // StreamEventsParams defines parameters for StreamEvents.
 type StreamEventsParams struct {
 	AfterSeq    *int64  `form:"after_seq,omitempty" json:"after_seq,omitempty"`
@@ -648,6 +855,21 @@ type RefreshJSONRequestBody = RefreshRequest
 // RegisterJSONRequestBody defines body for Register for application/json ContentType.
 type RegisterJSONRequestBody = RegisterRequest
 
+// AcknowledgeDaemonCommandJSONRequestBody defines body for AcknowledgeDaemonCommand for application/json ContentType.
+type AcknowledgeDaemonCommandJSONRequestBody = DaemonCommandAckRequest
+
+// ResolveDaemonCommandJSONRequestBody defines body for ResolveDaemonCommand for application/json ContentType.
+type ResolveDaemonCommandJSONRequestBody = DaemonCommandResultRequest
+
+// UploadDaemonEventJSONRequestBody defines body for UploadDaemonEvent for application/json ContentType.
+type UploadDaemonEventJSONRequestBody = DaemonEventUploadRequest
+
+// DaemonHeartbeatJSONRequestBody defines body for DaemonHeartbeat for application/json ContentType.
+type DaemonHeartbeatJSONRequestBody = DaemonHeartbeatRequest
+
+// DaemonHelloJSONRequestBody defines body for DaemonHello for application/json ContentType.
+type DaemonHelloJSONRequestBody = DaemonHelloRequest
+
 // DecideDelegationJSONRequestBody defines body for DecideDelegation for application/json ContentType.
 type DecideDelegationJSONRequestBody = DelegationDecisionRequest
 
@@ -671,6 +893,137 @@ type CreateSessionDelegationJSONRequestBody = CreateDelegationRequest
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
+
+// Getter for additional properties for OpaqueCipherEnvelope. Returns the specified
+// element and whether it was found
+func (a OpaqueCipherEnvelope) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OpaqueCipherEnvelope
+func (a *OpaqueCipherEnvelope) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OpaqueCipherEnvelope to handle AdditionalProperties
+func (a *OpaqueCipherEnvelope) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["aad_hash"]; found {
+		err = json.Unmarshal(raw, &a.AadHash)
+		if err != nil {
+			return fmt.Errorf("error reading 'aad_hash': %w", err)
+		}
+		delete(object, "aad_hash")
+	}
+
+	if raw, found := object["alg"]; found {
+		err = json.Unmarshal(raw, &a.Alg)
+		if err != nil {
+			return fmt.Errorf("error reading 'alg': %w", err)
+		}
+		delete(object, "alg")
+	}
+
+	if raw, found := object["ciphertext"]; found {
+		err = json.Unmarshal(raw, &a.Ciphertext)
+		if err != nil {
+			return fmt.Errorf("error reading 'ciphertext': %w", err)
+		}
+		delete(object, "ciphertext")
+	}
+
+	if raw, found := object["key_id"]; found {
+		err = json.Unmarshal(raw, &a.KeyId)
+		if err != nil {
+			return fmt.Errorf("error reading 'key_id': %w", err)
+		}
+		delete(object, "key_id")
+	}
+
+	if raw, found := object["nonce"]; found {
+		err = json.Unmarshal(raw, &a.Nonce)
+		if err != nil {
+			return fmt.Errorf("error reading 'nonce': %w", err)
+		}
+		delete(object, "nonce")
+	}
+
+	if raw, found := object["payload_version"]; found {
+		err = json.Unmarshal(raw, &a.PayloadVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'payload_version': %w", err)
+		}
+		delete(object, "payload_version")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OpaqueCipherEnvelope to handle AdditionalProperties
+func (a OpaqueCipherEnvelope) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["aad_hash"], err = json.Marshal(a.AadHash)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'aad_hash': %w", err)
+	}
+
+	object["alg"], err = json.Marshal(a.Alg)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'alg': %w", err)
+	}
+
+	object["ciphertext"], err = json.Marshal(a.Ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'ciphertext': %w", err)
+	}
+
+	object["key_id"], err = json.Marshal(a.KeyId)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'key_id': %w", err)
+	}
+
+	object["nonce"], err = json.Marshal(a.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'nonce': %w", err)
+	}
+
+	object["payload_version"], err = json.Marshal(a.PayloadVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'payload_version': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -704,6 +1057,24 @@ type ServerInterface interface {
 
 	// (GET /v1/commands/{id})
 	GetCommand(c *gin.Context, id string)
+
+	// (GET /v1/daemon/commands/stream)
+	StreamDaemonCommands(c *gin.Context, params StreamDaemonCommandsParams)
+
+	// (POST /v1/daemon/commands/{id}/ack)
+	AcknowledgeDaemonCommand(c *gin.Context, id string)
+
+	// (POST /v1/daemon/commands/{id}/result)
+	ResolveDaemonCommand(c *gin.Context, id string)
+
+	// (POST /v1/daemon/events)
+	UploadDaemonEvent(c *gin.Context)
+
+	// (POST /v1/daemon/heartbeat)
+	DaemonHeartbeat(c *gin.Context)
+
+	// (POST /v1/daemon/hello)
+	DaemonHello(c *gin.Context)
 
 	// (POST /v1/delegations/{id}/decision)
 	DecideDelegation(c *gin.Context, id string)
@@ -933,6 +1304,143 @@ func (siw *ServerInterfaceWrapper) GetCommand(c *gin.Context) {
 	}
 
 	siw.Handler.GetCommand(c, id)
+}
+
+// StreamDaemonCommands operation middleware
+func (siw *ServerInterfaceWrapper) StreamDaemonCommands(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamDaemonCommandsParams
+
+	// ------------- Optional query parameter "after_delivery_seq" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after_delivery_seq", c.Request.URL.Query(), &params.AfterDeliverySeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after_delivery_seq: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	headers := c.Request.Header
+
+	// ------------- Optional header parameter "Last-Event-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
+		var LastEventID string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for Last-Event-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter Last-Event-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.LastEventID = &LastEventID
+
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StreamDaemonCommands(c, params)
+}
+
+// AcknowledgeDaemonCommand operation middleware
+func (siw *ServerInterfaceWrapper) AcknowledgeDaemonCommand(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.AcknowledgeDaemonCommand(c, id)
+}
+
+// ResolveDaemonCommand operation middleware
+func (siw *ServerInterfaceWrapper) ResolveDaemonCommand(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ResolveDaemonCommand(c, id)
+}
+
+// UploadDaemonEvent operation middleware
+func (siw *ServerInterfaceWrapper) UploadDaemonEvent(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UploadDaemonEvent(c)
+}
+
+// DaemonHeartbeat operation middleware
+func (siw *ServerInterfaceWrapper) DaemonHeartbeat(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DaemonHeartbeat(c)
+}
+
+// DaemonHello operation middleware
+func (siw *ServerInterfaceWrapper) DaemonHello(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DaemonHello(c)
 }
 
 // DecideDelegation operation middleware
@@ -1446,4 +1954,10 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/attachments/:id/complete", wrapper.CompleteAttachment)
 	router.GET(options.BaseURL+"/v1/capabilities", wrapper.GetCapabilities)
 	router.GET(options.BaseURL+"/v1/events", wrapper.StreamEvents)
+	router.POST(options.BaseURL+"/v1/daemon/hello", wrapper.DaemonHello)
+	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)
+	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)
+	router.POST(options.BaseURL+"/v1/daemon/commands/:id/ack", wrapper.AcknowledgeDaemonCommand)
+	router.POST(options.BaseURL+"/v1/daemon/commands/:id/result", wrapper.ResolveDaemonCommand)
+	router.POST(options.BaseURL+"/v1/daemon/events", wrapper.UploadDaemonEvent)
 }

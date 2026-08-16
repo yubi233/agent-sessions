@@ -716,6 +716,173 @@ paths:
                 type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/daemon/hello:
+    post:
+      operationId: daemonHello
+      description: 已配对 terminal 以设备 bearer 协商 N/N-1 协议并登记白名单 Daemon 元数据；不得包含 Workspace 绝对路径、Provider 正文或密钥。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonHelloRequest"
+      responses:
+        "200":
+          description: negotiated terminal state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonHelloResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "426":
+          description: terminal protocol is below the supported compatibility window
+  /v1/daemon/heartbeat:
+    post:
+      operationId: daemonHeartbeat
+      description: 仅已协商的 terminal 更新在线状态；Relay 只保留 heartbeat 时间与版本摘要。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonHeartbeatRequest"
+      responses:
+        "200":
+          description: heartbeat accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonHeartbeatResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "426":
+          description: terminal protocol is below the supported compatibility window
+  /v1/daemon/commands/stream:
+    get:
+      operationId: streamDaemonCommands
+      description: 仅目标 terminal 的专用 SSE 命令流。每个 command 均携带由 Relay 从 Session 推导的 opaque workspace_id，Daemon 必须再与本机已确认工作区匹配；不得传输 canonical_root。Last-Event-ID / after_delivery_seq 使用 terminal 范围的 delivery_seq，不能与账号级 /v1/events cursor 混用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          schema:
+            type: string
+        - in: query
+          name: after_delivery_seq
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        "200":
+          description: daemon command SSE stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/DaemonCommandDelivery"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/daemon/commands/{id}/ack:
+    post:
+      operationId: acknowledgeDaemonCommand
+      description: 目标 terminal 对 received/started/rejected 的幂等确认。started 会重新校验 command 的 lease epoch、instance 与 terminal 归属。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonCommandAckRequest"
+      responses:
+        "200":
+          description: ack state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonCommandReceipt"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/daemon/commands/{id}/result:
+    post:
+      operationId: resolveDaemonCommand
+      description: 目标 terminal 回写命令终态；详细结果必须通过独立、幂等的密文 canonical event 上传，不回显 Provider 正文。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonCommandResultRequest"
+      responses:
+        "200":
+          description: result state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonCommandReceipt"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/daemon/events:
+    post:
+      operationId: uploadDaemonEvent
+      description: 目标 terminal 上传与命令绑定的 canonical event；Relay 只存 opaque ciphertext envelope 与白名单索引，event_id 可安全重试。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonEventUploadRequest"
+      responses:
+        "200":
+          description: event accepted or idempotently replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonEventUploadResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
 components:
   securitySchemes:
     bearerAuth:
@@ -1013,6 +1180,8 @@ components:
       properties:
         project_id:
           type: string
+        terminal_id:
+          type: string
         canonical_root:
           type: string
         branch:
@@ -1158,6 +1327,8 @@ components:
           minimum: 1
         target_instance_id:
           type: string
+        target_terminal_id:
+          type: string
         ciphertext:
           type: object
     Command:
@@ -1175,6 +1346,206 @@ components:
         lease_epoch:
           type: integer
           format: int64
+          minimum: 1
+        target_terminal_id:
+          type: string
+    DaemonHelloRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, daemon_version, hostname, platform, capabilities]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        daemon_version:
+          type: string
+          maxLength: 128
+        hostname:
+          type: string
+          maxLength: 128
+        platform:
+          type: string
+          maxLength: 64
+        capabilities:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            maxLength: 96
+    DaemonHelloResponse:
+      type: object
+      required: [terminal_id, protocol_version, min_protocol_version, heartbeat_interval_seconds, after_delivery_seq]
+      properties:
+        terminal_id:
+          type: string
+        protocol_version:
+          type: integer
+          minimum: 1
+        min_protocol_version:
+          type: integer
+          minimum: 1
+        heartbeat_interval_seconds:
+          type: integer
+          minimum: 1
+        after_delivery_seq:
+          type: integer
+          format: int64
+          minimum: 0
+    DaemonHeartbeatRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+    DaemonHeartbeatResponse:
+      type: object
+      required: [terminal_id, server_time_unix_ms]
+      properties:
+        terminal_id:
+          type: string
+        server_time_unix_ms:
+          type: integer
+          format: int64
+    DaemonCommandDelivery:
+      type: object
+      additionalProperties: false
+      required: [delivery_seq, command]
+      properties:
+        delivery_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        command:
+          $ref: "#/components/schemas/DaemonDeliveredCommand"
+    DaemonDeliveredCommand:
+      type: object
+      additionalProperties: false
+      required: [id, session_id, workspace_id, kind, lease_epoch, target_terminal_id, ciphertext]
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        workspace_id:
+          type: string
+          description: Relay 从 Session 推导的 opaque ID；不是本机路径，也不能替代 Daemon 本机确认。
+        kind:
+          type: string
+        lease_epoch:
+          type: integer
+          format: int64
+          minimum: 1
+        target_instance_id:
+          type: string
+        target_terminal_id:
+          type: string
+        ciphertext:
+          type: object
+    DaemonCommandAckRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, delivery_seq, ack_kind]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        delivery_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        ack_kind:
+          type: string
+          enum: [received, started, rejected]
+        error_code:
+          type: string
+          maxLength: 96
+    DaemonCommandResultRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, delivery_seq, status]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        delivery_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        status:
+          type: string
+          enum: [succeeded, failed, cancelled]
+        error_code:
+          type: string
+          maxLength: 96
+    DaemonCommandReceipt:
+      type: object
+      required: [command_id, delivery_seq, ack_kind, status]
+      properties:
+        command_id:
+          type: string
+        delivery_seq:
+          type: integer
+          format: int64
+        ack_kind:
+          type: string
+        status:
+          type: string
+        error_code:
+          type: string
+    DaemonEventUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, event_id, command_id, session_id, event_type, envelope]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        event_id:
+          type: string
+          maxLength: 128
+        command_id:
+          type: string
+          maxLength: 128
+        session_id:
+          type: string
+          maxLength: 128
+        event_type:
+          type: string
+          enum: [session.lifecycle, turn.started, message.delta, message.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated]
+        envelope:
+          $ref: "#/components/schemas/OpaqueCipherEnvelope"
+    DaemonEventUploadResponse:
+      type: object
+      required: [event_id, event_seq, idempotent]
+      properties:
+        event_id:
+          type: string
+        event_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        idempotent:
+          type: boolean
+    OpaqueCipherEnvelope:
+      type: object
+      description: Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。
+      additionalProperties: true
+      required: [alg, key_id, nonce, ciphertext, aad_hash, payload_version]
+      properties:
+        alg:
+          type: string
+        key_id:
+          type: string
+        nonce:
+          type: string
+        ciphertext:
+          type: string
+        aad_hash:
+          type: string
+        payload_version:
+          type: integer
           minimum: 1
     AttachmentChunkUploadRequest:
       type: object
