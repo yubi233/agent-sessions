@@ -13,9 +13,11 @@ import '../relay/relay_repository.dart';
 import '../git/git_diff_repository.dart';
 import '../files/workspace_files_repository.dart';
 import '../state/app_controller.dart';
+import '../state/code_viewer_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
+import '../state/recent_sessions_controller.dart';
 import '../state/session_controller.dart';
 import '../state/session_info_controller.dart';
 import '../state/settings_controller.dart';
@@ -148,6 +150,22 @@ final workspaceFilesControllerProvider =
     ChangeNotifierProvider<WorkspaceFilesController>((ref) {
       return WorkspaceFilesController(
         repository: ref.read(workspaceFilesRepositoryProvider),
+      );
+    });
+
+/// P3 代码查看器：复用文件只读 repository 的受限文本预览，行号与高亮纯本地渲染。
+final codeViewerControllerProvider =
+    ChangeNotifierProvider<CodeViewerController>((ref) {
+      return CodeViewerController(
+        repository: ref.read(workspaceFilesRepositoryProvider),
+      );
+    });
+
+/// P3 最近会话页只读状态机：复用 Relay 白名单会话列表并稳定排序。
+final recentSessionsControllerProvider =
+    ChangeNotifierProvider<RecentSessionsController>((ref) {
+      return RecentSessionsController(
+        relay: ref.read(relayRepositoryProvider),
       );
     });
 

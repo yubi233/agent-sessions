@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../state/app_controller.dart';
 import '../ui/git_diff_screens.dart';
 import '../ui/pairing_scanner.dart';
+import '../ui/recent_sessions_screens.dart';
 import '../ui/screens.dart';
 import '../ui/session_info_screens.dart';
 import '../ui/session_screens.dart';
@@ -59,6 +60,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/home',
         builder: (context, state) => const SessionHomeScreen(),
+      ),
+      GoRoute(
+        path: '/sessions/recent',
+        builder: (context, state) => const RecentSessionsScreen(),
       ),
       GoRoute(
         path: '/sessions/new',

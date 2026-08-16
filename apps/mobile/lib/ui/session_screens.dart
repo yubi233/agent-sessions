@@ -31,6 +31,12 @@ class SessionHomeScreen extends ConsumerWidget {
         actions: [
           const AppearanceMenu(),
           IconButton(
+            key: const Key('session-recent-button'),
+            tooltip: '最近会话',
+            onPressed: () => context.push('/sessions/recent'),
+            icon: const Icon(Icons.history),
+          ),
+          IconButton(
             key: const Key('session-new-button'),
             tooltip: '新建会话',
             onPressed: app.canManageDevices && !app.isBusy

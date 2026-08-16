@@ -8,6 +8,7 @@ import '../app/providers.dart';
 import '../domain/workspace_files_models.dart';
 import '../state/workspace_files_controller.dart';
 import 'appearance_controls.dart';
+import 'code_viewer_screens.dart';
 
 /// Happy 风格的只读工作区文件浏览：树、搜索、文本预览与安全摘要。
 /// 不提供写按钮、shell 或 Git 写入口；越权路径由 Daemon workspacesafe 语义拒绝。
@@ -135,7 +136,8 @@ class _WorkspaceFilesBody extends StatelessWidget {
     );
   }
 
-  /// 目录进入下一层；文件打开只读预览。越权拒绝由控制器写入 banner。
+  /// 目录进入下一层；文件打开全屏只读代码查看器（P3 代码阅读）。
+  /// 越权路径由 repository fail-closed，控制器写入拒绝 banner。
   void _openEntry(
     BuildContext context,
     WorkspaceFilesController controller,
@@ -144,7 +146,12 @@ class _WorkspaceFilesBody extends StatelessWidget {
     if (entry.isDirectory) {
       unawaited(controller.openDirectory(entry.path));
     } else {
-      unawaited(controller.openFile(entry.path));
+      // P3 代码查看器以 push 全屏打开，repo-relative 路径不进入 URL。
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => CodeViewerScreen(filePath: entry.path),
+        ),
+      );
     }
   }
 }

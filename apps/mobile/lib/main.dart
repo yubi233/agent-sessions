@@ -20,6 +20,7 @@ import 'storage/runtime_encrypted_cache.dart';
 import 'storage/secure_token_store.dart';
 import 'storage/theme_preference_store.dart';
 import 'ui/app_theme.dart';
+import 'ui/code_viewer_screens.dart';
 
 const _compileTimeLocalFixtureMode = bool.fromEnvironment('LOCAL_FIXTURE_MODE');
 const _compileTimeLocalVisualScenarioValue = String.fromEnvironment(
@@ -261,6 +262,8 @@ class _LocalVisualScenarioCoordinatorState
       _openTerminalsWhenReady();
     } else if (widget.scenario == LocalVisualScenario.settingsIndex) {
       _openSettingsWhenReady();
+    } else if (widget.scenario == LocalVisualScenario.recentSessions) {
+      _openRecentSessionsWhenReady();
     } else if (widget.sessionId != null) {
       _openSessionWhenReady();
     }
@@ -271,6 +274,17 @@ class _LocalVisualScenarioCoordinatorState
       final app = ref.read(appControllerProvider);
       if (app.isAuthenticated) {
         ref.read(appRouterProvider).go('/settings');
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  Future<void> _openRecentSessionsWhenReady() async {
+    for (var attempt = 0; attempt < 80; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      if (app.isAuthenticated) {
+        ref.read(appRouterProvider).go('/sessions/recent');
         return;
       }
       await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -387,6 +401,17 @@ class _LocalVisualScenarioCoordinatorState
       } else if (widget.scenario == LocalVisualScenario.sessionFilesBrowse) {
         // 文件浏览是独立只读页面，与 Git 一样不需要 lease。
         router.go('/sessions/$sessionId/files');
+      } else if (widget.scenario == LocalVisualScenario.codeViewer) {
+        // 代码查看器视觉场景：先落到文件浏览页，再 push 全屏只读查看器，
+        // 与真实用户「点开文本文件」的交互一致。
+        router.go('/sessions/$sessionId/files');
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => CodeViewerScreen(filePath: 'lib/main.dart'),
+          ),
+        );
       } else if (widget.scenario == LocalVisualScenario.sessionInfo) {
         // 会话 info 是独立只读页面，不需要 lease；控制器只做白名单聚合。
         router.go('/sessions/$sessionId/info');

@@ -41,6 +41,9 @@ enum LocalVisualScenario {
   // v0.4/P3-A 视觉场景：设置中心与会话 info 只读白名单展示。
   settingsIndex,
   sessionInfo,
+  // v0.4/P3-B 视觉场景：代码查看器与最近会话。
+  codeViewer,
+  recentSessions,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(
@@ -72,6 +75,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'terminal-status' => LocalVisualScenario.terminalStatus,
   'settings-index' => LocalVisualScenario.settingsIndex,
   'session-info' => LocalVisualScenario.sessionInfo,
+  'code-viewer' => LocalVisualScenario.codeViewer,
+  'recent-sessions' => LocalVisualScenario.recentSessions,
   _ => LocalVisualScenario.none,
 };
 
@@ -131,7 +136,8 @@ class LocalVisualFixture {
     }
     if (scenario == LocalVisualScenario.terminalStatus ||
         scenario == LocalVisualScenario.settingsIndex ||
-        scenario == LocalVisualScenario.sessionInfo) {
+        scenario == LocalVisualScenario.sessionInfo ||
+        scenario == LocalVisualScenario.codeViewer) {
       relay.replaceTerminals([
         TerminalSummary(
           id: 'term_visual_online',
@@ -247,7 +253,8 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionComposerControls ||
       LocalVisualScenario.sessionGoalEdit ||
       LocalVisualScenario.sessionProviderUnavailable ||
-      LocalVisualScenario.sessionInfo => true,
+      LocalVisualScenario.sessionInfo ||
+      LocalVisualScenario.recentSessions => true,
       _ => false,
     };
     if (!needsSession) return null;

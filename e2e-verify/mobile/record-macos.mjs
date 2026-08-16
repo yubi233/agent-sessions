@@ -38,6 +38,8 @@ export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-21",
   "VISUAL-MOBILE-22",
   "VISUAL-MOBILE-23",
+  "VISUAL-MOBILE-24",
+  "VISUAL-MOBILE-25",
 ]);
 
 class RecordingError extends Error {

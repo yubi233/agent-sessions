@@ -500,23 +500,27 @@
     {
       "id": "MOBILE-18",
       "title": "代码查看器：语法高亮只读视图与受限摘要",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P0",
       "test_layer": "Daemon integration + Flutter widget + visible AVD",
-      "precondition": "P2 已提供经过 Workspace 路径校验的只读 file/code RPC；临时 Git 仓库含文本、二进制、超大文件、符号链接与越界路径。",
+      "precondition": "P2 已提供经 Workspace 路径校验的只读 file/code RPC fixture；临时 Git 仓库含文本/二进制/超大文件。",
       "steps": [
-        "从会话或项目打开文本文件，检查行号、语法类型、长行滚动、搜索和跳行。",
-        "打开二进制、超大、未知编码、无权和 snapshot stale 文件。",
-        "请求 `..`、仓外符号链接和未确认 Workspace 路径。"
+        "从文件浏览页打开文本文件，进入全屏代码查看器，核对行号、轻量语法高亮、长行横向滚动。",
+        "使用搜索输入关键字，核对匹配计数与上/下一个循环跳转。",
+        "使用跳转行对话框跳到指定行，核对行号列高亮。",
+        "打开二进制、超大文件，核对受限摘要而非正文渲染。",
+        "请求 ../secret.txt 或 /etc/passwd，核对 fail-closed 拒绝与重试入口。"
       ],
-      "expected": "文本仅以只读形式展示；受限文件显示安全摘要；越界请求被 Daemon 拒绝且 Relay、日志和客户端缓存不保存文件正文。",
+      "expected": "文本只读展示且带行号与语法高亮；搜索/跳行可用；二进制/超大文件安全摘要；越界路径被拒绝且 Relay/日志/客户端缓存不保存正文。",
       "cleanup": [
-        "删除临时仓库、清空代码缓存并停止测试 Daemon"
+        "关闭代码查看器并清理文件选择状态"
       ],
       "evidence": [
-        "internal/gitread/git_test.go",
+        "apps/mobile/lib/state/code_viewer_controller.dart",
+        "apps/mobile/lib/ui/code_viewer_screens.dart",
+        "apps/mobile/test/code_viewer_controller_test.dart",
         "apps/mobile/test/code_viewer_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
@@ -672,22 +676,26 @@
     {
       "id": "MOBILE-25",
       "title": "最近会话页",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P2",
       "test_layer": "Relay integration + Flutter widget + visible AVD",
-      "precondition": "会话列表 API 具备稳定排序、cursor 分页和账户 scope；测试账号包含空列表、同时间戳和多页会话。",
+      "precondition": "会话列表 API 返回白名单元数据（id/status/provider/last_seq/updated_at）；fixture 含空列表与多会话。",
       "steps": [
-        "打开 recent，首屏加载后下拉刷新、向下分页并进入一条会话。",
-        "制造离线、cursor 失效、撤销设备和跨账号会话 ID 请求。",
-        "刷新应用并从深链打开已存在、已删除和无权会话。"
+        "打开 /sessions/recent，核对首屏按 updatedAt 稳定降序展示与相对时间。",
+        "下拉刷新并核对列表顺序稳定、不跳项。",
+        "点击会话项进入详情深链。",
+        "制造离线/Relay 错误，核对保留旧列表与内联错误、空数据时全页错误与重试。",
+        "核对空列表与无写入口。"
       ],
-      "expected": "排序和分页无重复/跳项；深链受账户 scope 保护；空、离线、stale、删除和无权均有明确状态且不泄漏其它会话元数据。",
+      "expected": "排序稳定无重复跳项；深链受账户 scope 保护；空/离线/错误有明确状态且不泄漏其它会话元数据。",
       "cleanup": [
-        "删除测试会话并清理本地 cursor/cache"
+        "清理 fixture 会话与刷新状态"
       ],
       "evidence": [
+        "apps/mobile/lib/state/recent_sessions_controller.dart",
+        "apps/mobile/lib/ui/recent_sessions_screens.dart",
         "apps/mobile/test/recent_sessions_controller_test.dart",
         "apps/mobile/test/recent_sessions_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
