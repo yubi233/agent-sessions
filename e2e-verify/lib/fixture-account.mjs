@@ -1,4 +1,6 @@
 // headed 浏览器 suite 共用单租户 fixture owner；避免每个场景各自注册而违反首账号 bootstrap 门禁。
+// owner 写 token 只用于套件预置数据（建会话/终端），绝不写入浏览器或报告；
+// 浏览器仍走各自可见的密码登录流程。
 export function createFixtureAccountFactory(relayBase) {
   let account = null;
 
@@ -14,8 +16,14 @@ export function createFixtureAccountFactory(relayBase) {
     if (!response.ok) {
       throw new Error(`fixture owner registration failed: ${response.status}`);
     }
-    // 令牌不进入浏览器报告；Web/Admin 仍须走各自可见的密码登录流程。
-    account = { email, password };
+    const data = await response.json();
+    // 令牌只留在 Node 预置侧（脱敏，不进入报告与浏览器内存）。
+    account = {
+      email,
+      password,
+      accessToken: data.access_token,
+      deviceId: data.device_id,
+    };
     return account;
   };
 }

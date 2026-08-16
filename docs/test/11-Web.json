@@ -22,22 +22,27 @@
     {
       "id": "WEB-01",
       "title": "只读列表与详情",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Web",
       "priority": "P0",
-      "test_layer": "component + headed E2E",
-      "precondition": "P4 会话列表/详情只读路由、账户 scoped fixture 或真实只读 API 已实现；当前 Web 只有首页与 capabilities。",
+      "test_layer": "Vue component + headed Chrome",
+      "precondition": "隔离 Relay fixture 与单租户只读登录；会话列表 API 返回白名单元数据。",
       "steps": [
-        "打开项目/会话列表与详情",
-        "检查 loading、empty、error、offline、forbidden 和无写控件"
+        "在 headed Chrome 打开 /sessions，登录后核对会话列表展示 id/status/provider/last_seq 白名单。",
+        "进入 /sessions/:id 核对元数据与密文事件序号，确认页面无 composer/发送/终止等写控件。",
+        "制造 Relay 失败核对 loading/error/空态与刷新。"
       ],
-      "expected": "只显示授权的白名单会话状态；无 prompt、审批、终止或设备管理入口；当前缺路由时本用例不能标 passed。",
+      "expected": "列表与详情只展示白名单元数据；事件 envelope 不解密；无任何写入口；错误与空态明确。",
       "cleanup": [
-        "清理浏览器存储"
+        "关闭浏览器并清理 fixture 会话"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/WEB/web-01.json"
+        "apps/web/src/views/SessionsView.vue",
+        "apps/web/src/views/SessionDetailView.vue",
+        "apps/web/src/readonly-views.test.ts",
+        "e2e-verify/suites/p4-web-readonly.mjs",
+        "e2e-verify/reports/<ts>/WEB/p4-web-readonly.json"
       ]
     },
     {
@@ -48,12 +53,11 @@
       "category": "Web",
       "priority": "P0",
       "test_layer": "headed E2E",
-      "precondition": "有序事件 fixture。",
+      "precondition": "账号级 SSE（/v1/events）与 cursor 恢复；Web 只读客户端接入前为 planned。",
       "steps": [
-        "刷新",
-        "断线重连"
+        "Web 尚未接入 SSE；登记为 planned，不伪造恢复证据。"
       ],
-      "expected": "不重复渲染；解密正文不进 SW。",
+      "expected": "SSE cursor 恢复在 Web 接入后验证；当前不声称已完成。",
       "cleanup": [],
       "evidence": [
         "e2e-verify/reports/<ts>/WEB/web-02.json"
@@ -62,21 +66,25 @@
     {
       "id": "WEB-03",
       "title": "只读 Git DiffView",
-      "status": "planned",
+      "status": "partial",
       "phase": "P4",
       "category": "Web",
       "priority": "P1",
-      "test_layer": "component + headed E2E",
-      "precondition": "Git fixtures。",
+      "test_layer": "Vue component + headed Chrome",
+      "precondition": "文件/Git 内容走 Daemon 加密只读 RPC，Web 未接入该 transport。",
       "steps": [
-        "文件树",
-        "unified/split",
-        "stale"
+        "打开 /sessions/:id/files 与 /sessions/:id/git，核对明确 unavailable 降级文案。",
+        "确认页面不展示占位文件列表或伪造 diff。"
       ],
-      "expected": "可渲染或安全降级。",
-      "cleanup": [],
+      "expected": "明确显示依赖 Daemon 加密 RPC 且尚未接入；不伪造成功。",
+      "cleanup": [
+        "关闭浏览器"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/WEB/web-03.json"
+        "apps/web/src/views/SessionFilesView.vue",
+        "apps/web/src/views/SessionGitView.vue",
+        "apps/web/src/readonly-views.test.ts",
+        "e2e-verify/reports/<ts>/WEB/p4-web-readonly.json"
       ]
     },
     {
@@ -103,38 +111,44 @@
     {
       "id": "WEB-05",
       "title": "headed 只读旅程",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Web",
       "priority": "P0",
-      "test_layer": "headed E2E",
-      "precondition": "Playwright headed。",
+      "test_layer": "headed Chrome",
+      "precondition": "隔离 Relay fixture、单租户 owner、已登记终端（或空态容错）。",
       "steps": [
-        "加载/空/错误/重试/响应式"
+        "在真实浏览器完成登录 -> 会话列表 -> 详情 -> 文件/Git 降级 -> 终端状态只读旅程。"
       ],
-      "expected": "real_browser=true, headless=false。",
-      "cleanup": [],
+      "expected": "全程无写控件；终端页无重启入口；窄屏无横向溢出。",
+      "cleanup": [
+        "关闭浏览器与 Relay fixture"
+      ],
       "evidence": [
-        "e2e-verify/traces/web/WEB-05/"
+        "e2e-verify/suites/p4-web-readonly.mjs",
+        "e2e-verify/reports/<ts>/WEB/p4-web-readonly.json"
       ]
     },
     {
       "id": "E2E-WEB-01",
       "title": "跨层只读回归",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Web",
       "priority": "P0",
-      "test_layer": "headed E2E",
-      "precondition": "mock Relay 可运行。",
+      "test_layer": "headed Chrome + Relay fixture",
+      "precondition": "同 WEB-05；Relay 写权限反向测试通过（Web token 403）。",
       "steps": [
-        "完整只读旅程",
-        "尝试构造写请求"
+        "同 WEB-05 全旅程 + 写权限反向断言。"
       ],
-      "expected": "UI 无写入口；网络层写请求失败。",
-      "cleanup": [],
+      "expected": "只读旅程通过；Web token 直接构造写请求被 Relay 拒绝。",
+      "cleanup": [
+        "关闭浏览器与 Relay"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/WEB/e2e-web-01.json"
+        "e2e-verify/suites/p4-web-readonly.mjs",
+        "internal/relay/p1_authorization_test.go",
+        "e2e-verify/reports/<ts>/WEB/p4-web-readonly.json"
       ]
     },
     {
@@ -164,24 +178,22 @@
     {
       "id": "E2E-WEB-02",
       "title": "多视口 headed Chrome 的 Web 只读完整旅程",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P4",
       "category": "Web E2E",
       "priority": "P0",
-      "test_layer": "headed Chrome E2E",
-      "precondition": "隔离 Relay、只读测试账号、P4 Web 路由和 Chrome 可见窗口已启动。",
+      "test_layer": "headed Chrome 多视口",
+      "precondition": "同 WEB-05。",
       "steps": [
-        "在桌面和移动宽度的可见 Chrome 登录、查看 capabilities、会话、机器、文件/Git，并模拟 SSE 断线恢复。",
-        "访问空、错误、无权、stale 与 offline 状态，再尝试构造写请求。",
-        "执行键盘导航并保存脱敏 trace/report。"
+        "桌面 1280 与窄屏 375 视口分别走只读旅程，检查无横向溢出。"
       ],
-      "expected": "报告标记 `real_browser=true`、`headless=false`；所有页面保持只读；写请求由 Relay 拒绝；SSE cursor 不重复渲染且不把正文写入 PWA 缓存。",
+      "expected": "多视口只读旅程通过且无横向溢出。",
       "cleanup": [
-        "退出测试账号，清理浏览器 profile、Service Worker、测试会话和 Relay 数据"
+        "关闭浏览器"
       ],
       "evidence": [
-        "e2e-verify/web/v04-web-readonly.mjs",
-        "e2e-verify/reports/<ts>/WEB/e2e-web-02.json"
+        "e2e-verify/suites/p4-web-readonly.mjs",
+        "e2e-verify/reports/<ts>/WEB/p4-web-readonly.json"
       ]
     }
   ]

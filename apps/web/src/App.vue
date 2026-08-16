@@ -14,6 +14,8 @@ import ThemeControl from "./components/ThemeControl.vue";
         </RouterLink>
         <nav class="site-nav" aria-label="主导航">
           <RouterLink to="/">总览</RouterLink>
+          <RouterLink to="/sessions">会话</RouterLink>
+          <RouterLink to="/terminals">终端</RouterLink>
           <RouterLink to="/capabilities">能力</RouterLink>
         </nav>
         <ThemeControl />

@@ -455,3 +455,78 @@ input {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ---- P4 只读列表与元数据 ---- */
+.readonly-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.readonly-item {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.readonly-item a {
+  color: inherit;
+  display: block;
+  text-decoration: none;
+}
+
+.readonly-item a:hover {
+  color: var(--accent);
+}
+
+.item-title {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.item-sub {
+  color: var(--text-muted);
+  display: block;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.back-link {
+  margin-bottom: 8px;
+}
+
+.back-link a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.back-link a:hover {
+  color: var(--accent);
+}
+
+.meta-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 24px;
+  max-width: 480px;
+}
+
+.meta-list div {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.meta-list dt {
+  color: var(--text-muted);
+}
+
+.meta-list dd {
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
