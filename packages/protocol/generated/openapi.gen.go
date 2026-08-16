@@ -887,6 +887,12 @@ type TooManyRequests = ErrorResponse
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = ErrorResponse
 
+// ListAuditParams defines parameters for ListAudit.
+type ListAuditParams struct {
+	Limit  *int `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
 // StreamDaemonCommandsParams defines parameters for StreamDaemonCommands.
 type StreamDaemonCommandsParams struct {
 	AfterDeliverySeq *int64  `form:"after_delivery_seq,omitempty" json:"after_delivery_seq,omitempty"`
@@ -1118,6 +1124,9 @@ type ServerInterface interface {
 	// (POST /v1/attachments/{id}/complete)
 	CompleteAttachment(c *gin.Context, id string)
 
+	// (GET /v1/audit)
+	ListAudit(c *gin.Context, params ListAuditParams)
+
 	// (POST /v1/auth/login)
 	Login(c *gin.Context)
 
@@ -1298,6 +1307,41 @@ func (siw *ServerInterfaceWrapper) CompleteAttachment(c *gin.Context) {
 	}
 
 	siw.Handler.CompleteAttachment(c, id)
+}
+
+// ListAudit operation middleware
+func (siw *ServerInterfaceWrapper) ListAudit(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAuditParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", c.Request.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter offset: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListAudit(c, params)
 }
 
 // Login operation middleware
@@ -2062,6 +2106,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/recovery-codes", wrapper.GenerateRecoveryCode)
 	router.POST(options.BaseURL+"/v1/recovery-codes/restore", wrapper.RestoreRecoveryCode)
 	router.GET(options.BaseURL+"/v1/terminals", wrapper.ListTerminals)
+	router.GET(options.BaseURL+"/v1/audit", wrapper.ListAudit)
 	router.GET(options.BaseURL+"/v1/usage/summary", wrapper.UsageSummary)
 	router.POST(options.BaseURL+"/v1/daemon/usage/events", wrapper.UploadUsageEvent)
 	router.GET(options.BaseURL+"/v1/projects", wrapper.ListProjects)
