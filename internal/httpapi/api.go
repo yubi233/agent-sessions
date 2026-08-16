@@ -24,6 +24,7 @@ type API struct {
 	Daemons          *domain.DaemonService
 	DaemonDeliveries *domain.DaemonDeliveryHub
 	Capabilities     *adapterreg.Registry
+	Usage            *domain.UsageService
 	Repo             store.Repository
 }
 
@@ -32,7 +33,8 @@ func New(auth *domain.AuthService, pairing *domain.PairingService, sessions *dom
 	return &API{
 		Auth: auth, Pairing: pairing, Sessions: sessions, Delegations: delegations,
 		Attachments: domain.NewAttachmentService(repo), Daemons: domain.NewDaemonService(repo),
-		DaemonDeliveries: domain.NewDaemonDeliveryHub(), Capabilities: adapterreg.New(), Repo: repo,
+		DaemonDeliveries: domain.NewDaemonDeliveryHub(), Capabilities: adapterreg.New(),
+		Usage: domain.NewUsageService(repo), Repo: repo,
 	}
 }
 

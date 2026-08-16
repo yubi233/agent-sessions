@@ -271,6 +271,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/usage/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 账号在最近 1/7/30 天（UTC 日桶）的白名单用量聚合（ADR-010）。 */
+        get: operations["usageSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/usage/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 已配对 Terminal 上传单条白名单 usage 事件；usage_key 哈希去重，重复上传返回同一回执。 */
+        post: operations["uploadUsageEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/projects": {
         parameters: {
             query?: never;
@@ -700,6 +734,42 @@ export interface components {
         };
         TerminalList: {
             terminals: components["schemas"]["Terminal"][];
+        };
+        UploadUsageEventRequest: {
+            /** @description Daemon 对来源事件生成的稳定去重键，Relay 只保存其哈希。 */
+            usage_key: string;
+            provider: string;
+            /** @description UTC 日桶，格式 YYYY-MM-DD。 */
+            utc_day: string;
+            input_tokens: number;
+            output_tokens: number;
+            /** @default 0 */
+            cache_read_tokens: number;
+            /** @default 0 */
+            cache_write_tokens: number;
+        };
+        UsageEventReceipt: {
+            /** @description usage_key 的不可逆 SHA-256 十六进制摘要，用于幂等回执。 */
+            usage_key_hash: string;
+            /** @description false 表示该 usage key 已存在（重复上传），不重复累加。 */
+            inserted: boolean;
+        };
+        UsageSummary: {
+            /** @description 聚合窗口天数（1/7/30）。 */
+            days: number;
+            /** @description 聚合窗口结束的 UTC 日桶。 */
+            utc_today: string;
+            providers: components["schemas"]["UsageDayAggregate"][];
+            total_input_tokens: number;
+            total_output_tokens: number;
+        };
+        UsageDayAggregate: {
+            provider: string;
+            utc_day: string;
+            input_tokens: number;
+            output_tokens: number;
+            cache_read_tokens: number;
+            cache_write_tokens: number;
         };
         Project: {
             id: string;
@@ -1404,6 +1474,56 @@ export interface operations {
                     "application/json": components["schemas"]["TerminalList"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    usageSummary: {
+        parameters: {
+            query?: {
+                days?: 1 | 7 | 30;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description usage summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    uploadUsageEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadUsageEventRequest"];
+            };
+        };
+        responses: {
+            /** @description usage event receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageEventReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
         };
     };

@@ -306,6 +306,18 @@ type RelayEvent struct {
 	EnvelopeJSON string
 }
 
+// RelayUsage 是等待上传的白名单 usage 计数（ADR-010）。UsageKey 由 Daemon 对
+// 来源事件生成，保证断线 outbox 重放幂等；绝不包含 prompt、回复、费用或精确时间。
+type RelayUsage struct {
+	UsageKey         string
+	Provider         string
+	UTCDay           string
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+}
+
 // RecordRelayCommand 原子记录一个 SSE delivery。相同 command_id 即使因至少一次投递再次到达，
 // 也不能再次触发 Provider 进程；成功写入后才推进本机 delivery cursor。
 func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {

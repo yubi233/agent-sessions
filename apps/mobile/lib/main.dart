@@ -264,8 +264,34 @@ class _LocalVisualScenarioCoordinatorState
       _openSettingsWhenReady();
     } else if (widget.scenario == LocalVisualScenario.recentSessions) {
       _openRecentSessionsWhenReady();
+    } else if (widget.scenario == LocalVisualScenario.usageScreen) {
+      _openUsageWhenReady();
+    } else if (widget.scenario == LocalVisualScenario.commandPalette) {
+      _openCommandPaletteWhenReady();
     } else if (widget.sessionId != null) {
       _openSessionWhenReady();
+    }
+  }
+
+  Future<void> _openUsageWhenReady() async {
+    for (var attempt = 0; attempt < 80; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      if (app.isAuthenticated) {
+        ref.read(appRouterProvider).go('/usage');
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  Future<void> _openCommandPaletteWhenReady() async {
+    for (var attempt = 0; attempt < 80; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      if (app.isAuthenticated) {
+        ref.read(appRouterProvider).go('/command-palette');
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
     }
   }
 
@@ -415,6 +441,9 @@ class _LocalVisualScenarioCoordinatorState
       } else if (widget.scenario == LocalVisualScenario.sessionInfo) {
         // 会话 info 是独立只读页面，不需要 lease；控制器只做白名单聚合。
         router.go('/sessions/$sessionId/info');
+      } else if (widget.scenario == LocalVisualScenario.messageDeepLink) {
+        // 单消息深链：跳到目标消息序号；不存在时页面展示统一 empty。
+        router.go('/sessions/$sessionId/messages/1');
       } else {
         router.go('/sessions/$sessionId');
       }

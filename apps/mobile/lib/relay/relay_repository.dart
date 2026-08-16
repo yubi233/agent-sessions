@@ -3,6 +3,7 @@ import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../domain/terminal_models.dart';
+import '../domain/usage_models.dart';
 
 /// Flutter 只依赖此业务契约；真实 HTTP、fixture 或未来 Daemon 命令流实现都可替换。
 abstract interface class RelayRepository {
@@ -23,6 +24,10 @@ abstract interface class RelayRepository {
 
   /// 仅返回账号范围的 Terminal 白名单元数据；不得携带路径、日志或命令 payload。
   Future<List<TerminalSummary>> listTerminals();
+
+  /// 读取账号最近 1/7/30 天（UTC 日桶）的白名单用量聚合（ADR-010）。
+  /// 只返回整数计数与 Provider/日桶标识，不包含 prompt、回复、费用或精确时间。
+  Future<UsageSummary> getUsageSummary({int days = 30});
 
   Future<PairingRequest> createPairing(PairingRequestInput input);
 

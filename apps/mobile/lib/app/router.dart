@@ -2,7 +2,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../state/app_controller.dart';
+import '../ui/command_palette_screens.dart';
 import '../ui/git_diff_screens.dart';
+import '../ui/message_deep_link_screens.dart';
 import '../ui/pairing_scanner.dart';
 import '../ui/recent_sessions_screens.dart';
 import '../ui/screens.dart';
@@ -10,6 +12,7 @@ import '../ui/session_info_screens.dart';
 import '../ui/session_screens.dart';
 import '../ui/settings_screens.dart';
 import '../ui/terminal_status_screens.dart';
+import '../ui/usage_screens.dart';
 import '../ui/workspace_files_screens.dart';
 import 'providers.dart';
 
@@ -89,6 +92,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => SessionInfoScreen(
           sessionId: state.pathParameters['id']!,
         ),
+      ),
+      GoRoute(
+        path: '/sessions/:id/messages/:seq',
+        builder: (context, state) => MessageDeepLinkScreen(
+          sessionId: state.pathParameters['id']!,
+          messageSequence: int.tryParse(state.pathParameters['seq'] ?? '') ??
+              0,
+        ),
+      ),
+      GoRoute(
+        path: '/command-palette',
+        builder: (context, state) => const CommandPaletteScreen(),
+      ),
+      GoRoute(
+        path: '/usage',
+        builder: (context, state) => const UsageScreen(),
       ),
       GoRoute(
         path: '/settings',

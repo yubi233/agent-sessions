@@ -86,6 +86,10 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.POST("/commands/:id/ack", a.handleDaemonCommandAck)
 		daemon.POST("/commands/:id/result", a.handleDaemonCommandResult)
 		daemon.POST("/events", a.handleDaemonEventUpload)
+
+		// Usage（ADR-010）：Terminal 上传白名单计数，账号只读聚合摘要。
+		daemon.POST("/usage/events", a.handleUsageUpload)
+		auth.GET("/usage/summary", a.handleUsageSummary)
 	}
 }
 

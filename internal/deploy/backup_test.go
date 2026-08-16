@@ -16,9 +16,22 @@ func TestBackupRestoreIntegrity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	// 写入账号与事件，制造可恢复数据。
+	// 写入账号、device、project、workspace 与事件，制造可恢复数据。
+	// sessions/workspaces 外键链需要 device/terminal -> workspace -> project -> account。
 	if err := db.QueryRow(`INSERT INTO accounts(id,email,password_hash,created_at) VALUES('a','a@b',x'00',1)`).Err(); err != nil {
 		t.Fatalf("insert account: %v", err)
+	}
+	if err := db.QueryRow(`INSERT INTO devices(id,account_id,role,status,display_name,platform,identity_public_key,encryption_public_key,last_seen_unix_ms) VALUES('dev','a','terminal','active','dev','test','identity','encryption',1)`).Err(); err != nil {
+		t.Fatalf("insert device: %v", err)
+	}
+	if err := db.QueryRow(`INSERT INTO terminals(id,device_id,account_id,hostname,platform,status,last_seen_unix_ms) VALUES('t','dev','a','host','test','online',1)`).Err(); err != nil {
+		t.Fatalf("insert terminal: %v", err)
+	}
+	if err := db.QueryRow(`INSERT INTO projects(id,account_id,fingerprint) VALUES('p','a','fp')`).Err(); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if err := db.QueryRow(`INSERT INTO workspaces(id,project_id,terminal_id,canonical_root,status) VALUES('w','p','t','/ws','active')`).Err(); err != nil {
+		t.Fatalf("insert workspace: %v", err)
 	}
 	if err := db.QueryRow(`INSERT INTO sessions(id,workspace_id,account_id,status,provider,last_seq,current_instance_id) VALUES('s','w','a','running','mock',2,NULL)`).Err(); err != nil {
 		t.Fatalf("insert session: %v", err)

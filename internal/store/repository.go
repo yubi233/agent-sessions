@@ -135,8 +135,40 @@ type Repository interface {
 	MarkOutboxFailed(ctx context.Context, id int64, attempts int) error
 	ListPendingOutbox(ctx context.Context, limit int) ([]OutboxRow, error)
 
+	// Usage（ADR-010）：usage_key_hash 唯一约束去重；聚合只读白名单整数计数。
+	// UpsertUsageEvent 返回 false 表示该 usage key 已存在（重复上传，不重复累加）。
+	UpsertUsageEvent(ctx context.Context, u UsageEventRow) (bool, error)
+	// AggregateUsage 返回账号在 [startDay, endDay]（含两端）UTC 日桶内按 Provider 的聚合。
+	AggregateUsage(ctx context.Context, accountID, startDay, endDay string) ([]UsageDayAggregateRow, error)
+
 	// 事务：domain 层需要原子提交时使用
 	WithTx(ctx context.Context, fn func(ctx context.Context, tx Repository) error) error
+}
+
+// UsageEventRow 是 usage_events 表的行投影。字段全部为白名单整数或归属标识，
+// 不包含 prompt、回复、费用、精确时间或会话正文。
+type UsageEventRow struct {
+	UsageKeyHash     string
+	AccountID        string
+	TerminalID       string
+	Provider         string
+	UTCDay           string
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	SchemaVersion    int64
+	CreatedAtUnixMS  int64
+}
+
+// UsageDayAggregateRow 是账号某 UTC 日桶内单个 Provider 的聚合投影。
+type UsageDayAggregateRow struct {
+	Provider         string
+	UTCDay           string
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 // AccountRow 是 accounts 表的行投影。

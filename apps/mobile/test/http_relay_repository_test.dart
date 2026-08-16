@@ -6,6 +6,7 @@ import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
+import 'package:agent_sessions_mobile/domain/usage_models.dart';
 import 'package:agent_sessions_mobile/relay/http_relay_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -526,6 +527,150 @@ void main() {
       expect(receipt.status, 'completed');
       expect(receipt.chunkIndex, -1);
       expect(receipt.idempotent, isTrue);
+    });
+  });
+
+  group('MOBILE-20 HttpRelayRepository 用量映射', () {
+    test('getUsageSummary(days: 7) 请求 /v1/usage/summary?days=7 并聚合 Provider 计数', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/usage/summary?days=7');
+        expect(options.method, 'GET');
+        expect(options.data, isNull);
+        expect(
+          options.headers['Authorization'],
+          'Bearer fixture-owner-access-token',
+        );
+        return _jsonResponse({
+          'days': 7,
+          'utc_today': '2026-08-16',
+          'providers': [
+            {
+              'provider': 'codex',
+              'utc_day': '2026-08-16',
+              'input_tokens': 100,
+              'output_tokens': 50,
+              'cache_read_tokens': 20,
+              'cache_write_tokens': 5,
+            },
+            {
+              'provider': 'claude',
+              'utc_day': '2026-08-16',
+              'input_tokens': 30,
+              'output_tokens': 25,
+              'cache_read_tokens': 0,
+              'cache_write_tokens': 10,
+            },
+          ],
+        });
+      });
+
+      final UsageSummary summary = await _authenticatedRepository(
+        adapter,
+      ).getUsageSummary(days: 7);
+
+      expect(summary.days, 7);
+      expect(summary.utcToday, '2026-08-16');
+      expect(summary.providers, hasLength(2));
+      expect(summary.providers.first.provider, 'codex');
+      expect(summary.providers.first.utcDay, '2026-08-16');
+      expect(summary.providers.first.inputTokens, 100);
+      expect(summary.providers.first.outputTokens, 50);
+      expect(summary.providers.first.cacheReadTokens, 20);
+      expect(summary.providers.first.cacheWriteTokens, 5);
+      expect(summary.providers.first.totalTokens, 150);
+      final (input, output) = summary.totals;
+      expect(input, 130);
+      expect(output, 75);
+    });
+
+    test('缺 providers 字段的响应按 protocol 错误拒绝', () async {
+      final adapter = _FixtureHttpAdapter(
+        (_) => _jsonResponse({
+          'days': 7,
+          'utc_today': '2026-08-16',
+        }),
+      );
+
+      await expectLater(
+        _authenticatedRepository(adapter).getUsageSummary(),
+        throwsA(
+          isA<RelayFailure>().having(
+            (failure) => failure.kind,
+            'kind',
+            RelayFailureKind.protocol,
+          ),
+        ),
+      );
+    });
+
+    test('days 非正数或非数值时按 protocol 错误拒绝', () async {
+      for (final invalid in [0, -3, '7']) {
+        final adapter = _FixtureHttpAdapter(
+          (_) => _jsonResponse({
+            'days': invalid,
+            'utc_today': '2026-08-16',
+            'providers': <Object>[],
+          }),
+        );
+
+        await expectLater(
+          _authenticatedRepository(adapter).getUsageSummary(),
+          throwsA(
+            isA<RelayFailure>().having(
+              (failure) => failure.kind,
+              'kind',
+              RelayFailureKind.protocol,
+            ),
+          ),
+        );
+      }
+    });
+
+    test('响应体不是 JSON 对象时按 protocol 错误拒绝', () async {
+      final adapter = _FixtureHttpAdapter(
+        (_) => _jsonResponse(['not', 'an', 'object']),
+      );
+
+      await expectLater(
+        _authenticatedRepository(adapter).getUsageSummary(),
+        throwsA(
+          isA<RelayFailure>().having(
+            (failure) => failure.kind,
+            'kind',
+            RelayFailureKind.protocol,
+          ),
+        ),
+      );
+    });
+
+    test('负数 token 计数被拒绝', () async {
+      final adapter = _FixtureHttpAdapter(
+        (_) => _jsonResponse({
+          'days': 7,
+          'utc_today': '2026-08-16',
+          'providers': [
+            {
+              'provider': 'codex',
+              'utc_day': '2026-08-16',
+              'input_tokens': -1,
+              'output_tokens': 50,
+              'cache_read_tokens': 0,
+              'cache_write_tokens': 0,
+            },
+          ],
+        }),
+      );
+
+      await expectLater(
+        _authenticatedRepository(adapter).getUsageSummary(),
+        throwsA(
+          isA<RelayFailure>().having(
+            (failure) => failure.kind,
+            'kind',
+            RelayFailureKind.protocol,
+          ),
+        ),
+      );
     });
   });
 }

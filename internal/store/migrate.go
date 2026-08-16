@@ -253,6 +253,26 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS daemon_event_receipts_command_idx
 		ON daemon_event_receipts(command_id, event_seq);`,
+	// P3 usage（ADR-010）：Relay 只保留白名单整数计数与 UTC 日桶，不保存 prompt、
+	// 回复、工具参数、路径、费用或精确事件时间。usage_key_hash 唯一约束保证
+	// Daemon 断线 outbox 重复上传返回同一 canonical receipt，不重复累加。
+	`CREATE TABLE IF NOT EXISTS usage_events (
+		usage_key_hash TEXT PRIMARY KEY,
+		account_id TEXT NOT NULL,
+		terminal_id TEXT NOT NULL,
+		provider TEXT NOT NULL,
+		utc_day TEXT NOT NULL,
+		input_tokens INTEGER NOT NULL,
+		output_tokens INTEGER NOT NULL,
+		cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+		schema_version INTEGER NOT NULL DEFAULT 1,
+		created_at_unix_ms INTEGER NOT NULL,
+		FOREIGN KEY(account_id) REFERENCES accounts(id),
+		FOREIGN KEY(terminal_id) REFERENCES terminals(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS usage_events_account_day_idx
+		ON usage_events(account_id, utc_day, provider);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

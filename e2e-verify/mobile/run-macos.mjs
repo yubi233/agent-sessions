@@ -162,6 +162,21 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-25-recent-sessions",
     localVisualScenario: "recent-sessions",
   }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-26",
+    directory: "visual-mobile-26-usage",
+    localVisualScenario: "usage-screen",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-27",
+    directory: "visual-mobile-27-command-palette",
+    localVisualScenario: "command-palette",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-28",
+    directory: "visual-mobile-28-message-deeplink",
+    localVisualScenario: "message-deeplink",
+  }),
 ]);
 
 function wait(milliseconds) {

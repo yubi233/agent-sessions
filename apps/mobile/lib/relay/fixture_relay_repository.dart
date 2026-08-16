@@ -5,6 +5,7 @@ import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../domain/terminal_models.dart';
+import '../domain/usage_models.dart';
 import 'relay_repository.dart';
 
 /// 可重复的本地 Relay fixture。它只模拟白名单元数据，绝不生成会话正文。
@@ -178,6 +179,23 @@ class FixtureRelayRepository implements RelayRepository {
   Future<List<TerminalSummary>> listTerminals() async {
     _requireFixtureNetwork();
     return List<TerminalSummary>.unmodifiable(_terminals);
+  }
+
+  final List<UsageSummary> _usageSummaries = [];
+
+  /// 预置账号用量聚合（ADR-010 白名单计数）；未预置时返回空摘要。
+  void replaceUsageSummary(UsageSummary summary) {
+    _usageSummaries
+      ..clear()
+      ..add(summary);
+  }
+
+  @override
+  Future<UsageSummary> getUsageSummary({int days = 30}) async {
+    _requireFixtureNetwork();
+    return _usageSummaries.isEmpty
+        ? UsageSummary.empty
+        : _usageSummaries.first;
   }
 
   @override

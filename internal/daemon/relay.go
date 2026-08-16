@@ -111,6 +111,16 @@ func (c *RelayClient) UploadEvent(ctx context.Context, event RelayEvent) error {
 	}, &struct{}{})
 }
 
+// UploadUsage 只上传白名单整数计数与 UTC 日桶（ADR-010）。usage key 由 Daemon
+// 对来源事件生成，重复上传返回同一 canonical receipt，不重复累加。
+func (c *RelayClient) UploadUsage(ctx context.Context, usage RelayUsage) error {
+	return c.postJSON(ctx, "/v1/daemon/usage/events", map[string]any{
+		"usage_key": usage.UsageKey, "provider": usage.Provider, "utc_day": usage.UTCDay,
+		"input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens,
+		"cache_read_tokens": usage.CacheReadTokens, "cache_write_tokens": usage.CacheWriteTokens,
+	}, &struct{}{})
+}
+
 // Stream 从终端自己的 delivery_seq 重放，再持续接收推送。SSE 数据由 Relay 生成且只包含目标
 // Terminal 的密文命令；客户端不能自己指定 terminal_id。
 func (c *RelayClient) Stream(ctx context.Context, afterDeliverySeq int64, consume func(context.Context, RelayDelivery) error) error {

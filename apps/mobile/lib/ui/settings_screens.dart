@@ -93,8 +93,8 @@ class _SettingsBody extends ConsumerWidget {
           key: const Key('settings-usage-tile'),
           icon: Icons.bar_chart_outlined,
           title: '用量',
-          subtitle: controller.usageUnavailable ? '暂无可用的用量统计' : '今日与 7 天用量',
-          onTap: () => context.push('/settings/usage'),
+          subtitle: '今日、7 天与 30 天统计',
+          onTap: () => context.push('/usage'),
         ),
         _SettingsSectionTile(
           key: const Key('settings-connect-tile'),

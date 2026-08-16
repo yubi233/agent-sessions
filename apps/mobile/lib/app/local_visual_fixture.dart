@@ -5,6 +5,7 @@ import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../domain/terminal_models.dart';
+import '../domain/usage_models.dart';
 import '../git/git_diff_repository.dart';
 import '../relay/fixture_relay_repository.dart';
 import '../state/lifecycle_recovery_controller.dart';
@@ -44,6 +45,10 @@ enum LocalVisualScenario {
   // v0.4/P3-B 视觉场景：代码查看器与最近会话。
   codeViewer,
   recentSessions,
+  // v0.4/P3-C 视觉场景：用量统计、命令面板与单消息深链。
+  usageScreen,
+  commandPalette,
+  messageDeepLink,
 }
 
 LocalVisualScenario localVisualScenarioFromEnvironment(
@@ -77,6 +82,9 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'session-info' => LocalVisualScenario.sessionInfo,
   'code-viewer' => LocalVisualScenario.codeViewer,
   'recent-sessions' => LocalVisualScenario.recentSessions,
+  'usage-screen' => LocalVisualScenario.usageScreen,
+  'command-palette' => LocalVisualScenario.commandPalette,
+  'message-deeplink' => LocalVisualScenario.messageDeepLink,
   _ => LocalVisualScenario.none,
 };
 
@@ -137,7 +145,8 @@ class LocalVisualFixture {
     if (scenario == LocalVisualScenario.terminalStatus ||
         scenario == LocalVisualScenario.settingsIndex ||
         scenario == LocalVisualScenario.sessionInfo ||
-        scenario == LocalVisualScenario.codeViewer) {
+        scenario == LocalVisualScenario.codeViewer ||
+        scenario == LocalVisualScenario.commandPalette) {
       relay.replaceTerminals([
         TerminalSummary(
           id: 'term_visual_online',
@@ -158,6 +167,41 @@ class LocalVisualFixture {
           lastSeen: DateTime.utc(2026, 8, 14, 11, 54),
         ),
       ]);
+    }
+    if (scenario == LocalVisualScenario.usageScreen) {
+      // 用量场景预置 30 天窗口的白名单整数计数（ADR-010），覆盖多 Provider 分解。
+      relay.replaceUsageSummary(
+        UsageSummary(
+          days: 30,
+          utcToday: '2026-08-14',
+          providers: [
+            UsageDayAggregate(
+              provider: 'codex',
+              utcDay: '2026-08-14',
+              inputTokens: 12000,
+              outputTokens: 3000,
+              cacheReadTokens: 500,
+              cacheWriteTokens: 200,
+            ),
+            UsageDayAggregate(
+              provider: 'claude',
+              utcDay: '2026-08-14',
+              inputTokens: 8000,
+              outputTokens: 2500,
+              cacheReadTokens: 300,
+              cacheWriteTokens: 100,
+            ),
+            UsageDayAggregate(
+              provider: 'codex',
+              utcDay: '2026-08-07',
+              inputTokens: 20000,
+              outputTokens: 6000,
+              cacheReadTokens: 800,
+              cacheWriteTokens: 400,
+            ),
+          ],
+        ),
+      );
     }
     final tokens = InMemorySecureTokenStore();
     final identities = InMemoryDeviceIdentityStore();
@@ -254,7 +298,8 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionGoalEdit ||
       LocalVisualScenario.sessionProviderUnavailable ||
       LocalVisualScenario.sessionInfo ||
-      LocalVisualScenario.recentSessions => true,
+      LocalVisualScenario.recentSessions ||
+      LocalVisualScenario.messageDeepLink => true,
       _ => false,
     };
     if (!needsSession) return null;

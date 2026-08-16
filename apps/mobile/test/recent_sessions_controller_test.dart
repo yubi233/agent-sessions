@@ -3,6 +3,7 @@ import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
+import 'package:agent_sessions_mobile/domain/usage_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/relay/relay_repository.dart';
 import 'package:agent_sessions_mobile/state/recent_sessions_controller.dart';
@@ -210,6 +211,10 @@ class _ListOverridingRelay implements RelayRepository {
 
   /// 设置后 listSessions 返回该列表；为 null 时走 fixture 默认实现。
   List<MobileSession> Function()? listOverride;
+
+  @override
+  Future<UsageSummary> getUsageSummary({int days = 30}) =>
+      _delegate.getUsageSummary(days: days);
 
   @override
   Future<List<MobileSession>> listSessions() async {

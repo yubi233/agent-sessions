@@ -14,14 +14,17 @@ import '../git/git_diff_repository.dart';
 import '../files/workspace_files_repository.dart';
 import '../state/app_controller.dart';
 import '../state/code_viewer_controller.dart';
+import '../state/command_palette_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
+import '../state/message_deep_link_controller.dart';
 import '../state/recent_sessions_controller.dart';
 import '../state/session_controller.dart';
 import '../state/session_info_controller.dart';
 import '../state/settings_controller.dart';
 import '../state/terminal_status_controller.dart';
+import '../state/usage_controller.dart';
 import '../state/workspace_files_controller.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
@@ -166,6 +169,27 @@ final recentSessionsControllerProvider =
     ChangeNotifierProvider<RecentSessionsController>((ref) {
       return RecentSessionsController(
         relay: ref.read(relayRepositoryProvider),
+      );
+    });
+
+/// P3 用量统计页只读状态机：消费 Relay 白名单整数聚合（ADR-010）。
+final usageControllerProvider = ChangeNotifierProvider<UsageController>((ref) {
+  return UsageController(relay: ref.read(relayRepositoryProvider));
+});
+
+/// P3 命令面板索引：只引用 SessionController 的快照与 capability 门控。
+final commandPaletteControllerProvider =
+    ChangeNotifierProvider<CommandPaletteController>((ref) {
+      return CommandPaletteController(
+        sessionController: ref.read(sessionControllerProvider),
+      );
+    });
+
+/// P3 单消息深链：只通过 SessionController 定位授权会话中的目标消息。
+final messageDeepLinkControllerProvider =
+    ChangeNotifierProvider<MessageDeepLinkController>((ref) {
+      return MessageDeepLinkController(
+        sessionController: ref.read(sessionControllerProvider),
       );
     });
 

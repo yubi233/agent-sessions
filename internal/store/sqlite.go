@@ -1001,3 +1001,53 @@ func (r *sqliteRepo) ListPendingOutbox(ctx context.Context, limit int) ([]Outbox
 	}
 	return out, rows.Err()
 }
+
+// UpsertUsageEvent 以 usage_key_hash 唯一约束写入 usage 事件。重复 key 返回
+// (false, nil)，调用方按 ADR-010 去重语义返回同一 canonical receipt。
+func (r *sqliteRepo) UpsertUsageEvent(ctx context.Context, u UsageEventRow) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO usage_events
+			(usage_key_hash, account_id, terminal_id, provider, utc_day,
+			 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+			 schema_version, created_at_unix_ms)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		u.UsageKeyHash, u.AccountID, u.TerminalID, u.Provider, u.UTCDay,
+		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens,
+		u.SchemaVersion, u.CreatedAtUnixMS)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// AggregateUsage 按账号在 [startDay, endDay] UTC 日桶内聚合 usage 事件。
+// 只返回白名单整数计数；查询只按账号 scope，客户端不能读取其它账号或单条事件。
+func (r *sqliteRepo) AggregateUsage(ctx context.Context, accountID, startDay, endDay string) ([]UsageDayAggregateRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT provider, utc_day,
+		        SUM(input_tokens), SUM(output_tokens),
+		        SUM(cache_read_tokens), SUM(cache_write_tokens)
+		 FROM usage_events
+		 WHERE account_id = ? AND utc_day >= ? AND utc_day <= ?
+		 GROUP BY provider, utc_day
+		 ORDER BY utc_day, provider`,
+		accountID, startDay, endDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageDayAggregateRow
+	for rows.Next() {
+		var row UsageDayAggregateRow
+		if err := rows.Scan(&row.Provider, &row.UTCDay, &row.InputTokens,
+			&row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

@@ -343,6 +343,27 @@ func (e PairingRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for UsageSummaryParamsDays.
+const (
+	N1  UsageSummaryParamsDays = 1
+	N30 UsageSummaryParamsDays = 30
+	N7  UsageSummaryParamsDays = 7
+)
+
+// Valid indicates whether the value is a known member of the UsageSummaryParamsDays enum.
+func (e UsageSummaryParamsDays) Valid() bool {
+	switch e {
+	case N1:
+		return true
+	case N30:
+		return true
+	case N7:
+		return true
+	default:
+		return false
+	}
+}
+
 // AttachmentChunkUploadRequest 不包含 filename 或明文内容；metadata_ciphertext 与 ciphertext 均为客户端加密后的 base64 字节串。
 type AttachmentChunkUploadRequest struct {
 	AttachmentId       string                                  `json:"attachment_id"`
@@ -785,6 +806,52 @@ type TokenPair struct {
 	RefreshToken string  `json:"refresh_token"`
 }
 
+// UploadUsageEventRequest defines model for UploadUsageEventRequest.
+type UploadUsageEventRequest struct {
+	CacheReadTokens  *int   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int   `json:"cache_write_tokens,omitempty"`
+	InputTokens      int    `json:"input_tokens"`
+	OutputTokens     int    `json:"output_tokens"`
+	Provider         string `json:"provider"`
+
+	// UsageKey Daemon 对来源事件生成的稳定去重键，Relay 只保存其哈希。
+	UsageKey string `json:"usage_key"`
+
+	// UtcDay UTC 日桶，格式 YYYY-MM-DD。
+	UtcDay string `json:"utc_day"`
+}
+
+// UsageDayAggregate defines model for UsageDayAggregate.
+type UsageDayAggregate struct {
+	CacheReadTokens  int    `json:"cache_read_tokens"`
+	CacheWriteTokens int    `json:"cache_write_tokens"`
+	InputTokens      int    `json:"input_tokens"`
+	OutputTokens     int    `json:"output_tokens"`
+	Provider         string `json:"provider"`
+	UtcDay           string `json:"utc_day"`
+}
+
+// UsageEventReceipt defines model for UsageEventReceipt.
+type UsageEventReceipt struct {
+	// Inserted false 表示该 usage key 已存在（重复上传），不重复累加。
+	Inserted bool `json:"inserted"`
+
+	// UsageKeyHash usage_key 的不可逆 SHA-256 十六进制摘要，用于幂等回执。
+	UsageKeyHash string `json:"usage_key_hash"`
+}
+
+// UsageSummary defines model for UsageSummary.
+type UsageSummary struct {
+	// Days 聚合窗口天数（1/7/30）。
+	Days              int                 `json:"days"`
+	Providers         []UsageDayAggregate `json:"providers"`
+	TotalInputTokens  int                 `json:"total_input_tokens"`
+	TotalOutputTokens int                 `json:"total_output_tokens"`
+
+	// UtcToday 聚合窗口结束的 UTC 日桶。
+	UtcToday string `json:"utc_today"`
+}
+
 // Workspace defines model for Workspace.
 type Workspace struct {
 	Branch     *string `json:"branch,omitempty"`
@@ -837,6 +904,14 @@ type GetSessionSnapshotParams struct {
 	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
 }
 
+// UsageSummaryParams defines parameters for UsageSummary.
+type UsageSummaryParams struct {
+	Days *UsageSummaryParamsDays `form:"days,omitempty" json:"days,omitempty"`
+}
+
+// UsageSummaryParamsDays defines parameters for UsageSummary.
+type UsageSummaryParamsDays int
+
 // UploadAttachmentChunkJSONRequestBody defines body for UploadAttachmentChunk for application/json ContentType.
 type UploadAttachmentChunkJSONRequestBody = AttachmentChunkUploadRequest
 
@@ -869,6 +944,9 @@ type DaemonHeartbeatJSONRequestBody = DaemonHeartbeatRequest
 
 // DaemonHelloJSONRequestBody defines body for DaemonHello for application/json ContentType.
 type DaemonHelloJSONRequestBody = DaemonHelloRequest
+
+// UploadUsageEventJSONRequestBody defines body for UploadUsageEvent for application/json ContentType.
+type UploadUsageEventJSONRequestBody = UploadUsageEventRequest
 
 // DecideDelegationJSONRequestBody defines body for DecideDelegation for application/json ContentType.
 type DecideDelegationJSONRequestBody = DelegationDecisionRequest
@@ -1076,6 +1154,9 @@ type ServerInterface interface {
 	// (POST /v1/daemon/hello)
 	DaemonHello(c *gin.Context)
 
+	// (POST /v1/daemon/usage/events)
+	UploadUsageEvent(c *gin.Context)
+
 	// (POST /v1/delegations/{id}/decision)
 	DecideDelegation(c *gin.Context, id string)
 
@@ -1135,6 +1216,9 @@ type ServerInterface interface {
 
 	// (GET /v1/terminals)
 	ListTerminals(c *gin.Context)
+
+	// (GET /v1/usage/summary)
+	UsageSummary(c *gin.Context, params UsageSummaryParams)
 
 	// (GET /v1/workspaces)
 	ListWorkspaces(c *gin.Context)
@@ -1441,6 +1525,19 @@ func (siw *ServerInterfaceWrapper) DaemonHello(c *gin.Context) {
 	}
 
 	siw.Handler.DaemonHello(c)
+}
+
+// UploadUsageEvent operation middleware
+func (siw *ServerInterfaceWrapper) UploadUsageEvent(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UploadUsageEvent(c)
 }
 
 // DecideDelegation operation middleware
@@ -1869,6 +1966,33 @@ func (siw *ServerInterfaceWrapper) ListTerminals(c *gin.Context) {
 	siw.Handler.ListTerminals(c)
 }
 
+// UsageSummary operation middleware
+func (siw *ServerInterfaceWrapper) UsageSummary(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UsageSummaryParams
+
+	// ------------- Optional query parameter "days" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "days", c.Request.URL.Query(), &params.Days, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter days: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UsageSummary(c, params)
+}
+
 // ListWorkspaces operation middleware
 func (siw *ServerInterfaceWrapper) ListWorkspaces(c *gin.Context) {
 
@@ -1938,6 +2062,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/recovery-codes", wrapper.GenerateRecoveryCode)
 	router.POST(options.BaseURL+"/v1/recovery-codes/restore", wrapper.RestoreRecoveryCode)
 	router.GET(options.BaseURL+"/v1/terminals", wrapper.ListTerminals)
+	router.GET(options.BaseURL+"/v1/usage/summary", wrapper.UsageSummary)
+	router.POST(options.BaseURL+"/v1/daemon/usage/events", wrapper.UploadUsageEvent)
 	router.GET(options.BaseURL+"/v1/projects", wrapper.ListProjects)
 	router.GET(options.BaseURL+"/v1/workspaces", wrapper.ListWorkspaces)
 	router.POST(options.BaseURL+"/v1/workspaces", wrapper.CreateWorkspace)

@@ -7,6 +7,7 @@ import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../domain/terminal_models.dart';
+import '../domain/usage_models.dart';
 import 'relay_repository.dart';
 
 /// 真实 Relay REST 适配器。密码登录不提交角色或设备 id，只能获得 Relay 默认的只读 token。
@@ -107,6 +108,15 @@ class HttpRelayRepository implements RelayRepository {
       response.data,
       wrappedKey: 'terminals',
     ).map(TerminalSummary.fromRelayJson).toList(growable: false);
+  }
+
+  @override
+  Future<UsageSummary> getUsageSummary({int days = 30}) async {
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/usage/summary?days=$days',
+    );
+    return UsageSummary.fromRelayJson(_asMap(response.data));
   }
 
   @override

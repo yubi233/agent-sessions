@@ -556,23 +556,30 @@
     {
       "id": "MOBILE-20",
       "title": "用量统计页：7/30 天脱敏图表",
-      "status": "decision_gated",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P1",
-      "test_layer": "usage integration + Flutter widget + visible AVD",
-      "precondition": "ADR-010 的 usage 上传、去重、UTC 日桶、保留和权限契约已实现；当前仅验证无数据/不可用状态。",
+      "test_layer": "usage integration + Flutter widget + visible macOS fixture + AVD",
+      "precondition": "ADR-010 服务端聚合契约已实现（usage_events 表、usage_key_hash 去重、UTC 日桶聚合、/v1/usage/summary）。",
       "steps": [
-        "为同一 usage key 重放上传并跨 UTC 日桶、Provider 和连续 7/30 天查询聚合。",
-        "在移动端切换 7 天和 30 天视图，检查缺失 Provider、零值、错误与离线缓存提示。",
-        "检查网络、SQLite、日志、图表语义标签和导出内容。"
+        "Daemon 以 usage key 上传白名单计数，重复 key 只计一次（USAGE-01）。",
+        "移动端打开 /usage，切换 1/7/30 天窗口核对 UTC 日桶聚合与 Provider 分解。",
+        "无数据时核对「无可用统计」降级，不显示估算值。",
+        "制造 Relay 失败核对保留旧数据与重试。"
       ],
-      "expected": "重复上传不重复计数；图表明确标识 UTC，只显示白名单整数聚合；不出现 prompt、回复、路径、原始会话 ID、费用或精确时间。",
+      "expected": "重复上传不重复计数；图表明确 UTC 只显示白名单整数聚合；不出现 prompt/回复/路径/会话 ID/费用/精确时间。",
       "cleanup": [
-        "删除测试账号 usage 聚合、去重账本和本地缓存"
+        "清理 usage fixture 与窗口状态"
       ],
       "evidence": [
-        "internal/usage/usage_test.go",
+        "internal/domain/usage.go",
+        "internal/domain/usage_test.go",
+        "internal/httpapi/usage.go",
+        "internal/relay/usage_contract_test.go",
+        "apps/mobile/lib/state/usage_controller.dart",
+        "apps/mobile/lib/ui/usage_screens.dart",
+        "apps/mobile/test/usage_controller_test.dart",
         "apps/mobile/test/usage_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
@@ -604,23 +611,26 @@
     {
       "id": "MOBILE-22",
       "title": "命令面板：capability 门控命令入口",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P1",
       "test_layer": "Dart unit + Flutter widget + visible macOS fixture + AVD",
-      "precondition": "已有路由、当前 session/lease 和 Provider capability；命令面板只索引已存在的安全动作。",
+      "precondition": "已有路由、当前 session/lease 和 Provider capability；面板只索引已存在的安全动作。",
       "steps": [
-        "打开命令面板，按路由、会话和 capability 搜索并以键盘选择项目。",
-        "选择只读导航、支持的控制动作和 unsupported/无 lease 动作。",
-        "在长列表、屏幕阅读器和 reduced motion 下关闭、返回并恢复焦点。"
+        "打开 /command-palette，按路由/会话/capability 搜索并键盘选择。",
+        "核对导航条目只包含已注册路由；unsupported/无 lease 动作显示原因且不可执行。",
+        "切换当前会话后核对面板索引实时刷新。",
+        "核对面板不绕过服务端授权、不创建隐藏命令。"
       ],
-      "expected": "面板只显示已注册的路由和已授权动作；unsupported 或无 lease 项不可执行且说明原因；不会绕过服务端授权或创建隐藏命令。",
+      "expected": "只显示已注册路由与已授权动作；unsupported/无 lease 不可执行并说明原因；不绕过服务端授权或创建隐藏命令。",
       "cleanup": [
-        "清空搜索历史、关闭面板并清理测试 lease"
+        "关闭面板并清理选中会话状态"
       ],
       "evidence": [
-        "apps/mobile/test/command_palette_test.dart",
+        "apps/mobile/lib/state/command_palette_controller.dart",
+        "apps/mobile/lib/ui/command_palette_screens.dart",
+        "apps/mobile/test/command_palette_controller_test.dart",
         "apps/mobile/test/command_palette_screens_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
@@ -729,25 +739,27 @@
     {
       "id": "MOBILE-27",
       "title": "单消息深链、文本选择与复制",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P3",
       "category": "Android",
       "priority": "P1",
-      "test_layer": "Flutter widget + Relay integration + visible AVD",
-      "precondition": "会话事件具有稳定 message ID，客户端已实现账户 scoped 深链和受控的文本选择/复制。",
+      "test_layer": "Flutter widget + Relay integration + visible macOS fixture + AVD",
+      "precondition": "会话事件有稳定 sequence；客户端已实现账户 scoped 深链与受控文本选择。",
       "steps": [
-        "从一条有权限的消息生成并打开深链，刷新应用后再次打开。",
-        "选择并复制允许显示的消息文本，检查焦点、读屏标签和剪贴板内容。",
-        "用跨账号、已删除、过期或无权 message ID 打开深链。"
+        "从 /sessions/:id/messages/:seq 打开深链，核对定位目标消息并显示序号。",
+        "选择复制可见消息文本，核对剪贴板不含 token/内部 ID/隐藏正文。",
+        "用不存在/无权 seq 打开，核对统一 empty 不泄漏存在性。",
+        "Relay 失败时核对可重试错误态（会话存在）或统一 empty（无权）。"
       ],
-      "expected": "只定位授权会话中的目标消息；无权或失效 ID 不泄漏存在性；复制不添加 token、内部 ID 或隐藏正文，深链状态可恢复。",
+      "expected": "只定位授权会话中目标消息；无权/失效 ID 不泄漏存在性；复制不加 token/内部 ID/隐藏正文。",
       "cleanup": [
-        "清理剪贴板、测试会话、深链历史和本地缓存"
+        "关闭深链页并清理选中会话状态"
       ],
       "evidence": [
+        "apps/mobile/lib/state/message_deep_link_controller.dart",
+        "apps/mobile/lib/ui/message_deep_link_screens.dart",
         "apps/mobile/test/message_deeplink_test.dart",
-        "apps/mobile/test/message_selection_screens_test.dart",
-        "e2e-verify/reports/<ts>/MOBILE/mobile-27-android.json"
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {

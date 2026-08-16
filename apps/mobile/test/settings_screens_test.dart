@@ -6,6 +6,7 @@ import 'package:agent_sessions_mobile/state/settings_controller.dart';
 import 'package:agent_sessions_mobile/storage/secure_token_store.dart';
 import 'package:agent_sessions_mobile/storage/theme_preference_store.dart';
 import 'package:agent_sessions_mobile/ui/settings_screens.dart';
+import 'package:agent_sessions_mobile/ui/usage_screens.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,7 +49,7 @@ void main() {
       // 分区副标题来自只读白名单状态
       expect(find.text('已确认 owner 设备'), findsOneWidget);
       expect(find.text('4/4 个 Provider 可用'), findsOneWidget);
-      expect(find.text('暂无可用的用量统计'), findsOneWidget);
+      expect(find.text('今日、7 天与 30 天统计'), findsOneWidget);
       expect(find.text('2 台终端'), findsOneWidget);
 
       // 账户分区
@@ -72,10 +73,10 @@ void main() {
       await tester.tap(find.byTooltip('返回设置'));
       await tester.pumpAndSettle();
 
-      // 用量分区
+      // 用量分区（P3 已指向真实图表页 /usage）
       await tester.tap(find.byKey(const Key('settings-usage-tile')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('settings-usage-screen')), findsOneWidget);
+      expect(find.byKey(const Key('usage-screen')), findsOneWidget);
       await tester.tap(find.byTooltip('返回设置'));
       await tester.pumpAndSettle();
 
@@ -417,6 +418,10 @@ Widget _buildSettingsApp({
       GoRoute(
         path: '/settings/usage',
         builder: (context, state) => const SettingsUsageScreen(),
+      ),
+      GoRoute(
+        path: '/usage',
+        builder: (context, state) => const UsageScreen(),
       ),
       GoRoute(
         path: '/settings/connect',

@@ -315,6 +315,54 @@ paths:
                 $ref: "#/components/schemas/TerminalList"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/usage/summary:
+    get:
+      operationId: usageSummary
+      description: 账号在最近 1/7/30 天（UTC 日桶）的白名单用量聚合（ADR-010）。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [1, 7, 30]
+            default: 30
+      responses:
+        "200":
+          description: usage summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/daemon/usage/events:
+    post:
+      operationId: uploadUsageEvent
+      description: 已配对 Terminal 上传单条白名单 usage 事件；usage_key 哈希去重，重复上传返回同一回执。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadUsageEventRequest"
+      responses:
+        "200":
+          description: usage event receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageEventReceipt"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /v1/projects:
     get:
       operationId: listProjects
@@ -1134,6 +1182,76 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Terminal"
+    UploadUsageEventRequest:
+      type: object
+      required: [usage_key, provider, utc_day, input_tokens, output_tokens]
+      properties:
+        usage_key:
+          type: string
+          description: Daemon 对来源事件生成的稳定去重键，Relay 只保存其哈希。
+        provider:
+          type: string
+        utc_day:
+          type: string
+          description: UTC 日桶，格式 YYYY-MM-DD。
+        input_tokens:
+          type: integer
+          minimum: 0
+        output_tokens:
+          type: integer
+          minimum: 0
+        cache_read_tokens:
+          type: integer
+          minimum: 0
+          default: 0
+        cache_write_tokens:
+          type: integer
+          minimum: 0
+          default: 0
+    UsageEventReceipt:
+      type: object
+      required: [usage_key_hash, inserted]
+      properties:
+        usage_key_hash:
+          type: string
+          description: usage_key 的不可逆 SHA-256 十六进制摘要，用于幂等回执。
+        inserted:
+          type: boolean
+          description: false 表示该 usage key 已存在（重复上传），不重复累加。
+    UsageSummary:
+      type: object
+      required: [days, utc_today, providers, total_input_tokens, total_output_tokens]
+      properties:
+        days:
+          type: integer
+          description: 聚合窗口天数（1/7/30）。
+        utc_today:
+          type: string
+          description: 聚合窗口结束的 UTC 日桶。
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageDayAggregate"
+        total_input_tokens:
+          type: integer
+        total_output_tokens:
+          type: integer
+    UsageDayAggregate:
+      type: object
+      required: [provider, utc_day, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens]
+      properties:
+        provider:
+          type: string
+        utc_day:
+          type: string
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        cache_read_tokens:
+          type: integer
+        cache_write_tokens:
+          type: integer
     Project:
       type: object
       required: [id, fingerprint]
