@@ -194,6 +194,30 @@ func (a *API) handleDaemonCommandResult(c *gin.Context) {
 	writeOK(c, newDaemonCommandReceiptView(receipt))
 }
 
+type daemonWebReadResponseRequest struct {
+	ProtocolVersion int             `json:"protocol_version"`
+	DeliverySeq     int64           `json:"delivery_seq"`
+	Envelope        json.RawMessage `json:"envelope"`
+}
+
+// handleDaemonWebReadResponse 只接收浏览器临时密钥可解的 envelope。Relay 不会将其投影到
+// session_events 或账号 SSE，避免文件/代码/diff 内容穿过普通事件通道。
+func (a *API) handleDaemonWebReadResponse(c *gin.Context) {
+	var req daemonWebReadResponseRequest
+	if err := c.ShouldBindJSON(&req); err != nil || !json.Valid(req.Envelope) {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed web read response"))
+		return
+	}
+	subj := subject(c)
+	receipt, err := a.Daemons.StoreWebReadResponse(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
+		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, string(req.Envelope))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newDaemonCommandReceiptView(receipt))
+}
+
 type daemonEventUploadRequest struct {
 	ProtocolVersion int             `json:"protocol_version"`
 	EventID         string          `json:"event_id"`

@@ -82,12 +82,12 @@
       "category": "Web",
       "priority": "P1",
       "test_layer": "Vue component + headed Chrome",
-      "precondition": "文件/Git 内容走 Daemon 加密只读 RPC，Web 未接入该 transport。",
+      "precondition": "P4-D 已接入 Daemon 加密只读 transport；本用例 fixture 不配对可读 Terminal，用于验证 transport 不可用时的页面降级。",
       "steps": [
-        "打开 /sessions/:id/files 与 /sessions/:id/git，核对明确 unavailable 降级文案。",
-        "确认页面不展示占位文件列表或伪造 diff。"
+        "在未配对或未在线可读 Terminal 的 fixture 中打开 /sessions/:id/files 与 /sessions/:id/git，核对明确的连接错误/重试降级。",
+        "确认降级页面不展示占位文件列表或伪造 diff；成功读取由 WEB-07 的真实 Daemon 旅程单独验证。"
       ],
-      "expected": "明确显示依赖 Daemon 加密 RPC 且尚未接入；不伪造成功。",
+      "expected": "缺失安全 transport 时明确降级且不伪造成功；成功文件/Git 读取、临时密钥销毁和 Relay 无明文持久化由 WEB-07 验证。",
       "cleanup": [
         "关闭浏览器"
       ],
@@ -96,6 +96,37 @@
         "apps/web/src/views/SessionGitView.vue",
         "apps/web/src/readonly-views.test.ts",
         "e2e-verify/reports/<ts>/WEB/p4-web-readonly.json"
+      ]
+    },
+    {
+      "id": "WEB-07",
+      "title": "Web-Daemon 加密文件与 Git 只读传输",
+      "status": "passed",
+      "phase": "v0.4/P4-D",
+      "category": "Web 安全传输",
+      "priority": "P0",
+      "test_layer": "Relay/Daemon integration + Vue component + headed Chrome",
+      "precondition": "隔离 Relay、已配对并在线的 Terminal、已确认临时 Git Workspace；Daemon 持有与配对公钥匹配的本机 X25519 私钥。",
+      "steps": [
+        "Web 为每个请求生成仅驻留内存的临时 X25519 密钥，使用目标 Terminal 已配对公钥密封 repo-relative 只读请求；Relay 只保存 opaque request/response envelope 与状态。",
+        "Daemon 重新校验 Session -> Workspace -> Terminal、本机确认 Workspace 和 capability 后，解封请求并执行 file.tree、file.read/code.read、git.status/git.changes/git.diff；以该临时公钥密封结果后回传。",
+        "请求未知会话、其他账号会话、非 web 角色、离线/未声明 capability 的 Terminal、错误密钥/AAD、绝对路径、..、仓外 symlink、目录、二进制、超限和 stale snapshot，核对全部拒绝且 Relay/日志/DOM 不出现受保护明文。",
+        "在 headed Chrome 完成登录 -> 文件树 -> 代码读取 -> Git 状态/变更 -> diff 的旅程；刷新页面后原响应因临时私钥丢失而不再解密，只能重新请求，页面无编辑、终止或设备管理写入口。"
+      ],
+      "expected": "Web 仅能发起限定只读请求；Relay 不解密、不缓存文件/代码/diff 明文；Daemon 是唯一访问已确认 Workspace 的组件；浏览器仅在当前页面内存展示经临时密钥解密的结果，所有越权和安全拒绝路径 fail-closed。",
+      "cleanup": [
+        "关闭 headed Chrome、终止本轮 Daemon 与 Relay、删除临时 Git 仓库和 Daemon state。",
+        "确认报告、SQLite 和浏览器 storage 中没有文件、代码、diff、私钥或 bearer。"
+      ],
+      "evidence": [
+        "internal/domain/web_readonly.go",
+        "internal/daemon/web_read_transport.go",
+        "internal/relay/p4_web_read_transport_test.go",
+        "apps/web/src/read_transport.ts",
+        "apps/web/src/views/SessionFilesView.vue",
+        "apps/web/src/views/SessionGitView.vue",
+        "e2e-verify/suites/p4-web-read-transport.mjs",
+        "e2e-verify/reports/<ts>/WEB/p4-web-read-transport.json"
       ]
     },
     {

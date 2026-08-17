@@ -6,6 +6,7 @@ import SessionFilesView from "./views/SessionFilesView.vue";
 import SessionGitView from "./views/SessionGitView.vue";
 import TerminalsView from "./views/TerminalsView.vue";
 import { router } from "./router";
+import { requestWebRead } from "./read_transport";
 import {
   decodeSessionSnapshot,
   mergeSessionEventMeta,
@@ -13,12 +14,20 @@ import {
   startAccountEventStream,
 } from "./session";
 
+vi.mock("./read_transport", async () => {
+  const actual = await vi.importActual<typeof import("./read_transport")>("./read_transport");
+  return { ...actual, requestWebRead: vi.fn() };
+});
+
+const requestWebReadMock = vi.mocked(requestWebRead);
+
 // P4 Web 只读闭环的组件级回归（WEB-01/WEB-03/WEB-05）：
 // 会话列表/详情/文件/Git 降级与终端状态全部只读展示白名单元数据。
 
 describe("P4 会话列表页", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    requestWebReadMock.mockReset();
     sessionState.token = "";
   });
 
@@ -124,27 +133,65 @@ describe("P4 会话详情页", () => {
     wrapper.unmount();
   });
 
-  it("WEB-03：文件与 Git 入口明确 unavailable，不伪造列表", async () => {
+  it("WEB-03：文件树和代码读取仅展示当前请求的解密结果，刷新后清空旧文本", async () => {
     sessionState.token = "tok";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ status: "idle", provider: "codex", last_seq: 0, events: [] }),
-      }),
-    );
+    requestWebReadMock
+      .mockResolvedValueOnce([{ path: "src", is_dir: true, size: 0 }, { path: "src/main.go", is_dir: false, size: 22 }])
+      .mockResolvedValueOnce({ path: "src/main.go", content: "package webfixture\n" })
+      .mockResolvedValueOnce([{ path: "src", is_dir: true, size: 0 }]);
+    await router.push("/sessions/web-read/files");
+    await router.isReady();
     const files = mount(SessionFilesView, {
       global: { plugins: [router] },
     });
+    await flushPromises();
+    expect(files.get('[data-testid="files-tree"]').text()).toContain("src/main.go");
+    await files.get('[data-testid="file-entry-src/main.go"]').trigger("click");
+    await flushPromises();
+    expect(files.get('[data-testid="files-code"]').text()).toContain("package webfixture");
+    expect(files.find("textarea").exists()).toBe(false);
+    await files.get('[data-testid="files-refresh"]').trigger("click");
+    await flushPromises();
+    expect(files.find('[data-testid="files-code"]').exists()).toBe(false);
+    files.unmount();
+  });
+
+  it("WEB-03：文件读取失败展示脱敏错误，不保留旧代码", async () => {
+    sessionState.token = "tok";
+    requestWebReadMock.mockRejectedValue(new Error("offline"));
+    await router.push("/sessions/web-read-error/files");
+    await router.isReady();
+    const files = mount(SessionFilesView, { global: { plugins: [router] } });
+    await flushPromises();
+    expect(files.get('[data-testid="files-error"]').text()).toContain("无法读取工作区内容");
+    expect(files.find('[data-testid="files-code"]').exists()).toBe(false);
+    files.unmount();
+  });
+
+  it("WEB-03：Git 状态与 Diff 只读展示，失败时清空旧 Diff", async () => {
+    sessionState.token = "tok";
+    requestWebReadMock
+      .mockResolvedValueOnce({
+        branch: "main", snapshot_token: "snapshot-web", files: [
+          { path: "src/main.go", type: "modified", staged: false, unstaged: true, binary: false, additions: 1, deletions: 0 },
+        ],
+      })
+      .mockResolvedValueOnce({ path: "src/main.go", binary: false, truncated: false, hunks: [{ header: "@@ -1 +1 @@", lines: ["+package webfixture"] }] })
+      .mockRejectedValueOnce(new Error("offline"));
+    await router.push("/sessions/web-read/git");
+    await router.isReady();
     const git = mount(SessionGitView, { global: { plugins: [router] } });
     await flushPromises();
-    expect(files.get('[data-testid="files-unavailable"]').text()).toContain(
-      "尚未接入该 transport",
-    );
-    expect(git.get('[data-testid="git-unavailable"]').text()).toContain(
-      "尚未接入该 transport",
-    );
-    expect(files.text()).not.toContain("README.md");
+    expect(git.get('[data-testid="git-changes"]').text()).toContain("src/main.go");
+    await git.get('[data-testid="git-file-src/main.go"]').trigger("click");
+    await flushPromises();
+    expect(git.get('[data-testid="git-diff"]').text()).toContain("package webfixture");
+    await git.get('[data-testid="git-refresh"]').trigger("click");
+    await flushPromises();
+    expect(git.get('[data-testid="git-error"]').text()).toContain("无法读取 Git 状态");
+    expect(git.find('[data-testid="git-diff"]').exists()).toBe(false);
+    expect(git.find("textarea").exists()).toBe(false);
+    git.unmount();
   });
 });
 

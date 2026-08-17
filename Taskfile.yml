@@ -68,6 +68,22 @@ tasks:
     cmds:
       - node e2e-verify/run.mjs --suite p4-web-readonly
 
+  test:e2e:web-read-transport:
+    desc: P4-D Web-Daemon 加密文件/Git 的 headed Chrome 本地旅程
+    cmds:
+      - node e2e-verify/run.mjs --suite p4-web-read-transport
+
+  test:v04:p4d:
+    desc: v0.4 P4-D Web-Daemon 加密只读传输 full gate
+    cmds:
+      - task: docs:verify
+      - task: check
+      - go test ./internal/daemon -run WebRead -count=1
+      - go test ./internal/relay -run WebRead -count=1
+      - pnpm --filter @agent-sessions/web test
+      - task: test:e2e:web-read-transport
+      - git diff --check
+
   test:v04:p4:
     desc: v0.4 P4 Web SSE cursor、只读快照与 headed Chrome full gate
     cmds:

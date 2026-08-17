@@ -343,6 +343,135 @@ func (e PairingRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for WebReadReceiptStatus.
+const (
+	WebReadReceiptStatusAccepted  WebReadReceiptStatus = "accepted"
+	WebReadReceiptStatusFailed    WebReadReceiptStatus = "failed"
+	WebReadReceiptStatusRejected  WebReadReceiptStatus = "rejected"
+	WebReadReceiptStatusRunning   WebReadReceiptStatus = "running"
+	WebReadReceiptStatusSucceeded WebReadReceiptStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the WebReadReceiptStatus enum.
+func (e WebReadReceiptStatus) Valid() bool {
+	switch e {
+	case WebReadReceiptStatusAccepted:
+		return true
+	case WebReadReceiptStatusFailed:
+		return true
+	case WebReadReceiptStatusRejected:
+		return true
+	case WebReadReceiptStatusRunning:
+		return true
+	case WebReadReceiptStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WebReadRequestKind.
+const (
+	CodeRead   WebReadRequestKind = "code.read"
+	FileRead   WebReadRequestKind = "file.read"
+	FileTree   WebReadRequestKind = "file.tree"
+	GitChanges WebReadRequestKind = "git.changes"
+	GitDiff    WebReadRequestKind = "git.diff"
+	GitStatus  WebReadRequestKind = "git.status"
+)
+
+// Valid indicates whether the value is a known member of the WebReadRequestKind enum.
+func (e WebReadRequestKind) Valid() bool {
+	switch e {
+	case CodeRead:
+		return true
+	case FileRead:
+		return true
+	case FileTree:
+		return true
+	case GitChanges:
+		return true
+	case GitDiff:
+		return true
+	case GitStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WebReadRequestEnvelopeAlg.
+const (
+	WebReadRequestEnvelopeAlgV1X25519Hkdfsha256Aes256gcm WebReadRequestEnvelopeAlg = "v1-x25519-hkdfsha256-aes256gcm"
+)
+
+// Valid indicates whether the value is a known member of the WebReadRequestEnvelopeAlg enum.
+func (e WebReadRequestEnvelopeAlg) Valid() bool {
+	switch e {
+	case WebReadRequestEnvelopeAlgV1X25519Hkdfsha256Aes256gcm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WebReadResponseEnvelopeAlg.
+const (
+	WebReadResponseEnvelopeAlgV1X25519Hkdfsha256Aes256gcm WebReadResponseEnvelopeAlg = "v1-x25519-hkdfsha256-aes256gcm"
+)
+
+// Valid indicates whether the value is a known member of the WebReadResponseEnvelopeAlg enum.
+func (e WebReadResponseEnvelopeAlg) Valid() bool {
+	switch e {
+	case WebReadResponseEnvelopeAlgV1X25519Hkdfsha256Aes256gcm:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WebReadStatusStatus.
+const (
+	WebReadStatusStatusAccepted  WebReadStatusStatus = "accepted"
+	WebReadStatusStatusFailed    WebReadStatusStatus = "failed"
+	WebReadStatusStatusRejected  WebReadStatusStatus = "rejected"
+	WebReadStatusStatusRunning   WebReadStatusStatus = "running"
+	WebReadStatusStatusSucceeded WebReadStatusStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the WebReadStatusStatus enum.
+func (e WebReadStatusStatus) Valid() bool {
+	switch e {
+	case WebReadStatusStatusAccepted:
+		return true
+	case WebReadStatusStatusFailed:
+		return true
+	case WebReadStatusStatusRejected:
+		return true
+	case WebReadStatusStatusRunning:
+		return true
+	case WebReadStatusStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WebReadTransportAlgorithm.
+const (
+	WebReadTransportAlgorithmV1X25519Hkdfsha256Aes256gcm WebReadTransportAlgorithm = "v1-x25519-hkdfsha256-aes256gcm"
+)
+
+// Valid indicates whether the value is a known member of the WebReadTransportAlgorithm enum.
+func (e WebReadTransportAlgorithm) Valid() bool {
+	switch e {
+	case WebReadTransportAlgorithmV1X25519Hkdfsha256Aes256gcm:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UsageSummaryParamsDays.
 const (
 	N1  UsageSummaryParamsDays = 1
@@ -444,9 +573,11 @@ type CipherEvent struct {
 
 // Command defines model for Command.
 type Command struct {
-	Id               string  `json:"id"`
-	IdempotencyKey   string  `json:"idempotency_key"`
-	Kind             string  `json:"kind"`
+	Id             string `json:"id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Kind           string `json:"kind"`
+
+	// LeaseEpoch 0 仅用于受限 Web 只读请求；所有 Android 写控制命令必须大于 0 并通过 lease fencing。
 	LeaseEpoch       *int64  `json:"lease_epoch,omitempty"`
 	Status           string  `json:"status"`
 	TargetTerminalId *string `json:"target_terminal_id,omitempty"`
@@ -578,6 +709,13 @@ type DaemonHelloResponse struct {
 	MinProtocolVersion       int    `json:"min_protocol_version"`
 	ProtocolVersion          int    `json:"protocol_version"`
 	TerminalId               string `json:"terminal_id"`
+}
+
+// DaemonWebReadResponseRequest defines model for DaemonWebReadResponseRequest.
+type DaemonWebReadResponseRequest struct {
+	DeliverySeq     int64                   `json:"delivery_seq"`
+	Envelope        WebReadResponseEnvelope `json:"envelope"`
+	ProtocolVersion int                     `json:"protocol_version"`
 }
 
 // Delegation parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。
@@ -854,6 +992,78 @@ type UsageSummary struct {
 	UtcToday string `json:"utc_today"`
 }
 
+// WebReadReceipt defines model for WebReadReceipt.
+type WebReadReceipt struct {
+	Kind      string               `json:"kind"`
+	RequestId string               `json:"request_id"`
+	Status    WebReadReceiptStatus `json:"status"`
+}
+
+// WebReadReceiptStatus defines model for WebReadReceipt.Status.
+type WebReadReceiptStatus string
+
+// WebReadRequest defines model for WebReadRequest.
+type WebReadRequest struct {
+	Envelope  WebReadRequestEnvelope `json:"envelope"`
+	Kind      WebReadRequestKind     `json:"kind"`
+	RequestId string                 `json:"request_id"`
+}
+
+// WebReadRequestKind defines model for WebReadRequest.Kind.
+type WebReadRequestKind string
+
+// WebReadRequestEnvelope defines model for WebReadRequestEnvelope.
+type WebReadRequestEnvelope struct {
+	AadHash            string                    `json:"aad_hash"`
+	Alg                WebReadRequestEnvelopeAlg `json:"alg"`
+	Ciphertext         string                    `json:"ciphertext"`
+	EphemeralPublicKey string                    `json:"ephemeral_public_key"`
+	Nonce              string                    `json:"nonce"`
+	PayloadVersion     int                       `json:"payload_version"`
+}
+
+// WebReadRequestEnvelopeAlg defines model for WebReadRequestEnvelope.Alg.
+type WebReadRequestEnvelopeAlg string
+
+// WebReadResponseEnvelope defines model for WebReadResponseEnvelope.
+type WebReadResponseEnvelope struct {
+	AadHash        string                     `json:"aad_hash"`
+	Alg            WebReadResponseEnvelopeAlg `json:"alg"`
+	Ciphertext     string                     `json:"ciphertext"`
+	Nonce          string                     `json:"nonce"`
+	PayloadVersion int                        `json:"payload_version"`
+}
+
+// WebReadResponseEnvelopeAlg defines model for WebReadResponseEnvelope.Alg.
+type WebReadResponseEnvelopeAlg string
+
+// WebReadStatus defines model for WebReadStatus.
+type WebReadStatus struct {
+	Envelope  *WebReadResponseEnvelope `json:"envelope,omitempty"`
+	ErrorCode *string                  `json:"error_code,omitempty"`
+	Kind      string                   `json:"kind"`
+	RequestId string                   `json:"request_id"`
+	Status    WebReadStatusStatus      `json:"status"`
+}
+
+// WebReadStatusStatus defines model for WebReadStatus.Status.
+type WebReadStatusStatus string
+
+// WebReadTransport defines model for WebReadTransport.
+type WebReadTransport struct {
+	Algorithm WebReadTransportAlgorithm `json:"algorithm"`
+
+	// EncryptionPublicKey 配对 Terminal 的 X25519 公钥，不是内容密钥。
+	EncryptionPublicKey string `json:"encryption_public_key"`
+	TerminalId          string `json:"terminal_id"`
+
+	// WorkspaceId Session 关联的 opaque Workspace ID，不是本机路径。
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// WebReadTransportAlgorithm defines model for WebReadTransport.Algorithm.
+type WebReadTransportAlgorithm string
+
 // Workspace defines model for Workspace.
 type Workspace struct {
 	Branch     *string `json:"branch,omitempty"`
@@ -944,6 +1154,9 @@ type RegisterJSONRequestBody = RegisterRequest
 // AcknowledgeDaemonCommandJSONRequestBody defines body for AcknowledgeDaemonCommand for application/json ContentType.
 type AcknowledgeDaemonCommandJSONRequestBody = DaemonCommandAckRequest
 
+// StoreWebReadResponseJSONRequestBody defines body for StoreWebReadResponse for application/json ContentType.
+type StoreWebReadResponseJSONRequestBody = DaemonWebReadResponseRequest
+
 // ResolveDaemonCommandJSONRequestBody defines body for ResolveDaemonCommand for application/json ContentType.
 type ResolveDaemonCommandJSONRequestBody = DaemonCommandResultRequest
 
@@ -979,6 +1192,9 @@ type SubmitSessionCommandJSONRequestBody = SubmitCommandRequest
 
 // CreateSessionDelegationJSONRequestBody defines body for CreateSessionDelegation for application/json ContentType.
 type CreateSessionDelegationJSONRequestBody = CreateDelegationRequest
+
+// SubmitWebReadRequestJSONRequestBody defines body for SubmitWebReadRequest for application/json ContentType.
+type SubmitWebReadRequestJSONRequestBody = WebReadRequest
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
@@ -1156,6 +1372,9 @@ type ServerInterface interface {
 	// (POST /v1/daemon/commands/{id}/ack)
 	AcknowledgeDaemonCommand(c *gin.Context, id string)
 
+	// (POST /v1/daemon/commands/{id}/readonly-response)
+	StoreWebReadResponse(c *gin.Context, id string)
+
 	// (POST /v1/daemon/commands/{id}/result)
 	ResolveDaemonCommand(c *gin.Context, id string)
 
@@ -1224,6 +1443,15 @@ type ServerInterface interface {
 
 	// (POST /v1/sessions/{id}/lease)
 	AcquireSessionLease(c *gin.Context, id string)
+
+	// (POST /v1/sessions/{id}/readonly-requests)
+	SubmitWebReadRequest(c *gin.Context, id string)
+
+	// (GET /v1/sessions/{id}/readonly-requests/{requestID})
+	GetWebReadRequest(c *gin.Context, id string, requestID string)
+
+	// (GET /v1/sessions/{id}/readonly-transport)
+	GetWebReadTransport(c *gin.Context, id string)
 
 	// (GET /v1/sessions/{id}/snapshot)
 	GetSessionSnapshot(c *gin.Context, id string, params GetSessionSnapshotParams)
@@ -1510,6 +1738,31 @@ func (siw *ServerInterfaceWrapper) AcknowledgeDaemonCommand(c *gin.Context) {
 	}
 
 	siw.Handler.AcknowledgeDaemonCommand(c, id)
+}
+
+// StoreWebReadResponse operation middleware
+func (siw *ServerInterfaceWrapper) StoreWebReadResponse(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StoreWebReadResponse(c, id)
 }
 
 // ResolveDaemonCommand operation middleware
@@ -1966,6 +2219,90 @@ func (siw *ServerInterfaceWrapper) AcquireSessionLease(c *gin.Context) {
 	siw.Handler.AcquireSessionLease(c, id)
 }
 
+// SubmitWebReadRequest operation middleware
+func (siw *ServerInterfaceWrapper) SubmitWebReadRequest(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SubmitWebReadRequest(c, id)
+}
+
+// GetWebReadRequest operation middleware
+func (siw *ServerInterfaceWrapper) GetWebReadRequest(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "requestID" -------------
+	var requestID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "requestID", c.Param("requestID"), &requestID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter requestID: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetWebReadRequest(c, id, requestID)
+}
+
+// GetWebReadTransport operation middleware
+func (siw *ServerInterfaceWrapper) GetWebReadTransport(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetWebReadTransport(c, id)
+}
+
 // GetSessionSnapshot operation middleware
 func (siw *ServerInterfaceWrapper) GetSessionSnapshot(c *gin.Context) {
 
@@ -2125,6 +2462,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/sessions/:id/delegations", wrapper.CreateSessionDelegation)
 	router.POST(options.BaseURL+"/v1/delegations/:id/decision", wrapper.DecideDelegation)
 	router.POST(options.BaseURL+"/v1/sessions/:id/commands", wrapper.SubmitSessionCommand)
+	router.GET(options.BaseURL+"/v1/sessions/:id/readonly-transport", wrapper.GetWebReadTransport)
+	router.POST(options.BaseURL+"/v1/sessions/:id/readonly-requests", wrapper.SubmitWebReadRequest)
+	router.GET(options.BaseURL+"/v1/sessions/:id/readonly-requests/:requestID", wrapper.GetWebReadRequest)
 	router.GET(options.BaseURL+"/v1/commands/:id", wrapper.GetCommand)
 	router.POST(options.BaseURL+"/v1/attachments/chunks", wrapper.UploadAttachmentChunk)
 	router.POST(options.BaseURL+"/v1/attachments/:id/complete", wrapper.CompleteAttachment)
@@ -2135,5 +2475,6 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/ack", wrapper.AcknowledgeDaemonCommand)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/result", wrapper.ResolveDaemonCommand)
+	router.POST(options.BaseURL+"/v1/daemon/commands/:id/readonly-response", wrapper.StoreWebReadResponse)
 	router.POST(options.BaseURL+"/v1/daemon/events", wrapper.UploadDaemonEvent)
 }

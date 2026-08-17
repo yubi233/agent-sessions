@@ -47,6 +47,11 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.GET("/sessions", a.handleListSessions)
 		auth.GET("/audit", a.handleListAudit)
 		auth.GET("/sessions/:id/snapshot", a.handleSessionSnapshot)
+		// Web 只读 transport 是受限的 request/response 通道，不使用 RequireWrite；领域层仍会
+		// 限定 web 角色、kind、Session -> Workspace -> Terminal 与密文 envelope。
+		auth.GET("/sessions/:id/readonly-transport", a.handleWebReadTransport)
+		auth.POST("/sessions/:id/readonly-requests", a.handleSubmitWebReadRequest)
+		auth.GET("/sessions/:id/readonly-requests/:requestID", a.handleGetWebReadRequest)
 		// Delegation 图可由同账号所有已配对端只读；创建和决策仍只允许 Android 写控制端。
 		auth.GET("/sessions/:id/delegations", a.handleListDelegations)
 		// 创建 Workspace/Session 会改变账号元数据，和会话命令一样只允许 Android 控制端发起。
@@ -87,6 +92,7 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.GET("/commands/stream", a.handleDaemonCommandSSE(logger))
 		daemon.POST("/commands/:id/ack", a.handleDaemonCommandAck)
 		daemon.POST("/commands/:id/result", a.handleDaemonCommandResult)
+		daemon.POST("/commands/:id/readonly-response", a.handleDaemonWebReadResponse)
 		daemon.POST("/events", a.handleDaemonEventUpload)
 
 		// Usage（ADR-010）：Terminal 上传白名单计数，账号只读聚合摘要。
@@ -460,6 +466,67 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 		})
 	}
 	writeOK(c, sessionSnapshotView{Session: newSessionView(session), Events: views})
+}
+
+// handleWebReadTransport 返回当前会话所绑定 Terminal 的配对公钥。该公钥不是内容密钥；浏览器
+// 仅用它为本次请求生成临时 ECDH secret，Relay 不会看到路径、文件或 diff 明文。
+func (a *API) handleWebReadTransport(c *gin.Context) {
+	info, err := a.Sessions.WebReadTransportForSession(c.Request.Context(), subject(c).AccountID, subject(c).Role, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, gin.H{"terminal_id": info.TerminalID, "workspace_id": info.WorkspaceID, "encryption_public_key": info.EncryptionPublicKey, "algorithm": info.Algorithm})
+}
+
+type webReadRequestBody struct {
+	RequestID string          `json:"request_id"`
+	Kind      string          `json:"kind"`
+	Envelope  json.RawMessage `json:"envelope"`
+}
+
+// handleSubmitWebReadRequest 只转发 opaque envelope。这里不解密、不打印 body，也不接受浏览器
+// 提供 terminal/workspace/lease，避免只读页面演化成写控制入口。
+func (a *API) handleSubmitWebReadRequest(c *gin.Context) {
+	var req webReadRequestBody
+	if err := c.ShouldBindJSON(&req); err != nil || !json.Valid(req.Envelope) {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed web read request"))
+		return
+	}
+	command, err := a.Sessions.SubmitWebReadCommand(c.Request.Context(), domain.WebReadCommandInput{
+		AccountID: subject(c).AccountID, Role: subject(c).Role, SessionID: c.Param("id"),
+		RequestID: req.RequestID, Kind: req.Kind, EnvelopeJSON: string(req.Envelope),
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	// Web 只读命令和 Android 写命令共用 Terminal 专用 delivery 表。提交事务已保证断线后能从
+	// SQLite 重放；这里仅向已连接的 Daemon 推送实时通知，避免它在长连接期间错过新请求。
+	if command.TargetTerminalID != "" {
+		if delivery, deliveryErr := a.Sessions.DaemonDeliveryForCommand(c.Request.Context(), command.ID); deliveryErr == nil {
+			a.DaemonDeliveries.Publish(command.TargetTerminalID, delivery)
+		}
+	}
+	c.JSON(http.StatusAccepted, gin.H{"request_id": command.ID, "kind": command.Kind, "status": command.Status})
+}
+
+// handleGetWebReadRequest 返回 command 状态与完成后的 opaque response envelope；响应不会混入
+// Session snapshot，防止既有 Web SSE 消费路径意外保存内容。
+func (a *API) handleGetWebReadRequest(c *gin.Context) {
+	result, err := a.Sessions.GetWebReadCommand(c.Request.Context(), subject(c).AccountID, subject(c).Role, c.Param("id"), c.Param("requestID"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	view := gin.H{"request_id": result.RequestID, "kind": result.Kind, "status": result.Status}
+	if result.ErrorCode != "" {
+		view["error_code"] = result.ErrorCode
+	}
+	if result.ResponseEnvelopeJSON != "" {
+		view["envelope"] = json.RawMessage(result.ResponseEnvelopeJSON)
+	}
+	writeOK(c, view)
 }
 
 type createSessionRequest struct {

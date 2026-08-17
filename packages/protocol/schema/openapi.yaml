@@ -674,6 +674,94 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+  /v1/sessions/{id}/readonly-transport:
+    get:
+      operationId: getWebReadTransport
+      description: 仅 web 只读角色可获取当前 Session 绑定 Terminal 的配对公钥，用于一次性 X25519 请求密封。Relay 不返回内容密钥、工作区路径或文件元数据。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: current terminal public transport metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebReadTransport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/sessions/{id}/readonly-requests:
+    post:
+      operationId: submitWebReadRequest
+      description: 仅 web 角色可提交的一次性加密文件/Git 只读请求。Relay 根据 Session -> Workspace -> Terminal 推导目标，仅保存 opaque envelope，不能读取路径、snapshot token 或内容。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebReadRequest"
+      responses:
+        "202":
+          description: accepted web read request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebReadReceipt"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/sessions/{id}/readonly-requests/{requestID}:
+    get:
+      operationId: getWebReadRequest
+      description: 仅原账号 web 角色读取受限请求状态；成功后才返回浏览器临时私钥可解的 response envelope。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: requestID
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: web read state and optional opaque response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebReadStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /v1/commands/{id}:
     get:
       operationId: getCommand
@@ -944,6 +1032,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DaemonCommandReceipt"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/daemon/commands/{id}/readonly-response:
+    post:
+      operationId: storeWebReadResponse
+      description: 目标 Terminal 回写 browser 临时公钥可解的文件/Git 结果 envelope。Relay 不把该内容写入 session event 或 SSE。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonWebReadResponseRequest"
+      responses:
+        "200":
+          description: opaque web read response stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonCommandReceipt"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1494,6 +1615,99 @@ components:
           type: string
         ciphertext:
           type: object
+    WebReadTransport:
+      type: object
+      additionalProperties: false
+      required: [terminal_id, workspace_id, encryption_public_key, algorithm]
+      properties:
+        terminal_id:
+          type: string
+        workspace_id:
+          type: string
+          description: Session 关联的 opaque Workspace ID，不是本机路径。
+        encryption_public_key:
+          type: string
+          description: 配对 Terminal 的 X25519 公钥，不是内容密钥。
+        algorithm:
+          type: string
+          enum: [v1-x25519-hkdfsha256-aes256gcm]
+    WebReadRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, kind, envelope]
+      properties:
+        request_id:
+          type: string
+          pattern: '^webread_[a-z0-9_-]{16,120}$'
+        kind:
+          type: string
+          enum: [file.tree, file.read, code.read, git.status, git.changes, git.diff]
+        envelope:
+          $ref: "#/components/schemas/WebReadRequestEnvelope"
+    WebReadRequestEnvelope:
+      type: object
+      additionalProperties: false
+      required: [alg, payload_version, ephemeral_public_key, nonce, ciphertext, aad_hash]
+      properties:
+        alg:
+          type: string
+          enum: [v1-x25519-hkdfsha256-aes256gcm]
+        payload_version:
+          type: integer
+          minimum: 1
+        ephemeral_public_key:
+          type: string
+        nonce:
+          type: string
+        ciphertext:
+          type: string
+        aad_hash:
+          type: string
+    WebReadReceipt:
+      type: object
+      additionalProperties: false
+      required: [request_id, kind, status]
+      properties:
+        request_id:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+          enum: [accepted, running, succeeded, failed, rejected]
+    WebReadStatus:
+      type: object
+      additionalProperties: false
+      required: [request_id, kind, status]
+      properties:
+        request_id:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+          enum: [accepted, running, succeeded, failed, rejected]
+        error_code:
+          type: string
+        envelope:
+          $ref: "#/components/schemas/WebReadResponseEnvelope"
+    WebReadResponseEnvelope:
+      type: object
+      additionalProperties: false
+      required: [alg, payload_version, nonce, ciphertext, aad_hash]
+      properties:
+        alg:
+          type: string
+          enum: [v1-x25519-hkdfsha256-aes256gcm]
+        payload_version:
+          type: integer
+          minimum: 1
+        nonce:
+          type: string
+        ciphertext:
+          type: string
+        aad_hash:
+          type: string
     Command:
       type: object
       required: [id, kind, status, idempotency_key]
@@ -1509,7 +1723,8 @@ components:
         lease_epoch:
           type: integer
           format: int64
-          minimum: 1
+          minimum: 0
+          description: 0 仅用于受限 Web 只读请求；所有 Android 写控制命令必须大于 0 并通过 lease fencing。
         target_terminal_id:
           type: string
     DaemonHelloRequest:
@@ -1657,6 +1872,20 @@ components:
           type: string
         error_code:
           type: string
+    DaemonWebReadResponseRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, delivery_seq, envelope]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        delivery_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        envelope:
+          $ref: "#/components/schemas/WebReadResponseEnvelope"
     DaemonEventUploadRequest:
       type: object
       additionalProperties: false

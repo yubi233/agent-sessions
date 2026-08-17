@@ -117,6 +117,13 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 		return fmt.Errorf("加载生产 event E2EE 配置: %w", err)
 	}
 	defer clearEventDEK()
+	webRead, err := daemon.LoadWebReadTransportFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("加载 Web 只读 transport 配置: %w", err)
+	}
+	if webRead != nil {
+		defer webRead.Destroy()
+	}
 	if useFixtureAdapter {
 		adapters = map[string]adapter.Adapter{"mock": adapter.NewMockAdapter()}
 	}
@@ -130,6 +137,12 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 		loop.Capabilities = []string{"start", "send", "resume", "abort", "file_read", "git_read"}
 	} else {
 		loop.Capabilities = []string{"start", "send", "resume", "abort"}
+	}
+	if webRead != nil {
+		// 只在私钥实际可用时声明 browser read capability；缺失配置时 Web endpoint 必须保持
+		// fail-closed，不能因为普通 file_read capability 误认为可加密响应。
+		loop.Capabilities = append(loop.Capabilities, "web_read_transport")
+		loop.WebRead = webRead
 	}
 	logger.Info("daemon relay loop starting", "fixture_adapter", useFixtureAdapter, "relay_configured", relayBase != "")
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

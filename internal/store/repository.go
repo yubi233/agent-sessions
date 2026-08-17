@@ -98,6 +98,8 @@ type Repository interface {
 	CommandByID(ctx context.Context, id string) (CommandRow, error)
 	CommandByScopeKey(ctx context.Context, scopeHash, idempotencyKey string) (CommandRow, error)
 	UpdateCommandStatus(ctx context.Context, id, status string) error
+	// SetCommandReadResponse 只保存 Web 临时公钥可解的 response envelope；调用方不得传入文件、代码或 diff 明文。
+	SetCommandReadResponse(ctx context.Context, id, envelopeJSON string) error
 	ListCommands(ctx context.Context, sessionID string) ([]CommandRow, error)
 
 	// Daemon 专用投递记录。账号级 outbox 不承担终端命令流，避免客户端 SSE 与 Daemon SSE 混用。
@@ -319,17 +321,18 @@ type SessionEventRow struct {
 
 // CommandRow 是 commands 表的行投影。
 type CommandRow struct {
-	ID               string
-	AccountID        string
-	SessionID        string
-	Kind             string
-	Status           string
-	ScopeHash        string
-	IdempotencyKey   string
-	LeaseEpoch       int64
-	TargetInstanceID string
-	TargetTerminalID string
-	CiphertextJSON   string
+	ID                       string
+	AccountID                string
+	SessionID                string
+	Kind                     string
+	Status                   string
+	ScopeHash                string
+	IdempotencyKey           string
+	LeaseEpoch               int64
+	TargetInstanceID         string
+	TargetTerminalID         string
+	CiphertextJSON           string
+	ReadResponseEnvelopeJSON string
 }
 
 // DaemonDeliveryRow 是一个仅属于目标 Terminal 的至少一次投递记录。

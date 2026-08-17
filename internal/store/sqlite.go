@@ -679,10 +679,10 @@ func (r *sqliteRepo) CreateCommand(ctx context.Context, c CommandRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO commands(
 			id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
-			target_instance_id,target_terminal_id,ciphertext_json
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			target_instance_id,target_terminal_id,ciphertext_json,readonly_response_envelope_json
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.AccountID, c.SessionID, c.Kind, c.Status, c.ScopeHash, c.IdempotencyKey, c.LeaseEpoch,
-		c.TargetInstanceID, c.TargetTerminalID, c.CiphertextJSON)
+		c.TargetInstanceID, c.TargetTerminalID, c.CiphertextJSON, c.ReadResponseEnvelopeJSON)
 	return err
 }
 
@@ -690,7 +690,7 @@ func scanCommand(row *sql.Row) (CommandRow, error) {
 	var c CommandRow
 	if err := row.Scan(
 		&c.ID, &c.AccountID, &c.SessionID, &c.Kind, &c.Status, &c.ScopeHash, &c.IdempotencyKey, &c.LeaseEpoch,
-		&c.TargetInstanceID, &c.TargetTerminalID, &c.CiphertextJSON,
+		&c.TargetInstanceID, &c.TargetTerminalID, &c.CiphertextJSON, &c.ReadResponseEnvelopeJSON,
 	); err != nil {
 		return CommandRow{}, err
 	}
@@ -700,14 +700,14 @@ func scanCommand(row *sql.Row) (CommandRow, error) {
 func (r *sqliteRepo) CommandByID(ctx context.Context, id string) (CommandRow, error) {
 	return scanCommand(r.db.QueryRowContext(ctx,
 		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
-			target_instance_id,target_terminal_id,ciphertext_json
+			target_instance_id,target_terminal_id,ciphertext_json,readonly_response_envelope_json
 		 FROM commands WHERE id=?`, id))
 }
 
 func (r *sqliteRepo) CommandByScopeKey(ctx context.Context, scopeHash, idempotencyKey string) (CommandRow, error) {
 	return scanCommand(r.db.QueryRowContext(ctx,
 		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
-			target_instance_id,target_terminal_id,ciphertext_json
+			target_instance_id,target_terminal_id,ciphertext_json,readonly_response_envelope_json
 		 FROM commands WHERE scope_hash=? AND idempotency_key=?`, scopeHash, idempotencyKey))
 }
 
@@ -716,10 +716,15 @@ func (r *sqliteRepo) UpdateCommandStatus(ctx context.Context, id, status string)
 	return err
 }
 
+func (r *sqliteRepo) SetCommandReadResponse(ctx context.Context, id, envelopeJSON string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE commands SET readonly_response_envelope_json=? WHERE id=?`, envelopeJSON, id)
+	return err
+}
+
 func (r *sqliteRepo) ListCommands(ctx context.Context, sessionID string) ([]CommandRow, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id,account_id,session_id,kind,status,scope_hash,idempotency_key,lease_epoch,
-			target_instance_id,target_terminal_id,ciphertext_json
+			target_instance_id,target_terminal_id,ciphertext_json,readonly_response_envelope_json
 		 FROM commands WHERE session_id=? ORDER BY id`, sessionID)
 	if err != nil {
 		return nil, err
@@ -730,7 +735,7 @@ func (r *sqliteRepo) ListCommands(ctx context.Context, sessionID string) ([]Comm
 		var c CommandRow
 		if err := rows.Scan(
 			&c.ID, &c.AccountID, &c.SessionID, &c.Kind, &c.Status, &c.ScopeHash, &c.IdempotencyKey, &c.LeaseEpoch,
-			&c.TargetInstanceID, &c.TargetTerminalID, &c.CiphertextJSON,
+			&c.TargetInstanceID, &c.TargetTerminalID, &c.CiphertextJSON, &c.ReadResponseEnvelopeJSON,
 		); err != nil {
 			return nil, err
 		}

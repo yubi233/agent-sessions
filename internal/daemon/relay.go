@@ -103,6 +103,16 @@ func (c *RelayClient) Resolve(ctx context.Context, commandID string, deliverySeq
 	}, &struct{}{})
 }
 
+// UploadWebReadResponse 把只属于浏览器临时公钥的响应 envelope 回写 Relay。Relay 只保存密文和
+// command 状态；文件、代码、Git 状态或 diff 的明文不会进入该 HTTP body 之外的任何 Relay 逻辑。
+func (c *RelayClient) UploadWebReadResponse(ctx context.Context, commandID string, deliverySeq int64, envelope WebReadResponseEnvelope) error {
+	return c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/readonly-response", map[string]any{
+		"protocol_version": daemonProtocolVersion,
+		"delivery_seq":     deliverySeq,
+		"envelope":         envelope,
+	}, &struct{}{})
+}
+
 func (c *RelayClient) UploadEvent(ctx context.Context, event RelayEvent) error {
 	var envelope json.RawMessage = json.RawMessage(event.EnvelopeJSON)
 	return c.postJSON(ctx, "/v1/daemon/events", map[string]any{
@@ -260,11 +270,14 @@ func (FixtureEventEncoder) Encode(sessionID string, event adapter.Event) (string
 // RelayLoop 把持久化接收、ack、Adapter 执行、终态和事件 outbox 串成最小可靠循环。
 // 它刻意不读取/输出 Provider 正文，且任何网络失败都会留下可安全重试的本机记录。
 type RelayLoop struct {
-	Store         *Store
-	Client        *RelayClient
-	Runner        *SessionRunner
-	ReadOnly      *ReadOnlyDispatcher
-	Encoder       EventEncoder
+	Store    *Store
+	Client   *RelayClient
+	Runner   *SessionRunner
+	ReadOnly *ReadOnlyDispatcher
+	Encoder  EventEncoder
+	// WebRead 只用于 browser -> Daemon -> browser 的临时密钥只读响应；它与 Provider event
+	// encoder 分离，不能把浏览器文件结果塞进账号事件或复用共享 DEK。
+	WebRead       *WebReadTransport
 	DaemonVersion string
 	Hostname      string
 	Platform      string
@@ -503,6 +516,12 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 				// 手工构造 RelayLoop 的旧调用方可能尚未注入 dispatcher。缺失本机安全边界时
 				// 必须 fail-closed，而不能 panic 或退回到未受限的文件/Git 执行路径。
 				err = newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("read-only dispatcher unavailable"))
+			} else if isWebReadTransportRequest(command.PayloadJSON) {
+				var envelope WebReadResponseEnvelope
+				envelope, err = l.ReadOnly.ExecuteWeb(ctx, command, l.WebRead)
+				if err == nil {
+					err = l.Client.UploadWebReadResponse(ctx, command.CommandID, command.DeliverySeq, envelope)
+				}
 			} else {
 				event, err = l.ReadOnly.Execute(ctx, command)
 				if err == nil {
@@ -531,6 +550,15 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 		}
 	}
 	return l.flushEvents(ctx)
+}
+
+// isWebReadTransportRequest 只按 envelope 的公开算法标识选择 Web 分支；真正的字段、AAD 和
+// 密文认证仍由 ExecuteWeb 完成。无法识别的数据按既有 P2 fixture 路径处理，不产生明文降级。
+func isWebReadTransportRequest(payload string) bool {
+	var marker struct {
+		Alg string `json:"alg"`
+	}
+	return json.Unmarshal([]byte(payload), &marker) == nil && marker.Alg == webReadAlgorithm
 }
 
 // enqueueCommandEvent 把只读结果送入同一条 canonical event outbox。没有 EventEncoder 时不能把

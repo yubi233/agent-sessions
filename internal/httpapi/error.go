@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yubi233/agent-sessions/internal/domain"
+	"github.com/yubi233/agent-sessions/internal/store"
 	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
@@ -43,6 +44,8 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusForbidden, protocol.NewError(protocol.ErrReadOnlyDevice, "read-only device")
 	case errors.Is(err, domain.ErrTerminalRequired):
 		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "terminal device required")
+	case errors.Is(err, domain.ErrTerminalOffline):
+		return http.StatusConflict, protocol.NewError(protocol.ErrTerminalOffline, "terminal offline or does not support requested capability")
 	case errors.Is(err, domain.ErrProtocolUpgradeRequired):
 		return http.StatusUpgradeRequired, protocol.NewError(protocol.ErrUpgradeRequired, "daemon protocol upgrade required")
 	case errors.Is(err, domain.ErrProtocolUnsupported):
@@ -71,6 +74,8 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "delegation not found")
 	case errors.Is(err, domain.ErrSessionNotFound), errors.Is(err, domain.ErrWorkspaceNotFound):
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "session not found")
+	case errors.Is(err, store.ErrNotFound):
+		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "resource not found")
 	case errors.Is(err, domain.ErrAttachmentNotFound):
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "attachment not found")
 	case errors.Is(err, domain.ErrAttachmentConflict), errors.Is(err, domain.ErrAttachmentAlreadyClosed):

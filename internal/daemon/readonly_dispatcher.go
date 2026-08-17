@@ -69,26 +69,65 @@ func isReadOnlyCommandKind(kind string) bool {
 // Execute 只执行已登记的 file/code/Git 只读 kind。真实密文没有 fixture_payload 时拒绝执行，
 // 防止 Daemon 把未解密或未经用户确认的请求误当成本机文件读取。
 func (d *ReadOnlyDispatcher) Execute(ctx context.Context, command RelayCommand) (adapter.Event, error) {
-	if d == nil || d.store == nil {
-		return adapter.Event{}, newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("read-only dispatcher unavailable"))
-	}
-	if !isReadOnlyCommandKind(command.Kind) {
-		return adapter.Event{}, newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("unsupported read-only command"))
-	}
-	if strings.TrimSpace(command.SessionID) == "" || strings.TrimSpace(command.WorkspaceID) == "" {
-		return adapter.Event{}, newCommandExecutionError(protocol.ErrInvalidRequest, errors.New("missing session or workspace metadata"))
-	}
-	localTerminalID, err := d.store.Get("terminal_id")
-	if err != nil || localTerminalID == "" || localTerminalID != command.TargetTerminalID {
-		return adapter.Event{}, newCommandExecutionError(protocol.ErrScopeDenied, errors.New("terminal target mismatch"))
-	}
-	workspace, err := d.store.ConfirmedWorkspaceByID(command.WorkspaceID)
-	if err != nil {
-		return adapter.Event{}, newCommandExecutionError(readOnlyErrorCode(err), err)
-	}
 	request, err := parseFixtureReadOnlyRequest(command.PayloadJSON)
 	if err != nil {
 		return adapter.Event{}, newCommandExecutionError(protocol.ErrCapabilityUnsupported, err)
+	}
+	result, err := d.executeRequest(ctx, command, request)
+	if err != nil {
+		return adapter.Event{}, err
+	}
+	return adapter.Event{
+		Type: adapter.EventToolResult,
+		Seq:  command.DeliverySeq,
+		Payload: map[string]any{
+			"command_kind": command.Kind,
+			"workspace_id": command.WorkspaceID,
+			"result":       result,
+		},
+	}, nil
+}
+
+// ExecuteWeb 解开 Web 临时密钥请求并回封仅属于该浏览器页面的结果。它不复用 P2 fixture
+// payload，也不会进入 canonical event outbox，防止 Relay 或账号 SSE 获得内容明文。
+func (d *ReadOnlyDispatcher) ExecuteWeb(ctx context.Context, command RelayCommand, transport *WebReadTransport) (WebReadResponseEnvelope, error) {
+	if transport == nil {
+		return WebReadResponseEnvelope{}, newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("web read transport unavailable"))
+	}
+	request, clientPublic, err := transport.OpenRequest(command)
+	if err != nil {
+		return WebReadResponseEnvelope{}, newCommandExecutionError(protocol.ErrInvalidRequest, err)
+	}
+	result, err := d.executeRequest(ctx, command, request)
+	if err != nil {
+		return WebReadResponseEnvelope{}, err
+	}
+	envelope, err := transport.SealResponse(command, clientPublic, result)
+	if err != nil {
+		return WebReadResponseEnvelope{}, newCommandExecutionError(protocol.ErrDaemonExecutionFailed, err)
+	}
+	return envelope, nil
+}
+
+// executeRequest 汇聚 fixture 与真实 Web transport 共用的本机 Workspace 安全边界。传入的 request
+// 必须已经在各自的加密边界完成验证，绝不能由 Relay metadata 或绝对路径兜底。
+func (d *ReadOnlyDispatcher) executeRequest(ctx context.Context, command RelayCommand, request WebReadRequest) (any, error) {
+	if d == nil || d.store == nil {
+		return nil, newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("read-only dispatcher unavailable"))
+	}
+	if !isReadOnlyCommandKind(command.Kind) {
+		return nil, newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("unsupported read-only command"))
+	}
+	if strings.TrimSpace(command.SessionID) == "" || strings.TrimSpace(command.WorkspaceID) == "" {
+		return nil, newCommandExecutionError(protocol.ErrInvalidRequest, errors.New("missing session or workspace metadata"))
+	}
+	localTerminalID, err := d.store.Get("terminal_id")
+	if err != nil || localTerminalID == "" || localTerminalID != command.TargetTerminalID {
+		return nil, newCommandExecutionError(protocol.ErrScopeDenied, errors.New("terminal target mismatch"))
+	}
+	workspace, err := d.store.ConfirmedWorkspaceByID(command.WorkspaceID)
+	if err != nil {
+		return nil, newCommandExecutionError(readOnlyErrorCode(err), err)
 	}
 	reader := NewWorkspaceReader(workspace.Root, d.gitBin)
 
@@ -102,7 +141,7 @@ func (d *ReadOnlyDispatcher) Execute(ctx context.Context, command RelayCommand) 
 		result, err = reader.List(path)
 	case "file.read", "code.read":
 		if request.Path == "" {
-			return adapter.Event{}, newCommandExecutionError(protocol.ErrInvalidRequest, errors.New("file path missing"))
+			return nil, newCommandExecutionError(protocol.ErrInvalidRequest, errors.New("file path missing"))
 		}
 		var code CodeRead
 		code, err = reader.ReadCode(request.Path)
@@ -121,7 +160,7 @@ func (d *ReadOnlyDispatcher) Execute(ctx context.Context, command RelayCommand) 
 		}
 	case "git.diff":
 		if request.Path == "" || request.SnapshotToken == "" {
-			return adapter.Event{}, newCommandExecutionError(protocol.ErrInvalidRequest, errors.New("diff path or snapshot token missing"))
+			return nil, newCommandExecutionError(protocol.ErrInvalidRequest, errors.New("diff path or snapshot token missing"))
 		}
 		limit := request.Limit
 		if limit == 0 {
@@ -130,39 +169,24 @@ func (d *ReadOnlyDispatcher) Execute(ctx context.Context, command RelayCommand) 
 		result, err = reader.GitDiffPage(ctx, request.Path, request.SnapshotToken, request.Offset, limit)
 	}
 	if err != nil {
-		return adapter.Event{}, newCommandExecutionError(readOnlyErrorCode(err), err)
+		return nil, newCommandExecutionError(readOnlyErrorCode(err), err)
 	}
-	return adapter.Event{
-		Type: adapter.EventToolResult,
-		Seq:  command.DeliverySeq,
-		Payload: map[string]any{
-			"command_kind": command.Kind,
-			"workspace_id": command.WorkspaceID,
-			"result":       result,
-		},
-	}, nil
+	return result, nil
 }
 
-type fixtureReadOnlyRequest struct {
-	Path          string
-	SnapshotToken string
-	Offset        int
-	Limit         int
-}
-
-func parseFixtureReadOnlyRequest(raw string) (fixtureReadOnlyRequest, error) {
+func parseFixtureReadOnlyRequest(raw string) (WebReadRequest, error) {
 	envelope, err := parseEnvelope(raw)
 	if err != nil {
-		return fixtureReadOnlyRequest{}, err
+		return WebReadRequest{}, err
 	}
 	if envelope.Ciphertext == nil || envelope.Ciphertext.FixturePayload == nil {
-		return fixtureReadOnlyRequest{}, errors.New("fixture payload missing for read-only command")
+		return WebReadRequest{}, errors.New("fixture payload missing for read-only command")
 	}
 	payload := envelope.Ciphertext.FixturePayload
 	if payload.Offset < 0 || payload.Limit < 0 || payload.Limit > 500 {
-		return fixtureReadOnlyRequest{}, errors.New("invalid read-only pagination")
+		return WebReadRequest{}, errors.New("invalid read-only pagination")
 	}
-	return fixtureReadOnlyRequest{
+	return WebReadRequest{
 		Path:          strings.TrimSpace(payload.Path),
 		SnapshotToken: strings.TrimSpace(payload.SnapshotToken),
 		Offset:        payload.Offset,

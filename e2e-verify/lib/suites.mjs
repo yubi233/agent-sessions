@@ -4,6 +4,7 @@ import { p0Health } from "../suites/p0-health.mjs";
 import { p1DesignSystem } from "../suites/p1-design-system.mjs";
 import { p1WebReadonly } from "../suites/p1-web-readonly.mjs";
 import { p4AdminReadonly } from "../suites/p4-admin-readonly.mjs";
+import { p4WebReadTransport } from "../suites/p4-web-read-transport.mjs";
 import { p4WebReadonly } from "../suites/p4-web-readonly.mjs";
 import { p5OpencodeCapabilities } from "../suites/p5-opencode-capabilities.mjs";
 
@@ -14,5 +15,6 @@ export const registry = [
   p1WebReadonly,
   p4AdminReadonly,
   p4WebReadonly,
+  p4WebReadTransport,
   p5OpencodeCapabilities,
 ];

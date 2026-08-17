@@ -264,8 +264,12 @@ func (s *DaemonService) Acknowledge(ctx context.Context, accountID, deviceID, ro
 				return nil
 			}
 		case "started":
-			if err := validateCommandFence(ctx, tx, cmd); err != nil {
-				return err
+			// browser 只读请求没有 Android lease；只有 lease_epoch=0 且固定 kind 的命令可走
+			// 该分支，其他命令仍必须经过既有 owner/instance fencing。
+			if !isWebReadCommand(cmd) {
+				if err := validateCommandFence(ctx, tx, cmd); err != nil {
+					return err
+				}
 			}
 			if cmd.Status == CommandAccepted {
 				if err := tx.UpdateCommandStatus(ctx, cmd.ID, CommandRunning); err != nil {
@@ -317,8 +321,10 @@ func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, 
 			result = daemonReceipt(cmd, delivery)
 			return nil
 		}
-		if err := validateCommandFence(ctx, tx, cmd); err != nil {
-			return err
+		if !isWebReadCommand(cmd) {
+			if err := validateCommandFence(ctx, tx, cmd); err != nil {
+				return err
+			}
 		}
 		if cmd.Status != CommandRunning && cmd.Status != CommandAccepted {
 			return ErrDaemonCommandState
@@ -335,6 +341,56 @@ func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, 
 		}
 		if err := tx.AppendAudit(ctx, cmd.AccountID, "daemon.command_resolved", `{"command_id":"`+cmd.ID+`","status":"`+status+`"}`); err != nil {
 			return err
+		}
+		result = daemonReceipt(cmd, delivery)
+		return nil
+	})
+	if err != nil {
+		return DaemonCommandReceipt{}, err
+	}
+	return result, nil
+}
+
+// StoreWebReadResponse 保存 Daemon 对浏览器临时公钥回封的结果。该 endpoint 不接受普通 event，
+// 因此文件、代码和 diff 不会流入 account SSE 或 session_events；Relay 只保留 opaque envelope。
+func (s *DaemonService) StoreWebReadResponse(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, envelopeJSON string) (DaemonCommandReceipt, error) {
+	if err := validateDaemonProtocol(protocolVersion); err != nil {
+		return DaemonCommandReceipt{}, err
+	}
+	if deliverySeq <= 0 || len(envelopeJSON) == 0 || len(envelopeJSON) > maxWebReadEnvelopeBytes || !validWebReadResponseEnvelope(envelopeJSON) {
+		return DaemonCommandReceipt{}, protocol.NewError(protocol.ErrInvalidRequest, "invalid web read response envelope")
+	}
+	terminal, err := s.TerminalForDevice(ctx, accountID, deviceID, role)
+	if err != nil {
+		return DaemonCommandReceipt{}, err
+	}
+	var result DaemonCommandReceipt
+	err = s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		cmd, delivery, err := daemonCommandForTerminal(ctx, tx, terminal, commandID, deliverySeq)
+		if err != nil {
+			return err
+		}
+		if !isWebReadCommand(cmd) {
+			return ErrScopeDenied
+		}
+		// 只有 Terminal 已确认开始处理的 delivery 才能回填响应。否则任意持有 Terminal token 的
+		// 调用方都可能抢在本机 fence/解密前写入伪造 envelope，破坏 command 状态机。
+		if delivery.AckKind != "started" {
+			return ErrDaemonCommandState
+		}
+		if cmd.ReadResponseEnvelopeJSON != "" && cmd.ReadResponseEnvelopeJSON != envelopeJSON {
+			return ErrDaemonCommandState
+		}
+		if cmd.Status != CommandRunning && cmd.Status != CommandSucceeded {
+			return ErrDaemonCommandState
+		}
+		if cmd.Status == CommandSucceeded && cmd.ReadResponseEnvelopeJSON == "" {
+			return ErrDaemonCommandState
+		}
+		if cmd.ReadResponseEnvelopeJSON == "" {
+			if err := tx.SetCommandReadResponse(ctx, cmd.ID, envelopeJSON); err != nil {
+				return err
+			}
 		}
 		result = daemonReceipt(cmd, delivery)
 		return nil
@@ -522,6 +578,22 @@ func validDaemonResultStatus(value string) bool {
 		return true
 	}
 	return false
+}
+
+func validWebReadResponseEnvelope(raw string) bool {
+	if !validWebReadEnvelopeObject(raw, "alg", "payload_version", "nonce", "ciphertext", "aad_hash") {
+		return false
+	}
+	var envelope struct {
+		Alg            string `json:"alg"`
+		PayloadVersion int    `json:"payload_version"`
+		Nonce          string `json:"nonce"`
+		Ciphertext     string `json:"ciphertext"`
+		AADHash        string `json:"aad_hash"`
+	}
+	return json.Unmarshal([]byte(raw), &envelope) == nil &&
+		envelope.Alg == WebReadEnvelopeAlgorithm && envelope.PayloadVersion == 1 &&
+		validWebReadCipherFields(envelope.Nonce, envelope.Ciphertext, envelope.AADHash)
 }
 
 func validDaemonEventType(value string) bool {

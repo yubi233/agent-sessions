@@ -287,6 +287,8 @@ var migrations = []string{
 		SELECT session_id, event_seq FROM session_events ORDER BY session_id, event_seq;`,
 	`CREATE INDEX IF NOT EXISTS account_event_log_session_cursor_idx
 		ON account_event_log(session_id, cursor);`,
+	// P4-D Web 只读响应只保存浏览器临时公钥可解的 envelope；不能为调试便利新增明文缓存。
+	`ALTER TABLE commands ADD COLUMN readonly_response_envelope_json TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

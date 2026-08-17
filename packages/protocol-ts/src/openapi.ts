@@ -457,6 +457,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}/readonly-transport": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 仅 web 只读角色可获取当前 Session 绑定 Terminal 的配对公钥，用于一次性 X25519 请求密封。Relay 不返回内容密钥、工作区路径或文件元数据。 */
+        get: operations["getWebReadTransport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/readonly-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅 web 角色可提交的一次性加密文件/Git 只读请求。Relay 根据 Session -> Workspace -> Terminal 推导目标，仅保存 opaque envelope，不能读取路径、snapshot token 或内容。 */
+        post: operations["submitWebReadRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/readonly-requests/{requestID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 仅原账号 web 角色读取受限请求状态；成功后才返回浏览器临时私钥可解的 response envelope。 */
+        get: operations["getWebReadRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/commands/{id}": {
         parameters: {
             query?: never;
@@ -619,6 +670,23 @@ export interface paths {
         put?: never;
         /** @description 目标 terminal 回写命令终态；详细结果必须通过独立、幂等的密文 canonical event 上传，不回显 Provider 正文。 */
         post: operations["resolveDaemonCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/commands/{id}/readonly-response": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 目标 Terminal 回写 browser 临时公钥可解的文件/Git 结果 envelope。Relay 不把该内容写入 session event 或 SSE。 */
+        post: operations["storeWebReadResponse"];
         delete?: never;
         options?: never;
         head?: never;
@@ -887,12 +955,61 @@ export interface components {
             target_terminal_id?: string;
             ciphertext?: Record<string, never>;
         };
+        WebReadTransport: {
+            terminal_id: string;
+            /** @description Session 关联的 opaque Workspace ID，不是本机路径。 */
+            workspace_id: string;
+            /** @description 配对 Terminal 的 X25519 公钥，不是内容密钥。 */
+            encryption_public_key: string;
+            /** @enum {string} */
+            algorithm: "v1-x25519-hkdfsha256-aes256gcm";
+        };
+        WebReadRequest: {
+            request_id: string;
+            /** @enum {string} */
+            kind: "file.tree" | "file.read" | "code.read" | "git.status" | "git.changes" | "git.diff";
+            envelope: components["schemas"]["WebReadRequestEnvelope"];
+        };
+        WebReadRequestEnvelope: {
+            /** @enum {string} */
+            alg: "v1-x25519-hkdfsha256-aes256gcm";
+            payload_version: number;
+            ephemeral_public_key: string;
+            nonce: string;
+            ciphertext: string;
+            aad_hash: string;
+        };
+        WebReadReceipt: {
+            request_id: string;
+            kind: string;
+            /** @enum {string} */
+            status: "accepted" | "running" | "succeeded" | "failed" | "rejected";
+        };
+        WebReadStatus: {
+            request_id: string;
+            kind: string;
+            /** @enum {string} */
+            status: "accepted" | "running" | "succeeded" | "failed" | "rejected";
+            error_code?: string;
+            envelope?: components["schemas"]["WebReadResponseEnvelope"];
+        };
+        WebReadResponseEnvelope: {
+            /** @enum {string} */
+            alg: "v1-x25519-hkdfsha256-aes256gcm";
+            payload_version: number;
+            nonce: string;
+            ciphertext: string;
+            aad_hash: string;
+        };
         Command: {
             id: string;
             kind: string;
             status: string;
             idempotency_key: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description 0 仅用于受限 Web 只读请求；所有 Android 写控制命令必须大于 0 并通过 lease fencing。
+             */
             lease_epoch?: number;
             target_terminal_id?: string;
         };
@@ -959,6 +1076,12 @@ export interface components {
             ack_kind: string;
             status: string;
             error_code?: string;
+        };
+        DaemonWebReadResponseRequest: {
+            protocol_version: number;
+            /** Format: int64 */
+            delivery_seq: number;
+            envelope: components["schemas"]["WebReadResponseEnvelope"];
         };
         DaemonEventUploadRequest: {
             protocol_version: number;
@@ -1860,6 +1983,87 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    getWebReadTransport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description current terminal public transport metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebReadTransport"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    submitWebReadRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebReadRequest"];
+            };
+        };
+        responses: {
+            /** @description accepted web read request */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebReadReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getWebReadRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                requestID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description web read state and optional opaque response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebReadStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     getCommand: {
         parameters: {
             query?: never;
@@ -2147,6 +2351,36 @@ export interface operations {
                     "application/json": components["schemas"]["DaemonCommandReceipt"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    storeWebReadResponse: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonWebReadResponseRequest"];
+            };
+        };
+        responses: {
+            /** @description opaque web read response stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonCommandReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];

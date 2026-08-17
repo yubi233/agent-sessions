@@ -237,6 +237,59 @@ h3 {
   color: var(--danger);
 }
 
+.readonly-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.readonly-list-item {
+  min-width: 0;
+}
+
+.list-action {
+  align-items: center;
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--text);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(64px, 0.4fr) minmax(0, 1fr) auto;
+  text-align: left;
+  width: 100%;
+}
+
+.list-action span,
+.list-action small {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.list-action strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-preview {
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  line-height: 1.55;
+  margin: 0;
+  max-height: 56rem;
+  overflow: auto;
+  padding: 16px;
+  white-space: pre;
+}
+
+.code-preview code {
+  display: block;
+}
+
 .credentials-form {
   display: grid;
   gap: 14px;

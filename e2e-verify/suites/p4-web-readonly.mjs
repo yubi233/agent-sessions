@@ -84,17 +84,18 @@ export const p4WebReadonly = {
         notes.push("断网重连后以 cursor 刷新 delegation 时间线，opaque envelope 未进入 DOM");
       }
 
-      // 文件与 Git 降级页：明确 unavailable，不伪造列表。
+      // 旧 P4-C fixture 没有配对 Daemon transport：页面必须显示真实连接错误，不能伪造
+      // 文件/Git 列表。完整加密读取由独立的 P4-D suite 覆盖。
       await page.getByTestId("session-files-link").click();
-      await page.getByTestId("files-unavailable").waitFor({ state: "visible" });
-      const filesText = await page.getByTestId("files-unavailable").innerText();
-      if (!filesText.includes("尚未接入")) {
-        errors.push("文件页未正确显示 unavailable 降级");
+      await page.getByTestId("files-error").waitFor({ state: "visible" });
+      const filesText = await page.getByTestId("files-error").innerText();
+      if (!filesText.includes("无法读取工作区内容")) {
+        errors.push("文件页未正确显示 transport 连接错误");
       }
       await page.goBack();
       await page.getByTestId("session-detail-meta").waitFor({ state: "visible" });
       await page.getByTestId("session-git-link").click();
-      await page.getByTestId("git-unavailable").waitFor({ state: "visible" });
+      await page.getByTestId("git-error").waitFor({ state: "visible" });
       await page.goBack();
       await page.getByTestId("session-detail-meta").waitFor({ state: "visible" });
 
