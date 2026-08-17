@@ -89,7 +89,7 @@ func cmdDoctor() error {
 }
 
 // cmdRun 启动真实 Relay REST+SSE 循环。凭据只从显式 flag、当前环境变量或 Daemon 本机 state 读取，
-// 不读取浏览器/其他 CLI 登录态；默认不注入 event encoder，因此没有账户密钥时会 fail-closed 地保留事件。
+// 不读取浏览器/其他 CLI 登录态；生产 event DEK 只从 Daemon 环境读取，未配置时会 fail-closed 地扣留事件。
 func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter bool) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if relayBase == "" {
@@ -112,10 +112,13 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 		hostname = "agent-sessions-daemon"
 	}
 	adapters := map[string]adapter.Adapter{"opencode": opencode.New()}
-	var encoder daemon.EventEncoder
+	encoder, clearEventDEK, err := eventEncoderForRun(useFixtureAdapter, os.Getenv)
+	if err != nil {
+		return fmt.Errorf("加载生产 event E2EE 配置: %w", err)
+	}
+	defer clearEventDEK()
 	if useFixtureAdapter {
 		adapters = map[string]adapter.Adapter{"mock": adapter.NewMockAdapter()}
-		encoder = daemon.FixtureEventEncoder{}
 	}
 	runner := daemon.NewSessionRunner(st, adapters, logger)
 	defer func() { _ = runner.Close(context.Background()) }()
@@ -132,6 +135,22 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return loop.RunWithRetry(ctx)
+}
+
+// eventEncoderForRun 集中生产与 fixture 的加密边界：fixture 永远不接触生产 DEK；
+// 生产环境只有在两项密钥配置都缺失时才沿用旧的事件扣留行为，半配置必须拒绝启动。
+func eventEncoderForRun(useFixtureAdapter bool, getenv func(string) string) (daemon.EventEncoder, func(), error) {
+	if useFixtureAdapter {
+		return daemon.FixtureEventEncoder{}, func() {}, nil
+	}
+	encoder, err := daemon.LoadE2EEEventEncoderFromEnv(getenv)
+	if err != nil {
+		return nil, nil, err
+	}
+	if encoder == nil {
+		return nil, func() {}, nil
+	}
+	return encoder, encoder.Destroy, nil
 }
 
 // cmdRunner 把 outbox 中 pending 的 Relay 命令兑现到 OpenCode Adapter（ADPT-OPENCODE-06）。
