@@ -140,6 +140,25 @@ func (h *fakeHandle) Dispose(ctx context.Context) error {
 	return nil
 }
 
+// forceKillFakeHandle 只在 Runner 回归中表示 Daemon 明确拥有的受控进程树。真实 HTTP Adapter
+// 不实现 ForceKill，因此此 fixture 用于验证 session.kill 不会退化为 Abort。
+type forceKillFakeHandle struct {
+	*fakeHandle
+	forceKills   int
+	forceKillErr error
+}
+
+func (h *forceKillFakeHandle) ForceKill(ctx context.Context) error {
+	h.mu.Lock()
+	h.forceKills++
+	err := h.forceKillErr
+	h.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return h.Dispose(ctx)
+}
+
 // newRunnerFixture 构造 store + fake adapter 的 runner 测试环境。
 func newRunnerFixture(t *testing.T, provider string) (*Store, *SessionRunner, *fakeAdapter) {
 	t.Helper()
@@ -261,6 +280,63 @@ func TestSessionRunnerAbortCallsHandle(t *testing.T) {
 	h.mu.Unlock()
 	if aborts != 1 {
 		t.Fatalf("handle.Abort calls = %d, want 1", aborts)
+	}
+}
+
+// session.kill 只能触发明确拥有本机进程树的 ForceKill，并会删除本地 instance 映射；它绝不
+// 借用 Abort 伪造强制终止成功。
+func TestSessionRunnerKillUsesOwnedProcessHandle(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	owned := &forceKillFakeHandle{fakeHandle: newFakeHandle("instance-owned")}
+	fake.mu.Lock()
+	fake.startOverride = owned
+	fake.mu.Unlock()
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.kill", PayloadJSON: `{"session_id":"s1"}`,
+	}); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	owned.mu.Lock()
+	forceKills, aborts := owned.forceKills, owned.aborts
+	owned.mu.Unlock()
+	if forceKills != 1 || aborts != 0 {
+		t.Fatalf("forceKills/aborts=%d/%d, want 1/0", forceKills, aborts)
+	}
+	if _, err := s.Get(instanceKey("s1")); err == nil {
+		t.Fatal("killed session must remove instance mapping")
+	}
+	if _, err := runner.lookupSession("s1"); !errors.Is(err, ErrSessionInstanceMissing) {
+		t.Fatalf("killed session must remove handle, err=%v", err)
+	}
+}
+
+// 远端/共享服务 Handle 没有可证明的本机进程所有权时，session.kill 必须 fail-closed，且不得
+// 调用 Abort 或 Dispose 来伪造成功。
+func TestSessionRunnerKillWithoutOwnedProcessFailsClosed(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	err := runner.ConsumeCommand(context.Background(), Command{Kind: "session.kill", PayloadJSON: `{"session_id":"s1"}`})
+	if !errors.Is(err, ErrUnsupportedCommand) {
+		t.Fatalf("kill error=%v, want ErrUnsupportedCommand", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	aborts := h.aborts
+	h.mu.Unlock()
+	if aborts != 0 {
+		t.Fatalf("unsupported kill called Abort %d times", aborts)
+	}
+	if _, err := s.Get(instanceKey("s1")); err != nil {
+		t.Fatalf("unsupported kill must retain instance mapping: %v", err)
 	}
 }
 

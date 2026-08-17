@@ -31,5 +31,5 @@ P2 已将以下接口写入 OpenAPI 和 Gin handler：`/v1/daemon/hello`、`/v1/
 
 - 命令流不承载明文工作区文件、diff、Provider 正文、私钥或 token。Relay 只保存密文 envelope 与白名单元数据；日志记录脱敏 ID、状态和错误码。
 - Android 继续是唯一远程写控制端；Web/Admin 不获得命令流或 Daemon 写权限。
-- 已沉淀 `P0-SCHEMA-02`、`MIG-02`、`CTRL-04`、`SYNC-05`、`RELAY-LEASE-03`、`DAEMON-RPC-01` 与 `GIT-07` 的本地根因回归，以及 `task test:e2e:relay` 的窄纵向 fixture gate。`SESS-05` 仅覆盖确定性 `session.start`，`DAEMON-PROC-02` 和完整 `E2E-RELAY-02` 仍未满足，必须保持 `partial/planned`。
+- 已沉淀 `P0-SCHEMA-02`、`MIG-02`、`CTRL-04`、`SYNC-05`、`RELAY-LEASE-03`、`DAEMON-RPC-01` 与 `GIT-07` 的本地根因回归，以及 `task test:e2e:relay` 的窄纵向 fixture gate。`SESS-05` 已覆盖确定性 `session.start/send/resume/abort`；`session.kill` 已进入 schema、Relay capability gate 和仅限 owned-process Handle 的 Daemon 兑现边界。`DAEMON-PROC-02` 已以本地 helper 覆盖进程组、超时、崩溃、重复 kill 与 fail-closed，但尚未绑定真实 Provider；完整 `E2E-RELAY-02` 仍缺 kill、断线/重启矩阵和生产 key provisioning，必须保持 `partial`。
 - WebSocket 的 `WS-01/WS-02` 已被明确排除，不能作为命令流实现证据。

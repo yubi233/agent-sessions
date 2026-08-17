@@ -877,6 +877,7 @@ export interface components {
             envelope: Record<string, never>;
         };
         SubmitCommandRequest: {
+            /** @description 仅在目标 Terminal 声明对应 capability 时投递；session.kill 仅适用于 Daemon 明确拥有的本机 Provider 进程树，不能用 session.abort 替代。 */
             kind: string;
             idempotency_key: string;
             /** Format: int64 */

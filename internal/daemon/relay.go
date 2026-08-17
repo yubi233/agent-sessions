@@ -442,6 +442,8 @@ func capabilityForCommand(kind string) string {
 		return "resume"
 	case "session.abort":
 		return "abort"
+	case "session.kill":
+		return "kill"
 	case "file.tree", "file.read", "code.read":
 		return "file_read"
 	case "git.status", "git.changes", "git.diff":

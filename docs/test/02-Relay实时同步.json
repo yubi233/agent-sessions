@@ -478,11 +478,13 @@
       "cleanup": [
         "终止所有测试 Provider 子进程，删除测试会话、事件、outbox 与本地 state"
       ],
-      "evidence": [
-        "internal/relay/p2_daemon_contract_test.go",
-        "internal/daemon/runner_test.go",
-        "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-05.json"
-      ]
+    "evidence": [
+      "internal/relay/p2_daemon_contract_test.go",
+      "internal/daemon/runner_test.go",
+      "internal/daemon/process_supervisor_test.go",
+      "Taskfile.yml:test:daemon:process",
+      "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-05.json"
+    ]
     },
     {
       "id": "SYNC-05",

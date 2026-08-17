@@ -14,7 +14,7 @@ const (
 
 // 能力清单（与 packages/protocol 对齐）。客户端按此消费入口。
 var CapabilityNames = []string{
-	"start", "resume", "abort", "permission", "permission_mode", "question", "plan", "goal",
+	"start", "resume", "abort", "kill", "permission", "permission_mode", "question", "plan", "goal",
 	"skill_catalog", "invoke_skill", "model_select", "effort_select",
 	"attachments", "file_read", "git_read", "usage",
 	"delegate_session", "delegate_cross_provider",
@@ -118,4 +118,12 @@ type Handle interface {
 	Events() <-chan Event
 	// Dispose 释放资源并清理进程树。
 	Dispose(ctx context.Context) error
+}
+
+// ForceKillHandle 只由明确拥有本机 Provider 进程树的 Handle 实现。它和 Abort 的语义不同：
+// Abort 只取消当前 turn；ForceKill 必须在返回前启动受控进程树的终止流程。共享 HTTP 服务、
+// 远端 Provider 或无法证明所有权的 Adapter 不得实现此接口。
+type ForceKillHandle interface {
+	Handle
+	ForceKill(ctx context.Context) error
 }

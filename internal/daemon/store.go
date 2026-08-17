@@ -167,6 +167,14 @@ func (s *Store) Set(key, value string) error {
 	return err
 }
 
+// Delete 删除已失效的本机状态。仅接受稳定内部键；不存在视为成功，确保 kill/关闭清理可重试。
+func (s *Store) Delete(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM local_state WHERE key=?", key)
+	return err
+}
+
 // ConfirmWorkspace 把用户明确确认的 Git 根绑定到 Relay Workspace ID。确认时和每次读取时都做
 // realpath/Git 根校验，避免目录移动、符号链接替换或 Relay payload 伪造扩大本机读取范围。
 func (s *Store) ConfirmWorkspace(workspaceID, root string) (ConfirmedWorkspace, error) {

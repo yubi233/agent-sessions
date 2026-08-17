@@ -48,6 +48,11 @@ tasks:
     cmds:
       - go test ./apps/daemon/... ./internal/daemon/... ./internal/gitread/... ./internal/adapter/... ./internal/workspacesafe/... -count=1
 
+  test:daemon:process:
+    desc: P2 Provider 受控进程树、session.kill 与 capability fail-closed 回归
+    cmds:
+      - go test ./internal/daemon -run '^(TestProcessSupervisor.*|TestSessionRunnerKill.*|TestRelayLoopRejectsMismatchedTerminalAndUndeclaredCapability)$' -count=1
+
   test:contract:
     desc: Adapter SPI 与四类 fixture contract
     cmds:
@@ -65,6 +70,7 @@ tasks:
       - task: check
       - task: test:protocol
       - task: test:relay
+      - task: test:daemon:process
       - task: test:daemon
       - go test ./internal/domain -count=1
       - task: test:contract

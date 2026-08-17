@@ -69,6 +69,9 @@ type SessionRunner struct {
 
 	mu      sync.Mutex
 	handles map[string]*runningSession // key: sessionID
+	// executionMu 把同一 Daemon 的命令兑现串行化。Relay 已有 delivery/idempotency，但这里仍要
+	// 防止 start 与 kill 并发改写同一 session 的本地 instance 映射。
+	executionMu sync.Mutex
 
 	// eventSink 仅接收 Daemon 本机已规范化事件；是否加密/上传由连接层决定。
 	// 未配置 sink 时仍保留本地状态，但绝不伪造 Relay event 成功。
@@ -107,6 +110,8 @@ func (r *SessionRunner) SetEventSink(sink func(sessionID string, event adapter.E
 // ConsumeCommand 消费 outbox 中的一条 Relay 命令。
 // kind 以 cmd.Kind 为准；payload_json 也可能携带 kind（Relay 命令体），作为兜底来源。
 func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
+	r.executionMu.Lock()
+	defer r.executionMu.Unlock()
 	kind := cmd.Kind
 	if kind == "" {
 		if env, err := parseEnvelope(cmd.PayloadJSON); err == nil && env.kind() != "" {
@@ -121,6 +126,8 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 		return r.sendMessage(ctx, cmd)
 	case "session.abort":
 		return r.abortSession(ctx, cmd)
+	case "session.kill":
+		return r.killSession(ctx, cmd)
 	case "session.resume":
 		return r.resumeSession(ctx, cmd)
 	default:
@@ -264,6 +271,44 @@ func (r *SessionRunner) abortSession(ctx context.Context, cmd Command) error {
 		return err
 	}
 	return rs.handle.Abort(ctx)
+}
+
+// killSession 兑现 session.kill。它只调用拥有本机进程树的 Handle.ForceKill，绝不把远端
+// HTTP abort 当作进程清理成功。未声明本机所有权的 Provider 保持 CAPABILITY_UNSUPPORTED。
+func (r *SessionRunner) killSession(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("session.kill 缺少 session_id")
+	}
+	rs, err := r.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	killer, ok := rs.handle.(adapter.ForceKillHandle)
+	if !ok {
+		return fmt.Errorf("%w: session.kill requires owned provider process", ErrUnsupportedCommand)
+	}
+	if err := killer.ForceKill(ctx); err != nil {
+		return fmt.Errorf("force kill provider process: %w", err)
+	}
+	// ForceKill 成功后立即切断事件转发并释放 handle；重复 delivery 在 Relay/local store 收敛，
+	// 本地映射同步删除，避免后续 send/resume 错把已终止实例当作仍可用。
+	rs.cancel()
+	if err := rs.handle.Dispose(ctx); err != nil {
+		return fmt.Errorf("dispose killed session handle: %w", err)
+	}
+	r.removeHandle(sessionID)
+	if err := r.store.Delete(instanceKey(sessionID)); err != nil {
+		return fmt.Errorf("删除已终止 instance 映射: %w", err)
+	}
+	if err := r.store.Delete(resumeResultKey(sessionID)); err != nil {
+		return fmt.Errorf("删除已终止 resume 结果: %w", err)
+	}
+	return nil
 }
 
 // resumeSession 兑现 session.resume：用本地 instance 映射中的 OpenCode session id

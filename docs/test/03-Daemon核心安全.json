@@ -154,25 +154,26 @@
     {
       "id": "DAEMON-PROC-02",
       "title": "Provider 子进程启动、停止、异常退出与清理",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "进程",
       "priority": "P0",
       "test_layer": "Daemon/Adapter integration",
-      "precondition": "确定性 Adapter 可启动受控子进程并注入正常退出、超时、崩溃和输出上限；命令来自 ADR-009 投递链。",
+      "precondition": "Daemon 仅通过 ProcessSupervisor 启动并拥有受控本机进程；确定性 helper 可注入正常退出、超时、崩溃和子进程；真实 Provider 仍需独立声明 process ownership。",
       "steps": [
-        "提交 start，观察进程创建、started ack 与 canonical event。",
-        "提交 abort/kill，观察进程组退出、result 和资源清理。",
-        "分别注入崩溃、超时、重复 delivery 与 Daemon 重启后恢复。"
+        "以参数数组启动受控 helper，分别观察正常退出、崩溃、context 超时、重复 start 和稳定终态。",
+        "执行 force kill，检查父/子进程组均退出，重复 kill 只返回同一终态。",
+        "通过 session.kill 验证仅 Process-owned Handle 可被强制终止；未声明 kill capability 或共享 HTTP Handle 均 fail-closed。"
       ],
-      "expected": "每个 command_id 最多启动一次进程；终止和异常产生明确终态；子进程、文件描述符和临时目录被清理；不使用 shell 拼接或泄漏输出正文。",
+      "expected": "每个 ownership id 最多启动一次进程；正常、崩溃、超时和 kill 产生明确脱敏终态；Darwin/Linux 上父/子进程组均被清理；不使用 shell 拼接或泄漏输出正文。真实 Provider 进程、文件描述符/临时目录与 Relay-Daemon 断线矩阵仍需后续 gate。",
       "cleanup": [
         "终止残留测试进程，删除临时目录、本地 outbox、SQLite 与 trace"
       ],
       "evidence": [
         "internal/daemon/process_supervisor_test.go",
-        "internal/daemon/session_runner_test.go",
-        "e2e-verify/reports/<ts>/DAEMON-CORE/daemon-proc-02.json"
+        "internal/daemon/runner_test.go",
+        "internal/daemon/relay_test.go",
+        "Taskfile.yml:test:daemon:process"
       ]
     }
   ]

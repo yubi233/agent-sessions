@@ -774,12 +774,14 @@ type SessionSnapshot struct {
 
 // SubmitCommandRequest defines model for SubmitCommandRequest.
 type SubmitCommandRequest struct {
-	Ciphertext       *map[string]interface{} `json:"ciphertext,omitempty"`
-	IdempotencyKey   string                  `json:"idempotency_key"`
-	Kind             string                  `json:"kind"`
-	LeaseEpoch       int64                   `json:"lease_epoch"`
-	TargetInstanceId *string                 `json:"target_instance_id,omitempty"`
-	TargetTerminalId *string                 `json:"target_terminal_id,omitempty"`
+	Ciphertext     *map[string]interface{} `json:"ciphertext,omitempty"`
+	IdempotencyKey string                  `json:"idempotency_key"`
+
+	// Kind 仅在目标 Terminal 声明对应 capability 时投递；session.kill 仅适用于 Daemon 明确拥有的本机 Provider 进程树，不能用 session.abort 替代。
+	Kind             string  `json:"kind"`
+	LeaseEpoch       int64   `json:"lease_epoch"`
+	TargetInstanceId *string `json:"target_instance_id,omitempty"`
+	TargetTerminalId *string `json:"target_terminal_id,omitempty"`
 }
 
 // Terminal defines model for Terminal.

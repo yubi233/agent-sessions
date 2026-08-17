@@ -91,12 +91,14 @@ func TestCommandErrorCodeUsesPublicProtocolCodes(t *testing.T) {
 func TestRelayLoopRejectsMismatchedTerminalAndUndeclaredCapability(t *testing.T) {
 	cases := []struct {
 		name         string
+		kind         string
 		target       string
 		capabilities []string
 		wantCode     string
 	}{
-		{name: "target mismatch", target: "term-other", capabilities: []string{"start"}, wantCode: protocol.ErrScopeDenied},
-		{name: "capability absent", target: "term-local", capabilities: []string{"git_read"}, wantCode: protocol.ErrCapabilityUnsupported},
+		{name: "target mismatch", kind: "session.start", target: "term-other", capabilities: []string{"start"}, wantCode: protocol.ErrScopeDenied},
+		{name: "capability absent", kind: "session.start", target: "term-local", capabilities: []string{"git_read"}, wantCode: protocol.ErrCapabilityUnsupported},
+		{name: "kill capability absent", kind: "session.kill", target: "term-local", capabilities: []string{"abort"}, wantCode: protocol.ErrCapabilityUnsupported},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,7 +139,7 @@ func TestRelayLoopRejectsMismatchedTerminalAndUndeclaredCapability(t *testing.T)
 			loop.Capabilities = tc.capabilities
 			err = loop.handleDelivery(context.Background(), RelayDelivery{DeliverySeq: 1, Command: RelayCommand{
 				CommandID: "cmd-local-check", SessionID: "sess-local-check", WorkspaceID: "ws-local-check",
-				Kind: "session.start", LeaseEpoch: 1, TargetTerminalID: tc.target, PayloadJSON: `{}`,
+				Kind: tc.kind, LeaseEpoch: 1, TargetTerminalID: tc.target, PayloadJSON: `{}`,
 			}})
 			if err != nil {
 				t.Fatalf("handle delivery: %v", err)
