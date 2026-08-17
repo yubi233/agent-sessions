@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -33,5 +34,17 @@ Future<void> writeLocalVisualFrame(String outputPath, Uint8List bytes) async {
   // 先写同目录临时文件再替换，避免 runner 在跨进程轮询时读取到半张 PNG。
   final temporary = File('$outputPath.part');
   await temporary.writeAsBytes(bytes, flush: true);
+  await temporary.rename(outputPath);
+}
+
+/// 与连续帧一起写入无业务数据的单调时间表，供 runner 核验严格 5fps 调度。
+Future<void> writeLocalVisualFrameTiming(
+  String outputPath,
+  Map<String, dynamic> timing,
+) async {
+  final file = File(outputPath);
+  await file.parent.create(recursive: true);
+  final temporary = File('$outputPath.part');
+  await temporary.writeAsString(jsonEncode(timing), flush: true);
   await temporary.rename(outputPath);
 }

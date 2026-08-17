@@ -1,5 +1,6 @@
 import 'package:agent_sessions_mobile/app/local_visual_fixture.dart';
 import 'package:agent_sessions_mobile/domain/control_models.dart';
+import 'package:agent_sessions_mobile/domain/daemon_observation_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
@@ -280,6 +281,33 @@ void main() {
       expect(
         terminals.first.availabilityAt(DateTime.utc(2026, 8, 14, 12)),
         TerminalAvailability.online,
+      );
+    });
+
+    test('v0.4 P2-F Daemon 观察场景只预置安全投影，不模拟执行或密钥交付', () async {
+      final fixture = await LocalVisualFixture.create(
+        'session-daemon-observation',
+      );
+
+      expect(fixture, isNotNull);
+      expect(fixture!.scenario, LocalVisualScenario.sessionDaemonObservation);
+      expect(fixture.sessionId, isNotNull);
+      final observation = await fixture.relay.getSessionDaemonObservation(
+        fixture.sessionId!,
+      );
+      expect(observation.commands, isNotEmpty);
+      expect(
+        observation.commands.every(
+          (command) => command.deliveryState == DaemonDeliveryState.queued,
+        ),
+        isTrue,
+      );
+      expect(observation.events, isNotEmpty);
+      expect(
+        observation.events.every(
+          (event) => event.envelope.state == CipherEnvelopeState.opaque,
+        ),
+        isTrue,
       );
     });
 

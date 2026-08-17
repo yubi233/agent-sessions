@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import '../domain/control_models.dart';
+import '../domain/daemon_observation_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
@@ -243,6 +244,27 @@ class HttpRelayRepository implements RelayRepository {
       queryParameters: {'after_seq': afterSequence},
     );
     return SessionSnapshot.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<DaemonSessionObservation> getSessionDaemonObservation(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    if (sessionId.trim().isEmpty || afterSequence < 0) {
+      throw const RelayFailure(
+        RelayFailureKind.validation,
+        'Daemon 观察会话或事件游标无效。',
+      );
+    }
+    // P2-F 只读取 Relay 已裁剪的安全投影；Flutter 不连接 Terminal 专用 SSE，
+    // 不持有 Daemon bearer，也不获取命令 payload 或原始密文 envelope。
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/sessions/$sessionId/commands',
+      queryParameters: {'after_seq': afterSequence},
+    );
+    return DaemonSessionObservation.fromRelayJson(_asMap(response.data));
   }
 
   @override

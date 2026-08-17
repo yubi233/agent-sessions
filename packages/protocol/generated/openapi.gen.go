@@ -97,6 +97,84 @@ func (e CapabilityItemStatus) Valid() bool {
 	}
 }
 
+// Defines values for CipherEnvelopeMetadataAlgorithm.
+const (
+	V1Aes256gcmHkdfsha256 CipherEnvelopeMetadataAlgorithm = "v1-aes256gcm-hkdfsha256"
+)
+
+// Valid indicates whether the value is a known member of the CipherEnvelopeMetadataAlgorithm enum.
+func (e CipherEnvelopeMetadataAlgorithm) Valid() bool {
+	switch e {
+	case V1Aes256gcmHkdfsha256:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CipherEnvelopeMetadataState.
+const (
+	Opaque   CipherEnvelopeMetadataState = "opaque"
+	Verified CipherEnvelopeMetadataState = "verified"
+)
+
+// Valid indicates whether the value is a known member of the CipherEnvelopeMetadataState enum.
+func (e CipherEnvelopeMetadataState) Valid() bool {
+	switch e {
+	case Opaque:
+		return true
+	case Verified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonCipherEventObservationEventType.
+const (
+	DaemonCipherEventObservationEventTypeCommandUpdated   DaemonCipherEventObservationEventType = "command.updated"
+	DaemonCipherEventObservationEventTypeFileChanged      DaemonCipherEventObservationEventType = "file.changed"
+	DaemonCipherEventObservationEventTypeGitSnapshot      DaemonCipherEventObservationEventType = "git.snapshot"
+	DaemonCipherEventObservationEventTypeMessageCompleted DaemonCipherEventObservationEventType = "message.completed"
+	DaemonCipherEventObservationEventTypeMessageDelta     DaemonCipherEventObservationEventType = "message.delta"
+	DaemonCipherEventObservationEventTypeSessionLifecycle DaemonCipherEventObservationEventType = "session.lifecycle"
+	DaemonCipherEventObservationEventTypeToolCall         DaemonCipherEventObservationEventType = "tool.call"
+	DaemonCipherEventObservationEventTypeToolResult       DaemonCipherEventObservationEventType = "tool.result"
+	DaemonCipherEventObservationEventTypeTurnStarted      DaemonCipherEventObservationEventType = "turn.started"
+	DaemonCipherEventObservationEventTypeUnknown          DaemonCipherEventObservationEventType = "unknown"
+	DaemonCipherEventObservationEventTypeUsageUpdated     DaemonCipherEventObservationEventType = "usage.updated"
+)
+
+// Valid indicates whether the value is a known member of the DaemonCipherEventObservationEventType enum.
+func (e DaemonCipherEventObservationEventType) Valid() bool {
+	switch e {
+	case DaemonCipherEventObservationEventTypeCommandUpdated:
+		return true
+	case DaemonCipherEventObservationEventTypeFileChanged:
+		return true
+	case DaemonCipherEventObservationEventTypeGitSnapshot:
+		return true
+	case DaemonCipherEventObservationEventTypeMessageCompleted:
+		return true
+	case DaemonCipherEventObservationEventTypeMessageDelta:
+		return true
+	case DaemonCipherEventObservationEventTypeSessionLifecycle:
+		return true
+	case DaemonCipherEventObservationEventTypeToolCall:
+		return true
+	case DaemonCipherEventObservationEventTypeToolResult:
+		return true
+	case DaemonCipherEventObservationEventTypeTurnStarted:
+		return true
+	case DaemonCipherEventObservationEventTypeUnknown:
+		return true
+	case DaemonCipherEventObservationEventTypeUsageUpdated:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DaemonCommandAckRequestAckKind.
 const (
 	DaemonCommandAckRequestAckKindReceived DaemonCommandAckRequestAckKind = "received"
@@ -112,6 +190,66 @@ func (e DaemonCommandAckRequestAckKind) Valid() bool {
 	case DaemonCommandAckRequestAckKindRejected:
 		return true
 	case DaemonCommandAckRequestAckKindStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonCommandObservationDeliveryState.
+const (
+	DaemonCommandObservationDeliveryStateQueued   DaemonCommandObservationDeliveryState = "queued"
+	DaemonCommandObservationDeliveryStateReceived DaemonCommandObservationDeliveryState = "received"
+	DaemonCommandObservationDeliveryStateRejected DaemonCommandObservationDeliveryState = "rejected"
+	DaemonCommandObservationDeliveryStateResolved DaemonCommandObservationDeliveryState = "resolved"
+	DaemonCommandObservationDeliveryStateStarted  DaemonCommandObservationDeliveryState = "started"
+)
+
+// Valid indicates whether the value is a known member of the DaemonCommandObservationDeliveryState enum.
+func (e DaemonCommandObservationDeliveryState) Valid() bool {
+	switch e {
+	case DaemonCommandObservationDeliveryStateQueued:
+		return true
+	case DaemonCommandObservationDeliveryStateReceived:
+		return true
+	case DaemonCommandObservationDeliveryStateRejected:
+		return true
+	case DaemonCommandObservationDeliveryStateResolved:
+		return true
+	case DaemonCommandObservationDeliveryStateStarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonCommandObservationStatus.
+const (
+	DaemonCommandObservationStatusAccepted  DaemonCommandObservationStatus = "accepted"
+	DaemonCommandObservationStatusCancelled DaemonCommandObservationStatus = "cancelled"
+	DaemonCommandObservationStatusExpired   DaemonCommandObservationStatus = "expired"
+	DaemonCommandObservationStatusFailed    DaemonCommandObservationStatus = "failed"
+	DaemonCommandObservationStatusRejected  DaemonCommandObservationStatus = "rejected"
+	DaemonCommandObservationStatusRunning   DaemonCommandObservationStatus = "running"
+	DaemonCommandObservationStatusSucceeded DaemonCommandObservationStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the DaemonCommandObservationStatus enum.
+func (e DaemonCommandObservationStatus) Valid() bool {
+	switch e {
+	case DaemonCommandObservationStatusAccepted:
+		return true
+	case DaemonCommandObservationStatusCancelled:
+		return true
+	case DaemonCommandObservationStatusExpired:
+		return true
+	case DaemonCommandObservationStatusFailed:
+		return true
+	case DaemonCommandObservationStatusRejected:
+		return true
+	case DaemonCommandObservationStatusRunning:
+		return true
+	case DaemonCommandObservationStatusSucceeded:
 		return true
 	default:
 		return false
@@ -141,40 +279,40 @@ func (e DaemonCommandResultRequestStatus) Valid() bool {
 
 // Defines values for DaemonEventUploadRequestEventType.
 const (
-	CommandUpdated   DaemonEventUploadRequestEventType = "command.updated"
-	FileChanged      DaemonEventUploadRequestEventType = "file.changed"
-	GitSnapshot      DaemonEventUploadRequestEventType = "git.snapshot"
-	MessageCompleted DaemonEventUploadRequestEventType = "message.completed"
-	MessageDelta     DaemonEventUploadRequestEventType = "message.delta"
-	SessionLifecycle DaemonEventUploadRequestEventType = "session.lifecycle"
-	ToolCall         DaemonEventUploadRequestEventType = "tool.call"
-	ToolResult       DaemonEventUploadRequestEventType = "tool.result"
-	TurnStarted      DaemonEventUploadRequestEventType = "turn.started"
-	UsageUpdated     DaemonEventUploadRequestEventType = "usage.updated"
+	DaemonEventUploadRequestEventTypeCommandUpdated   DaemonEventUploadRequestEventType = "command.updated"
+	DaemonEventUploadRequestEventTypeFileChanged      DaemonEventUploadRequestEventType = "file.changed"
+	DaemonEventUploadRequestEventTypeGitSnapshot      DaemonEventUploadRequestEventType = "git.snapshot"
+	DaemonEventUploadRequestEventTypeMessageCompleted DaemonEventUploadRequestEventType = "message.completed"
+	DaemonEventUploadRequestEventTypeMessageDelta     DaemonEventUploadRequestEventType = "message.delta"
+	DaemonEventUploadRequestEventTypeSessionLifecycle DaemonEventUploadRequestEventType = "session.lifecycle"
+	DaemonEventUploadRequestEventTypeToolCall         DaemonEventUploadRequestEventType = "tool.call"
+	DaemonEventUploadRequestEventTypeToolResult       DaemonEventUploadRequestEventType = "tool.result"
+	DaemonEventUploadRequestEventTypeTurnStarted      DaemonEventUploadRequestEventType = "turn.started"
+	DaemonEventUploadRequestEventTypeUsageUpdated     DaemonEventUploadRequestEventType = "usage.updated"
 )
 
 // Valid indicates whether the value is a known member of the DaemonEventUploadRequestEventType enum.
 func (e DaemonEventUploadRequestEventType) Valid() bool {
 	switch e {
-	case CommandUpdated:
+	case DaemonEventUploadRequestEventTypeCommandUpdated:
 		return true
-	case FileChanged:
+	case DaemonEventUploadRequestEventTypeFileChanged:
 		return true
-	case GitSnapshot:
+	case DaemonEventUploadRequestEventTypeGitSnapshot:
 		return true
-	case MessageCompleted:
+	case DaemonEventUploadRequestEventTypeMessageCompleted:
 		return true
-	case MessageDelta:
+	case DaemonEventUploadRequestEventTypeMessageDelta:
 		return true
-	case SessionLifecycle:
+	case DaemonEventUploadRequestEventTypeSessionLifecycle:
 		return true
-	case ToolCall:
+	case DaemonEventUploadRequestEventTypeToolCall:
 		return true
-	case ToolResult:
+	case DaemonEventUploadRequestEventTypeToolResult:
 		return true
-	case TurnStarted:
+	case DaemonEventUploadRequestEventTypeTurnStarted:
 		return true
-	case UsageUpdated:
+	case DaemonEventUploadRequestEventTypeUsageUpdated:
 		return true
 	default:
 		return false
@@ -564,6 +702,19 @@ type CapabilityProvidersResponse struct {
 	Providers []CapabilityProvider `json:"providers"`
 }
 
+// CipherEnvelopeMetadata 仅证明 Relay 已验证版本化密文封装，不包含 key_id、nonce、ciphertext、aad_hash 或任何明文。
+type CipherEnvelopeMetadata struct {
+	Algorithm      *CipherEnvelopeMetadataAlgorithm `json:"algorithm,omitempty"`
+	PayloadVersion *int                             `json:"payload_version,omitempty"`
+	State          CipherEnvelopeMetadataState      `json:"state"`
+}
+
+// CipherEnvelopeMetadataAlgorithm defines model for CipherEnvelopeMetadata.Algorithm.
+type CipherEnvelopeMetadataAlgorithm string
+
+// CipherEnvelopeMetadataState defines model for CipherEnvelopeMetadata.State.
+type CipherEnvelopeMetadataState string
+
 // CipherEvent defines model for CipherEvent.
 type CipherEvent struct {
 	Envelope  map[string]interface{} `json:"envelope"`
@@ -609,6 +760,17 @@ type CreateWorkspaceRequest struct {
 	TerminalId    *string `json:"terminal_id,omitempty"`
 }
 
+// DaemonCipherEventObservation defines model for DaemonCipherEventObservation.
+type DaemonCipherEventObservation struct {
+	// Envelope 仅证明 Relay 已验证版本化密文封装，不包含 key_id、nonce、ciphertext、aad_hash 或任何明文。
+	Envelope  CipherEnvelopeMetadata                `json:"envelope"`
+	EventSeq  int64                                 `json:"event_seq"`
+	EventType DaemonCipherEventObservationEventType `json:"event_type"`
+}
+
+// DaemonCipherEventObservationEventType defines model for DaemonCipherEventObservation.EventType.
+type DaemonCipherEventObservationEventType string
+
 // DaemonCommandAckRequest defines model for DaemonCommandAckRequest.
 type DaemonCommandAckRequest struct {
 	AckKind         DaemonCommandAckRequestAckKind `json:"ack_kind"`
@@ -625,6 +787,24 @@ type DaemonCommandDelivery struct {
 	Command     DaemonDeliveredCommand `json:"command"`
 	DeliverySeq int64                  `json:"delivery_seq"`
 }
+
+// DaemonCommandObservation defines model for DaemonCommandObservation.
+type DaemonCommandObservation struct {
+	DeliveryState DaemonCommandObservationDeliveryState `json:"delivery_state"`
+
+	// ErrorCode 仅协议登记的稳定错误码；未知值在 Relay 侧归一为 DAEMON_EXECUTION_FAILED。
+	ErrorCode *string `json:"error_code,omitempty"`
+
+	// Kind 已登记命令种类；客户端未知种类必须显示通用只读占位。
+	Kind   string                         `json:"kind"`
+	Status DaemonCommandObservationStatus `json:"status"`
+}
+
+// DaemonCommandObservationDeliveryState defines model for DaemonCommandObservation.DeliveryState.
+type DaemonCommandObservationDeliveryState string
+
+// DaemonCommandObservationStatus defines model for DaemonCommandObservation.Status.
+type DaemonCommandObservationStatus string
 
 // DaemonCommandReceipt defines model for DaemonCommandReceipt.
 type DaemonCommandReceipt struct {
@@ -709,6 +889,20 @@ type DaemonHelloResponse struct {
 	MinProtocolVersion       int    `json:"min_protocol_version"`
 	ProtocolVersion          int    `json:"protocol_version"`
 	TerminalId               string `json:"terminal_id"`
+}
+
+// DaemonObservationSession defines model for DaemonObservationSession.
+type DaemonObservationSession struct {
+	LastSeq  int64   `json:"last_seq"`
+	Provider *string `json:"provider,omitempty"`
+	Status   string  `json:"status"`
+}
+
+// DaemonSessionObservation Flutter P2-F 只读观察投影。该资源不返回会话/命令/Terminal 的 opaque 标识，也不返回原始密文 envelope。
+type DaemonSessionObservation struct {
+	Commands []DaemonCommandObservation     `json:"commands"`
+	Events   []DaemonCipherEventObservation `json:"events"`
+	Session  DaemonObservationSession       `json:"session"`
 }
 
 // DaemonWebReadResponseRequest defines model for DaemonWebReadResponseRequest.
@@ -1120,6 +1314,12 @@ type StreamEventsParams struct {
 	LastEventID *string `json:"Last-Event-ID,omitempty"`
 }
 
+// GetSessionDaemonObservationParams defines parameters for GetSessionDaemonObservation.
+type GetSessionDaemonObservationParams struct {
+	// AfterSeq 仅返回严格大于该会话事件序号的安全事件元数据；命令状态始终返回当前完整安全投影。
+	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
+}
+
 // GetSessionSnapshotParams defines parameters for GetSessionSnapshot.
 type GetSessionSnapshotParams struct {
 	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
@@ -1431,6 +1631,9 @@ type ServerInterface interface {
 
 	// (POST /v1/sessions)
 	CreateSession(c *gin.Context)
+
+	// (GET /v1/sessions/{id}/commands)
+	GetSessionDaemonObservation(c *gin.Context, id string, params GetSessionDaemonObservationParams)
 
 	// (POST /v1/sessions/{id}/commands)
 	SubmitSessionCommand(c *gin.Context, id string)
@@ -2119,6 +2322,42 @@ func (siw *ServerInterfaceWrapper) CreateSession(c *gin.Context) {
 	siw.Handler.CreateSession(c)
 }
 
+// GetSessionDaemonObservation operation middleware
+func (siw *ServerInterfaceWrapper) GetSessionDaemonObservation(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSessionDaemonObservationParams
+
+	// ------------- Optional query parameter "after_seq" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after_seq", c.Request.URL.Query(), &params.AfterSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after_seq: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSessionDaemonObservation(c, id, params)
+}
+
 // SubmitSessionCommand operation middleware
 func (siw *ServerInterfaceWrapper) SubmitSessionCommand(c *gin.Context) {
 
@@ -2461,6 +2700,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/sessions/:id/delegations", wrapper.ListSessionDelegations)
 	router.POST(options.BaseURL+"/v1/sessions/:id/delegations", wrapper.CreateSessionDelegation)
 	router.POST(options.BaseURL+"/v1/delegations/:id/decision", wrapper.DecideDelegation)
+	router.GET(options.BaseURL+"/v1/sessions/:id/commands", wrapper.GetSessionDaemonObservation)
 	router.POST(options.BaseURL+"/v1/sessions/:id/commands", wrapper.SubmitSessionCommand)
 	router.GET(options.BaseURL+"/v1/sessions/:id/readonly-transport", wrapper.GetWebReadTransport)
 	router.POST(options.BaseURL+"/v1/sessions/:id/readonly-requests", wrapper.SubmitWebReadRequest)

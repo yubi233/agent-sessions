@@ -57,6 +57,15 @@ type CommandInput struct {
 	CiphertextJSON   string
 }
 
+// DaemonCommandObservation 是 Android 只读观察面的最小命令投影。
+// 它刻意不包含 command/terminal/instance 标识、lease、幂等键或密文，避免观察页演化成控制面。
+type DaemonCommandObservation struct {
+	Kind          string
+	Status        string
+	DeliveryState string
+	ErrorCode     string
+}
+
 // SessionService 管理 Session 生命周期、事件追加与命令状态机。
 type SessionService struct {
 	repo store.Repository
@@ -338,6 +347,60 @@ func (s *SessionService) GetCommand(ctx context.Context, id string) (store.Comma
 		return store.CommandRow{}, err
 	}
 	return cmd, nil
+}
+
+// ListDaemonCommandObservations 返回账号内指定会话的 Daemon 命令安全投影。
+// 命令状态和 delivery receipt 是不同事实：前者代表 Relay 命令生命周期，后者代表 Daemon
+// 是否已接收/开始/完成。两者都不需要也不允许向 Android 返回执行 payload。
+func (s *SessionService) ListDaemonCommandObservations(ctx context.Context, accountID, sessionID string) ([]DaemonCommandObservation, error) {
+	session, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if session.AccountID != accountID {
+		return nil, ErrScopeDenied
+	}
+	commands, err := s.repo.ListCommands(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	observations := make([]DaemonCommandObservation, 0, len(commands))
+	for _, command := range commands {
+		// 没有目标 Terminal 的历史控制记录不属于 Daemon 观察契约，不能借此暴露旧控制面。
+		if command.TargetTerminalID == "" {
+			continue
+		}
+		observation := DaemonCommandObservation{
+			Kind:          command.Kind,
+			Status:        command.Status,
+			DeliveryState: "queued",
+		}
+		delivery, deliveryErr := s.repo.DaemonDeliveryByCommandID(ctx, command.ID)
+		switch {
+		case deliveryErr == nil:
+			observation.DeliveryState = daemonObservationDeliveryState(delivery)
+			observation.ErrorCode = safeErrorCode(delivery.ErrorCode)
+		case errors.Is(deliveryErr, sql.ErrNoRows):
+			// 旧库升级期间可能存在已投递标记尚未补齐的记录；只读端明确显示 queued，
+			// 不推断 Terminal 已经执行，也不把该不一致转为可写修复动作。
+		default:
+			return nil, deliveryErr
+		}
+		observations = append(observations, observation)
+	}
+	return observations, nil
+}
+
+func daemonObservationDeliveryState(delivery store.DaemonDeliveryRow) string {
+	if delivery.ResultStatus != "" {
+		return "resolved"
+	}
+	switch delivery.AckKind {
+	case "received", "started", "rejected":
+		return delivery.AckKind
+	default:
+		return "queued"
+	}
 }
 
 // ResolveCommand 更新命令状态并追加标准事件；已终态的命令幂等返回原状态。

@@ -447,7 +447,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** @description 账号已认证客户端读取指定会话的 Daemon 安全观察投影。仅返回会话状态、命令状态/稳定错误码和裁剪后的密文封装元数据；不返回 command/terminal/lease 标识、密文、nonce、AAD、路径或 Provider 正文。 */
+        get: operations["getSessionDaemonObservation"];
         put?: never;
         /** @description 仅 android_owner/android 写控制端可提交；lease_epoch 必须为当前正 fencing epoch。 */
         post: operations["submitSessionCommand"];
@@ -905,6 +906,43 @@ export interface components {
         SessionSnapshot: {
             session: components["schemas"]["Session"];
             events: components["schemas"]["CipherEvent"][];
+        };
+        /** @description Flutter P2-F 只读观察投影。该资源不返回会话/命令/Terminal 的 opaque 标识，也不返回原始密文 envelope。 */
+        DaemonSessionObservation: {
+            session: components["schemas"]["DaemonObservationSession"];
+            commands: components["schemas"]["DaemonCommandObservation"][];
+            events: components["schemas"]["DaemonCipherEventObservation"][];
+        };
+        DaemonObservationSession: {
+            status: string;
+            provider?: string;
+            /** Format: int64 */
+            last_seq: number;
+        };
+        DaemonCommandObservation: {
+            /** @description 已登记命令种类；客户端未知种类必须显示通用只读占位。 */
+            kind: string;
+            /** @enum {string} */
+            status: "accepted" | "running" | "succeeded" | "failed" | "cancelled" | "rejected" | "expired";
+            /** @enum {string} */
+            delivery_state: "queued" | "received" | "started" | "rejected" | "resolved";
+            /** @description 仅协议登记的稳定错误码；未知值在 Relay 侧归一为 DAEMON_EXECUTION_FAILED。 */
+            error_code?: string;
+        };
+        DaemonCipherEventObservation: {
+            /** Format: int64 */
+            event_seq: number;
+            /** @enum {string} */
+            event_type: "session.lifecycle" | "turn.started" | "message.delta" | "message.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "unknown";
+            envelope: components["schemas"]["CipherEnvelopeMetadata"];
+        };
+        /** @description 仅证明 Relay 已验证版本化密文封装，不包含 key_id、nonce、ciphertext、aad_hash 或任何明文。 */
+        CipherEnvelopeMetadata: {
+            /** @enum {string} */
+            state: "verified" | "opaque";
+            /** @enum {string} */
+            algorithm?: "v1-aes256gcm-hkdfsha256";
+            payload_version?: number;
         };
         /** @description parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。 */
         Delegation: {
@@ -1951,6 +1989,34 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    getSessionDaemonObservation: {
+        parameters: {
+            query?: {
+                /** @description 仅返回严格大于该会话事件序号的安全事件元数据；命令状态始终返回当前完整安全投影。 */
+                after_seq?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description daemon observation projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonSessionObservation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     submitSessionCommand: {

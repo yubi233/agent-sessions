@@ -61,7 +61,7 @@ tasks:
   test:e2e:relay:
     desc: P2 本地 Relay-Daemon fixture 闭环（命令、SSE、只读 Workspace 与密文事件边界）
     cmds:
-      - go test ./internal/relay -run '^(TestP2DaemonCommandLifecycleAndSSERecovery|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2DaemonProtocolAndRevocationFailClosed|TestP2RelayDaemonDeterministicFullLoop|TestP2RelayDaemonDeterministicSessionLifecycleFullLoop|TestP2RelayDaemonRestart.*|TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay)$' -count=1
+      - go test ./internal/relay -run '^(TestP2DaemonCommandLifecycleAndSSERecovery|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2DaemonProtocolAndRevocationFailClosed|TestP2FlutterDaemonObservationReadOnly|TestP2RelayDaemonDeterministicFullLoop|TestP2RelayDaemonDeterministicSessionLifecycleFullLoop|TestP2RelayDaemonRestart.*|TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay)$' -count=1
 
   test:e2e:web:
     desc: P4 Web SSE cursor 的 headed Chrome 本地 fixture 旅程
@@ -106,6 +106,23 @@ tasks:
       - go test ./internal/domain -count=1
       - task: test:contract
       - task: test:e2e:relay
+      - git diff --check
+
+  test:mobile:p2f:
+    desc: P2-F Flutter Daemon 安全观察定向回归
+    dir: apps/mobile
+    cmds:
+      - dart format --set-exit-if-changed lib/domain/daemon_observation_models.dart lib/state/daemon_observation_controller.dart lib/ui/daemon_observation_screens.dart test/daemon_observation_test.dart test/http_relay_repository_test.dart
+      - flutter test test/daemon_observation_test.dart test/http_relay_repository_test.dart --concurrency=1
+
+  test:v04:p2f:
+    desc: v0.4 P2-F Relay 安全观察契约与 Flutter 最小可见衔接 gate
+    cmds:
+      - task: docs:verify
+      - task: check
+      - go test ./internal/domain ./internal/httpapi ./packages/protocol -count=1
+      - task: test:e2e:relay
+      - task: test:mobile:p2f
       - git diff --check
 
   test:
@@ -154,7 +171,7 @@ tasks:
       - node e2e-verify/mobile/run-macos.mjs {{.CLI_ARGS}}
 
   test:flutter:record:
-    desc: 已通过 Flutter macOS full gate 后的 P6 5fps fixture 录屏
+    desc: 已通过 Flutter macOS full gate 后的严格 5fps fixture 录屏（100 候选帧筛选 25 连续最终帧）
     cmds:
       - node e2e-verify/mobile/record-macos.test.mjs
       - node e2e-verify/mobile/record-macos.mjs {{.CLI_ARGS}}

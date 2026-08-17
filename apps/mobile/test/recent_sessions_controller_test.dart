@@ -1,4 +1,5 @@
 import 'package:agent_sessions_mobile/domain/control_models.dart';
+import 'package:agent_sessions_mobile/domain/daemon_observation_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
@@ -21,11 +22,17 @@ void main() {
       var clock = now;
       final relay = FixtureRelayRepository(clock: () => clock);
       await relay.register(_credentials());
-      await relay.createSession(_sessionInput('workspace-a')); // session-fixture-001
+      await relay.createSession(
+        _sessionInput('workspace-a'),
+      ); // session-fixture-001
       clock = clock.add(const Duration(minutes: 2));
-      await relay.createSession(_sessionInput('workspace-b')); // session-fixture-002
+      await relay.createSession(
+        _sessionInput('workspace-b'),
+      ); // session-fixture-002
       clock = clock.add(const Duration(minutes: 5));
-      await relay.createSession(_sessionInput('workspace-c')); // session-fixture-003
+      await relay.createSession(
+        _sessionInput('workspace-c'),
+      ); // session-fixture-003
 
       final controller = RecentSessionsController(relay: relay);
 
@@ -41,10 +48,11 @@ void main() {
       expect(controller.errorMessage, isNull);
       expect(controller.isEmpty, isFalse);
       // updatedAt 降序：最新的 session-fixture-003 在最前
-      expect(
-        controller.sessions.map((session) => session.id).toList(),
-        ['session-fixture-003', 'session-fixture-002', 'session-fixture-001'],
-      );
+      expect(controller.sessions.map((session) => session.id).toList(), [
+        'session-fixture-003',
+        'session-fixture-002',
+        'session-fixture-001',
+      ]);
       // 排序后仍持有完整白名单元数据
       expect(controller.sessions.first.workspaceId, 'workspace-c');
       expect(controller.sessions.first.provider, 'codex');
@@ -65,7 +73,9 @@ void main() {
     });
 
     test('排序独立于 relay 返回顺序：乱序输入也按 updatedAt 降序', () async {
-      final relay = _ListOverridingRelay(FixtureRelayRepository(clock: () => now));
+      final relay = _ListOverridingRelay(
+        FixtureRelayRepository(clock: () => now),
+      );
       // 故意乱序返回，验证排序发生在控制器内部而非依赖 relay 预排序。
       relay.listOverride = () => [
         _session(
@@ -84,14 +94,17 @@ void main() {
       final controller = RecentSessionsController(relay: relay);
       await controller.initialize();
 
-      expect(
-        controller.sessions.map((session) => session.id).toList(),
-        ['session-a', 'session-b', 'session-c'],
-      );
+      expect(controller.sessions.map((session) => session.id).toList(), [
+        'session-a',
+        'session-b',
+        'session-c',
+      ]);
     });
 
     test('同 updatedAt：lastSequence 降序 → id 字典序，多次刷新顺序稳定', () async {
-      final relay = _ListOverridingRelay(FixtureRelayRepository(clock: () => now));
+      final relay = _ListOverridingRelay(
+        FixtureRelayRepository(clock: () => now),
+      );
       relay.listOverride = () => [
         // 同时间戳，靠 lastSequence 与 id 决定次序。
         _session('session-zz', lastSequence: 1, updatedAt: now),
@@ -102,10 +115,11 @@ void main() {
       final controller = RecentSessionsController(relay: relay);
       await controller.initialize();
       // lastSequence 降序：aa(3) → mm(2) → zz(1)
-      expect(
-        controller.sessions.map((session) => session.id).toList(),
-        ['session-aa', 'session-mm', 'session-zz'],
-      );
+      expect(controller.sessions.map((session) => session.id).toList(), [
+        'session-aa',
+        'session-mm',
+        'session-zz',
+      ]);
 
       // lastSequence 相同时退到 id 字典序；多次刷新结果不变，避免页面跳项。
       relay.listOverride = () => [
@@ -114,19 +128,23 @@ void main() {
         _session('session-mm', lastSequence: 1, updatedAt: now),
       ];
       await controller.refresh();
-      expect(
-        controller.sessions.map((session) => session.id).toList(),
-        ['session-aa', 'session-mm', 'session-zz'],
-      );
+      expect(controller.sessions.map((session) => session.id).toList(), [
+        'session-aa',
+        'session-mm',
+        'session-zz',
+      ]);
       await controller.refresh();
-      expect(
-        controller.sessions.map((session) => session.id).toList(),
-        ['session-aa', 'session-mm', 'session-zz'],
-      );
+      expect(controller.sessions.map((session) => session.id).toList(), [
+        'session-aa',
+        'session-mm',
+        'session-zz',
+      ]);
     });
 
     test('updatedAt 为 null 的会话排在有时间戳的会话之后', () async {
-      final relay = _ListOverridingRelay(FixtureRelayRepository(clock: () => now));
+      final relay = _ListOverridingRelay(
+        FixtureRelayRepository(clock: () => now),
+      );
       relay.listOverride = () => [
         _session('session-no-time', lastSequence: 9, updatedAt: null),
         _session('session-with-time', lastSequence: 1, updatedAt: now),
@@ -135,10 +153,10 @@ void main() {
       final controller = RecentSessionsController(relay: relay);
       await controller.initialize();
 
-      expect(
-        controller.sessions.map((session) => session.id).toList(),
-        ['session-with-time', 'session-no-time'],
-      );
+      expect(controller.sessions.map((session) => session.id).toList(), [
+        'session-with-time',
+        'session-no-time',
+      ]);
     });
 
     test('RelayFailure：有数据时保留旧数据 + errorMessage；无数据时 error 且可重试', () async {
@@ -247,9 +265,8 @@ class _ListOverridingRelay implements RelayRepository {
   Future<List<Device>> listDevices() => _delegate.listDevices();
 
   @override
-  Future<void> revokeDevice(String deviceId) => _delegate.revokeDevice(
-    deviceId,
-  );
+  Future<void> revokeDevice(String deviceId) =>
+      _delegate.revokeDevice(deviceId);
 
   @override
   Future<List<TerminalSummary>> listTerminals() => _delegate.listTerminals();
@@ -286,6 +303,15 @@ class _ListOverridingRelay implements RelayRepository {
     String sessionId, {
     int afterSequence = 0,
   }) => _delegate.getSessionSnapshot(sessionId, afterSequence: afterSequence);
+
+  @override
+  Future<DaemonSessionObservation> getSessionDaemonObservation(
+    String sessionId, {
+    int afterSequence = 0,
+  }) => _delegate.getSessionDaemonObservation(
+    sessionId,
+    afterSequence: afterSequence,
+  );
 
   @override
   Future<SessionLease> acquireSessionLease(String sessionId) =>
@@ -331,7 +357,6 @@ class _ListOverridingRelay implements RelayRepository {
   ) => _delegate.uploadAttachmentChunk(input);
 
   @override
-  Future<AttachmentReceipt> completeAttachment(
-    AttachmentCompleteInput input,
-  ) => _delegate.completeAttachment(input);
+  Future<AttachmentReceipt> completeAttachment(AttachmentCompleteInput input) =>
+      _delegate.completeAttachment(input);
 }

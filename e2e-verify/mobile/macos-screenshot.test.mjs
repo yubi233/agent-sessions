@@ -9,7 +9,11 @@ import {
   captureMacosWindowFrameSeries,
   FLUTTER_RENDER_BOUNDARY_FALLBACK,
   parsePngDimensions,
+  selectStrictWindowEvidenceFrames,
   waitForFlutterRenderFrameSeries,
+  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+  WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
 } from "./macos-screenshot.mjs";
 
 function pngHeader(width, height) {
@@ -78,7 +82,7 @@ test("截图 manifest 只保留 fixture 元数据、哈希和窗口尺寸", () =
   assert.equal(manifest.screenshots[0].capture_mode, FLUTTER_RENDER_BOUNDARY_FALLBACK);
 });
 
-test("5fps 连续截图按场景写入稳定帧序列", async () => {
+test("严格 5fps 候选采集不按时长截断，并筛选连续的最终帧序列", async () => {
   const captures = [];
   const waits = [];
   let clock = 0;
@@ -87,7 +91,7 @@ test("5fps 连续截图按场景写入稳定帧序列", async () => {
     outputDirectory: "/fixture/screenshots/visual-owner",
     scenarioId: "VISUAL-MOBILE-02",
     fps: 5,
-    durationMs: 1_000,
+    frameCount: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
     now: () => clock,
     waitForNextFrame: async (milliseconds) => {
       waits.push(milliseconds);
@@ -106,13 +110,23 @@ test("5fps 连续截图按场景写入稳定帧序列", async () => {
     },
   });
 
-  assert.equal(frames.length, 5);
+  assert.equal(frames.length, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
   assert.equal(frames.at(-1).scenarioId, "VISUAL-MOBILE-02");
-  assert.equal(frames.at(-1).frameIndex, 5);
-  assert.equal(captures.length, 5);
+  assert.equal(frames.at(-1).frameIndex, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
+  assert.equal(captures.length, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
   assert.match(captures[0].outputPath, /visual-owner\/frame-0001\.png$/);
-  assert.match(captures.at(-1).outputPath, /visual-owner\/frame-0005\.png$/);
-  assert.deepEqual(waits, [200, 200, 200, 200]);
+  assert.match(captures.at(-1).outputPath, /visual-owner\/frame-0100\.png$/);
+  assert.equal(waits.length, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT - 1);
+  assert.equal(waits.every((milliseconds) => milliseconds === WINDOW_EVIDENCE_FRAME_INTERVAL_MS), true);
+  const selected = selectStrictWindowEvidenceFrames({ frames });
+  assert.equal(selected.length, WINDOW_EVIDENCE_SELECTED_FRAME_COUNT);
+  assert.equal(selected[0].sourceFrameIndex, 76);
+  assert.equal(selected.at(-1).sourceFrameIndex, 100);
+  assert.equal(selected[0].scheduledOffsetMs, 0);
+  assert.equal(
+    selected.at(-1).scheduledOffsetMs,
+    (WINDOW_EVIDENCE_SELECTED_FRAME_COUNT - 1) * WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+  );
 });
 
 test("Flutter render boundary fallback 只接受完整的预登记 PNG 帧序列", async () => {
@@ -120,26 +134,45 @@ test("Flutter render boundary fallback 只接受完整的预登记 PNG 帧序列
   const sourceDirectory = join(root, "sandbox-source");
   const outputDirectory = join(root, "e2e-evidence");
   mkdirSync(sourceDirectory, { recursive: true });
-  for (let index = 0; index < 5; index += 1) {
+  for (let index = 0; index < WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT; index += 1) {
     writeFileSync(
       join(sourceDirectory, `frame-${String(index + 1).padStart(4, "0")}.png`),
       pngHeader(480, 960),
     );
   }
+  writeFileSync(
+    join(sourceDirectory, "frame-timing.json"),
+    JSON.stringify({
+      frame_rate_fps: 5,
+      frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+      frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+      frames: Array.from({ length: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT }, (_, index) => ({
+        frame_index: index + 1,
+        scheduled_offset_ms: index * WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+        capture_started_offset_ms: index * WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+        capture_completed_offset_ms: index * WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+      })),
+    }),
+  );
 
   const frames = await waitForFlutterRenderFrameSeries({
     outputDirectory,
     sourceDirectory,
     scenarioId: "VISUAL-MOBILE-08",
-    frameCount: 5,
+    frameCount: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+    fps: 5,
     timeoutMs: 100,
     pollIntervalMs: 1,
   });
 
-  assert.equal(frames.length, 5);
+  assert.equal(frames.length, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
   assert.equal(frames.at(-1).captureMode, FLUTTER_RENDER_BOUNDARY_FALLBACK);
   assert.equal(frames.at(-1).width, 480);
   assert.equal(frames.at(-1).height, 960);
   assert.equal(frames.every((frame) => frame.sha256.length === 64), true);
-  assert.equal(existsSync(join(outputDirectory, "frame-0005.png")), true);
+  assert.equal(existsSync(join(outputDirectory, "frame-0100.png")), true);
+  assert.equal(
+    selectStrictWindowEvidenceFrames({ frames }).length,
+    WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
+  );
 });

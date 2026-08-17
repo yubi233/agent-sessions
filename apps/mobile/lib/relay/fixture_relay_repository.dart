@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../domain/control_models.dart';
+import '../domain/daemon_observation_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
@@ -193,9 +194,7 @@ class FixtureRelayRepository implements RelayRepository {
   @override
   Future<UsageSummary> getUsageSummary({int days = 30}) async {
     _requireFixtureNetwork();
-    return _usageSummaries.isEmpty
-        ? UsageSummary.empty
-        : _usageSummaries.first;
+    return _usageSummaries.isEmpty ? UsageSummary.empty : _usageSummaries.first;
   }
 
   @override
@@ -368,6 +367,53 @@ class FixtureRelayRepository implements RelayRepository {
     return SessionSnapshot(
       session: state.session,
       events: List<RelaySessionEvent>.unmodifiable(events),
+    );
+  }
+
+  @override
+  Future<DaemonSessionObservation> getSessionDaemonObservation(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    if (afterSequence < 0) {
+      throw const RelayFailure(
+        RelayFailureKind.validation,
+        'Daemon 观察事件游标不能为负数。',
+      );
+    }
+    _requireFixtureNetwork();
+    final state = _sessionState(sessionId);
+    // fixture 只复用同一只读 DTO 以验证页面边界；它不模拟 Daemon 执行、命令回执或 E2EE 密钥。
+    final receipts = state.commandReceipts.values.toList()
+      ..sort((left, right) => left.id.compareTo(right.id));
+    return DaemonSessionObservation(
+      session: DaemonObservationSession(
+        status: state.session.status,
+        provider: state.session.provider,
+        lastSequence: state.session.lastSequence,
+      ),
+      commands: List<DaemonCommandObservation>.unmodifiable([
+        for (final receipt in receipts)
+          DaemonCommandObservation(
+            kind: DaemonObservationCommandKind.fromWire(receipt.kind),
+            status: DaemonObservationCommandStatus.fromWire(receipt.status),
+            // deterministic fixture 未启动 Daemon；不能把 accepted 命令伪装成已接收或已执行。
+            deliveryState: DaemonDeliveryState.queued,
+          ),
+      ]),
+      events: List<DaemonCipherEventObservation>.unmodifiable([
+        for (final event in state.events.where(
+          (item) => item.sequence > afterSequence,
+        ))
+          DaemonCipherEventObservation(
+            sequence: event.sequence,
+            eventType: DaemonObservationEventType.fromWire(event.eventType),
+            // fixture payload 即使是测试数据也不进入观察 DTO，始终按无 DEK 的 opaque 状态渲染。
+            envelope: const CipherEnvelopeMetadata(
+              state: CipherEnvelopeState.opaque,
+            ),
+          ),
+      ]),
     );
   }
 

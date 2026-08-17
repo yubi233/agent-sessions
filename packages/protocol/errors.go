@@ -24,6 +24,7 @@ const (
 	ErrContentUnavailable      = "CONTENT_UNAVAILABLE"
 	ErrTerminalOffline         = "TERMINAL_OFFLINE"
 	ErrLocalStateMissing       = "LOCAL_STATE_MISSING"
+	ErrDaemonRestartRecovery   = "DAEMON_RESTART_RECOVERY"
 	ErrDaemonExecutionFailed   = "DAEMON_EXECUTION_FAILED"
 	ErrPayloadTooLarge         = "PAYLOAD_TOO_LARGE"
 	ErrDeadlineExceeded        = "DEADLINE_EXCEEDED"

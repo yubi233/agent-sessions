@@ -29,7 +29,7 @@
       "test_layer": "Flutter widget + Flutter macOS visible fixture + Relay integration（native macOS integration 因工具链回归暂缓）",
       "precondition": "MacBook、可见 Flutter macOS 桌面窗口、deterministic fixture Relay；runner 先构建 debug App，再直接启动该 App；Android 原生存储验证不作为本轮前置条件。",
       "steps": [
-        "通过 task test:flutter:local 构建并直接启动可见 macOS debug App，在 480x960 逻辑手机画布采集已登记的 5fps fixture 截图",
+        "通过 task test:flutter:local 构建并直接启动可见 macOS debug App；每个已登记场景以严格 5fps（200ms 节拍）持续采集 100 个候选帧，再筛选连续 25 帧作为 480x960 逻辑手机画布的最终 fixture 截图，不以 1 秒或 5 张截图结案",
         "创建首个 owner、登录、发起并批准 QR 配对、撤销设备并以恢复码恢复",
         "重启本地应用并检查受控认证状态；同时由 Dart/Relay 回归验证密文 envelope 和事务边界"
       ],
@@ -132,7 +132,7 @@
         "选择文本文件，验证窄屏默认 unified、unified/split 切换、稳定行号、hunk 折叠与分页继续加载",
         "选择 rename、binary、submodule、LFS 与超大 diff fixture，验证展示受限摘要而不是把二进制或超限内容渲染为文本",
         "让 fixture 在首次读取后返回 snapshot stale，点击重试并验证旧快照内容被整体替换、不会混合两个 snapshot",
-        "在 480x960 可见 macOS 窗口采集已登记的 5fps DiffView fixture PNG"
+        "在 480x960 可见 macOS 窗口以严格 5fps（200ms 节拍）采集 100 个候选帧，并筛选连续 25 帧的已登记 DiffView fixture PNG"
       ],
       "expected": "Git UI 只读；窄屏默认 unified；状态、分页与 diff 共用一个 snapshot token。漂移时仅显示可重试状态，成功重试后不混用旧、新快照。真实 Daemon 加密 RPC 尚未部署时，非 fixture 运行必须明确显示不可用，不能伪造成功。",
       "cleanup": [
@@ -189,7 +189,7 @@
         "确认同 Workspace 的子会话派发",
         "查看父子图并切入子会话",
         "拒绝另一张确认卡",
-        "在 480x960 可见 macOS 窗口采集已登记的 5fps fixture PNG"
+        "在 480x960 可见 macOS 窗口以严格 5fps（200ms 节拍）采集 100 个候选帧，并筛选连续 25 帧的已登记 fixture PNG"
       ],
       "expected": "确认后只显示密文任务摘要和子会话状态；子会话获得独立控制入口；拒绝不创建 Provider 命令。",
       "cleanup": [
@@ -216,7 +216,7 @@
         "在后台期间向当前 fixture 会话追加新事件，并记录当前 command 计数与 cursor",
         "恢复前台和网络，等待控制器仅以 after_seq 拉取增量 snapshot",
         "观察应用内降级通知、去重后的会话事件、失效 lease 的重新获取入口和未变化的 command 计数",
-        "在 480x960 可见 macOS 窗口采集已登记的 5fps fixture PNG；P6 full gate 后执行专用 5fps fixture 录屏"
+        "在 480x960 可见 macOS 窗口以严格 5fps（200ms 节拍）采集 100 个候选帧，并筛选连续 25 帧的已登记 fixture PNG；P6 full gate 后基于同一严格帧序列执行专用 5fps fixture 录屏"
       ],
       "expected": "只补齐 cursor 之后的事件并按 sequence 去重；恢复流程不自动重放任何写命令，已有 idempotency_key 只供显式用户重试复用；无 UnifiedPush distributor 时显示应用内通知而不丢失事件。MacBook 可见窗口结果不写成 Android 原生/真机或真实系统推送通过。",
       "cleanup": [
@@ -832,6 +832,37 @@
         "apps/mobile/test/accessibility_screens_test.dart",
         "apps/mobile/integration_test/accessibility_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-30-device.json"
+      ]
+    },
+    {
+      "id": "MOBILE-31",
+      "title": "Daemon 安全观察：只读命令状态与密文事件元数据",
+      "status": "partial",
+      "phase": "v0.4/P2-F",
+      "category": "Android",
+      "priority": "P0",
+      "test_layer": "Relay integration + Flutter unit/widget + HTTP DTO contract + visible macOS fixture",
+      "consumes": [
+        "CTRL-04",
+        "SYNC-05",
+        "DAEMON-RPC-01"
+      ],
+      "precondition": "Relay 已提供同账号 `GET /v1/sessions/{id}/commands?after_seq=` 安全投影；Terminal 专用 SSE、命令 payload、会话内容密钥与远程写控制均不进入 Flutter。",
+      "steps": [
+        "以当前账号读取已授权会话的 Daemon 观察，验证命令种类/状态/投递状态、稳定错误码与受限事件元数据按 cursor 增量返回。",
+        "以另一账号读取同一会话，验证被拒绝；检查响应与 Flutter 页面不含 command/Terminal ID、lease、workspace、密文、nonce、AAD、key ID、路径、Provider 正文或远程写入口。",
+        "向客户端注入未知命令、事件、错误码和算法，验证均安全降级；在可见 macOS fixture 窗口以严格 5fps（200ms 节拍）采集 100 个候选帧，筛选连续 25 帧的 `VISUAL-MOBILE-29` 最终证据，并明确该证据不是 Android AVD/真机。"
+      ],
+      "expected": "Flutter 只消费 Relay 裁剪投影且未知值 fail-closed；观察页不连接 Terminal SSE、不取得 lease、不解密事件也不发送命令。HTTP/Relay 测试证明真实契约与账号隔离，fixture 只证明本地可见状态。",
+      "cleanup": [
+        "关闭本轮 Flutter macOS 子进程并清理 deterministic fixture；不持久化或记录任何命令 payload、终端标识或密文。"
+      ],
+      "evidence": [
+        "internal/relay/p2_daemon_contract_test.go",
+        "apps/mobile/test/daemon_observation_test.dart",
+        "apps/mobile/test/http_relay_repository_test.dart",
+        "apps/mobile/test/local_visual_fixture_test.dart",
+        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
       ]
     },
     {

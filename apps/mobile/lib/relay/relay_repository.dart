@@ -1,4 +1,5 @@
 import '../domain/control_models.dart';
+import '../domain/daemon_observation_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
@@ -62,6 +63,12 @@ abstract interface class RelayRepository {
     String sessionId,
     SessionCommandInput input,
   );
+
+  /// P2-F：读取真实 Relay 的 Daemon 安全观察投影。该接口只读且不返回原始密文 envelope。
+  Future<DaemonSessionObservation> getSessionDaemonObservation(
+    String sessionId, {
+    int afterSequence = 0,
+  });
 
   /// parent 图只返回密文摘要与 child 引用；任务书和 child 正文不会经过该接口返回。
   Future<List<SessionDelegation>> listSessionDelegations(

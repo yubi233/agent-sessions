@@ -202,11 +202,29 @@ class _LocalVisualFrameRecorderState extends State<_LocalVisualFrameRecorder> {
   Future<void> _captureAfterScenarioSettles() async {
     // Coordinator 需要完成认证、选会话和 lease；固定等待只存在于 deterministic visual fixture。
     await Future<void>.delayed(const Duration(milliseconds: 1400));
+    final boundary = _boundaryKey.currentContext?.findRenderObject();
+    if (boundary is! RenderRepaintBoundary) return;
+    // 预热 raster 与 PNG 编码；严格采样从预热后开始，避免首帧初始化拖慢 200ms 节拍。
+    final warmup = await boundary.toImage(pixelRatio: 1);
+    try {
+      await warmup.toByteData(format: ui.ImageByteFormat.png);
+    } finally {
+      warmup.dispose();
+    }
+    final stopwatch = Stopwatch()..start();
+    final frameTimings = <Map<String, int>>[];
     for (var index = 0; index < widget.frameCount; index += 1) {
       if (!mounted) return;
-      final boundary = _boundaryKey.currentContext?.findRenderObject();
-      if (boundary is! RenderRepaintBoundary) return;
-      final image = await boundary.toImage(pixelRatio: 1);
+      final scheduledOffsetMs = index * widget.frameIntervalMs;
+      final remainingMs = scheduledOffsetMs - stopwatch.elapsedMilliseconds;
+      if (remainingMs > 0) {
+        await Future<void>.delayed(Duration(milliseconds: remainingMs));
+      }
+      if (!mounted) return;
+      final currentBoundary = _boundaryKey.currentContext?.findRenderObject();
+      if (currentBoundary is! RenderRepaintBoundary) return;
+      final captureStartedOffsetMs = stopwatch.elapsedMilliseconds;
+      final image = await currentBoundary.toImage(pixelRatio: 1);
       try {
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
         if (bytes == null) return;
@@ -214,15 +232,22 @@ class _LocalVisualFrameRecorderState extends State<_LocalVisualFrameRecorder> {
           '${widget.directory}/frame-${(index + 1).toString().padLeft(4, '0')}.png',
           bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
         );
+        frameTimings.add({
+          'frame_index': index + 1,
+          'scheduled_offset_ms': scheduledOffsetMs,
+          'capture_started_offset_ms': captureStartedOffsetMs,
+          'capture_completed_offset_ms': stopwatch.elapsedMilliseconds,
+        });
       } finally {
         image.dispose();
       }
-      if (index + 1 < widget.frameCount) {
-        await Future<void>.delayed(
-          Duration(milliseconds: widget.frameIntervalMs),
-        );
-      }
     }
+    await writeLocalVisualFrameTiming('${widget.directory}/frame-timing.json', {
+      'frame_rate_fps': 1000 ~/ widget.frameIntervalMs,
+      'frame_count': widget.frameCount,
+      'frame_interval_ms': widget.frameIntervalMs,
+      'frames': frameTimings,
+    });
   }
 
   @override
@@ -421,6 +446,10 @@ class _LocalVisualScenarioCoordinatorState
       final router = ref.read(appRouterProvider);
       if (widget.scenario == LocalVisualScenario.sessionList) {
         router.go('/home');
+      } else if (widget.scenario ==
+          LocalVisualScenario.sessionDaemonObservation) {
+        // P2-F 仍先经真实 controller 选择会话，再打开只读观察路由；不获取 lease。
+        router.go('/sessions/$sessionId/observation');
       } else if (widget.scenario == LocalVisualScenario.sessionGitMain ||
           widget.scenario == LocalVisualScenario.sessionGitRestricted) {
         router.go('/sessions/$sessionId/git');

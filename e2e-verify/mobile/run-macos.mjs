@@ -5,11 +5,12 @@ import {
   existsSync,
   openSync,
   readFileSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { baseReport, writeReport } from "../lib/report.mjs";
@@ -28,7 +29,13 @@ import {
 } from "./macos.mjs";
 import {
   captureMacosWindowFrameSeries,
+  materializeStrictWindowEvidenceFrames,
+  selectStrictWindowEvidenceFrames,
   waitForFlutterRenderFrameSeries,
+  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+  WINDOW_EVIDENCE_FPS,
+  WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
   writeMacosScreenshotManifest,
 } from "./macos-screenshot.mjs";
 
@@ -36,13 +43,23 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MOBILE_ROOT = join(ROOT, "apps", "mobile");
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_CASES = [...new Set(MACOS_INTEGRATION_TESTS.flatMap((entry) => entry.testIds))];
-const SCREENSHOT_FRAME_RATE_FPS = 5;
-const SCREENSHOT_FRAME_DURATION_MS = 1_000;
+const SCREENSHOT_FRAME_RATE_FPS = WINDOW_EVIDENCE_FPS;
+const SCREENSHOT_CANDIDATE_FRAME_COUNT = WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT;
+const SCREENSHOT_SELECTED_FRAME_COUNT = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT;
 const SCREENSHOT_SCENARIO_SETTLE_MS = 800;
-const FLUTTER_RENDER_FRAME_TIMEOUT_MS = 15_000;
+// 候选帧不按 1 秒窗口截断；100 帧以严格 5fps 采集约 20 秒，超时仅用于环境故障回收。
+const FLUTTER_RENDER_FRAME_TIMEOUT_MS = 35_000;
 const WINDOW_RELEASE_TIMEOUT_MS = 15_000;
 const WINDOW_RELEASE_POLL_MS = 200;
 const MACOS_GATE_LOCK_PATH = join(tmpdir(), "agent-sessions-flutter-macos-gate.lock");
+
+// 报告可归档，但不应带出执行主机的绝对目录；证据只用仓库内相对引用。
+function evidenceReference(path) {
+  const projectRelativePath = relative(ROOT, path);
+  return projectRelativePath.length > 0 && !projectRelativePath.startsWith("..")
+    ? projectRelativePath
+    : "[PATH REDACTED]";
+}
 export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
   Object.freeze({
     id: "VISUAL-MOBILE-01",
@@ -153,6 +170,11 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     id: "VISUAL-MOBILE-21",
     directory: "visual-mobile-21-terminal-status",
     localVisualScenario: "terminal-status",
+  }),
+  Object.freeze({
+    id: "VISUAL-MOBILE-29",
+    directory: "visual-mobile-29-daemon-observation",
+    localVisualScenario: "session-daemon-observation",
   }),
   Object.freeze({
     id: "VISUAL-MOBILE-22",
@@ -284,6 +306,7 @@ export async function recordMacosVisualScenario({
   waitForWindowExit = waitForNoMacosWindows,
 }) {
   const outputDirectory = join(screenshotDirectory, scenario.directory);
+  const candidateDirectory = join(outputDirectory, ".candidates");
   const sandboxDirectoryName = [
     "agent-sessions-visual",
     basename(dirname(screenshotDirectory)),
@@ -298,28 +321,46 @@ export async function recordMacosVisualScenario({
     observeWindow,
     localVisualScenario: scenario.localVisualScenario,
     localVisualFrameDirectoryName: sandboxDirectoryName,
-    localVisualFrameCount: SCREENSHOT_FRAME_RATE_FPS,
-    localVisualFrameIntervalMs: Math.round(1_000 / SCREENSHOT_FRAME_RATE_FPS),
+    localVisualFrameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+    localVisualFrameIntervalMs: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
     // onWindowObserved 会等待稳定并采完帧；随后才开始受控退出，保证不会截到退出中的窗口。
     stopAfterWindowMs: 400,
     onWindowObserved: async (window) => {
       await waitForStableFrame(SCREENSHOT_SCENARIO_SETTLE_MS);
       try {
-        return await captureFrames({
+        const candidates = await captureFrames({
           windowId: window.id,
-          outputDirectory,
+          outputDirectory: candidateDirectory,
           scenarioId: scenario.id,
           fps: SCREENSHOT_FRAME_RATE_FPS,
-          durationMs: SCREENSHOT_FRAME_DURATION_MS,
+          frameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+        });
+        const selected = selectStrictWindowEvidenceFrames({
+          frames: candidates,
+          selectedFrameCount: SCREENSHOT_SELECTED_FRAME_COUNT,
+        });
+        return materializeStrictWindowEvidenceFrames({
+          frames: selected,
+          outputDirectory,
         });
       } catch {
         // 当前 macOS 已观察到真实窗口，但 Screen Recording 可能被系统拒绝；此时只等同一 app 的 render tree 帧。
-        return waitForFlutterRenderFrames({
-          outputDirectory,
+        const candidates = await waitForFlutterRenderFrames({
+          outputDirectory: candidateDirectory,
           sourceDirectory: sandboxFrameDirectory,
           scenarioId: scenario.id,
-          frameCount: SCREENSHOT_FRAME_RATE_FPS,
+          frameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+          fps: SCREENSHOT_FRAME_RATE_FPS,
+          copyFrames: false,
           timeoutMs: FLUTTER_RENDER_FRAME_TIMEOUT_MS,
+        });
+        const selected = selectStrictWindowEvidenceFrames({
+          frames: candidates,
+          selectedFrameCount: SCREENSHOT_SELECTED_FRAME_COUNT,
+        });
+        return materializeStrictWindowEvidenceFrames({
+          frames: selected,
+          outputDirectory,
         });
       }
     },
@@ -357,9 +398,10 @@ export async function recordMacosVisualScenario({
   const frames = smoke.window.captureArtifacts.filter(
     (artifact) => artifact?.scenarioId === scenario.id,
   );
-  if (frames.length !== SCREENSHOT_FRAME_RATE_FPS) {
+  rmSync(candidateDirectory, { force: true, recursive: true });
+  if (frames.length !== SCREENSHOT_SELECTED_FRAME_COUNT) {
     throw new GateError(
-      `视觉场景 ${scenario.id} 未采集到完整 ${SCREENSHOT_FRAME_RATE_FPS} 帧序列。`,
+      `视觉场景 ${scenario.id} 未保留完整 ${SCREENSHOT_SELECTED_FRAME_COUNT} 帧连续 5fps 证据。`,
       { failureClass: "environment_or_startup_failure" },
     );
   }
@@ -456,6 +498,7 @@ function safeError(error) {
   return message
     .replace(/(bearer\s+)[^\s"']+/gi, "$1[REDACTED]")
     .replace(/([?&](?:token|password|secret)=)[^&#\s"']+/gi, "$1[REDACTED]")
+    .replace(/\/(?:Users|private|var|tmp)\/[^\s"']+/g, "[PATH REDACTED]")
     .slice(0, 500);
 }
 
@@ -584,10 +627,10 @@ async function main() {
 
     if (testResults.length === tests.length && testResults.every((result) => result.passed)) {
       // 业务断言全部通过后才开始 5fps 可见窗口采样，截图是补充证据而非提前替代 gate。
-      process.stdout.write("[macos-e2e] 启动预构建 App 并采集 5fps 视觉证据\n");
+      process.stdout.write("[macos-e2e] 启动预构建 App，持续采集 5fps 候选帧并筛选连续视觉证据\n");
       screenshotDirectory = join(ROOT, "e2e-verify", "screenshots", timestamp, "MOBILE");
       for (const scenario of visualScenarios) {
-        process.stdout.write(`[macos-e2e] 录制 5fps 视觉场景：${scenario.id}\n`);
+        process.stdout.write(`[macos-e2e] 采集并筛选 5fps 视觉场景：${scenario.id}\n`);
         const visualRun = await recordMacosVisualScenario({
           scenario,
           screenshotDirectory,
@@ -647,11 +690,16 @@ async function main() {
             },
             windowMode: smoke.window.portraitMobileWindowMode,
             frameRateFps: SCREENSHOT_FRAME_RATE_FPS,
+            candidateFrameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+            selectedFrameCount: SCREENSHOT_SELECTED_FRAME_COUNT,
+            strictFrameRate: true,
           });
         }
         screenshotArtifacts = [
-          ...screenshotEntries.map((artifact) => artifact.path),
-          ...(screenshotManifestPath != null ? [screenshotManifestPath] : []),
+          ...screenshotEntries.map((artifact) => evidenceReference(artifact.path)),
+          ...(screenshotManifestPath != null
+            ? [evidenceReference(screenshotManifestPath)]
+            : []),
         ];
       } catch (error) {
         status = "failed";
@@ -701,7 +749,7 @@ async function main() {
         prebuilt_debug_build: prebuiltBuild && {
           exit_code: prebuiltBuild.code,
           timed_out: prebuiltBuild.timedOut,
-          app_executable: prebuiltAppPath,
+          app_executable_name: basename(prebuiltAppPath),
         },
         visible_app_launcher: "prebuilt-macos-debug-app",
         target_mobile_content_size: MACOS_MOBILE_CONTENT_SIZE,
@@ -732,6 +780,11 @@ async function main() {
         visual_scenario_runs: visualScenarioRuns.map(({ scenario, smoke: scenarioSmoke, frames }) => ({
           id: scenario.id,
           frame_count: frames.length,
+          candidate_frame_count: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+          selected_frame_count: SCREENSHOT_SELECTED_FRAME_COUNT,
+          frame_rate_fps: SCREENSHOT_FRAME_RATE_FPS,
+          frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+          strict_frame_rate: true,
           capture_modes: [...new Set(frames.map((frame) => frame.captureMode))],
           exit_code: scenarioSmoke.code,
           signal: scenarioSmoke.signal,

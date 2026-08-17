@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/store"
+	contentcrypto "github.com/yubi233/agent-sessions/packages/crypto"
 	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
@@ -47,6 +48,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.GET("/sessions", a.handleListSessions)
 		auth.GET("/audit", a.handleListAudit)
 		auth.GET("/sessions/:id/snapshot", a.handleSessionSnapshot)
+		// P2-F 只读观察使用独立投影，不把 Daemon 专用 SSE、命令 payload 或原始密文交给 Android。
+		auth.GET("/sessions/:id/commands", a.handleSessionDaemonObservation)
 		// Web 只读 transport 是受限的 request/response 通道，不使用 RequireWrite；领域层仍会
 		// 限定 web 角色、kind、Session -> Workspace -> Terminal 与密文 envelope。
 		auth.GET("/sessions/:id/readonly-transport", a.handleWebReadTransport)
@@ -466,6 +469,55 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 		})
 	}
 	writeOK(c, sessionSnapshotView{Session: newSessionView(session), Events: views})
+}
+
+// handleSessionDaemonObservation 返回 Android 可消费的 Daemon 安全投影。
+// 这里不复用 /v1/daemon/commands/stream：后者只属于目标 Terminal，向 Android 暴露会突破
+// Terminal scope。观察页也不返回原始 envelope，防止无 DEK 的页面误解密或缓存密文。
+func (a *API) handleSessionDaemonObservation(c *gin.Context) {
+	afterSeq := int64(0)
+	if raw := c.Query("after_seq"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "after_seq must be a non-negative integer"))
+			return
+		}
+		afterSeq = parsed
+	}
+	session, err := a.Sessions.GetSession(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if session.AccountID != subject(c).AccountID {
+		writeError(c, domain.ErrScopeDenied)
+		return
+	}
+	commands, err := a.Sessions.ListDaemonCommandObservations(c.Request.Context(), session.AccountID, session.ID)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	events, err := a.Sessions.ListEventsAfter(c.Request.Context(), session.ID, afterSeq)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	eventViews := make([]daemonCipherEventObservationView, 0, len(events))
+	for _, event := range events {
+		eventViews = append(eventViews, newDaemonCipherEventObservationView(event))
+	}
+	commandViews := make([]daemonCommandObservationView, 0, len(commands))
+	for _, command := range commands {
+		commandViews = append(commandViews, newDaemonCommandObservationView(command))
+	}
+	writeOK(c, daemonSessionObservationView{
+		Session: daemonObservationSessionView{
+			Status: session.Status, Provider: session.Provider, LastSeq: session.LastSeq,
+		},
+		Commands: commandViews,
+		Events:   eventViews,
+	})
 }
 
 // handleWebReadTransport 返回当前会话所绑定 Terminal 的配对公钥。该公钥不是内容密钥；浏览器
@@ -1078,6 +1130,83 @@ type cipherEventView struct {
 type sessionSnapshotView struct {
 	Session sessionView       `json:"session"`
 	Events  []cipherEventView `json:"events"`
+}
+
+// daemonSessionObservationView 只保留 Flutter 观察页显示状态所需的字段。
+// workspace_id、session id 由路由已知但不在投影中重传，降低只读响应的关联面。
+type daemonSessionObservationView struct {
+	Session  daemonObservationSessionView       `json:"session"`
+	Commands []daemonCommandObservationView     `json:"commands"`
+	Events   []daemonCipherEventObservationView `json:"events"`
+}
+
+type daemonObservationSessionView struct {
+	Status   string `json:"status"`
+	Provider string `json:"provider,omitempty"`
+	LastSeq  int64  `json:"last_seq"`
+}
+
+// daemonCommandObservationView 不回显 command ID、target terminal、lease、幂等键或密文。
+type daemonCommandObservationView struct {
+	Kind          string `json:"kind"`
+	Status        string `json:"status"`
+	DeliveryState string `json:"delivery_state"`
+	ErrorCode     string `json:"error_code,omitempty"`
+}
+
+func newDaemonCommandObservationView(command domain.DaemonCommandObservation) daemonCommandObservationView {
+	return daemonCommandObservationView{
+		Kind: command.Kind, Status: command.Status, DeliveryState: command.DeliveryState, ErrorCode: command.ErrorCode,
+	}
+}
+
+type daemonCipherEventObservationView struct {
+	EventSeq  int64                      `json:"event_seq"`
+	EventType string                     `json:"event_type"`
+	Envelope  cipherEnvelopeMetadataView `json:"envelope"`
+}
+
+type cipherEnvelopeMetadataView struct {
+	State          string `json:"state"`
+	Algorithm      string `json:"algorithm,omitempty"`
+	PayloadVersion int    `json:"payload_version,omitempty"`
+}
+
+// newDaemonCipherEventObservationView 只验证并转发安全元数据；原始 envelope 永远不进入该 DTO。
+func newDaemonCipherEventObservationView(event store.SessionEventRow) daemonCipherEventObservationView {
+	return daemonCipherEventObservationView{
+		EventSeq: event.EventSeq, EventType: daemonObservationEventType(event.EventType),
+		Envelope: daemonCipherEnvelopeMetadata(event.EnvelopeJSON),
+	}
+}
+
+func daemonObservationEventType(value string) string {
+	switch value {
+	case "session.lifecycle", "turn.started", "message.delta", "message.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
+		return value
+	default:
+		return "unknown"
+	}
+}
+
+func daemonCipherEnvelopeMetadata(raw string) cipherEnvelopeMetadataView {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return cipherEnvelopeMetadataView{State: "opaque"}
+	}
+	var algorithm, keyID, nonce, ciphertext, aadHash string
+	var payloadVersion int
+	if json.Unmarshal(envelope["alg"], &algorithm) != nil || algorithm != contentcrypto.AlgorithmVersion ||
+		json.Unmarshal(envelope["key_id"], &keyID) != nil || strings.TrimSpace(keyID) == "" ||
+		json.Unmarshal(envelope["nonce"], &nonce) != nil || strings.TrimSpace(nonce) == "" ||
+		json.Unmarshal(envelope["ciphertext"], &ciphertext) != nil || strings.TrimSpace(ciphertext) == "" ||
+		json.Unmarshal(envelope["aad_hash"], &aadHash) != nil || strings.TrimSpace(aadHash) == "" ||
+		json.Unmarshal(envelope["payload_version"], &payloadVersion) != nil || payloadVersion < 1 {
+		return cipherEnvelopeMetadataView{State: "opaque"}
+	}
+	return cipherEnvelopeMetadataView{
+		State: "verified", Algorithm: contentcrypto.AlgorithmVersion, PayloadVersion: payloadVersion,
+	}
 }
 
 type recoveryRestoreView struct {

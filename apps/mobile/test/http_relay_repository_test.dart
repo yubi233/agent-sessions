@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:agent_sessions_mobile/domain/control_models.dart';
+import 'package:agent_sessions_mobile/domain/daemon_observation_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
@@ -243,6 +244,65 @@ void main() {
 
       expect(snapshot.session.lastSequence, 5);
       expect(snapshot.events.single.envelope, {'alg': 'opaque-ciphertext'});
+    });
+
+    test('P2-F 只读取 Daemon 安全观察投影，不请求 Terminal SSE 或原始密文', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/sessions/session_1/commands');
+        expect(options.method, 'GET');
+        expect(options.queryParameters, {'after_seq': 8});
+        expect(options.data, isNull);
+        return _jsonResponse({
+          'session': {
+            'status': 'running',
+            'provider': 'opencode',
+            'last_seq': 9,
+          },
+          'commands': [
+            {
+              'kind': 'session.start',
+              'status': 'failed',
+              'delivery_state': 'resolved',
+              'error_code': 'DAEMON_RESTART_RECOVERY',
+            },
+          ],
+          'events': [
+            {
+              'event_seq': 9,
+              'event_type': 'message.delta',
+              'envelope': {
+                'state': 'verified',
+                'algorithm': 'v1-aes256gcm-hkdfsha256',
+                'payload_version': 1,
+              },
+            },
+          ],
+        });
+      });
+
+      final observation = await _authenticatedRepository(
+        adapter,
+      ).getSessionDaemonObservation('session_1', afterSequence: 8);
+
+      expect(observation.session.lastSequence, 9);
+      expect(
+        observation.commands.single.kind,
+        DaemonObservationCommandKind.start,
+      );
+      expect(
+        observation.commands.single.errorCode,
+        DaemonObservationErrorCode.daemonRestartRecovery,
+      );
+      expect(
+        observation.events.single.eventType,
+        DaemonObservationEventType.messageDelta,
+      );
+      expect(
+        observation.events.single.envelope.state,
+        CipherEnvelopeState.verified,
+      );
+      // DTO 不保留 key_id、nonce、AAD 或 ciphertext；编译期字段缺失就是该边界的契约。
+      expect(observation.events.single.envelope.payloadVersion, 1);
     });
 
     test('零 lease 在客户端边界被拒绝，不发出 Relay 命令', () async {
@@ -531,64 +591,64 @@ void main() {
   });
 
   group('MOBILE-20 HttpRelayRepository 用量映射', () {
-    test('getUsageSummary(days: 7) 请求 /v1/usage/summary?days=7 并聚合 Provider 计数', () async {
-      final adapter = _FixtureHttpAdapter((options) {
-        expect(options.path, '/v1/usage/summary?days=7');
-        expect(options.method, 'GET');
-        expect(options.data, isNull);
-        expect(
-          options.headers['Authorization'],
-          'Bearer fixture-owner-access-token',
-        );
-        return _jsonResponse({
-          'days': 7,
-          'utc_today': '2026-08-16',
-          'providers': [
-            {
-              'provider': 'codex',
-              'utc_day': '2026-08-16',
-              'input_tokens': 100,
-              'output_tokens': 50,
-              'cache_read_tokens': 20,
-              'cache_write_tokens': 5,
-            },
-            {
-              'provider': 'claude',
-              'utc_day': '2026-08-16',
-              'input_tokens': 30,
-              'output_tokens': 25,
-              'cache_read_tokens': 0,
-              'cache_write_tokens': 10,
-            },
-          ],
+    test(
+      'getUsageSummary(days: 7) 请求 /v1/usage/summary?days=7 并聚合 Provider 计数',
+      () async {
+        final adapter = _FixtureHttpAdapter((options) {
+          expect(options.path, '/v1/usage/summary?days=7');
+          expect(options.method, 'GET');
+          expect(options.data, isNull);
+          expect(
+            options.headers['Authorization'],
+            'Bearer fixture-owner-access-token',
+          );
+          return _jsonResponse({
+            'days': 7,
+            'utc_today': '2026-08-16',
+            'providers': [
+              {
+                'provider': 'codex',
+                'utc_day': '2026-08-16',
+                'input_tokens': 100,
+                'output_tokens': 50,
+                'cache_read_tokens': 20,
+                'cache_write_tokens': 5,
+              },
+              {
+                'provider': 'claude',
+                'utc_day': '2026-08-16',
+                'input_tokens': 30,
+                'output_tokens': 25,
+                'cache_read_tokens': 0,
+                'cache_write_tokens': 10,
+              },
+            ],
+          });
         });
-      });
 
-      final UsageSummary summary = await _authenticatedRepository(
-        adapter,
-      ).getUsageSummary(days: 7);
+        final UsageSummary summary = await _authenticatedRepository(
+          adapter,
+        ).getUsageSummary(days: 7);
 
-      expect(summary.days, 7);
-      expect(summary.utcToday, '2026-08-16');
-      expect(summary.providers, hasLength(2));
-      expect(summary.providers.first.provider, 'codex');
-      expect(summary.providers.first.utcDay, '2026-08-16');
-      expect(summary.providers.first.inputTokens, 100);
-      expect(summary.providers.first.outputTokens, 50);
-      expect(summary.providers.first.cacheReadTokens, 20);
-      expect(summary.providers.first.cacheWriteTokens, 5);
-      expect(summary.providers.first.totalTokens, 150);
-      final (input, output) = summary.totals;
-      expect(input, 130);
-      expect(output, 75);
-    });
+        expect(summary.days, 7);
+        expect(summary.utcToday, '2026-08-16');
+        expect(summary.providers, hasLength(2));
+        expect(summary.providers.first.provider, 'codex');
+        expect(summary.providers.first.utcDay, '2026-08-16');
+        expect(summary.providers.first.inputTokens, 100);
+        expect(summary.providers.first.outputTokens, 50);
+        expect(summary.providers.first.cacheReadTokens, 20);
+        expect(summary.providers.first.cacheWriteTokens, 5);
+        expect(summary.providers.first.totalTokens, 150);
+        final (input, output) = summary.totals;
+        expect(input, 130);
+        expect(output, 75);
+      },
+    );
 
     test('缺 providers 字段的响应按 protocol 错误拒绝', () async {
       final adapter = _FixtureHttpAdapter(
-        (_) => _jsonResponse({
-          'days': 7,
-          'utc_today': '2026-08-16',
-        }),
+        (_) => _jsonResponse({'days': 7, 'utc_today': '2026-08-16'}),
       );
 
       await expectLater(

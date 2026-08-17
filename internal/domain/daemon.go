@@ -640,8 +640,26 @@ func normalizeDaemonCipherEnvelope(raw string) (string, error) {
 
 func safeErrorCode(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) > 96 {
-		return value[:96]
+	// Terminal 上报的错误码会投影给同账号只读端，因此只能保留协议已登记的稳定码。
+	// 未知值统一归为执行失败，不能把 Adapter/系统自由文本写入 Relay 或客户端界面。
+	switch value {
+	case "":
+		return ""
+	case protocol.ErrCapabilityUnsupported,
+		protocol.ErrContentUnavailable,
+		protocol.ErrDaemonExecutionFailed,
+		protocol.ErrDaemonRestartRecovery,
+		protocol.ErrDeadlineExceeded,
+		protocol.ErrLocalStateMissing,
+		protocol.ErrProtocolUnsupported,
+		protocol.ErrSnapshotStale,
+		protocol.ErrTargetInstanceStale,
+		protocol.ErrTerminalOffline,
+		protocol.ErrUpgradeRequired,
+		protocol.ErrWorkspaceMoved,
+		protocol.ErrWorkspacePathDenied:
+		return value
+	default:
+		return protocol.ErrDaemonExecutionFailed
 	}
-	return value
 }

@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  FLUTTER_RECORDING_FRAME_COUNT,
   FLUTTER_RECORDING_FPS,
   FLUTTER_RECORDING_SCENARIO_IDS,
   parseRecordingArgs,
   selectRecordingScenarios,
   validatePassedGateReport,
 } from "./record-macos.mjs";
+import {
+  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+} from "./macos-screenshot.mjs";
 
 test("P6 Flutter 录屏固定使用 5fps、gate report 和三个预登记场景", () => {
   const args = parseRecordingArgs([
@@ -46,7 +51,15 @@ test("P6/v0.2-P5 Flutter 录屏拒绝缺少任一登记场景证据的 full gate
         status: "passed",
         headless: false,
         visible_desktop_app: true,
-        visual_scenario_runs: [{ id: "VISUAL-MOBILE-14", frame_count: 5 }],
+        visual_scenario_runs: [{
+          id: "VISUAL-MOBILE-14",
+          frame_count: FLUTTER_RECORDING_FRAME_COUNT,
+          candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+          selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
+          frame_rate_fps: FLUTTER_RECORDING_FPS,
+          frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+          strict_frame_rate: true,
+        }],
       }),
     /VISUAL-MOBILE-15/,
   );
@@ -58,7 +71,12 @@ test("P6/v0.2-P5 Flutter 录屏拒绝缺少任一登记场景证据的 full gate
       visible_desktop_app: true,
       visual_scenario_runs: FLUTTER_RECORDING_SCENARIO_IDS.map((id) => ({
         id,
-        frame_count: 5,
+        frame_count: FLUTTER_RECORDING_FRAME_COUNT,
+        candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+        selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
+        frame_rate_fps: FLUTTER_RECORDING_FPS,
+        frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+        strict_frame_rate: true,
       })),
     }).status,
     "passed",

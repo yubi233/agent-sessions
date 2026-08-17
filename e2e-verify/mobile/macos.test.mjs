@@ -41,7 +41,12 @@ import {
   summarizeFlutterFailure,
   waitForNoMacosWindows,
 } from "./run-macos.mjs";
-import { FLUTTER_RENDER_BOUNDARY_FALLBACK } from "./macos-screenshot.mjs";
+import {
+  FLUTTER_RENDER_BOUNDARY_FALLBACK,
+  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+  WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
+} from "./macos-screenshot.mjs";
 
 function mobileFixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), "macos-runner-"));
@@ -181,6 +186,7 @@ test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前
       "VISUAL-MOBILE-19",
       "VISUAL-MOBILE-20",
       "VISUAL-MOBILE-21",
+      "VISUAL-MOBILE-29",
       "VISUAL-MOBILE-22",
       "VISUAL-MOBILE-23",
       "VISUAL-MOBILE-24",
@@ -285,18 +291,24 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
     cwd: "/fixture/mobile",
     localVisualScenario: "session-attachments",
     localVisualFrameDirectoryName: "agent-sessions-visual-mobile-08",
-    localVisualFrameCount: 5,
-    localVisualFrameIntervalMs: 200,
+    localVisualFrameCount: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+    localVisualFrameIntervalMs: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
     runProcess: (received) => received,
   });
   assert.equal(renderFrames.env.LOCAL_VISUAL_FRAME_DIRECTORY, "agent-sessions-visual-mobile-08");
-  assert.equal(renderFrames.env.LOCAL_VISUAL_FRAME_COUNT, "5");
-  assert.equal(renderFrames.env.LOCAL_VISUAL_FRAME_INTERVAL_MS, "200");
+  assert.equal(
+    renderFrames.env.LOCAL_VISUAL_FRAME_COUNT,
+    String(WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT),
+  );
+  assert.equal(
+    renderFrames.env.LOCAL_VISUAL_FRAME_INTERVAL_MS,
+    String(WINDOW_EVIDENCE_FRAME_INTERVAL_MS),
+  );
   assert.throws(
     () => runMacosPrebuiltApp({
       appPath: prebuilt.flutter,
       cwd: "/fixture/mobile",
-      localVisualFrameCount: 5,
+      localVisualFrameCount: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
       runProcess: (received) => received,
     }),
     /未设置截图目录/,
@@ -312,16 +324,33 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
   let receivedLaunch = null;
   let fallbackInput = null;
   let waitedForWindowExit = false;
-  const expectedFrames = Array.from({ length: 5 }, (_, index) => ({
+  const root = mkdtempSync(join(tmpdir(), "macos-strict-frames-"));
+  const sourceDirectory = join(root, "source");
+  mkdirSync(sourceDirectory, { recursive: true });
+  const png = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png, 0);
+  png.writeUInt32BE(13, 8);
+  png.write("IHDR", 12, "ascii");
+  png.writeUInt32BE(480, 16);
+  png.writeUInt32BE(960, 20);
+  const candidateFrames = Array.from({ length: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT }, (_, index) => {
+    const path = join(sourceDirectory, `frame-${String(index + 1).padStart(4, "0")}.png`);
+    writeFileSync(path, png);
+    return {
     captureMode: FLUTTER_RENDER_BOUNDARY_FALLBACK,
-    filename: `frame-${String(index + 1).padStart(4, "0")}.png`,
+      filename: `frame-${String(index + 1).padStart(4, "0")}.png`,
     frameIndex: index + 1,
+      path,
     scenarioId: scenario.id,
-  }));
+      scheduledOffsetMs: index * WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+      captureStartedOffsetMs: index * WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+      capturedOffsetMs: index * WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+    };
+  });
 
   const result = await recordMacosVisualScenario({
     scenario,
-    screenshotDirectory: "/fixture/screenshots",
+    screenshotDirectory: join(root, "screenshots"),
     appPath: "/fixture/app",
     observeWindow: async () => ({ count: 1, windows: [] }),
     waitForStableFrame: async () => {},
@@ -330,7 +359,7 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
     },
     waitForFlutterRenderFrames: async (input) => {
       fallbackInput = input;
-      return expectedFrames;
+      return candidateFrames;
     },
     waitForWindowExit: async () => {
       waitedForWindowExit = true;
@@ -355,19 +384,23 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
   });
 
   assert.match(receivedLaunch.localVisualFrameDirectoryName, /^agent-sessions-visual-/);
-  assert.equal(receivedLaunch.localVisualFrameCount, 5);
+  assert.equal(receivedLaunch.localVisualFrameCount, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
   assert.equal(receivedLaunch.localVisualFrameIntervalMs, 200);
   assert.match(
     receivedLaunch.localVisualFrameDirectoryName,
     /visual-mobile-08-attachment-composer$/,
   );
-  assert.equal(fallbackInput.frameCount, 5);
-  assert.equal(fallbackInput.timeoutMs, 15_000);
+  assert.equal(fallbackInput.frameCount, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
+  assert.equal(fallbackInput.copyFrames, false);
+  assert.equal(fallbackInput.timeoutMs, 35_000);
   assert.match(
     fallbackInput.sourceDirectory,
     new RegExp(`Library/Containers/${MACOS_APP_BUNDLE_IDENTIFIER}/Data/tmp/`),
   );
-  assert.deepEqual(result.frames, expectedFrames);
+  assert.equal(result.frames.length, WINDOW_EVIDENCE_SELECTED_FRAME_COUNT);
+  assert.equal(result.frames[0].sourceFrameIndex, 76);
+  assert.equal(result.frames.at(-1).sourceFrameIndex, 100);
+  assert.equal(existsSync(result.frames.at(-1).path), true);
   assert.equal(waitedForWindowExit, true);
 });
 

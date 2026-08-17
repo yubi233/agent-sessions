@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { baseReport, writeReport } from "../lib/report.mjs";
@@ -21,11 +21,17 @@ import {
   MACOS_SCREENSHOT_SCENARIOS,
   recordMacosVisualScenario,
 } from "./run-macos.mjs";
+import {
+  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+  WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
+} from "./macos-screenshot.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MOBILE_ROOT = join(ROOT, "apps", "mobile");
 const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
 export const FLUTTER_RECORDING_FPS = 5;
+export const FLUTTER_RECORDING_FRAME_COUNT = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT;
 // 录屏范围：P6 生命周期恢复、v0.2 快捷菜单/Resume、文件浏览、composer 控制面、
 // P3 终端状态与 P3-A 设置中心/会话信息。
 export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
@@ -45,6 +51,14 @@ export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-28",
 ]);
 
+// 长期报告只存仓库内相对 artifact 引用，不能暴露执行主机目录。
+function evidenceReference(path) {
+  const projectRelativePath = relative(ROOT, path);
+  return projectRelativePath.length > 0 && !projectRelativePath.startsWith("..")
+    ? projectRelativePath
+    : "[PATH REDACTED]";
+}
+
 class RecordingError extends Error {
   constructor(message, { failureClass = "test_harness_defect" } = {}) {
     super(message);
@@ -56,6 +70,7 @@ function safeError(error) {
   return String(error instanceof Error ? error.message : error)
     .replace(/(bearer\s+)[^\s"']+/gi, "$1[REDACTED]")
     .replace(/([?&](?:token|password|secret)=)[^&#\s"']+/gi, "$1[REDACTED]")
+    .replace(/\/(?:Users|private|var|tmp)\/[^\s"']+/g, "[PATH REDACTED]")
     .slice(0, 500);
 }
 
@@ -146,14 +161,19 @@ export function validatePassedGateReport(report) {
   const visualRuns = Array.isArray(report.visual_scenario_runs)
     ? report.visual_scenario_runs
     : [];
-  // 录屏范围内的每个场景都必须具备 5fps 截图证据，缺任一场景都拒绝录屏。
+  // 录屏范围内的每个场景都必须先通过连续 5fps 候选采集与筛选，缺任一场景都拒绝录屏。
   const missing = FLUTTER_RECORDING_SCENARIO_IDS.filter((id) => {
     const run = visualRuns.find((item) => item?.id === id);
-    return run?.frame_count !== FLUTTER_RECORDING_FPS;
+    return run?.frame_count !== FLUTTER_RECORDING_FRAME_COUNT
+      || run?.candidate_frame_count !== WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT
+      || run?.selected_frame_count !== FLUTTER_RECORDING_FRAME_COUNT
+      || run?.frame_rate_fps !== FLUTTER_RECORDING_FPS
+      || run?.frame_interval_ms !== WINDOW_EVIDENCE_FRAME_INTERVAL_MS
+      || run?.strict_frame_rate !== true;
   });
   if (missing.length > 0) {
     throw new RecordingError(
-      `full gate 缺少以下场景的 5fps 截图证据：${missing.join(", ")}`,
+      `full gate 缺少以下场景的严格 5fps 连续截图证据：${missing.join(", ")}`,
       {
         failureClass: "checkpoint_mismatch",
       },
@@ -256,8 +276,8 @@ async function inspectMp4({ path, fps }) {
     });
   }
   const frameCount = Number(stream?.nb_frames);
-  if (!Number.isInteger(frameCount) || frameCount !== fps) {
-    throw new RecordingError(`Flutter 录屏帧数不是预期的 ${fps} 帧。`, {
+  if (!Number.isInteger(frameCount) || frameCount !== FLUTTER_RECORDING_FRAME_COUNT) {
+    throw new RecordingError(`Flutter 录屏帧数不是预期的 ${FLUTTER_RECORDING_FRAME_COUNT} 帧。`, {
       failureClass: "test_harness_defect",
     });
   }
@@ -265,7 +285,7 @@ async function inspectMp4({ path, fps }) {
     frame_count: frameCount,
     frame_rate_fps: frameRate,
     height: Number(stream.height),
-    path,
+    path: evidenceReference(path),
     size_bytes: statSync(path).size,
     width: Number(stream.width),
   };
@@ -323,7 +343,7 @@ async function main() {
 
     for (const scenario of selectRecordingScenarios()) {
       process.stdout.write(
-        `[flutter-record] 采集 ${scenario.id} 的 5fps 可见窗口帧\n`,
+        `[flutter-record] 采集 ${scenario.id} 的连续 5fps 可见窗口帧\n`,
       );
       const visualRun = await recordMacosVisualScenario({
         scenario,
@@ -339,7 +359,10 @@ async function main() {
         fps: args.fps,
       });
       const video = await inspectMp4({ path: mp4Path, fps: args.fps });
-      artifacts.push(mp4Path, ...visualRun.frames.map((frame) => frame.path));
+      artifacts.push(
+        evidenceReference(mp4Path),
+        ...visualRun.frames.map((frame) => evidenceReference(frame.path)),
+      );
       completedScenarios.push({
         capture_modes: [
           ...new Set(visualRun.frames.map((frame) => frame.captureMode)),
@@ -383,7 +406,13 @@ async function main() {
             completed_scenarios: completedScenarios,
             fixture_revision: "local-deterministic-fixture",
             fps: FLUTTER_RECORDING_FPS,
-            full_gate_report: gateReport?.path ?? null,
+            candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+            selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
+            frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+            strict_frame_rate: true,
+            full_gate_report: gateReport == null
+              ? null
+              : evidenceReference(gateReport.path),
             headless: false,
             host_platform: "macos",
             recording_scenarios: FLUTTER_RECORDING_SCENARIO_IDS,
@@ -402,7 +431,7 @@ async function main() {
         )}\n`,
         "utf-8",
       );
-      artifacts.unshift(manifestPath);
+      artifacts.unshift(evidenceReference(manifestPath));
     }
     const reportPath = writeReport({
       planId: "MOBILE",
@@ -426,10 +455,16 @@ async function main() {
           remaining_risk: remainingRisk,
         }),
         duration_ms: Date.now() - startedAt,
-        full_gate_report: gateReport?.path ?? null,
+        full_gate_report: gateReport == null
+          ? null
+          : evidenceReference(gateReport.path),
         gate_kind: "flutter_macos_fixture_recording",
         host_platform: "macos",
         recording_fps: FLUTTER_RECORDING_FPS,
+        recording_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
+        candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+        frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+        strict_frame_rate: true,
         recording_scenario_ids: FLUTTER_RECORDING_SCENARIO_IDS,
         visible_desktop_app: completedScenarios.length > 0,
       },

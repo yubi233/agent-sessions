@@ -39,6 +39,8 @@ enum LocalVisualScenario {
   sessionProviderUnavailable,
   // v0.4/P3 视觉场景：只读 Relay Terminal 状态，不模拟 Daemon 命令。
   terminalStatus,
+  // v0.4/P2-F：只读 Daemon 安全投影，不模拟命令执行、回执或密钥交付。
+  sessionDaemonObservation,
   // v0.4/P3-A 视觉场景：设置中心与会话 info 只读白名单展示。
   settingsIndex,
   sessionInfo,
@@ -78,6 +80,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'session-provider-unavailable' =>
     LocalVisualScenario.sessionProviderUnavailable,
   'terminal-status' => LocalVisualScenario.terminalStatus,
+  'session-daemon-observation' => LocalVisualScenario.sessionDaemonObservation,
   'settings-index' => LocalVisualScenario.settingsIndex,
   'session-info' => LocalVisualScenario.sessionInfo,
   'code-viewer' => LocalVisualScenario.codeViewer,
@@ -297,6 +300,7 @@ class LocalVisualFixture {
       LocalVisualScenario.sessionComposerControls ||
       LocalVisualScenario.sessionGoalEdit ||
       LocalVisualScenario.sessionProviderUnavailable ||
+      LocalVisualScenario.sessionDaemonObservation ||
       LocalVisualScenario.sessionInfo ||
       LocalVisualScenario.recentSessions ||
       LocalVisualScenario.messageDeepLink => true,

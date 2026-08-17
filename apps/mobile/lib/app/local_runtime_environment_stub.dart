@@ -12,3 +12,8 @@ int get localVisualFrameCountFromRuntime => 0;
 int get localVisualFrameIntervalMsFromRuntime => 0;
 
 Future<void> writeLocalVisualFrame(String outputPath, Uint8List bytes) async {}
+
+Future<void> writeLocalVisualFrameTiming(
+  String outputPath,
+  Map<String, dynamic> timing,
+) async {}

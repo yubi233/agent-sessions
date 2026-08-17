@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../state/app_controller.dart';
 import '../ui/command_palette_screens.dart';
+import '../ui/daemon_observation_screens.dart';
 import '../ui/git_diff_screens.dart';
 import '../ui/message_deep_link_screens.dart';
 import '../ui/pairing_scanner.dart';
@@ -83,32 +84,32 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             WorkspaceFilesScreen(sessionId: state.pathParameters['id']!),
       ),
       GoRoute(
+        path: '/sessions/:id/observation',
+        builder: (context, state) =>
+            DaemonObservationScreen(sessionId: state.pathParameters['id']!),
+      ),
+      GoRoute(
         path: '/sessions/:id',
         builder: (context, state) =>
             SessionDetailScreen(sessionId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: '/sessions/:id/info',
-        builder: (context, state) => SessionInfoScreen(
-          sessionId: state.pathParameters['id']!,
-        ),
+        builder: (context, state) =>
+            SessionInfoScreen(sessionId: state.pathParameters['id']!),
       ),
       GoRoute(
         path: '/sessions/:id/messages/:seq',
         builder: (context, state) => MessageDeepLinkScreen(
           sessionId: state.pathParameters['id']!,
-          messageSequence: int.tryParse(state.pathParameters['seq'] ?? '') ??
-              0,
+          messageSequence: int.tryParse(state.pathParameters['seq'] ?? '') ?? 0,
         ),
       ),
       GoRoute(
         path: '/command-palette',
         builder: (context, state) => const CommandPaletteScreen(),
       ),
-      GoRoute(
-        path: '/usage',
-        builder: (context, state) => const UsageScreen(),
-      ),
+      GoRoute(path: '/usage', builder: (context, state) => const UsageScreen()),
       GoRoute(
         path: '/settings',
         builder: (context, state) => const SettingsScreen(),

@@ -5,6 +5,11 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+} from "./macos-screenshot.mjs";
+
 const MAX_CAPTURE_BYTES = 1_000_000;
 const CHILD_ENV_SENSITIVE_KEY = /(api.?key|authorization|cookie|password|secret|token|private.?key|access.?key|refresh.?token)/i;
 
@@ -673,11 +678,11 @@ export function runMacosPrebuiltApp({
     (typeof localVisualFrameDirectoryName !== "string"
       || !/^[A-Za-z0-9_-]{1,120}$/.test(localVisualFrameDirectoryName)
       || !Number.isInteger(localVisualFrameCount)
-      || localVisualFrameCount <= 0
+      || localVisualFrameCount !== WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT
       || !Number.isInteger(localVisualFrameIntervalMs)
-      || localVisualFrameIntervalMs <= 0)
+      || localVisualFrameIntervalMs !== WINDOW_EVIDENCE_FRAME_INTERVAL_MS)
   ) {
-    throw new Error("Flutter 渲染截图参数无效。 ");
+    throw new Error("Flutter 渲染截图必须使用严格 5fps 候选采集参数。 ");
   }
   if (!hasFrameRecorder && (localVisualFrameCount !== 0 || localVisualFrameIntervalMs !== 0)) {
     throw new Error("未设置截图目录时不能启动 Flutter 渲染截图。 ");

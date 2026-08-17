@@ -355,6 +355,14 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             onPressed: () => context.push('/sessions/${widget.sessionId}/git'),
             icon: const Icon(Icons.difference_outlined),
           ),
+          // P2-F 入口只读取 Relay 安全投影，不获取 lease，也不让观察页承担任何远程写控制。
+          IconButton(
+            key: const Key('session-open-daemon-observation-button'),
+            tooltip: '查看 Daemon 观察',
+            onPressed: () =>
+                context.push('/sessions/${widget.sessionId}/observation'),
+            icon: const Icon(Icons.visibility_outlined),
+          ),
           _SessionQuickMenu(
             sessions: sessions,
             canWrite: app.canManageDevices,

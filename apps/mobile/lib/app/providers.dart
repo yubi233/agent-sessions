@@ -15,6 +15,7 @@ import '../files/workspace_files_repository.dart';
 import '../state/app_controller.dart';
 import '../state/code_viewer_controller.dart';
 import '../state/command_palette_controller.dart';
+import '../state/daemon_observation_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/git_diff_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
@@ -131,6 +132,20 @@ final sessionRecoveryControllerProvider =
       return controller;
     });
 
+/// P2-F Daemon 观察按会话隔离，只消费 Relay 的裁剪只读投影；不与 composer、lease 或写命令共享状态。
+final daemonObservationControllerProvider =
+    ChangeNotifierProvider.family<DaemonObservationController, String>((
+      ref,
+      sessionId,
+    ) {
+      final controller = DaemonObservationController(
+        relay: ref.read(relayRepositoryProvider),
+        sessionId: sessionId,
+      );
+      unawaited(controller.initialize());
+      return controller;
+    });
+
 /// Delegation 图与会话正文独立拉取，父会话切换时不会把上一页的 child 节点短暂画到当前页面。
 final delegationControllerProvider =
     ChangeNotifierProvider<DelegationController>(
@@ -167,9 +182,7 @@ final codeViewerControllerProvider =
 /// P3 最近会话页只读状态机：复用 Relay 白名单会话列表并稳定排序。
 final recentSessionsControllerProvider =
     ChangeNotifierProvider<RecentSessionsController>((ref) {
-      return RecentSessionsController(
-        relay: ref.read(relayRepositoryProvider),
-      );
+      return RecentSessionsController(relay: ref.read(relayRepositoryProvider));
     });
 
 /// P3 用量统计页只读状态机：消费 Relay 白名单整数聚合（ADR-010）。

@@ -22,6 +22,7 @@ import (
 	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/store"
+	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
 // DAEMON-RPC-01 / CTRL-04 / SESS-05 / SYNC-05：已配对 Terminal 通过独立 REST+SSE
@@ -200,6 +201,113 @@ func TestP2DaemonProtocolAndRevocationFailClosed(t *testing.T) {
 	}
 	if heartbeat := env.do(t, http.MethodPost, "/v1/daemon/heartbeat", map[string]any{"protocol_version": 1}, terminal.AccessToken); heartbeat.Code != http.StatusForbidden {
 		t.Fatalf("revoked heartbeat status=%d want 403 body=%s", heartbeat.Code, heartbeat.Body.String())
+	}
+}
+
+// P2-F / DAEMON-RPC-01：Android 只读观察只能读取账号内的命令状态、稳定错误码和安全 envelope
+// 元数据；它不能订阅 Terminal command SSE，也不能拿到 command/terminal 标识、lease 或密文。
+func TestP2FlutterDaemonObservationReadOnly(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "p2-flutter-observation@test.dev")
+	terminal := env.pairTerminal(t, owner, "p2-flutter-observation-terminal")
+	terminalID := daemonHello(t, env, terminal.AccessToken)
+	sessionID, _ := env.createBoundSession(t, owner, terminalID, "p2-flutter-observation")
+	epoch := p2SessionLeaseEpoch(t, env, owner.AccessToken, sessionID)
+
+	command := env.do(t, http.MethodPost, "/v1/sessions/"+sessionID+"/commands", map[string]any{
+		"kind": "session.start", "idempotency_key": "p2-flutter-observation-start", "lease_epoch": epoch,
+		"target_terminal_id": terminalID,
+		"ciphertext":         map[string]any{"opaque": "must-not-reach-observation"},
+	}, owner.AccessToken)
+	if command.Code != http.StatusAccepted {
+		t.Fatalf("submit observation command status=%d body=%s", command.Code, command.Body.String())
+	}
+	var submitted struct {
+		ID string `json:"id"`
+	}
+	decodeW1(t, command.Body.Bytes(), &submitted)
+	if submitted.ID == "" {
+		t.Fatal("missing observation command ID")
+	}
+
+	for _, ackKind := range []string{"received", "started"} {
+		response := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.ID+"/ack", map[string]any{
+			"protocol_version": 1, "delivery_seq": 1, "ack_kind": ackKind,
+		}, terminal.AccessToken)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s acknowledgement status=%d body=%s", ackKind, response.Code, response.Body.String())
+		}
+	}
+	// 该 envelope 仅用于验证投影是否正确裁剪；nonce、key_id、AAD 和 ciphertext 都不得进入 Android 响应。
+	event := env.do(t, http.MethodPost, "/v1/daemon/events", map[string]any{
+		"protocol_version": 1, "event_id": "evt-p2-flutter-observation", "command_id": submitted.ID,
+		"session_id": sessionID, "event_type": "turn.started",
+		"envelope": map[string]any{
+			"alg": "v1-aes256gcm-hkdfsha256", "key_id": "p2-observation-key", "nonce": "p2-observation-nonce",
+			"ciphertext": "p2-observation-ciphertext", "aad_hash": "p2-observation-aad", "payload_version": 1,
+		},
+	}, terminal.AccessToken)
+	if event.Code != http.StatusOK {
+		t.Fatalf("upload observation event status=%d body=%s", event.Code, event.Body.String())
+	}
+	var eventReceipt struct {
+		EventSeq int64 `json:"event_seq"`
+	}
+	decodeW1(t, event.Body.Bytes(), &eventReceipt)
+	if eventReceipt.EventSeq <= 0 {
+		t.Fatalf("observation event receipt=%+v", eventReceipt)
+	}
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.ID+"/result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 1, "status": "failed", "error_code": protocol.ErrDaemonRestartRecovery,
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("resolve observation command status=%d body=%s", result.Code, result.Body.String())
+	}
+
+	observation := env.do(t, http.MethodGet, "/v1/sessions/"+sessionID+"/commands?after_seq="+strconv.FormatInt(eventReceipt.EventSeq-1, 10), nil, owner.AccessToken)
+	if observation.Code != http.StatusOK {
+		t.Fatalf("get Flutter observation status=%d body=%s", observation.Code, observation.Body.String())
+	}
+	var body struct {
+		Session struct {
+			Status  string `json:"status"`
+			LastSeq int64  `json:"last_seq"`
+		} `json:"session"`
+		Commands []struct {
+			Kind          string `json:"kind"`
+			Status        string `json:"status"`
+			DeliveryState string `json:"delivery_state"`
+			ErrorCode     string `json:"error_code"`
+		} `json:"commands"`
+		Events []struct {
+			EventSeq  int64  `json:"event_seq"`
+			EventType string `json:"event_type"`
+			Envelope  struct {
+				State          string `json:"state"`
+				Algorithm      string `json:"algorithm"`
+				PayloadVersion int    `json:"payload_version"`
+			} `json:"envelope"`
+		} `json:"events"`
+	}
+	decodeW1(t, observation.Body.Bytes(), &body)
+	if body.Session.Status != domain.SessionRunning || body.Session.LastSeq < eventReceipt.EventSeq {
+		t.Fatalf("observation session=%+v", body.Session)
+	}
+	if len(body.Commands) != 1 || body.Commands[0].Kind != "session.start" || body.Commands[0].Status != domain.CommandFailed || body.Commands[0].DeliveryState != "resolved" || body.Commands[0].ErrorCode != protocol.ErrDaemonRestartRecovery {
+		t.Fatalf("observation commands=%+v", body.Commands)
+	}
+	if len(body.Events) != 1 || body.Events[0].EventType != "turn.started" || body.Events[0].Envelope.State != "verified" || body.Events[0].Envelope.Algorithm != "v1-aes256gcm-hkdfsha256" || body.Events[0].Envelope.PayloadVersion != 1 {
+		t.Fatalf("observation events=%+v", body.Events)
+	}
+	for _, forbidden := range []string{submitted.ID, terminalID, "p2-observation-key", "p2-observation-nonce", "p2-observation-ciphertext", "p2-observation-aad", "must-not-reach-observation", "workspace_id", "lease_epoch"} {
+		if strings.Contains(observation.Body.String(), forbidden) {
+			t.Fatalf("Flutter observation leaked forbidden value %q: %s", forbidden, observation.Body.String())
+		}
+	}
+
+	other := env.provisionAdditionalAccount(t, "p2-flutter-observation-other@test.dev")
+	if denied := env.do(t, http.MethodGet, "/v1/sessions/"+sessionID+"/commands", nil, other.AccessToken); denied.Code != http.StatusForbidden {
+		t.Fatalf("cross-account observation status=%d want 403 body=%s", denied.Code, denied.Body.String())
 	}
 }
 
