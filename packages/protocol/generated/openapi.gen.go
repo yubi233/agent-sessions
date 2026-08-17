@@ -903,7 +903,10 @@ type StreamDaemonCommandsParams struct {
 
 // StreamEventsParams defines parameters for StreamEvents.
 type StreamEventsParams struct {
-	AfterSeq    *int64  `form:"after_seq,omitempty" json:"after_seq,omitempty"`
+	// AfterSeq Last-Event-ID 缺失时使用的账号级 cursor；名称为兼容保留，不是 session event_seq。
+	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
+
+	// LastEventID 上次已处理的账号级 cursor；值必须是非负整数。
 	LastEventID *string `json:"Last-Event-ID,omitempty"`
 }
 

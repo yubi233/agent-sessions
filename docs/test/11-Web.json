@@ -1,6 +1,6 @@
 {
   "suite": "web",
-  "suite_version": 2,
+  "suite_version": 3,
   "status": "in_progress",
   "plan_id": "WEB",
   "description": "Vue Web 只读页面、SSE cursor、PWA 与 headed 浏览器。写权限仍由 Relay 测试定义。",
@@ -48,19 +48,30 @@
     {
       "id": "WEB-02",
       "title": "SSE cursor 刷新恢复",
-      "status": "planned",
-      "phase": "P4",
+      "status": "partial",
+      "phase": "v0.4/P4",
       "category": "Web",
       "priority": "P0",
-      "test_layer": "headed E2E",
-      "precondition": "账号级 SSE（/v1/events）与 cursor 恢复；Web 只读客户端接入前为 planned。",
+      "test_layer": "Relay contract + Vue component + headed Chrome",
+      "precondition": "隔离 Relay SQLite 已迁移 account_event_log；同账号至少两个 session 的 local event_seq 可重叠；Web 以只读 token 登录。",
       "steps": [
-        "Web 尚未接入 SSE；登记为 planned，不伪造恢复证据。"
+        "创建同账号两个 session，读取 /v1/events，使用 Last-Event-ID 恢复并核对只补账号全局 cursor 缺口，不把两个 session 的 event_seq=1 混为同一事件。",
+        "打开账号 SSE 后提交 fixture delegation.changed，核对同账号实时流收到事件、其他账号回放不含该 session，并拒绝负 cursor；预检允许 Last-Event-ID。",
+        "在 Vue 回归中核对嵌套 snapshot DTO 映射、SSE parser 只读取 id、重复 cursor 去重、重连携带 Last-Event-ID，opaque data 不进入状态。",
+        "在 headed Chrome 登录到会话详情，断网并由 Node fixture 创建 delegation，再恢复网络；核对 cursor 重连后时间线增量更新、无写控件且 DOM 无 opaque task ciphertext。"
       ],
-      "expected": "SSE cursor 恢复在 Web 接入后验证；当前不声称已完成。",
-      "cleanup": [],
+      "expected": "账号 cursor 全局单调且授权隔离；Web 以 fetch SSE 的 id 作为失效通知，按 session last_seq 增量重读 snapshot 并按 event_seq 去重；opaque envelope 不被解析、缓存或渲染。",
+      "cleanup": [
+        "关闭 headed Chrome、隔离 Relay 和 SSE 请求；清理临时 SQLite fixture。"
+      ],
       "evidence": [
-        "e2e-verify/reports/<ts>/WEB/web-02.json"
+        "internal/store/migrate_test.go",
+        "internal/relay/p4_web_sse_contract_test.go",
+        "apps/web/src/session.ts",
+        "apps/web/src/views/SessionDetailView.vue",
+        "apps/web/src/readonly-views.test.ts",
+        "e2e-verify/suites/p4-web-readonly.mjs",
+        "e2e-verify/reports/2026-08-17T08-47-44-171Z/WEB/p4-web-readonly.json"
       ]
     },
     {

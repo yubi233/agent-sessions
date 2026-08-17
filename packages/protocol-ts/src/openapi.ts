@@ -530,6 +530,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description 账号范围 SSE。Last-Event-ID 优先于 after_seq；两者都是 account_event_log 的跨会话单调 cursor，不能使用 session-local event_seq。客户端断线后从该 cursor 严格回放；实时 Hub 仅缩短延迟，SQLite 是恢复事实源。 */
         get: operations["streamEvents"];
         put?: never;
         post?: never;
@@ -1976,9 +1977,11 @@ export interface operations {
     streamEvents: {
         parameters: {
             query?: {
+                /** @description Last-Event-ID 缺失时使用的账号级 cursor；名称为兼容保留，不是 session event_seq。 */
                 after_seq?: number;
             };
             header?: {
+                /** @description 上次已处理的账号级 cursor；值必须是非负整数。 */
                 "Last-Event-ID"?: string;
             };
             path?: never;

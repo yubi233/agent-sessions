@@ -23,6 +23,7 @@ type API struct {
 	Attachments      *domain.AttachmentService
 	Daemons          *domain.DaemonService
 	DaemonDeliveries *domain.DaemonDeliveryHub
+	Events           *domain.PresenceHub
 	Capabilities     *adapterreg.Registry
 	Usage            *domain.UsageService
 	Repo             store.Repository

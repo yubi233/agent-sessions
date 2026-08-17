@@ -63,6 +63,21 @@ tasks:
     cmds:
       - go test ./internal/relay -run '^(TestP2DaemonCommandLifecycleAndSSERecovery|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2DaemonProtocolAndRevocationFailClosed|TestP2RelayDaemonDeterministicFullLoop|TestP2RelayDaemonDeterministicSessionLifecycleFullLoop|TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay)$' -count=1
 
+  test:e2e:web:
+    desc: P4 Web SSE cursor 的 headed Chrome 本地 fixture 旅程
+    cmds:
+      - node e2e-verify/run.mjs --suite p4-web-readonly
+
+  test:v04:p4:
+    desc: v0.4 P4 Web SSE cursor、只读快照与 headed Chrome full gate
+    cmds:
+      - task: docs:verify
+      - task: check
+      - go test ./internal/relay -run '^(TestP4AccountSSECursorRecoveryAndIsolation|TestP4AccountSSEPublishesCommittedDelegationEvent|TestP4AccountSSECORSAllowsLastEventID)$' -count=1
+      - pnpm --filter @agent-sessions/web test
+      - task: test:e2e:web
+      - git diff --check
+
   test:v04:p2:
     desc: v0.4 P2 协议、Relay-Daemon 和只读 Workspace 本地 full gate
     cmds:

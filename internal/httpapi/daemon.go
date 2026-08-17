@@ -219,6 +219,9 @@ func (a *API) handleDaemonEventUpload(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	if !result.Idempotent {
+		a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, req.SessionID, result.EventSeq-1)
+	}
 	writeOK(c, daemonEventUploadView{EventID: result.EventID, EventSeq: result.EventSeq, Idempotent: result.Idempotent})
 }
 

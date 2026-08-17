@@ -2,9 +2,18 @@
 // 会话详情页（只读）：展示会话白名单状态与事件序号列表。
 // 事件 envelope 是密文，浏览器端不尝试解密；文件/Git 依赖 Daemon 加密
 // 只读 RPC，Web 未接入时明确显示 unavailable，不伪造成功。
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import { readOnlyGet, sessionState, type SessionEventMeta } from "../session";
+import {
+  decodeSessionSnapshot,
+  mergeSessionEventMeta,
+  readOnlyGet,
+  sessionState,
+  startAccountEventStream,
+  type AccountEventStream,
+  type AccountEventStreamStatus,
+  type SessionEventMeta,
+} from "../session";
 
 const route = useRoute();
 const sessionId = String(route.params.id ?? "");
@@ -16,21 +25,23 @@ const status = ref("");
 const provider = ref("");
 const lastSeq = ref(0);
 const events = ref<SessionEventMeta[]>([]);
+const streamStatus = ref<AccountEventStreamStatus>("stopped");
+let stream: AccountEventStream | undefined;
+let incrementalLoadInFlight = false;
 
-async function load(): Promise<void> {
-  state.value = "loading";
-  message.value = "正在读取会话详情…";
+async function load(afterSeq = 0): Promise<void> {
+  const initialLoad = afterSeq === 0;
+  if (initialLoad) {
+    state.value = "loading";
+    message.value = "正在读取会话详情…";
+  }
   try {
-    const snapshot = await readOnlyGet<{
-      status?: string;
-      provider?: string;
-      last_seq?: number;
-      events: SessionEventMeta[];
-    }>(`/v1/sessions/${sessionId}/snapshot`);
-    status.value = snapshot.status ?? "unknown";
-    provider.value = snapshot.provider ?? "unknown";
-    lastSeq.value = snapshot.last_seq ?? 0;
-    events.value = snapshot.events;
+    const raw = await readOnlyGet<unknown>(`/v1/sessions/${sessionId}/snapshot?after_seq=${afterSeq}`);
+    const snapshot = decodeSessionSnapshot(raw);
+    status.value = snapshot.session.status;
+    provider.value = snapshot.session.provider;
+    lastSeq.value = snapshot.session.last_seq;
+    events.value = initialLoad ? snapshot.events : mergeSessionEventMeta(events.value, snapshot.events);
     state.value = "ready";
     message.value = "";
   } catch {
@@ -39,13 +50,54 @@ async function load(): Promise<void> {
   }
 }
 
+function refresh(): void {
+  void load();
+}
+
+function refreshAfterInvalidation(): void {
+  if (incrementalLoadInFlight || state.value !== "ready") return;
+  incrementalLoadInFlight = true;
+  void load(lastSeq.value).finally(() => {
+    incrementalLoadInFlight = false;
+  });
+}
+
+function startStream(): void {
+  stream?.stop();
+  stream = startAccountEventStream({
+    token: () => sessionState.token,
+    onInvalidate: refreshAfterInvalidation,
+    onStatus: (nextStatus) => {
+      streamStatus.value = nextStatus;
+    },
+  });
+}
+
+function streamStatusLabel(statusValue: AccountEventStreamStatus): string {
+  const labels: Record<AccountEventStreamStatus, string> = {
+    connecting: "正在连接",
+    live: "已连接",
+    reconnecting: "正在恢复",
+    unauthorized: "认证已失效",
+    error: "连接暂不可用",
+    stopped: "未连接",
+  };
+  return labels[statusValue];
+}
+
 onMounted(() => {
-  if (sessionState.token) void load();
+  if (sessionState.token) {
+    void load().then(() => {
+      if (state.value === "ready") startStream();
+    });
+  }
   else {
     state.value = "error";
     message.value = "尚未登录。请先在首页完成只读登录。";
   }
 });
+
+onUnmounted(() => stream?.stop());
 </script>
 
 <template>
@@ -70,7 +122,7 @@ onMounted(() => {
           type="button"
           data-testid="session-detail-refresh"
           :disabled="state === 'loading'"
-          @click="load"
+          @click="refresh"
         >
           刷新
         </button>
@@ -87,8 +139,11 @@ onMounted(() => {
           <div><dt>Provider</dt><dd>{{ provider }}</dd></div>
           <div><dt>事件序号</dt><dd>{{ lastSeq }}</dd></div>
         </dl>
+        <p class="status" role="status" aria-live="polite" data-testid="session-detail-stream-status">
+          实时更新：{{ streamStatusLabel(streamStatus) }}
+        </p>
 
-        <h3>事件时间线（密文 envelope，不解密）</h3>
+        <h3>事件时间线</h3>
         <ul data-testid="session-detail-events" class="readonly-list">
           <li v-if="events.length === 0" class="status">暂无事件。</li>
           <li v-for="event in events" :key="event.event_seq" class="readonly-item">

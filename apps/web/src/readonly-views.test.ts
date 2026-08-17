@@ -6,7 +6,12 @@ import SessionFilesView from "./views/SessionFilesView.vue";
 import SessionGitView from "./views/SessionGitView.vue";
 import TerminalsView from "./views/TerminalsView.vue";
 import { router } from "./router";
-import { sessionState } from "./session";
+import {
+  decodeSessionSnapshot,
+  mergeSessionEventMeta,
+  sessionState,
+  startAccountEventStream,
+} from "./session";
 
 // P4 Web 只读闭环的组件级回归（WEB-01/WEB-03/WEB-05）：
 // 会话列表/详情/文件/Git 降级与终端状态全部只读展示白名单元数据。
@@ -82,16 +87,16 @@ describe("P4 会话详情页", () => {
     sessionState.token = "";
   });
 
-  it("WEB-01：展示白名单元数据与密文事件序号，不解密 envelope", async () => {
+  it("WEB-01/WEB-02：展示嵌套快照白名单元数据，不保留 envelope", async () => {
     sessionState.token = "tok";
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          status: "streaming",
-          provider: "codex",
-          last_seq: 5,
+          session: {
+            id: "abc", workspace_id: "w1", status: "streaming", provider: "codex", last_seq: 5,
+          },
           events: [
             { event_seq: 4, event_type: "message.updated", envelope: { opaque: true } },
             { event_seq: 5, event_type: "command.updated", envelope: { opaque: true } },
@@ -116,6 +121,7 @@ describe("P4 会话详情页", () => {
     expect(wrapper.text()).not.toContain("opaque");
     // 无写控件。
     expect(wrapper.find("textarea").exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it("WEB-03：文件与 Git 入口明确 unavailable，不伪造列表", async () => {
@@ -139,6 +145,87 @@ describe("P4 会话详情页", () => {
       "尚未接入该 transport",
     );
     expect(files.text()).not.toContain("README.md");
+  });
+});
+
+describe("P4 SSE cursor 客户端", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("WEB-02：嵌套 snapshot 丢弃 envelope，并按 session event_seq 去重", () => {
+    const snapshot = decodeSessionSnapshot({
+      session: { id: "s1", workspace_id: "w1", status: "running", provider: "codex", last_seq: 3 },
+      events: [
+        { event_seq: 2, event_type: "message.updated", envelope: { ciphertext: "opaque-never-stored" } },
+        { event_seq: 3, event_type: "command.updated", envelope: { ciphertext: "opaque-never-stored" } },
+      ],
+    });
+    expect(snapshot.events).toEqual([
+      { event_seq: 2, event_type: "message.updated" },
+      { event_seq: 3, event_type: "command.updated" },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("opaque-never-stored");
+    expect(mergeSessionEventMeta(snapshot.events, [
+      { event_seq: 3, event_type: "command.updated" },
+      { event_seq: 4, event_type: "delegation.changed" },
+    ])).toEqual([
+      { event_seq: 2, event_type: "message.updated" },
+      { event_seq: 3, event_type: "command.updated" },
+      { event_seq: 4, event_type: "delegation.changed" },
+    ]);
+  });
+
+  it("WEB-02：SSE 只读取单调 id，重连带 Last-Event-ID，忽略 opaque data", async () => {
+    const encoder = new TextEncoder();
+    const body = (text: string): ReadableStream<Uint8Array> => new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: body('id: 7\nevent: delegation.changed\ndata: {"ciphertext":"opaque-never-rendered"}\n\n'),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: body('id: 7\ndata: {"ciphertext":"duplicate"}\n\nid: 8\ndata: {"ciphertext":"opaque-again"}\n\n'),
+      });
+    const invalidations: string[] = [];
+    const statuses: string[] = [];
+    const stream = startAccountEventStream({
+      token: () => "read-only-token",
+      onInvalidate: () => invalidations.push("snapshot"),
+      onStatus: (status) => statuses.push(status),
+      fetchImpl: fetchMock,
+      retryBaseMs: 0,
+      maxRetries: 2,
+    });
+    await vi.waitFor(() => expect(invalidations).toHaveLength(2));
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(fetchMock.mock.calls[1][1]?.headers).toMatchObject({ "Last-Event-ID": "7" });
+    expect(invalidations).toEqual(["snapshot", "snapshot"]);
+    expect(JSON.stringify({ invalidations, statuses })).not.toContain("opaque-never-rendered");
+    stream.stop();
+  });
+
+  it("WEB-02：认证失效停止重连", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401, body: null });
+    const statuses: string[] = [];
+    const stream = startAccountEventStream({
+      token: () => "expired-token",
+      onInvalidate: vi.fn(),
+      onStatus: (status) => statuses.push(status),
+      fetchImpl: fetchMock,
+      retryBaseMs: 0,
+    });
+    await vi.waitFor(() => expect(statuses).toContain("unauthorized"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    stream.stop();
   });
 });
 

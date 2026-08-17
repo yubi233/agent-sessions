@@ -605,7 +605,8 @@ func (r *sqliteRepo) InstanceByID(ctx context.Context, id string) (InstanceRow, 
 	return i, nil
 }
 
-// AppendEvent 写入事件，seq 用 MAX+1 保证并发单调，返回分配的 seq。
+// AppendEvent 同一事务内写 session-local 序号与账号流 cursor。SQLite 是两种序号的唯一事实源；
+// 进程内 SSE Hub 只能在本方法所在事务提交后缩短观察延迟，不能补偿或替代游标日志。
 func (r *sqliteRepo) AppendEvent(ctx context.Context, e SessionEventRow) (int64, error) {
 	if e.EventSeq <= 0 {
 		if err := r.db.QueryRowContext(ctx,
@@ -614,16 +615,25 @@ func (r *sqliteRepo) AppendEvent(ctx context.Context, e SessionEventRow) (int64,
 			return 0, err
 		}
 	}
-	_, err := r.db.ExecContext(ctx,
+	if _, err := r.db.ExecContext(ctx,
 		`INSERT INTO session_events(session_id,event_seq,event_type,envelope_json) VALUES(?,?,?,?)`,
-		e.SessionID, e.EventSeq, e.EventType, e.EnvelopeJSON)
-	return e.EventSeq, err
+		e.SessionID, e.EventSeq, e.EventType, e.EnvelopeJSON); err != nil {
+		return 0, err
+	}
+	if _, err := r.db.ExecContext(ctx,
+		`INSERT INTO account_event_log(session_id,event_seq) VALUES(?,?)`, e.SessionID, e.EventSeq); err != nil {
+		return 0, err
+	}
+	return e.EventSeq, nil
 }
 
 func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afterSeq int64) ([]SessionEventRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT session_id,event_seq,event_type,envelope_json FROM session_events
-		 WHERE session_id=? AND event_seq>? ORDER BY event_seq`, sessionID, afterSeq)
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.envelope_json
+		 FROM session_events AS events
+		 JOIN account_event_log AS event_log
+		   ON event_log.session_id=events.session_id AND event_log.event_seq=events.event_seq
+		 WHERE events.session_id=? AND events.event_seq>? ORDER BY events.event_seq`, sessionID, afterSeq)
 	if err != nil {
 		return nil, err
 	}
@@ -631,7 +641,33 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 	var out []SessionEventRow
 	for rows.Next() {
 		var e SessionEventRow
-		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.EventType, &e.EnvelopeJSON); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.EnvelopeJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// ListAccountEventsAfter 以账号 SSE cursor 的严格总序回放事件。查询从 sessions 推导账号范围，
+// 不能相信调用方提供的 session_id 或把其他账号的 event log 暴露到流中。
+func (r *sqliteRepo) ListAccountEventsAfter(ctx context.Context, accountID string, afterCursor int64) ([]SessionEventRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.envelope_json
+		 FROM account_event_log AS event_log
+		 JOIN session_events AS events
+		   ON events.session_id=event_log.session_id AND events.event_seq=event_log.event_seq
+		 JOIN sessions AS session ON session.id=events.session_id
+		 WHERE session.account_id=? AND event_log.cursor>?
+		 ORDER BY event_log.cursor`, accountID, afterCursor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionEventRow
+	for rows.Next() {
+		var e SessionEventRow
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.EnvelopeJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, e)

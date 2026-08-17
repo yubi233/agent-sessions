@@ -18,6 +18,7 @@ import (
 // RegisterRoutes 把领域服务挂载到 /v1 分组，并装配鉴权/权限中间件。
 // 业务 scope 一律从认证上下文推导，handler 不信任客户端目标前缀。
 func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *domain.PresenceHub) {
+	a.Events = presence
 	v1 := router.Group("/v1")
 	v1.Use(localAPICORS())
 	// 未匹配到业务路由的 OPTIONS 预检请求统一返回 204（浏览器跨源登录/授权需要）。
@@ -135,7 +136,7 @@ func localAPICORS() gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Vary", "Origin")
 			c.Header("Access-Control-Allow-Credentials", "true")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Last-Event-ID")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		}
 		if c.Request.Method == http.MethodOptions {
@@ -482,6 +483,7 @@ func (a *API) handleCreateSession(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, sess.ID, sess.LastSeq-1)
 	c.JSON(http.StatusCreated, newSessionView(sess))
 }
 
@@ -567,6 +569,7 @@ func (a *API) handleCreateDelegation(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	a.publishLatestSessionEvent(c.Request.Context(), subj.AccountID, delegation.ParentSessionID)
 	c.JSON(http.StatusAccepted, newDelegationView(delegation))
 }
 
@@ -601,6 +604,7 @@ func (a *API) handleDelegationDecision(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	a.publishLatestSessionEvent(c.Request.Context(), subj.AccountID, delegation.ParentSessionID)
 	writeOK(c, newDelegationView(delegation))
 }
 

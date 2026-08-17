@@ -169,7 +169,7 @@ func TestMigrateV04LegacyUpgradeRollbackAndRestartRecovery(t *testing.T) {
 	if !hasColumn(t, db, "commands", "target_terminal_id") {
 		t.Fatal("commands missing target_terminal_id after upgrade")
 	}
-	for _, table := range []string{"daemon_command_deliveries", "daemon_event_receipts"} {
+	for _, table := range []string{"daemon_command_deliveries", "daemon_event_receipts", "account_event_log"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing P2 table %q: %v", table, err)
@@ -187,6 +187,12 @@ func TestMigrateV04LegacyUpgradeRollbackAndRestartRecovery(t *testing.T) {
 		if err := db.QueryRow(`SELECT COUNT(1) FROM ` + table).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("legacy %s count=%d err=%v", table, count, err)
 		}
+	}
+	// P4 账号流 migration 必须把旧 session-local event 赋予可恢复 cursor；旧 event_seq=1
+	// 不能直接作为跨会话 Last-Event-ID 使用。
+	events, err := NewRepository(db).ListAccountEventsAfter(context.Background(), "acct-legacy", 0)
+	if err != nil || len(events) != 1 || events[0].SessionID != "sess-legacy" || events[0].EventSeq != 1 || events[0].AccountEventCursor <= 0 {
+		t.Fatalf("legacy account event cursor backfill=%+v err=%v", events, err)
 	}
 	if err := Migrate(db); err != nil {
 		t.Fatalf("repeat upgraded migration: %v", err)

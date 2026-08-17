@@ -87,9 +87,11 @@ type Repository interface {
 	CreateInstance(ctx context.Context, i InstanceRow) error
 	InstanceByID(ctx context.Context, id string) (InstanceRow, error)
 
-	// 会话事件：append 使用 MAX(event_seq)+1，保证并发下 seq 单调不重复，返回分配的 seq
+	// 会话事件：event_seq 只在单个会话内单调；account_event_cursor 是账号 SSE 恢复使用的
+	// 跨会话全局顺序。两者不能相互替代。
 	AppendEvent(ctx context.Context, e SessionEventRow) (int64, error)
 	ListEventsAfter(ctx context.Context, sessionID string, afterSeq int64) ([]SessionEventRow, error)
+	ListAccountEventsAfter(ctx context.Context, accountID string, afterCursor int64) ([]SessionEventRow, error)
 
 	// 命令（idempotency 在应用层用 (scope_hash,idempotency_key) 校验）
 	CreateCommand(ctx context.Context, c CommandRow) error
@@ -305,12 +307,14 @@ type InstanceRow struct {
 	WakeResult string
 }
 
-// SessionEventRow 是 session_events 表的行投影。envelope 只存密文/脱敏 JSON。
+// SessionEventRow 是 session_events 表及其账号流游标的联合投影。envelope 只存密文/脱敏 JSON；
+// AccountEventCursor 仅用于传输恢复，不能被误作业务事件序号或用于解密。
 type SessionEventRow struct {
-	SessionID    string
-	EventSeq     int64
-	EventType    string
-	EnvelopeJSON string
+	SessionID          string
+	EventSeq           int64
+	AccountEventCursor int64
+	EventType          string
+	EnvelopeJSON       string
 }
 
 // CommandRow 是 commands 表的行投影。

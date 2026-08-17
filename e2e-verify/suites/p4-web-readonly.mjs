@@ -13,9 +13,10 @@ export const p4WebReadonly = {
     const notes = [];
     let account;
     let sessionId = null;
+    let workspaceId = null;
     try {
       account = await fixtureAccount();
-      sessionId = await createFixtureSession(relay.base, account);
+      ({ sessionId, workspaceId } = await createFixtureSession(relay.base, account));
     } catch (error) {
       return report({
         suite: "p4-web-readonly",
@@ -57,6 +58,7 @@ export const p4WebReadonly = {
       await page.getByTestId(`session-link-${sessionId}`).click();
       await page.getByTestId("session-detail-meta").waitFor({ state: "visible" });
       await page.getByTestId("session-detail-events").waitFor({ state: "visible" });
+      await page.getByTestId("session-detail-stream-status").filter({ hasText: "已连接" }).waitFor({ state: "visible" });
       const writeControls = await page
         .locator('textarea, button[type="submit"], [data-testid*="send"], [data-testid*="composer"]')
         .count();
@@ -64,6 +66,22 @@ export const p4WebReadonly = {
         errors.push(`会话详情出现 ${writeControls} 个疑似写控件`);
       } else {
         notes.push("会话详情只读且无写控件");
+      }
+
+      // 断网后由 Node fixture 提交 parent event，再恢复真实浏览器网络。客户端必须携带
+      // Last-Event-ID 重连并以 snapshot 增量刷新时间线；SSE data 中的 opaque 密文不应出现于 DOM。
+      await page.context().setOffline(true);
+      await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+      await page.getByTestId("session-detail-stream-status").filter({ hasText: "正在恢复" }).waitFor({ state: "visible", timeout: 5000 });
+      await createFixtureDelegation(relay.base, account, sessionId, workspaceId);
+      await page.context().setOffline(false);
+      await page.getByTestId("session-detail-stream-status").filter({ hasText: "已连接" }).waitFor({ state: "visible", timeout: 5000 });
+      await page.getByTestId("session-detail-events").filter({ hasText: "delegation.changed" }).waitFor({ state: "visible", timeout: 5000 });
+      const timelineText = await page.getByTestId("session-detail-events").innerText();
+      if (timelineText.includes("opaque-task-ciphertext")) {
+        errors.push("SSE opaque task envelope 出现在 Web 时间线 DOM");
+      } else {
+        notes.push("断网重连后以 cursor 刷新 delegation 时间线，opaque envelope 未进入 DOM");
       }
 
       // 文件与 Git 降级页：明确 unavailable，不伪造列表。
@@ -130,11 +148,11 @@ export const p4WebReadonly = {
       headless: Boolean(headless),
       browser: browserLabel(headless),
       command: "node e2e-verify/run.mjs --suite p4-web-readonly",
-      test_ids: ["WEB-05", "E2E-WEB-01", "E2E-WEB-02"],
+      test_ids: ["WEB-02", "WEB-05", "E2E-WEB-01", "E2E-WEB-02"],
       artifacts: [],
       failure_class: errors.length ? "selector_or_dom_contract_defect" : null,
       remaining_risk:
-        "Web 只读闭环基于隔离 Relay fixture；文件/Git 按真实边界显示 unavailable，未接入 Daemon 加密 RPC。",
+        "Web SSE cursor 与只读闭环基于隔离 Relay fixture；文件/Git 按真实边界显示 unavailable，未接入 Daemon 加密 RPC，也不证明真实 Provider 或生产 E2EE 密钥生命周期。",
       notes,
       errors,
     });
@@ -172,7 +190,47 @@ async function createFixtureSession(relayBase, account) {
     throw new Error(`create fixture session failed: ${sessionResponse.status}`);
   }
   const session = await sessionResponse.json();
-  return session.id;
+  return { sessionId: session.id, workspaceId: workspace.id };
+}
+
+// createFixtureDelegation 使用浏览器之外的 fixture owner token 制造已提交事件；token 不进入
+// 页面或报告，浏览器只消费自己的只读快照与 SSE cursor。
+async function createFixtureDelegation(relayBase, account, sessionId, workspaceId) {
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${account.accessToken}`,
+  };
+  const leaseResponse = await fetch(`${relayBase}/v1/sessions/${sessionId}/lease`, {
+    method: "POST",
+    headers,
+  });
+  if (!leaseResponse.ok) {
+    throw new Error(`acquire fixture delegation lease failed: ${leaseResponse.status}`);
+  }
+  const lease = await leaseResponse.json();
+  const envelope = (ciphertext) => ({
+    alg: "v1-aes256gcm-hkdfsha256",
+    key_id: "fixture-dek",
+    nonce: "fixture-nonce",
+    ciphertext,
+    aad_hash: "fixture-aad",
+    payload_version: 1,
+  });
+  const response = await fetch(`${relayBase}/v1/sessions/${sessionId}/delegations`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      target_workspace_id: workspaceId,
+      target_provider: "codex",
+      task_envelope: envelope("opaque-task-ciphertext"),
+      summary_envelope: envelope("opaque-summary-ciphertext"),
+      idempotency_key: "p4-web-sse-reconnect",
+      lease_epoch: lease.lease_epoch,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`create fixture delegation failed: ${response.status}`);
+  }
 }
 
 // 以配对 + daemon hello 登记一台 fixture 终端并返回 terminal_id。

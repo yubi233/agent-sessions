@@ -273,6 +273,20 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS usage_events_account_day_idx
 		ON usage_events(account_id, utc_day, provider);`,
+	// 账号 SSE 需要跨会话且不会复用的恢复 cursor。session_events.event_seq 只在 session
+	// 范围内单调，不能直接放进 Last-Event-ID；本表以独立自增 cursor 记录同一事务内已持久化
+	// 的事件。旧库按稳定顺序回填，后续 AppendEvent 会同步写入。
+	`CREATE TABLE IF NOT EXISTS account_event_log (
+		cursor INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		event_seq INTEGER NOT NULL,
+		UNIQUE(session_id, event_seq),
+		FOREIGN KEY(session_id, event_seq) REFERENCES session_events(session_id, event_seq)
+	);`,
+	`INSERT OR IGNORE INTO account_event_log(session_id, event_seq)
+		SELECT session_id, event_seq FROM session_events ORDER BY session_id, event_seq;`,
+	`CREATE INDEX IF NOT EXISTS account_event_log_session_cursor_idx
+		ON account_event_log(session_id, cursor);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。
