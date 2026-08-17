@@ -301,7 +301,7 @@ func TestP2RelayDaemonDeterministicSessionLifecycleFullLoop(t *testing.T) {
 	loop.DaemonVersion = "p2-lifecycle-fixture"
 	loop.Hostname = "p2-lifecycle-host"
 	loop.Platform = "test"
-	loop.Capabilities = []string{"start", "send", "resume", "abort"}
+	loop.Capabilities = []string{"start", "send", "resume", "abort", "kill"}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- loop.RunWithRetry(ctx) }()
@@ -357,9 +357,16 @@ func TestP2RelayDaemonDeterministicSessionLifecycleFullLoop(t *testing.T) {
 		"kind": "session.abort", "session_id": sessionID,
 	})
 	waitP2CommandSucceeded(t, env, owner.AccessToken, abortID)
+	killID := submit("session.kill", "p2-e2e-lifecycle-kill", map[string]any{
+		"kind": "session.kill", "session_id": sessionID,
+	})
+	waitP2CommandSucceeded(t, env, owner.AccessToken, killID)
 
-	if starts, sends, resumes, aborts := adapterFixture.snapshot(); starts != 1 || sends != 1 || resumes != 1 || aborts != 1 {
-		t.Fatalf("adapter lifecycle calls start/send/resume/abort=%d/%d/%d/%d, want 1/1/1/1", starts, sends, resumes, aborts)
+	if starts, sends, resumes, aborts, kills := adapterFixture.snapshot(); starts != 1 || sends != 1 || resumes != 1 || aborts != 1 || kills != 1 {
+		t.Fatalf("adapter lifecycle calls start/send/resume/abort/kill=%d/%d/%d/%d/%d, want 1/1/1/1/1", starts, sends, resumes, aborts, kills)
+	}
+	if _, err := local.Get("instance:" + sessionID); err == nil {
+		t.Fatal("session.kill must remove local provider instance mapping")
 	}
 	events := waitP2CanonicalEvents(t, env, sessionID, 2)
 	var previousSeq int64
@@ -388,6 +395,7 @@ type p2LifecycleAdapter struct {
 	sends   int
 	resumes int
 	aborts  int
+	kills   int
 }
 
 func newP2LifecycleAdapter() *p2LifecycleAdapter { return &p2LifecycleAdapter{} }
@@ -420,10 +428,10 @@ func (a *p2LifecycleAdapter) Resume(context.Context, adapter.ResumeRequest) (ada
 	return adapter.ResumeResult{Result: adapter.WakeResumed}, nil
 }
 
-func (a *p2LifecycleAdapter) snapshot() (starts, sends, resumes, aborts int) {
+func (a *p2LifecycleAdapter) snapshot() (starts, sends, resumes, aborts, kills int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.starts, a.sends, a.resumes, a.aborts
+	return a.starts, a.sends, a.resumes, a.aborts, a.kills
 }
 
 type p2LifecycleHandle struct {
@@ -459,6 +467,16 @@ func (h *p2LifecycleHandle) Send(context.Context, string) error {
 func (h *p2LifecycleHandle) Abort(context.Context) error {
 	h.adapter.mu.Lock()
 	h.adapter.aborts++
+	h.adapter.mu.Unlock()
+	return nil
+}
+
+// ForceKill 只模拟 owned-process Handle 的调用边界，不创建任何真实 Provider 或子进程。实际
+// 进程树语义由 daemon.ProcessSupervisor 的专属根因回归覆盖；这里验证 Relay 命令确实到达
+// SessionRunner，且不会被降级为 Abort。
+func (h *p2LifecycleHandle) ForceKill(context.Context) error {
+	h.adapter.mu.Lock()
+	h.adapter.kills++
 	h.adapter.mu.Unlock()
 	return nil
 }

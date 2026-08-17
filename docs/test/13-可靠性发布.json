@@ -236,17 +236,17 @@
       "precondition": "ADR-009 命令流、隔离 Relay SQLite、已配对 Daemon、确定性 Adapter、已确认临时 Workspace 和可清理测试账号已就绪。",
       "steps": [
         "启动 Relay 和 Daemon，完成 owner/terminal 配对、hello、heartbeat 和 capability 发现。",
-        "创建会话，执行 start/send/abort 或 kill，观察 delivery、ack、canonical event、snapshot 与账号 SSE。",
+        "创建会话，依次执行 start/send/resume/abort/kill，观察 delivery、ack/result、canonical event、snapshot 与账号 SSE；其中 kill 仅允许测试 Adapter 的 owned Handle 成功。",
         "在 command/ack/event 边界断线重连、重启进程、重放幂等键、使用旧 lease 和撤销设备。"
       ],
-      "expected": "真实本地进程完成端到端闭环；不重复执行、不丢关键状态、不越过 Workspace；报告标记 `local_test=true`、`fixture_data=true`、`real_upstream=false`，不声称真实 Provider。",
+      "expected": "真实本地 Relay/Daemon 进程与确定性 Adapter 完成端到端闭环；不重复执行、不丢关键状态、不越过 Workspace；kill 后本机 instance 映射被回收。报告标记 `local_test=true`、`fixture_data=true`、`real_upstream=false`，不声称真实 Provider 或真实 E2EE 密钥生命周期。",
       "cleanup": [
         "停止 Relay、Daemon、Adapter 和 SSE；删除测试账号、SQLite、Workspace、outbox、trace 和日志"
       ],
       "evidence": [
         "Taskfile.yml",
         "internal/relay/p2_daemon_contract_test.go",
-        "task test:e2e:relay (2026-08-17; includes TestP2RelayDaemonDeterministicSessionLifecycleFullLoop)",
+        "task test:e2e:relay (2026-08-17; TestP2RelayDaemonDeterministicSessionLifecycleFullLoop covers start/send/resume/abort/kill with test-only owned Handle)",
         "task test:v04:p2 (2026-08-17)",
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/e2e-relay-02.json"
       ]
