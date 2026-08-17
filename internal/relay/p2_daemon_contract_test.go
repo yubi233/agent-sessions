@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,12 +12,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
 	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/domain"
+	"github.com/yubi233/agent-sessions/internal/store"
 )
 
 // DAEMON-RPC-01 / CTRL-04 / SESS-05 / SYNC-05：已配对 Terminal 通过独立 REST+SSE
@@ -272,6 +275,248 @@ func TestP2RelayDaemonDeterministicFullLoop(t *testing.T) {
 	cancel()
 	<-done
 	t.Fatalf("deterministic relay-daemon loop did not converge")
+}
+
+// E2E-RELAY-02 / SESS-05：完整 deterministic 生命周期必须真的经过本地 Relay HTTP、
+// Daemon 的专用 SSE、SessionRunner 和 Adapter Handle。这里不使用真实 Provider，也不把
+// fixture encoder 当成真实 E2EE；它只验证本地命令状态与明文边界能随每个动作收敛。
+func TestP2RelayDaemonDeterministicSessionLifecycleFullLoop(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "p2-e2e-session-lifecycle@test.dev")
+	terminal := env.pairTerminal(t, owner, "p2-e2e-session-lifecycle-terminal")
+	terminalID := daemonHello(t, env, terminal.AccessToken)
+
+	server := httptest.NewServer(env.router)
+	defer server.Close()
+	local, err := daemon.OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open daemon store: %v", err)
+	}
+	defer local.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	adapterFixture := newP2LifecycleAdapter()
+	runner := daemon.NewSessionRunner(local, map[string]adapter.Adapter{"lifecycle": adapterFixture}, logger)
+	defer runner.Close(context.Background())
+	loop := daemon.NewRelayLoop(local, &daemon.RelayClient{BaseURL: server.URL, AccessToken: terminal.AccessToken}, runner, daemon.FixtureEventEncoder{}, logger)
+	loop.DaemonVersion = "p2-lifecycle-fixture"
+	loop.Hostname = "p2-lifecycle-host"
+	loop.Platform = "test"
+	loop.Capabilities = []string{"start", "send", "resume", "abort"}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- loop.RunWithRetry(ctx) }()
+	// 清理必须先收束 SSE/RelayLoop，再交给外层 runner.Close 回收 handle，避免测试失败时
+	// 出现还在写 event 的 Adapter 与已经关闭的 runner 竞争。
+	defer func() {
+		cancel()
+		if runErr := <-done; runErr != context.Canceled {
+			t.Errorf("relay loop result=%v want context.Canceled", runErr)
+		}
+	}()
+	waitP2DaemonLocalTerminal(t, local)
+
+	sessionID, _ := env.createBoundSession(t, owner, terminalID, "p2-e2e-session-lifecycle")
+	epoch := p2SessionLeaseEpoch(t, env, owner.AccessToken, sessionID)
+	submit := func(kind, idempotencyKey string, envelope map[string]any) string {
+		t.Helper()
+		response := env.do(t, http.MethodPost, "/v1/sessions/"+sessionID+"/commands", map[string]any{
+			"kind": kind, "idempotency_key": idempotencyKey, "lease_epoch": epoch,
+			"target_terminal_id": terminalID, "ciphertext": envelope,
+		}, owner.AccessToken)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("submit %s status=%d body=%s", kind, response.Code, response.Body.String())
+		}
+		var command struct {
+			ID string `json:"id"`
+		}
+		decodeW1(t, response.Body.Bytes(), &command)
+		if command.ID == "" {
+			t.Fatalf("%s command id missing", kind)
+		}
+		return command.ID
+	}
+
+	startID := submit("session.start", "p2-e2e-lifecycle-start", map[string]any{
+		"kind": "session.start", "session_id": sessionID, "workspace_root": "/fixture/p2-e2e-session-lifecycle", "provider": "lifecycle",
+		"ciphertext": map[string]any{"fixture_payload": map[string]any{"provider": "lifecycle", "prompt": "start body must stay local"}},
+	})
+	waitP2CommandSucceeded(t, env, owner.AccessToken, startID)
+
+	sendID := submit("session.send", "p2-e2e-lifecycle-send", map[string]any{
+		"kind": "session.send", "session_id": sessionID,
+		"ciphertext": map[string]any{"fixture_payload": map[string]any{"message": "send body must stay local"}},
+	})
+	waitP2CommandSucceeded(t, env, owner.AccessToken, sendID)
+
+	resumeID := submit("session.resume", "p2-e2e-lifecycle-resume", map[string]any{
+		"kind": "session.resume", "session_id": sessionID,
+	})
+	waitP2CommandSucceeded(t, env, owner.AccessToken, resumeID)
+
+	abortID := submit("session.abort", "p2-e2e-lifecycle-abort", map[string]any{
+		"kind": "session.abort", "session_id": sessionID,
+	})
+	waitP2CommandSucceeded(t, env, owner.AccessToken, abortID)
+
+	if starts, sends, resumes, aborts := adapterFixture.snapshot(); starts != 1 || sends != 1 || resumes != 1 || aborts != 1 {
+		t.Fatalf("adapter lifecycle calls start/send/resume/abort=%d/%d/%d/%d, want 1/1/1/1", starts, sends, resumes, aborts)
+	}
+	events := waitP2CanonicalEvents(t, env, sessionID, 2)
+	var previousSeq int64
+	for _, event := range events {
+		if event.EventSeq <= previousSeq {
+			t.Fatalf("Relay canonical event sequence not monotonic: previous=%d current=%d", previousSeq, event.EventSeq)
+		}
+		previousSeq = event.EventSeq
+		if strings.Contains(event.EnvelopeJSON, "start body must stay local") || strings.Contains(event.EnvelopeJSON, "send body must stay local") {
+			t.Fatalf("Relay event envelope leaked lifecycle plaintext: %s", event.EnvelopeJSON)
+		}
+	}
+	// 账号级 SSE 只能看到事件类型和 opaque envelope；同样不能把 send 正文带到观察者侧。
+	accountStream := streamAccountUntil(t, env, owner.AccessToken, "event: message.delta")
+	if !strings.Contains(accountStream, "event: message.delta") || strings.Contains(accountStream, "send body must stay local") {
+		t.Fatalf("account SSE lifecycle projection invalid: %s", accountStream)
+	}
+}
+
+// p2LifecycleAdapter 是 full gate 专用的可观测 Adapter。它只在测试进程内创建，确保测试既能
+// 验证 Runner 真正调用 Handle，又不会对任何真实 Provider、token 或本机 Workspace 产生副作用。
+type p2LifecycleAdapter struct {
+	mu      sync.Mutex
+	nextID  int
+	starts  int
+	sends   int
+	resumes int
+	aborts  int
+}
+
+func newP2LifecycleAdapter() *p2LifecycleAdapter { return &p2LifecycleAdapter{} }
+
+func (a *p2LifecycleAdapter) Detect(context.Context) (adapter.Capabilities, error) {
+	return adapter.Capabilities{Provider: "lifecycle"}, nil
+}
+
+func (a *p2LifecycleAdapter) Capabilities() adapter.Capabilities {
+	caps, _ := a.Detect(context.Background())
+	return caps
+}
+
+func (a *p2LifecycleAdapter) Start(context.Context, adapter.StartRequest) (adapter.Handle, error) {
+	a.mu.Lock()
+	a.nextID++
+	a.starts++
+	id := fmt.Sprintf("lifecycle-%d", a.nextID)
+	a.mu.Unlock()
+	handle := &p2LifecycleHandle{adapter: a, id: id, events: make(chan adapter.Event, 8), done: make(chan struct{})}
+	// 首条事件必须是 turn_started，供 SessionRunner 安全取得本地 instance 映射。
+	handle.events <- adapter.Event{Type: adapter.EventTurnStarted, Seq: 1, Payload: map[string]any{"instance_id": id}}
+	return handle, nil
+}
+
+func (a *p2LifecycleAdapter) Resume(context.Context, adapter.ResumeRequest) (adapter.ResumeResult, error) {
+	a.mu.Lock()
+	a.resumes++
+	a.mu.Unlock()
+	return adapter.ResumeResult{Result: adapter.WakeResumed}, nil
+}
+
+func (a *p2LifecycleAdapter) snapshot() (starts, sends, resumes, aborts int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.starts, a.sends, a.resumes, a.aborts
+}
+
+type p2LifecycleHandle struct {
+	adapter *p2LifecycleAdapter
+	id      string
+	events  chan adapter.Event
+	done    chan struct{}
+	mu      sync.Mutex
+	seq     int64
+	closed  bool
+}
+
+func (h *p2LifecycleHandle) Send(context.Context, string) error {
+	h.adapter.mu.Lock()
+	h.adapter.sends++
+	h.adapter.mu.Unlock()
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return context.Canceled
+	}
+	h.seq++
+	seq := h.seq + 1 // seq=1 已由 turn_started 使用。
+	h.mu.Unlock()
+	select {
+	case h.events <- adapter.Event{Type: adapter.EventMessageDelta, Seq: seq, Payload: map[string]any{"text": "deterministic lifecycle delta"}}:
+		return nil
+	case <-h.done:
+		return context.Canceled
+	}
+}
+
+func (h *p2LifecycleHandle) Abort(context.Context) error {
+	h.adapter.mu.Lock()
+	h.adapter.aborts++
+	h.adapter.mu.Unlock()
+	return nil
+}
+
+func (h *p2LifecycleHandle) Events() <-chan adapter.Event { return h.events }
+
+func (h *p2LifecycleHandle) Dispose(context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.closed {
+		h.closed = true
+		close(h.done)
+		close(h.events)
+	}
+	return nil
+}
+
+func waitP2DaemonLocalTerminal(t *testing.T, local *daemon.Store) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if terminalID, err := local.Get("terminal_id"); err == nil && terminalID != "" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("daemon relay loop did not complete hello")
+}
+
+func waitP2CommandSucceeded(t *testing.T, env *testEnv, ownerToken, commandID string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		response := env.do(t, http.MethodGet, "/v1/commands/"+commandID, nil, ownerToken)
+		var command struct {
+			Status string `json:"status"`
+		}
+		decodeW1(t, response.Body.Bytes(), &command)
+		if response.Code == http.StatusOK && command.Status == domain.CommandSucceeded {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("command %s did not converge to succeeded", commandID)
+}
+
+func waitP2CanonicalEvents(t *testing.T, env *testEnv, sessionID string, minimum int) []store.SessionEventRow {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := env.repo.ListEventsAfter(t.Context(), sessionID, 0)
+		if err == nil && len(events) >= minimum {
+			return events
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("session %s did not receive %d canonical events", sessionID, minimum)
+	return nil
 }
 
 // GIT-07 / E2E-RELAY-02：真实临时 Git 根只在 Daemon 本机确认。Relay 的专用 SSE 只能携带

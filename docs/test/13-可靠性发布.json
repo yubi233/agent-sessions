@@ -246,7 +246,8 @@
       "evidence": [
         "Taskfile.yml",
         "internal/relay/p2_daemon_contract_test.go",
-        "task test:v04:p2 (2026-08-16)",
+        "task test:e2e:relay (2026-08-17; includes TestP2RelayDaemonDeterministicSessionLifecycleFullLoop)",
+        "task test:v04:p2 (2026-08-17)",
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/e2e-relay-02.json"
       ]
     },
