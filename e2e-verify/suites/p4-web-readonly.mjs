@@ -1,0 +1,223 @@
+// P4 Web 只读闭环 headed 验收（WEB-05 / E2E-WEB-01 / E2E-WEB-02）：
+// 真实浏览器走「登录 -> 会话列表 -> 详情 -> 文件/Git 降级 -> 终端」只读旅程，
+// 断言无写入口；多视口（桌面 + 窄屏）检查响应式。数据来自隔离 Relay fixture。
+import { launchHeaded, browserLabel } from "../lib/browser.mjs";
+
+export const p4WebReadonly = {
+  id: "p4-web-readonly",
+  title: "P4 Web 只读闭环 headed 多视口验收",
+  planId: "WEB",
+  async run(ctx) {
+    const { relay, web, report, headless = false, fixtureAccount } = ctx;
+    const errors = [];
+    const notes = [];
+    let account;
+    let sessionId = null;
+    try {
+      account = await fixtureAccount();
+      sessionId = await createFixtureSession(relay.base, account);
+    } catch (error) {
+      return report({
+        suite: "p4-web-readonly",
+        status: "failed",
+        real_browser: !headless,
+        fixture_data: true,
+        headless,
+        browser: browserLabel(headless),
+        command: "node e2e-verify/run.mjs --suite p4-web-readonly",
+        artifacts: [],
+        failure_class: "test_harness_defect",
+        remaining_risk: `无法预置 fixture 会话：${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+
+    const browser = await launchHeaded({ headless });
+    try {
+      const page = await browser.newPage({
+        viewport: { width: 1280, height: 800 },
+      });
+      await page.goto(web.base, { waitUntil: "networkidle" });
+      await page.getByTestId("relay-ready").waitFor({ state: "visible" });
+
+      // 用户可见只读登录。
+      await page.getByTestId("login-email").fill(account.email);
+      await page.getByTestId("login-password").fill(account.password);
+      await page.getByTestId("login-submit").click();
+      await page.getByTestId("auth-ok").waitFor({ state: "visible" });
+
+      // 会话列表：fixture 会话可见且可进入详情。
+      await page.click('a[href="#/sessions"]');
+      await page.getByTestId("sessions-list").waitFor({ state: "visible" });
+      await page
+        .getByTestId(`session-link-${sessionId}`)
+        .waitFor({ state: "visible" });
+      notes.push(`会话列表展示 fixture 会话 ${sessionId}`);
+
+      // 会话详情：白名单元数据可见，无 composer/发送等写控件。
+      await page.getByTestId(`session-link-${sessionId}`).click();
+      await page.getByTestId("session-detail-meta").waitFor({ state: "visible" });
+      await page.getByTestId("session-detail-events").waitFor({ state: "visible" });
+      const writeControls = await page
+        .locator('textarea, button[type="submit"], [data-testid*="send"], [data-testid*="composer"]')
+        .count();
+      if (writeControls > 0) {
+        errors.push(`会话详情出现 ${writeControls} 个疑似写控件`);
+      } else {
+        notes.push("会话详情只读且无写控件");
+      }
+
+      // 文件与 Git 降级页：明确 unavailable，不伪造列表。
+      await page.getByTestId("session-files-link").click();
+      await page.getByTestId("files-unavailable").waitFor({ state: "visible" });
+      const filesText = await page.getByTestId("files-unavailable").innerText();
+      if (!filesText.includes("尚未接入")) {
+        errors.push("文件页未正确显示 unavailable 降级");
+      }
+      await page.goBack();
+      await page.getByTestId("session-detail-meta").waitFor({ state: "visible" });
+      await page.getByTestId("session-git-link").click();
+      await page.getByTestId("git-unavailable").waitFor({ state: "visible" });
+      await page.goBack();
+      await page.getByTestId("session-detail-meta").waitFor({ state: "visible" });
+
+      // 终端状态页：白名单 hostname/平台可见，无重启按钮。
+      await page.click('a[href="#/terminals"]');
+      await page.getByTestId("terminals-list").waitFor({ state: "visible" });
+      const terminalText = await page.getByTestId("terminals-list").innerText();
+      const terminalSeeded = await seedTerminal(relay.base, account);
+      if (terminalSeeded && !/MacBook|fixture/i.test(terminalText)) {
+        errors.push("终端列表未展示 fixture 白名单元数据");
+      }
+      const restartControls = await page
+        .locator('[data-testid*="restart"], [data-testid*="reboot"]')
+        .count();
+      if (restartControls > 0) {
+        errors.push("终端页出现重启写入口");
+      }
+
+      // 窄屏视口：会话列表无横向溢出。
+      await page.setViewportSize({ width: 375, height: 720 });
+      await page.click('a[href="#/sessions"]');
+      await page.getByTestId("sessions-list").waitFor({ state: "visible" });
+      const overflow = await page.evaluate(() => {
+        const doc = document.documentElement;
+        return doc.scrollWidth > doc.clientWidth + 1;
+      });
+      if (overflow) {
+        errors.push("375px 视口出现横向溢出");
+      } else {
+        notes.push("375px 窄屏无横向溢出");
+      }
+      await page.close();
+    } catch (error) {
+      errors.push(
+        `浏览器旅程异常：${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      await browser.close();
+    }
+
+    const status = errors.length === 0 ? "passed" : "failed";
+    return report({
+      suite: "p4-web-readonly",
+      planId: "WEB",
+      status,
+      real_browser: !headless,
+      real_model: false,
+      real_upstream: false,
+      fixture_data: true,
+      local_test: true,
+      headless: Boolean(headless),
+      browser: browserLabel(headless),
+      command: "node e2e-verify/run.mjs --suite p4-web-readonly",
+      test_ids: ["WEB-05", "E2E-WEB-01", "E2E-WEB-02"],
+      artifacts: [],
+      failure_class: errors.length ? "selector_or_dom_contract_defect" : null,
+      remaining_risk:
+        "Web 只读闭环基于隔离 Relay fixture；文件/Git 按真实边界显示 unavailable，未接入 Daemon 加密 RPC。",
+      notes,
+      errors,
+    });
+  },
+};
+
+// 通过 fixture 账号的密码登录取得 token 并创建会话（隔离 fixture 数据）。
+async function createFixtureSession(relayBase, account) {
+  // 使用 fixture owner 的注册写 token 预置会话；token 不进入浏览器或报告。
+  // terminal_id 传空串绕过终端绑定（P4 浏览器侧不签发 terminal bearer）。
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${account.accessToken}`,
+  };
+  const wsResponse = await fetch(`${relayBase}/v1/workspaces`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      project_id: "p4-web-project",
+      terminal_id: "",
+      canonical_root: "/fixture/p4-web",
+      status: "active",
+    }),
+  });
+  if (!wsResponse.ok) {
+    throw new Error(`create fixture workspace failed: ${wsResponse.status}`);
+  }
+  const workspace = await wsResponse.json();
+  const sessionResponse = await fetch(`${relayBase}/v1/sessions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ workspace_id: workspace.id, provider: "codex" }),
+  });
+  if (!sessionResponse.ok) {
+    throw new Error(`create fixture session failed: ${sessionResponse.status}`);
+  }
+  const session = await sessionResponse.json();
+  return session.id;
+}
+
+// 以配对 + daemon hello 登记一台 fixture 终端并返回 terminal_id。
+// 失败时返回 null（页面空态也可接受，但终端断言会被跳过）。
+async function seedTerminal(relayBase, account) {
+  try {
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${account.accessToken}`,
+    };
+    const pending = await fetch(`${relayBase}/v1/pairing/requests`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        role: "terminal",
+        display_name: "p4-web-terminal",
+        platform: "macos",
+        identity_public_key: "p4-web-identity",
+        encryption_public_key: "p4-web-encryption",
+      }),
+    });
+    if (!pending.ok) return null;
+    const pairing = await pending.json();
+    const approved = await fetch(
+      `${relayBase}/v1/pairing/requests/${pairing.id}/approve`,
+      { method: "POST", headers },
+    );
+    if (!approved.ok) return null;
+    const device = await approved.json();
+    // 以 hello 让 Relay 登记 terminal 行并返回 terminal_id。
+    const hello = await fetch(`${relayBase}/v1/daemon/hello`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        protocol_version: 1,
+        daemon_version: "0.4.0-fixture",
+        hostname: "MacBook Fixture",
+        platform: "macos",
+        capabilities: [],
+      }),
+    });
+    if (!hello.ok) return null;
+    const helloData = await hello.json();
+    return helloData.terminal_id ?? device.id ?? null;
+  } catch {
+    return null;
+  }
+}

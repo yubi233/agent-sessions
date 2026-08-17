@@ -1,6 +1,6 @@
 // MacBook Flutter gate 的纯 Node 回归：不启动 Xcode、Flutter 或桌面窗口。
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,12 +8,14 @@ import test from "node:test";
 import {
   MACOS_APP_PROCESS,
   MACOS_APP_BUNDLE_IDENTIFIER,
+  MACOS_BUILD_TIMEOUT_MS,
   MACOS_MOBILE_CONTENT_SIZE,
   flutterMacosBuildArgs,
   flutterMacosArgs,
   flutterMacosSmokeArgs,
   flutterWidgetTestArgs,
   hasFlutterTestSuccessOutput,
+  isSuccessfulFlutterResult,
   isMacosPortraitMobileWindow,
   listMacosIntegrationTests,
   macosDebugAppExecutable,
@@ -30,12 +32,14 @@ import {
   runMacosPrebuiltApp,
 } from "./macos.mjs";
 import {
+  acquireMacosGateLock,
   classifyFlutterFailure,
   MACOS_SCREENSHOT_SCENARIOS,
   parseArgs,
   recordMacosVisualScenario,
   resolveMacosVisualScenarios,
   summarizeFlutterFailure,
+  waitForNoMacosWindows,
 } from "./run-macos.mjs";
 import { FLUTTER_RENDER_BOUNDARY_FALLBACK } from "./macos-screenshot.mjs";
 
@@ -124,6 +128,31 @@ test("macOS gate 拒绝 headless 和外部设备参数", () => {
     ["VISUAL-MOBILE-21"],
   );
   assert.throws(() => resolveMacosVisualScenarios(["VISUAL-MOBILE-UNKNOWN"]), /未登记/);
+});
+
+test("macOS Flutter gate 锁拒绝并发执行并回收陈旧锁", () => {
+  const root = mkdtempSync(join(tmpdir(), "macos-gate-lock-"));
+  const file = join(root, "gate.lock");
+  const release = acquireMacosGateLock({
+    file,
+    processId: 101,
+    processAlive: () => true,
+  });
+  assert.throws(
+    () => acquireMacosGateLock({ file, processId: 202, processAlive: () => true }),
+    /拒绝并发执行/,
+  );
+  release();
+  assert.equal(existsSync(file), false);
+
+  writeFileSync(file, JSON.stringify({ owner: "stale", pid: 303 }), "utf8");
+  const releaseStale = acquireMacosGateLock({
+    file,
+    processId: 404,
+    processAlive: () => false,
+  });
+  releaseStale();
+  assert.equal(existsSync(file), false);
 });
 
 test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
@@ -223,6 +252,7 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
     runProcess: (received) => received,
   });
   assert.deepEqual(build.args, ["build", "macos", "--debug", "--no-pub"]);
+  assert.equal(build.timeoutMs, MACOS_BUILD_TIMEOUT_MS);
   assert.equal(build.observeWindow().then != null, true);
 
   const prebuilt = runMacosPrebuiltApp({
@@ -281,6 +311,7 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
   };
   let receivedLaunch = null;
   let fallbackInput = null;
+  let waitedForWindowExit = false;
   const expectedFrames = Array.from({ length: 5 }, (_, index) => ({
     captureMode: FLUTTER_RENDER_BOUNDARY_FALLBACK,
     filename: `frame-${String(index + 1).padStart(4, "0")}.png`,
@@ -300,6 +331,10 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
     waitForFlutterRenderFrames: async (input) => {
       fallbackInput = input;
       return expectedFrames;
+    },
+    waitForWindowExit: async () => {
+      waitedForWindowExit = true;
+      return true;
     },
     runPrebuiltApp: async (input) => {
       receivedLaunch = input;
@@ -333,6 +368,17 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
     new RegExp(`Library/Containers/${MACOS_APP_BUNDLE_IDENTIFIER}/Data/tmp/`),
   );
   assert.deepEqual(result.frames, expectedFrames);
+  assert.equal(waitedForWindowExit, true);
+});
+
+test("macOS 场景在上一窗口完全退出后才允许继续", async () => {
+  const observations = [{ count: 1, observerError: false }, { count: 0, observerError: false }];
+  const released = await waitForNoMacosWindows({
+    observeWindow: async () => observations.shift() || { count: 0, observerError: false },
+    delay: async () => {},
+    timeoutMs: 100,
+  });
+  assert.equal(released, true);
 });
 
 test("macOS Flutter 失败摘要只保留有限的测试框架信号", () => {
@@ -364,5 +410,17 @@ test("macOS Flutter 工具 listener 清理竞态归为 harness，不误报产品
       timedOut: false,
     }),
     "product_defect",
+  );
+});
+
+test("macOS Flutter 直接子进程成功退出可进入可见验收", () => {
+  assert.equal(
+    isSuccessfulFlutterResult({
+      code: 0,
+      stderr: "",
+      stdout: "All tests passed!",
+      timedOut: false,
+    }),
+    true,
   );
 });

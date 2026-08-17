@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -21,6 +22,8 @@ var sensitiveMarkers = []string{
 var sensitiveExts = map[string]bool{
 	".go": true, ".ts": true, ".dart": true, ".mjs": true, ".json": true, ".yaml": true, ".md": true,
 }
+
+var dynamicBearerSource = regexp.MustCompile(`Bearer\s+(?:\$\{|\$[A-Za-z_]|["']\s*\+)`)
 
 // 已审阅的允许路径：其命中是合法的协议契约字段或鉴权边界，不是明文泄漏。
 // 任何新增命中都必须在此显式登记并说明理由。
@@ -49,8 +52,8 @@ func ScanPath(root string) ([]string, error) {
 		if !sensitiveExts[ext] {
 			return nil
 		}
-		// 跳过测试夹具与 allowlist 已审阅路径。
-		if strings.HasSuffix(path, "_test.go") {
+		// 测试代码中的固定哨兵值不属于运行时泄漏；真实运行时文件仍逐一扫描。
+		if isTestFixture(path) {
 			return nil
 		}
 		if _, ok := allowlisted[path]; ok {
@@ -60,12 +63,27 @@ func ScanPath(root string) ([]string, error) {
 		if err != nil {
 			return nil
 		}
-		if containsMarker(data) {
+		if containsSourceMarker(data) {
 			hits = append(hits, path)
 		}
 		return nil
 	})
 	return hits, err
+}
+
+func isTestFixture(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasSuffix(base, "_test.go") ||
+		strings.Contains(base, ".test.") ||
+		strings.Contains(filepath.ToSlash(path), "/test/") ||
+		strings.Contains(filepath.ToSlash(path), "/tests/")
+}
+
+// containsSourceMarker 保留源码扫描对硬编码凭据的拦截，同时识别安全的动态鉴权拼接。
+// 运行时响应仍使用 containsMarker，避免把真实 Bearer 值误判为源码模板。
+func containsSourceMarker(data []byte) bool {
+	withoutDynamicBearer := dynamicBearerSource.ReplaceAll(data, nil)
+	return containsMarker(withoutDynamicBearer)
 }
 
 func containsMarker(data []byte) bool {

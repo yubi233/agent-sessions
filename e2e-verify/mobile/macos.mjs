@@ -11,6 +11,8 @@ const CHILD_ENV_SENSITIVE_KEY = /(api.?key|authorization|cookie|password|secret|
 export const MACOS_APP_PROCESS = "agent_sessions_mobile";
 export const MACOS_APP_BUNDLE_IDENTIFIER = "com.agentsessions.agentSessionsMobile";
 export const MACOS_MOBILE_CONTENT_SIZE = Object.freeze({ height: 960, width: 480 });
+// Flutter macOS 的冷构建在受限本机环境中实测可超过 15 分钟；20 分钟是构建预算，不影响窗口采样超时。
+export const MACOS_BUILD_TIMEOUT_MS = 1_200_000;
 const MACOS_DEBUG_APP_EXECUTABLE = join(
   "build",
   "macos",
@@ -307,6 +309,13 @@ export function hasFlutterTestSuccessOutput(output) {
   return /All tests passed!/.test(String(output));
 }
 
+// 直接 Flutter 子进程已成功退出且输出包含测试成功标记，才允许进入可见窗口验收。
+export function isSuccessfulFlutterResult(result) {
+  return result.code === 0 && !result.timedOut && hasFlutterTestSuccessOutput(
+    `${result.stdout}\n${result.stderr}`,
+  );
+}
+
 // runMacosFlutterProcess 在子进程存活期间轮询窗口，原始输出仅保留在内存供诊断，绝不写入报告。
 export function runMacosFlutterProcess({
   flutter = "flutter",
@@ -343,6 +352,9 @@ export function runMacosFlutterProcess({
     let observedWindowExitRequested = false;
     let observedWindowCallbackStarted = false;
     let outputCallbackChain = Promise.resolve();
+    let parentSignalReceived = false;
+    let parentSignalCleanupTimer = null;
+    let onParentSignal = () => {};
     const window = {
       captureArtifacts: [],
       captureError: null,
@@ -351,6 +363,7 @@ export function runMacosFlutterProcess({
       observationAttempts: 0,
       observerErrors: 0,
       observedAppProcessIds: new Set(),
+      lastObservedWindow: null,
       portraitMobileWindowObserved: false,
       portraitMobileWindow: null,
       portraitMobileWindowMode: null,
@@ -366,6 +379,9 @@ export function runMacosFlutterProcess({
       if (outputStopTimer) clearTimeout(outputStopTimer);
       if (observedWindowCloseTimer) clearTimeout(observedWindowCloseTimer);
       if (forcedChildStopTimer) clearTimeout(forcedChildStopTimer);
+      if (parentSignalCleanupTimer) clearTimeout(parentSignalCleanupTimer);
+      process.off("SIGINT", onParentSignal);
+      process.off("SIGTERM", onParentSignal);
       resolveResult({
         stdout,
         stderr,
@@ -417,6 +433,21 @@ export function runMacosFlutterProcess({
       }, 10_000);
     };
 
+    // 外层命令被中断时，直接启动的预构建 App 不会自动随 shell 退出；必须回收本轮子进程。
+    onParentSignal = () => {
+      if (parentSignalReceived) return;
+      parentSignalReceived = true;
+      if (child?.exitCode != null) return;
+      try {
+        child?.kill("SIGTERM");
+      } catch {
+        // 子进程已退出时，close 事件会完成清理。
+      }
+      parentSignalCleanupTimer = setTimeout(() => {
+        if (child?.exitCode == null) child?.kill("SIGKILL");
+      }, 5_000);
+    };
+
     const scheduleOutputExit = () => {
       if (stopAfterOutputPattern == null || stopAfterOutputMs == null || outputStopTimer) return;
       stopAfterOutputPattern.lastIndex = 0;
@@ -456,6 +487,7 @@ export function runMacosFlutterProcess({
           observation.count || 0,
         );
         for (const observedWindow of observation.windows || []) {
+          window.lastObservedWindow = observedWindow;
           if (Number.isInteger(observedWindow.pid) && observedWindow.pid > 1) {
             window.observedAppProcessIds.add(observedWindow.pid);
           }
@@ -479,8 +511,9 @@ export function runMacosFlutterProcess({
             }
           }
         }
-        if (observation.count > 0) {
-          window.observed = true;
+        if (observation.count > 0) window.observed = true;
+        // 初始 XIB 窗口会在下一次主循环切换为 480x960；不能因短暂的非竖屏窗口提前结束本轮场景。
+        if (window.portraitMobileWindowObserved) {
           if (stopAfterWindowMs != null && !stopTimer) {
             stopTimer = setTimeout(requestGracefulExit, stopAfterWindowMs);
           }
@@ -515,6 +548,9 @@ export function runMacosFlutterProcess({
       return;
     }
 
+    process.once("SIGINT", onParentSignal);
+    process.once("SIGTERM", onParentSignal);
+
     pollTimer = setInterval(() => {
       void pollWindow();
     }, 300);
@@ -544,10 +580,14 @@ export function runMacosFlutterProcess({
         error: error instanceof Error ? error.message : String(error),
       });
     });
-    child.on("close", (code, signal) => {
-      // 等待已触发的 CoreGraphics 截图落盘，避免 Flutter 正常退出抢在证据写入之前收尾。
+    const finishAfterChildExit = (code, signal) => {
+      // Flutter 工具可能让后代进程暂时持有 stdout/stderr，导致 close 晚于已成功的 exit。
+      // 业务判定以启动的直接子进程 exit 为准，截图回调仍在 finish 前完成。
       void outputCallbackChain.finally(() => finish({ code, signal, error: null }));
-    });
+    };
+    child.on("exit", finishAfterChildExit);
+    // 保留 close 兼容 spawn 异常或平台事件顺序差异；finish 的幂等保护避免重复结算。
+    child.on("close", finishAfterChildExit);
   });
 }
 
@@ -598,7 +638,7 @@ export function runMacosFlutterWidgetTests({
 export function runMacosFlutterBuild({
   flutter = "flutter",
   cwd,
-  timeoutMs = 480_000,
+  timeoutMs = MACOS_BUILD_TIMEOUT_MS,
   env = process.env,
   runProcess = runMacosFlutterProcess,
 }) {

@@ -49,6 +49,34 @@ func TestScanSkipsDeps(t *testing.T) {
 	}
 }
 
+func TestScanAllowsDynamicAuthorizationButRejectsHardcodedBearer(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "dynamic.ts"), []byte("headers: { Authorization: `Bearer ${accessToken}` }\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "dynamic.go"), []byte("req.Header.Set(\"Authorization\", \"Bearer \"+token)\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "hardcoded.ts"), []byte("const authorization = 'Bearer production-secret-value'\n"), 0o600)
+
+	hits, err := ScanPath(dir)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(hits) != 1 || filepath.Base(hits[0]) != "hardcoded.ts" {
+		t.Fatalf("want only hardcoded bearer hit, got %v", hits)
+	}
+}
+
+func TestScanSkipsNonGoTestFixtures(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "authorization.test.mjs"), []byte("const token = 'Bearer fixture-owner-access-token'\n"), 0o600)
+
+	hits, err := ScanPath(dir)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("test fixture should not be scanned, got %v", hits)
+	}
+}
+
 // 明文探针标记（正文、diff）应被捕获。
 func TestContainsSensitive(t *testing.T) {
 	if !ContainsSensitive(`"refresh_token":"tf_x.y"`) {

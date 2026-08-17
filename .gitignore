@@ -29,11 +29,12 @@ tmp/
 *.swp
 
 # 测试产物中的临时帧可重建，保留报告目录结构
-e2e-verify/screencasts/*/frames/
+e2e-verify/reports/
+e2e-verify/screenshots/
+e2e-verify/screencasts/
 e2e-verify/traces/**/trace.zip
 playwright-report/
 test-results/
-e2e-verify/
 
 # Flutter
 apps/mobile/.dart_tool/

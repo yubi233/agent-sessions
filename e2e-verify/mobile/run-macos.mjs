@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 // MacBook 本地 Flutter gate：真实窗口负责可见验收，长期 widget/契约套件负责业务断言。
-import { existsSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +18,7 @@ import {
   MACOS_MOBILE_CONTENT_SIZE,
   createMacosWindowObserver,
   hasFlutterTestSuccessOutput,
+  isSuccessfulFlutterResult,
   macosDebugAppExecutable,
   macosSandboxVisualFrameDirectory,
   resolveMacosWidgetTests,
@@ -31,6 +40,9 @@ const SCREENSHOT_FRAME_RATE_FPS = 5;
 const SCREENSHOT_FRAME_DURATION_MS = 1_000;
 const SCREENSHOT_SCENARIO_SETTLE_MS = 800;
 const FLUTTER_RENDER_FRAME_TIMEOUT_MS = 15_000;
+const WINDOW_RELEASE_TIMEOUT_MS = 15_000;
+const WINDOW_RELEASE_POLL_MS = 200;
+const MACOS_GATE_LOCK_PATH = join(tmpdir(), "agent-sessions-flutter-macos-gate.lock");
 export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
   Object.freeze({
     id: "VISUAL-MOBILE-01",
@@ -183,6 +195,82 @@ function wait(milliseconds) {
   return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 }
 
+function isProcessAlive(processId) {
+  if (!Number.isInteger(processId) || processId <= 1) return false;
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+// macOS App、窗口观察器和截图目录均为单实例资源；用独占锁避免两个 full gate 相互污染证据。
+export function acquireMacosGateLock({
+  file = MACOS_GATE_LOCK_PATH,
+  processId = process.pid,
+  processAlive = isProcessAlive,
+} = {}) {
+  const owner = `${processId}-${Date.now()}`;
+  const lock = JSON.stringify({ owner, pid: processId, started_at: new Date().toISOString() });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const descriptor = openSync(file, "wx", 0o600);
+      try {
+        writeFileSync(descriptor, lock, "utf8");
+      } finally {
+        closeSync(descriptor);
+      }
+      return () => {
+        try {
+          const current = JSON.parse(readFileSync(file, "utf8"));
+          if (current?.owner === owner) unlinkSync(file);
+        } catch {
+          // 锁已经被本轮清理或被后续进程接管时，不删除不属于自己的文件。
+        }
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST" || attempt > 0) throw error;
+      let previous = null;
+      try {
+        previous = JSON.parse(readFileSync(file, "utf8"));
+      } catch {
+        // 损坏锁不能证明有活跃 gate，下一步按陈旧锁回收。
+      }
+      if (processAlive(previous?.pid)) {
+        throw new GateError(`已有 macOS Flutter gate 正在运行（pid ${previous.pid}），拒绝并发执行。`, {
+          failureClass: "environment_or_startup_failure",
+        });
+      }
+      try {
+        unlinkSync(file);
+      } catch (unlinkError) {
+        if (unlinkError?.code !== "ENOENT") throw unlinkError;
+      }
+    }
+  }
+  throw new GateError("无法获取 macOS Flutter gate 锁。", {
+    failureClass: "environment_or_startup_failure",
+  });
+}
+
+// 每个场景都启动独立 App；只有窗口系统确认上一实例已退出后，才允许开始下一场景。
+export async function waitForNoMacosWindows({
+  observeWindow,
+  timeoutMs = WINDOW_RELEASE_TIMEOUT_MS,
+  pollIntervalMs = WINDOW_RELEASE_POLL_MS,
+  delay = wait,
+}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const observation = await observeWindow();
+    if (!observation.observerError && observation.count === 0) return true;
+    await delay(pollIntervalMs);
+  }
+  return false;
+}
+
 /// 每个视觉场景单独启动真实 Flutter 窗口，并在稳定后连续采样，避免截图工作侵入 integration_test 的退出链路。
 export async function recordMacosVisualScenario({
   scenario,
@@ -193,6 +281,7 @@ export async function recordMacosVisualScenario({
   captureFrames = captureMacosWindowFrameSeries,
   waitForFlutterRenderFrames = waitForFlutterRenderFrameSeries,
   waitForStableFrame = wait,
+  waitForWindowExit = waitForNoMacosWindows,
 }) {
   const outputDirectory = join(screenshotDirectory, scenario.directory);
   const sandboxDirectoryName = [
@@ -245,7 +334,18 @@ export async function recordMacosVisualScenario({
     || !smoke.window.observed
     || !smoke.window.portraitMobileWindowObserved
   ) {
-    throw new GateError(`视觉场景 ${scenario.id} 的可见 macOS 窗口未正常完成。`, {
+    const lifecycle = [
+      `code=${smoke.code ?? "null"}`,
+      `signal=${smoke.signal ?? "none"}`,
+      `timed_out=${smoke.timedOut}`,
+      `controlled_exit=${controlledExit}`,
+      `window_observed=${smoke.window.observed}`,
+      `portrait_window=${smoke.window.portraitMobileWindowObserved}`,
+      `last_window=${smoke.window.lastObservedWindow == null
+        ? "none"
+        : `${smoke.window.lastObservedWindow.width}x${smoke.window.lastObservedWindow.height}`}`,
+    ].join(", ");
+    throw new GateError(`视觉场景 ${scenario.id} 的可见 macOS 窗口未正常完成（${lifecycle}）。`, {
       failureClass: "environment_or_startup_failure",
     });
   }
@@ -262,6 +362,12 @@ export async function recordMacosVisualScenario({
       `视觉场景 ${scenario.id} 未采集到完整 ${SCREENSHOT_FRAME_RATE_FPS} 帧序列。`,
       { failureClass: "environment_or_startup_failure" },
     );
+  }
+  const windowReleased = await waitForWindowExit({ observeWindow });
+  if (!windowReleased) {
+    throw new GateError(`视觉场景 ${scenario.id} 退出后窗口未在规定时间内释放。`, {
+      failureClass: "environment_or_startup_failure",
+    });
   }
   return { frames, smoke };
 }
@@ -394,6 +500,7 @@ async function main() {
   let screenshotDirectory = null;
   let screenshotManifestPath = null;
   let windowObserver = null;
+  let releaseGateLock = null;
   let prebuiltBuild = null;
   let prebuiltAppPath = null;
   let command = "flutter build macos --debug --no-pub && node e2e-verify/mobile/run-macos.mjs";
@@ -415,6 +522,7 @@ async function main() {
       });
     }
 
+    releaseGateLock = acquireMacosGateLock();
     tests = resolveMacosWidgetTests(MOBILE_ROOT, args.tests);
     visualScenarios = resolveMacosVisualScenarios(args.visualScenarios);
     windowObserver = await createMacosWindowObserver();
@@ -453,7 +561,7 @@ async function main() {
       const testSuccessOutputObserved = hasFlutterTestSuccessOutput(
         `${result.stdout}\n${result.stderr}`,
       );
-      const passed = result.code === 0 && !result.timedOut && testSuccessOutputObserved;
+      const passed = isSuccessfulFlutterResult(result);
       testResults.push({
         path: testPath,
         test_ids: args.cases.length ? args.cases : DEFAULT_CASES,
@@ -552,6 +660,7 @@ async function main() {
       }
     }
     windowObserver?.dispose();
+    releaseGateLock?.();
     if (args?.help) return;
     const visibleDesktopApp = Boolean(smoke?.window.observed);
     const report = baseReport({

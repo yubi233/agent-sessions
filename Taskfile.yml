@@ -83,7 +83,13 @@ tasks:
   test:e2e:
     desc: headed Web/Admin 浏览器回归
     cmds:
+      - task: test:e2e:harness
       - pnpm --filter @agent-sessions/e2e-verify test:e2e
+
+  test:e2e:harness:
+    desc: headed E2E runner 的纯 Node 生命周期与阻塞分类回归
+    cmds:
+      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs
 
   test:record:
     desc: headed 录屏演示，必须在回归清单通过后执行
