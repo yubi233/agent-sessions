@@ -32,7 +32,7 @@ import {
   materializeStrictWindowEvidenceFrames,
   selectStrictWindowEvidenceFrames,
   waitForFlutterRenderFrameSeries,
-  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
   WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
   WINDOW_EVIDENCE_FPS,
   WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
@@ -44,11 +44,11 @@ const MOBILE_ROOT = join(ROOT, "apps", "mobile");
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_CASES = [...new Set(MACOS_INTEGRATION_TESTS.flatMap((entry) => entry.testIds))];
 const SCREENSHOT_FRAME_RATE_FPS = WINDOW_EVIDENCE_FPS;
-const SCREENSHOT_CANDIDATE_FRAME_COUNT = WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT;
+const SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT = WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT;
 const SCREENSHOT_SELECTED_FRAME_COUNT = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT;
 const SCREENSHOT_SCENARIO_SETTLE_MS = 800;
-// 候选帧不按 1 秒窗口截断；100 帧以严格 5fps 采集约 20 秒，超时仅用于环境故障回收。
-const FLUTTER_RENDER_FRAME_TIMEOUT_MS = 35_000;
+// 候选帧不按 1 秒窗口截断；至少 300 帧以严格 5fps 完成长序列，超时仅用于环境故障回收。
+const FLUTTER_RENDER_FRAME_TIMEOUT_MS = 75_000;
 const WINDOW_RELEASE_TIMEOUT_MS = 15_000;
 const WINDOW_RELEASE_POLL_MS = 200;
 const MACOS_GATE_LOCK_PATH = join(tmpdir(), "agent-sessions-flutter-macos-gate.lock");
@@ -321,7 +321,7 @@ export async function recordMacosVisualScenario({
     observeWindow,
     localVisualScenario: scenario.localVisualScenario,
     localVisualFrameDirectoryName: sandboxDirectoryName,
-    localVisualFrameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+    localVisualFrameCount: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
     localVisualFrameIntervalMs: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
     // onWindowObserved 会等待稳定并采完帧；随后才开始受控退出，保证不会截到退出中的窗口。
     stopAfterWindowMs: 400,
@@ -333,7 +333,7 @@ export async function recordMacosVisualScenario({
           outputDirectory: candidateDirectory,
           scenarioId: scenario.id,
           fps: SCREENSHOT_FRAME_RATE_FPS,
-          frameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+          frameCount: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
         });
         const selected = selectStrictWindowEvidenceFrames({
           frames: candidates,
@@ -349,7 +349,7 @@ export async function recordMacosVisualScenario({
           outputDirectory: candidateDirectory,
           sourceDirectory: sandboxFrameDirectory,
           scenarioId: scenario.id,
-          frameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+          frameCount: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
           fps: SCREENSHOT_FRAME_RATE_FPS,
           copyFrames: false,
           timeoutMs: FLUTTER_RENDER_FRAME_TIMEOUT_MS,
@@ -690,8 +690,10 @@ async function main() {
             },
             windowMode: smoke.window.portraitMobileWindowMode,
             frameRateFps: SCREENSHOT_FRAME_RATE_FPS,
-            candidateFrameCount: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+            candidateFrameCount: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
             selectedFrameCount: SCREENSHOT_SELECTED_FRAME_COUNT,
+            candidateCollectionMode: "long-series-minimum",
+            collectionDurationLimited: false,
             strictFrameRate: true,
           });
         }
@@ -780,8 +782,10 @@ async function main() {
         visual_scenario_runs: visualScenarioRuns.map(({ scenario, smoke: scenarioSmoke, frames }) => ({
           id: scenario.id,
           frame_count: frames.length,
-          candidate_frame_count: SCREENSHOT_CANDIDATE_FRAME_COUNT,
+          candidate_frame_count: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
           selected_frame_count: SCREENSHOT_SELECTED_FRAME_COUNT,
+          candidate_collection_mode: "long-series-minimum",
+          collection_duration_limited: false,
           frame_rate_fps: SCREENSHOT_FRAME_RATE_FPS,
           frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
           strict_frame_rate: true,

@@ -13,10 +13,14 @@ import { basename, dirname, join } from "node:path";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 export const FLUTTER_RENDER_BOUNDARY_FALLBACK = "flutter-render-boundary-fallback";
-// 所有可见窗口证据固定 5fps/200ms 调度。采集器不按时长截断，而是先收集候选帧再筛选连续证据。
+// 所有可见窗口证据固定 5fps/200ms 调度。采集器不接受按秒数截断的短窗口，
+// 而是先完成足够长的连续采集，再筛选出可审计的连续证据。
 export const WINDOW_EVIDENCE_FPS = 5;
-export const WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT = 100;
-export const WINDOW_EVIDENCE_SELECTED_FRAME_COUNT = 25;
+// 这是候选序列的最低完整性门槛，不是 duration 参数或一秒截图窗口。
+// 300 帧约覆盖一分钟可见窗口，避免只抓取静态瞬间；采集实现允许未来场景提供更多候选帧。
+export const WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT = 300;
+// 最终 artifact 必须保留数十至数百张连续截图，不能退化为 1 秒或五张图片。
+export const WINDOW_EVIDENCE_SELECTED_FRAME_COUNT = 100;
 export const WINDOW_EVIDENCE_FRAME_INTERVAL_MS = 200;
 export const WINDOW_EVIDENCE_MAX_START_DRIFT_MS = 100;
 const MACOS_WINDOW_CAPTURE = "macos-window";
@@ -43,14 +47,23 @@ function wait(milliseconds) {
 export function validateStrictWindowFrameSeries({
   frames,
   fps = WINDOW_EVIDENCE_FPS,
-  expectedFrameCount = WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  expectedFrameCount = null,
+  minimumFrameCount = null,
 }) {
   if (fps !== WINDOW_EVIDENCE_FPS) {
     throw new Error(`窗口证据必须固定为 ${WINDOW_EVIDENCE_FPS}fps。`);
   }
-  if (!Array.isArray(frames) || frames.length !== expectedFrameCount) {
+  if (!Array.isArray(frames) || frames.length === 0) {
+    throw new Error("窗口证据至少需要一张连续帧。 ");
+  }
+  if (expectedFrameCount != null && frames.length !== expectedFrameCount) {
     throw new Error(
       `窗口证据必须采集恰好 ${expectedFrameCount} 个连续帧。`,
+    );
+  }
+  if (minimumFrameCount != null && frames.length < minimumFrameCount) {
+    throw new Error(
+      `窗口证据至少需要 ${minimumFrameCount} 个连续候选帧。`,
     );
   }
   for (let index = 0; index < frames.length; index += 1) {
@@ -135,7 +148,7 @@ export async function captureMacosWindowFrameSeries({
   outputDirectory,
   scenarioId,
   fps = WINDOW_EVIDENCE_FPS,
-  frameCount = WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  frameCount = WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
   capture = captureMacosWindowScreenshot,
   waitForNextFrame = wait,
   now = Date.now,
@@ -176,13 +189,16 @@ export async function captureMacosWindowFrameSeries({
   return validateStrictWindowFrameSeries({ frames, fps, expectedFrameCount: frameCount });
 }
 
-/// 候选帧全部通过 5fps 校验后，只保留末尾连续 25 帧作为可审计最终截图。
+/// 候选帧全部通过 5fps 校验后，保留末尾连续 100 帧作为可审计最终截图。
 /// 选择连续片段可保持每一秒 5 帧；不以单帧或稀疏抽样冒充连续窗口证据。
 export function selectStrictWindowEvidenceFrames({
   frames,
   selectedFrameCount = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
 }) {
-  validateStrictWindowFrameSeries({ frames });
+  validateStrictWindowFrameSeries({
+    frames,
+    minimumFrameCount: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
+  });
   if (!Number.isInteger(selectedFrameCount) || selectedFrameCount <= 0 || selectedFrameCount > frames.length) {
     throw new Error("窗口证据筛选数量无效。 ");
   }
@@ -226,7 +242,7 @@ export async function waitForFlutterRenderFrameSeries({
   outputDirectory,
   sourceDirectory = outputDirectory,
   scenarioId,
-  frameCount = WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  frameCount = WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
   fps = WINDOW_EVIDENCE_FPS,
   timeoutMs = 15_000,
   pollIntervalMs = 50,
@@ -336,6 +352,8 @@ export function buildMacosScreenshotManifest({
   frameRateFps = null,
   candidateFrameCount = null,
   selectedFrameCount = null,
+  candidateCollectionMode = null,
+  collectionDurationLimited = false,
   strictFrameRate = false,
 }) {
   if (!Array.isArray(artifacts) || artifacts.length === 0) {
@@ -364,6 +382,8 @@ export function buildMacosScreenshotManifest({
       frame_rate_fps: frameRateFps,
       candidate_frame_count: candidateFrameCount,
       selected_frame_count: selectedFrameCount,
+      candidate_collection_mode: candidateCollectionMode,
+      collection_duration_limited: collectionDurationLimited,
       frame_interval_ms: strictFrameRate ? WINDOW_EVIDENCE_FRAME_INTERVAL_MS : null,
       strict_frame_rate: strictFrameRate,
       selected_frame: selectedFrame.filename,
@@ -372,6 +392,7 @@ export function buildMacosScreenshotManifest({
         capture_mode: artifact.captureMode ?? MACOS_WINDOW_CAPTURE,
         filename: artifact.filename,
         frame_index: artifact.frameIndex ?? null,
+        source_frame_index: artifact.sourceFrameIndex ?? artifact.frameIndex ?? null,
         scheduled_offset_ms: artifact.scheduledOffsetMs ?? null,
         capture_started_offset_ms: artifact.captureStartedOffsetMs ?? null,
         captured_offset_ms: artifact.capturedOffsetMs ?? null,
@@ -398,6 +419,8 @@ export function buildMacosScreenshotManifest({
     frame_rate_fps: frameRateFps,
     candidate_frame_count: candidateFrameCount,
     selected_frame_count: selectedFrameCount,
+    candidate_collection_mode: candidateCollectionMode,
+    collection_duration_limited: collectionDurationLimited,
     frame_interval_ms: strictFrameRate ? WINDOW_EVIDENCE_FRAME_INTERVAL_MS : null,
     strict_frame_rate: strictFrameRate,
     captured_scenarios: frameSets.map((frameSet) => frameSet.scenario_id),
@@ -411,6 +434,7 @@ export function buildMacosScreenshotManifest({
         scenario_id: frameSet.scenario_id,
         filename: frameSet.selected_frame,
         frame_index: frameSet.selected_frame_index,
+        source_frame_index: selectedFrame.sourceFrameIndex ?? selectedFrame.frameIndex ?? null,
         width: selectedFrame.width,
         height: selectedFrame.height,
         size_bytes: selectedFrame.size_bytes,

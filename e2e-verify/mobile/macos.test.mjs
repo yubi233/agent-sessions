@@ -43,7 +43,7 @@ import {
 } from "./run-macos.mjs";
 import {
   FLUTTER_RENDER_BOUNDARY_FALLBACK,
-  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
   WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
   WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
 } from "./macos-screenshot.mjs";
@@ -253,6 +253,7 @@ test("macOS 本地 gate 的 widget 回归不绑定 device attach", () => {
 });
 
 test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受控退出", () => {
+  const appPath = "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile";
   const build = runMacosFlutterBuild({
     cwd: "/fixture/mobile",
     runProcess: (received) => received,
@@ -262,23 +263,20 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
   assert.equal(build.observeWindow().then != null, true);
 
   const prebuilt = runMacosPrebuiltApp({
-    appPath: "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile",
+    appPath,
     cwd: "/fixture/mobile",
     localVisualScenario: "owner-ready",
     env: { LOCAL_VISUAL_SCENARIO: "stale-host-value" },
     runProcess: (received) => received,
   });
-  assert.deepEqual(prebuilt.args, []);
-  assert.equal(
-    prebuilt.flutter,
-    "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile",
-  );
+  assert.deepEqual(prebuilt.args, ["-W", "-n", appPath]);
+  assert.equal(prebuilt.flutter, "/usr/bin/open");
   assert.equal(prebuilt.env.LOCAL_FIXTURE_MODE, "true");
   assert.equal(prebuilt.env.LOCAL_VISUAL_SCENARIO, "owner-ready");
   assert.equal(prebuilt.terminateObservedWindows, true);
 
   const login = runMacosPrebuiltApp({
-    appPath: prebuilt.flutter,
+    appPath,
     cwd: "/fixture/mobile",
     localVisualScenario: null,
     env: { LOCAL_VISUAL_SCENARIO: "stale-host-value" },
@@ -287,18 +285,18 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
   assert.equal(login.env.LOCAL_VISUAL_SCENARIO, "");
 
   const renderFrames = runMacosPrebuiltApp({
-    appPath: prebuilt.flutter,
+    appPath,
     cwd: "/fixture/mobile",
     localVisualScenario: "session-attachments",
     localVisualFrameDirectoryName: "agent-sessions-visual-mobile-08",
-    localVisualFrameCount: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+    localVisualFrameCount: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
     localVisualFrameIntervalMs: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
     runProcess: (received) => received,
   });
   assert.equal(renderFrames.env.LOCAL_VISUAL_FRAME_DIRECTORY, "agent-sessions-visual-mobile-08");
   assert.equal(
     renderFrames.env.LOCAL_VISUAL_FRAME_COUNT,
-    String(WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT),
+    String(WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT),
   );
   assert.equal(
     renderFrames.env.LOCAL_VISUAL_FRAME_INTERVAL_MS,
@@ -306,9 +304,9 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
   );
   assert.throws(
     () => runMacosPrebuiltApp({
-      appPath: prebuilt.flutter,
+      appPath,
       cwd: "/fixture/mobile",
-      localVisualFrameCount: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+      localVisualFrameCount: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
       runProcess: (received) => received,
     }),
     /未设置截图目录/,
@@ -333,7 +331,7 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
   png.write("IHDR", 12, "ascii");
   png.writeUInt32BE(480, 16);
   png.writeUInt32BE(960, 20);
-  const candidateFrames = Array.from({ length: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT }, (_, index) => {
+  const candidateFrames = Array.from({ length: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT }, (_, index) => {
     const path = join(sourceDirectory, `frame-${String(index + 1).padStart(4, "0")}.png`);
     writeFileSync(path, png);
     return {
@@ -384,22 +382,22 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
   });
 
   assert.match(receivedLaunch.localVisualFrameDirectoryName, /^agent-sessions-visual-/);
-  assert.equal(receivedLaunch.localVisualFrameCount, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
+  assert.equal(receivedLaunch.localVisualFrameCount, WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT);
   assert.equal(receivedLaunch.localVisualFrameIntervalMs, 200);
   assert.match(
     receivedLaunch.localVisualFrameDirectoryName,
     /visual-mobile-08-attachment-composer$/,
   );
-  assert.equal(fallbackInput.frameCount, WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT);
+  assert.equal(fallbackInput.frameCount, WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT);
   assert.equal(fallbackInput.copyFrames, false);
-  assert.equal(fallbackInput.timeoutMs, 35_000);
+  assert.equal(fallbackInput.timeoutMs, 75_000);
   assert.match(
     fallbackInput.sourceDirectory,
     new RegExp(`Library/Containers/${MACOS_APP_BUNDLE_IDENTIFIER}/Data/tmp/`),
   );
   assert.equal(result.frames.length, WINDOW_EVIDENCE_SELECTED_FRAME_COUNT);
-  assert.equal(result.frames[0].sourceFrameIndex, 76);
-  assert.equal(result.frames.at(-1).sourceFrameIndex, 100);
+  assert.equal(result.frames[0].sourceFrameIndex, 201);
+  assert.equal(result.frames.at(-1).sourceFrameIndex, 300);
   assert.equal(existsSync(result.frames.at(-1).path), true);
   assert.equal(waitedForWindowExit, true);
 });

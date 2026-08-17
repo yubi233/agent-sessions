@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
   WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
 } from "./macos-screenshot.mjs";
 
@@ -657,7 +657,8 @@ export function runMacosFlutterBuild({
   });
 }
 
-// 已构建 app 在 debug 模式读取本地环境变量以选择确定性 fixture；release、Web 和 Android 不读取这些变量。
+// 已构建 app 必须通过 LaunchServices 启动，否则直接执行 bundle 内 Mach-O 可能有 Dart VM 却没有可观察窗口。
+// debug 模式读取本地环境变量以选择确定性 fixture；release、Web 和 Android 不读取这些变量。
 export function runMacosPrebuiltApp({
   appPath,
   cwd,
@@ -678,7 +679,7 @@ export function runMacosPrebuiltApp({
     (typeof localVisualFrameDirectoryName !== "string"
       || !/^[A-Za-z0-9_-]{1,120}$/.test(localVisualFrameDirectoryName)
       || !Number.isInteger(localVisualFrameCount)
-      || localVisualFrameCount !== WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT
+      || localVisualFrameCount !== WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT
       || !Number.isInteger(localVisualFrameIntervalMs)
       || localVisualFrameIntervalMs !== WINDOW_EVIDENCE_FRAME_INTERVAL_MS)
   ) {
@@ -698,8 +699,9 @@ export function runMacosPrebuiltApp({
     LOCAL_VISUAL_FRAME_INTERVAL_MS: hasFrameRecorder ? String(localVisualFrameIntervalMs) : "",
   };
   return runProcess({
-    flutter: appPath,
-    args: [],
+    // -W 等待本轮应用退出；-n 避免复用用户已有实例，随后仍只清理本轮观察到的 PID。
+    flutter: "/usr/bin/open",
+    args: ["-W", "-n", appPath],
     cwd,
     timeoutMs,
     observeWindow,

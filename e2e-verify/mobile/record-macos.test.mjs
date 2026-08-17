@@ -10,7 +10,7 @@ import {
   validatePassedGateReport,
 } from "./record-macos.mjs";
 import {
-  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
   WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
 } from "./macos-screenshot.mjs";
 
@@ -54,10 +54,12 @@ test("P6/v0.2-P5 Flutter 录屏拒绝缺少任一登记场景证据的 full gate
         visual_scenario_runs: [{
           id: "VISUAL-MOBILE-14",
           frame_count: FLUTTER_RECORDING_FRAME_COUNT,
-          candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+          candidate_frame_count: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
           selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
           frame_rate_fps: FLUTTER_RECORDING_FPS,
           frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+          candidate_collection_mode: "long-series-minimum",
+          collection_duration_limited: false,
           strict_frame_rate: true,
         }],
       }),
@@ -72,10 +74,12 @@ test("P6/v0.2-P5 Flutter 录屏拒绝缺少任一登记场景证据的 full gate
       visual_scenario_runs: FLUTTER_RECORDING_SCENARIO_IDS.map((id) => ({
         id,
         frame_count: FLUTTER_RECORDING_FRAME_COUNT,
-        candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+        candidate_frame_count: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
         selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
         frame_rate_fps: FLUTTER_RECORDING_FPS,
         frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
+        candidate_collection_mode: "long-series-minimum",
+        collection_duration_limited: false,
         strict_frame_rate: true,
       })),
     }).status,

@@ -96,7 +96,7 @@
       "priority": "P0",
       "test_layer": "Flutter widget + Flutter macOS visible fixture",
       "precondition": "MOBILE-05 fixture 已装载；本轮使用 MacBook 可见 Flutter 窗口，不要求 Android AVD/实机。",
-      "steps": ["查看 proposed 卡片", "拒绝一项", "批准一项", "打开子会话", "在 480x960 可见窗口以严格 5fps（200ms 节拍）采集 100 个候选帧，并筛选连续 25 帧的预登记 fixture"],
+      "steps": ["查看 proposed 卡片", "拒绝一项", "批准一项", "打开子会话", "在 480x960 可见窗口以严格 5fps（200ms 节拍）采集不少于 300 个候选帧，并筛选连续 100 帧的预登记 fixture"],
       "expected": "拒绝无副作用；批准前后状态可见，父页面不渲染子会话正文，child 必须重新获取独立 lease。",
       "cleanup": ["清除 mock 会话和密文缓存"],
       "evidence": [

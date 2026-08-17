@@ -22,7 +22,7 @@ import {
   recordMacosVisualScenario,
 } from "./run-macos.mjs";
 import {
-  WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+  WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
   WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
   WINDOW_EVIDENCE_SELECTED_FRAME_COUNT,
 } from "./macos-screenshot.mjs";
@@ -165,10 +165,13 @@ export function validatePassedGateReport(report) {
   const missing = FLUTTER_RECORDING_SCENARIO_IDS.filter((id) => {
     const run = visualRuns.find((item) => item?.id === id);
     return run?.frame_count !== FLUTTER_RECORDING_FRAME_COUNT
-      || run?.candidate_frame_count !== WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT
+      || !Number.isInteger(run?.candidate_frame_count)
+      || run.candidate_frame_count < WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT
       || run?.selected_frame_count !== FLUTTER_RECORDING_FRAME_COUNT
       || run?.frame_rate_fps !== FLUTTER_RECORDING_FPS
       || run?.frame_interval_ms !== WINDOW_EVIDENCE_FRAME_INTERVAL_MS
+      || run?.candidate_collection_mode !== "long-series-minimum"
+      || run?.collection_duration_limited !== false
       || run?.strict_frame_rate !== true;
   });
   if (missing.length > 0) {
@@ -364,18 +367,23 @@ async function main() {
         ...visualRun.frames.map((frame) => evidenceReference(frame.path)),
       );
       completedScenarios.push({
+        candidate_collection_mode: "long-series-minimum",
+        candidate_frame_count: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
         capture_modes: [
           ...new Set(visualRun.frames.map((frame) => frame.captureMode)),
         ],
+        collection_duration_limited: false,
         frames: visualRun.frames.map((frame) => ({
           captured_offset_ms: frame.capturedOffsetMs,
           filename: frame.filename,
           frame_index: frame.frameIndex,
+          source_frame_index: frame.sourceFrameIndex ?? frame.frameIndex,
           height: frame.height,
           sha256: frame.sha256,
           width: frame.width,
         })),
         id: scenario.id,
+        selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
         observed_window_frame: visualRun.smoke.window.portraitMobileWindow,
         observed_window_mode: visualRun.smoke.window.portraitMobileWindowMode,
         video,
@@ -406,8 +414,10 @@ async function main() {
             completed_scenarios: completedScenarios,
             fixture_revision: "local-deterministic-fixture",
             fps: FLUTTER_RECORDING_FPS,
-            candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+            candidate_frame_minimum: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
             selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
+            candidate_collection_mode: "long-series-minimum",
+            collection_duration_limited: false,
             frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
             strict_frame_rate: true,
             full_gate_report: gateReport == null
@@ -462,7 +472,9 @@ async function main() {
         host_platform: "macos",
         recording_fps: FLUTTER_RECORDING_FPS,
         recording_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
-        candidate_frame_count: WINDOW_EVIDENCE_CANDIDATE_FRAME_COUNT,
+        candidate_frame_minimum: WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
+        candidate_collection_mode: "long-series-minimum",
+        collection_duration_limited: false,
         frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
         strict_frame_rate: true,
         recording_scenario_ids: FLUTTER_RECORDING_SCENARIO_IDS,

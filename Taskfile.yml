@@ -171,7 +171,7 @@ tasks:
       - node e2e-verify/mobile/run-macos.mjs {{.CLI_ARGS}}
 
   test:flutter:record:
-    desc: 已通过 Flutter macOS full gate 后的严格 5fps fixture 录屏（100 候选帧筛选 25 连续最终帧）
+    desc: 已通过 Flutter macOS full gate 后的严格 5fps fixture 录屏（不少于 300 候选帧筛选 100 连续最终帧）
     cmds:
       - node e2e-verify/mobile/record-macos.test.mjs
       - node e2e-verify/mobile/record-macos.mjs {{.CLI_ARGS}}
