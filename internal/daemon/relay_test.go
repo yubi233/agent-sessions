@@ -50,7 +50,9 @@ func TestRelayLoopFailsClosedForInterruptedStartedCommand(t *testing.T) {
 		resultStatus, resultCode = body.Status, body.ErrorCode
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{}`)
+		// Relay 的 result endpoint 返回权威终态；Daemon 重启重放时必须以它回填本机状态，
+		// 因此夹具不能用空对象掩盖公开收据契约。
+		_, _ = io.WriteString(w, `{"status":"failed","error_code":"DAEMON_RESTART_RECOVERY"}`)
 	}))
 	defer server.Close()
 

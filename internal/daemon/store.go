@@ -384,7 +384,7 @@ func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
 	rows, err := s.db.Query(
 		`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
 			payload_json,status,result_status,error_code
-		 FROM relay_commands WHERE status IN ('received','started') ORDER BY delivery_seq`)
+		 FROM relay_commands WHERE status IN ('received','starting','started') ORDER BY delivery_seq`)
 	if err != nil {
 		return nil, err
 	}
@@ -404,10 +404,36 @@ func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
 	return commands, rows.Err()
 }
 
+// RelayCommandByID 读取本机命令恢复诊断所需的最小状态。它只返回已持久化的协议元数据和密文
+// payload，不解密或记录 Provider 正文；RelayLoop 用它的同一行状态判断重放是否已收敛。
+func (s *Store) RelayCommandByID(commandID string) (RelayCommand, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var command RelayCommand
+	err := s.db.QueryRow(
+		`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
+			payload_json,status,result_status,error_code
+		 FROM relay_commands WHERE command_id=?`, commandID).Scan(
+		&command.CommandID, &command.DeliverySeq, &command.SessionID, &command.WorkspaceID, &command.Kind, &command.LeaseEpoch,
+		&command.TargetInstanceID, &command.TargetTerminalID, &command.PayloadJSON, &command.Status,
+		&command.ResultStatus, &command.ErrorCode,
+	)
+	return command, err
+}
+
 func (s *Store) MarkRelayCommandStarted(commandID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(`UPDATE relay_commands SET status='started', updated_at=? WHERE command_id=?`, time.Now().UnixMilli(), commandID)
+	return err
+}
+
+// MarkRelayCommandStarting 在发送 started 回执前先将本机状态落盘。网络在 Relay 接收回执后
+// 中断时，重启只会幂等重放 started 回执，不会把同一 command_id 再交给 Provider。
+func (s *Store) MarkRelayCommandStarting(commandID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`UPDATE relay_commands SET status='starting', updated_at=? WHERE command_id=?`, time.Now().UnixMilli(), commandID)
 	return err
 }
 

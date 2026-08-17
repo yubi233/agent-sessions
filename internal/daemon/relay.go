@@ -52,6 +52,16 @@ type RelayHello struct {
 	AfterDeliverySeq         int64  `json:"after_delivery_seq"`
 }
 
+// RelayCommandReceipt 是 Relay 对 result 的权威持久化投影。Daemon 重放请求时必须以该值
+// 回填本地 SQLite，不能用本机旧意图覆盖 Relay 已提交的终态。
+type RelayCommandReceipt struct {
+	CommandID   string `json:"command_id"`
+	DeliverySeq int64  `json:"delivery_seq"`
+	AckKind     string `json:"ack_kind"`
+	Status      string `json:"status"`
+	ErrorCode   string `json:"error_code"`
+}
+
 type RelayDelivery struct {
 	DeliverySeq int64        `json:"delivery_seq"`
 	Command     RelayCommand `json:"command"`
@@ -97,10 +107,18 @@ func (c *RelayClient) Ack(ctx context.Context, commandID string, deliverySeq int
 	}, &struct{}{})
 }
 
-func (c *RelayClient) Resolve(ctx context.Context, commandID string, deliverySeq int64, status, errorCode string) error {
-	return c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/result", map[string]any{
+func (c *RelayClient) Resolve(ctx context.Context, commandID string, deliverySeq int64, status, errorCode string) (RelayCommandReceipt, error) {
+	var out RelayCommandReceipt
+	err := c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/result", map[string]any{
 		"protocol_version": daemonProtocolVersion, "delivery_seq": deliverySeq, "status": status, "error_code": errorCode,
-	}, &struct{}{})
+	}, &out)
+	if err != nil {
+		return RelayCommandReceipt{}, err
+	}
+	if !validRelayResultStatus(out.Status) {
+		return RelayCommandReceipt{}, errors.New("relay command result receipt incomplete")
+	}
+	return out, nil
 }
 
 // UploadWebReadResponse 把只属于浏览器临时公钥的响应 envelope 回写 Relay。Relay 只保存密文和
@@ -342,6 +360,11 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if err := l.Client.Heartbeat(ctx); err != nil {
 		return err
 	}
+	// delivery cursor 已跳过已落盘命令。进程重启后先收敛本地 pending 状态，不能只等待 SSE
+	// 重放，否则 started 命令会永久滞留，或依赖下一条无关命令才恢复。
+	if err := l.processPending(ctx); err != nil {
+		return err
+	}
 	if err := l.flushEvents(ctx); err != nil {
 		return err
 	}
@@ -474,6 +497,14 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 	for _, command := range commands {
 		startedThisPass := false
 		if command.Status == "received" {
+			// 先持久化 starting，再向 Relay 发送 started。这样崩溃窗口只会留下可重放的
+			// started 回执，不会在重启后把同一个 command_id 再次交给 Provider。
+			if err := l.Store.MarkRelayCommandStarting(command.CommandID); err != nil {
+				return err
+			}
+			command.Status = "starting"
+		}
+		if command.Status == "starting" {
 			if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "started", ""); err != nil {
 				// stale lease/target 等拒绝需回写 rejected；Relay 允许该 ack 不经过旧 fence。
 				var httpErr *RelayHTTPError
@@ -501,10 +532,7 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			// Daemon 在已确认 started 后崩溃时，不知道本地 Provider 是否仍活着或是否已部分执行。
 			// 为避免 at-least-once delivery 把同一 command 再次交给 Provider，这里 fail-closed，
 			// 由客户端根据明确失败状态重新创建带新 lease/idempotency key 的动作。
-			if err := l.Client.Resolve(ctx, command.CommandID, command.DeliverySeq, "failed", "DAEMON_RESTART_RECOVERY"); err != nil {
-				return err
-			}
-			if err := l.Store.MarkRelayCommandResult(command.CommandID, "failed", "DAEMON_RESTART_RECOVERY"); err != nil {
+			if err := l.resolveAndPersist(ctx, command, "failed", "DAEMON_RESTART_RECOVERY"); err != nil {
 				return err
 			}
 			continue
@@ -542,14 +570,30 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 		if err := l.flushEvents(ctx); err != nil {
 			return err
 		}
-		if err := l.Client.Resolve(ctx, command.CommandID, command.DeliverySeq, status, errorCode); err != nil {
-			return err
-		}
-		if err := l.Store.MarkRelayCommandResult(command.CommandID, status, errorCode); err != nil {
+		if err := l.resolveAndPersist(ctx, command, status, errorCode); err != nil {
 			return err
 		}
 	}
 	return l.flushEvents(ctx)
+}
+
+// resolveAndPersist 以 Relay receipt 为本机最终状态。若 Relay 已提交 result、但 HTTP 响应在
+// 网络中丢失，重启重放会返回已有终态；使用原始请求会错误地把成功覆盖为恢复失败。
+func (l *RelayLoop) resolveAndPersist(ctx context.Context, command RelayCommand, requestedStatus, requestedErrorCode string) error {
+	receipt, err := l.Client.Resolve(ctx, command.CommandID, command.DeliverySeq, requestedStatus, requestedErrorCode)
+	if err != nil {
+		return err
+	}
+	return l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode)
+}
+
+func validRelayResultStatus(status string) bool {
+	switch status {
+	case "succeeded", "failed", "rejected":
+		return true
+	default:
+		return false
+	}
 }
 
 // isWebReadTransportRequest 只按 envelope 的公开算法标识选择 Web 分支；真正的字段、AAD 和

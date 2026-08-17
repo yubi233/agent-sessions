@@ -61,7 +61,7 @@ tasks:
   test:e2e:relay:
     desc: P2 本地 Relay-Daemon fixture 闭环（命令、SSE、只读 Workspace 与密文事件边界）
     cmds:
-      - go test ./internal/relay -run '^(TestP2DaemonCommandLifecycleAndSSERecovery|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2DaemonProtocolAndRevocationFailClosed|TestP2RelayDaemonDeterministicFullLoop|TestP2RelayDaemonDeterministicSessionLifecycleFullLoop|TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay)$' -count=1
+      - go test ./internal/relay -run '^(TestP2DaemonCommandLifecycleAndSSERecovery|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2DaemonProtocolAndRevocationFailClosed|TestP2RelayDaemonDeterministicFullLoop|TestP2RelayDaemonDeterministicSessionLifecycleFullLoop|TestP2RelayDaemonRestart.*|TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay)$' -count=1
 
   test:e2e:web:
     desc: P4 Web SSE cursor 的 headed Chrome 本地 fixture 旅程

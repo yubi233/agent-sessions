@@ -496,9 +496,9 @@
       "test_layer": "Relay/Daemon integration",
       "precondition": "目标终端命令 SSE、SQLite delivery cursor、Daemon 本地 outbox 和可计数确定性 Adapter 已实现。",
       "steps": [
-        "在 Daemon 收到命令前、received 后、started 后和 result 上传前分别断线。",
+        "在 Daemon 收到命令前、received 后、started 后、result/event 已提交但响应丢失后分别断线。",
         "重连并使用最后确认 delivery cursor，重复投递相同 command_id。",
-        "重启 Relay 与 Daemon 后检查最终 command、event、outbox 和 Adapter 调用计数。"
+        "关闭并重开 Daemon SQLite，检查最终 command、event、outbox 和 Adapter 调用计数；Relay 进程重启另列为剩余 P2 矩阵。"
       ],
       "expected": "至少一次投递不造成至少两次执行；cursor 单调前进；缺口可恢复；重复 ack/result 是幂等的；损坏或过期 cursor 返回可诊断错误。",
       "cleanup": [
@@ -508,7 +508,12 @@
         "internal/daemon/store_test.go",
         "internal/daemon/relay_test.go",
         "internal/relay/p2_daemon_contract_test.go",
-        "task test:v04:p2 (2026-08-16)",
+        "Taskfile.yml:test:e2e:relay",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartReplaysStartingAcknowledgement",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartFailsClosedForInterruptedProviderStart",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartReconcilesCommittedResultReceipt",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartReplaysCommittedEventOutbox",
+        "task test:v04:p2 (2026-08-17)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/sync-05.json"
       ]
     },

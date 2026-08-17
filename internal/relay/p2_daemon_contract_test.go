@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -386,11 +388,322 @@ func TestP2RelayDaemonDeterministicSessionLifecycleFullLoop(t *testing.T) {
 	}
 }
 
+// SYNC-05 / E2E-RELAY-02：started 回执的 HTTP 响应在网络中丢失时，Relay 可能已经持久化
+// 回执，而 Daemon 只能看到错误。重启后必须重放回执并只启动一次 Provider，不能把已落盘的
+// command 直接当作新命令执行。
+func TestP2RelayDaemonRestartReplaysStartingAcknowledgement(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "p2-restart-starting@test.dev")
+	terminal := env.pairTerminal(t, owner, "p2-restart-starting-terminal")
+	terminalID := daemonHello(t, env, terminal.AccessToken)
+	server := httptest.NewServer(env.router)
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "daemon.db")
+	local, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("open first daemon store: %v", err)
+	}
+	firstAdapter := newP2LifecycleAdapter()
+	firstRunner := daemon.NewSessionRunner(local, map[string]adapter.Adapter{"lifecycle": firstAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	drop := newP2DropCommittedResponseTransport(true, func(request *http.Request, body []byte) bool {
+		return request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/ack") && bytes.Contains(body, []byte(`"ack_kind":"started"`))
+	})
+	firstLoop := newP2RecoveryLoop(local, server.URL, terminal.AccessToken, firstRunner, &http.Client{Transport: drop})
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- firstLoop.RunWithRetry(firstCtx) }()
+	waitP2DaemonLocalTerminal(t, local)
+
+	sessionID, _ := env.createBoundSession(t, owner, terminalID, "p2-restart-starting")
+	commandID := submitP2LifecycleStart(t, env, owner.AccessToken, sessionID, terminalID, "p2-restart-starting")
+	waitP2TransportDrop(t, drop)
+	cancelFirst()
+	if runErr := <-firstDone; runErr != context.Canceled {
+		t.Fatalf("first relay loop=%v want context.Canceled", runErr)
+	}
+	stored, err := local.RelayCommandByID(commandID)
+	if err != nil || stored.Status != "starting" {
+		t.Fatalf("first local command=%+v err=%v want starting", stored, err)
+	}
+	if starts, _, _, _, _ := firstAdapter.snapshot(); starts != 0 {
+		t.Fatalf("provider started before started receipt was confirmed: %d", starts)
+	}
+	_ = firstRunner.Close(context.Background())
+	if err := local.Close(); err != nil {
+		t.Fatalf("close first daemon store: %v", err)
+	}
+
+	reopened, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("reopen daemon store: %v", err)
+	}
+	defer reopened.Close()
+	secondAdapter := newP2LifecycleAdapter()
+	secondRunner := daemon.NewSessionRunner(reopened, map[string]adapter.Adapter{"lifecycle": secondAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer secondRunner.Close(context.Background())
+	secondLoop := newP2RecoveryLoop(reopened, server.URL, terminal.AccessToken, secondRunner, nil)
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- secondLoop.RunWithRetry(secondCtx) }()
+	waitP2CommandSucceeded(t, env, owner.AccessToken, commandID)
+	if starts, _, _, _, _ := secondAdapter.snapshot(); starts != 1 {
+		cancelSecond()
+		<-secondDone
+		t.Fatalf("replayed started acknowledgement executed provider %d times, want 1", starts)
+	}
+	cancelSecond()
+	if runErr := <-secondDone; runErr != context.Canceled {
+		t.Fatalf("second relay loop=%v want context.Canceled", runErr)
+	}
+}
+
+// SYNC-05 / E2E-RELAY-02：当 Provider 已进入未知执行区间时，Daemon 重启不能尝试恢复或
+// 重复 start。新的 RelayLoop 必须主动扫描本地 started 命令并以稳定错误收敛，而不是等待 SSE
+// 再次推送已经被 cursor 跳过的 delivery。
+func TestP2RelayDaemonRestartFailsClosedForInterruptedProviderStart(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "p2-restart-interrupted@test.dev")
+	terminal := env.pairTerminal(t, owner, "p2-restart-interrupted-terminal")
+	terminalID := daemonHello(t, env, terminal.AccessToken)
+	server := httptest.NewServer(env.router)
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "daemon.db")
+	local, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("open first daemon store: %v", err)
+	}
+	blocking := newP2BlockingStartAdapter()
+	firstRunner := daemon.NewSessionRunner(local, map[string]adapter.Adapter{"blocking": blocking}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	firstLoop := newP2RecoveryLoop(local, server.URL, terminal.AccessToken, firstRunner, nil)
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- firstLoop.RunWithRetry(firstCtx) }()
+	waitP2DaemonLocalTerminal(t, local)
+
+	sessionID, _ := env.createBoundSession(t, owner, terminalID, "p2-restart-interrupted")
+	commandID := submitP2Start(t, env, owner.AccessToken, sessionID, terminalID, "blocking", "p2-restart-interrupted")
+	select {
+	case <-blocking.entered:
+	case <-time.After(3 * time.Second):
+		cancelFirst()
+		<-firstDone
+		t.Fatal("provider start did not enter the interrupted execution window")
+	}
+	cancelFirst()
+	if runErr := <-firstDone; runErr != context.Canceled {
+		t.Fatalf("first relay loop=%v want context.Canceled", runErr)
+	}
+	stored, err := local.RelayCommandByID(commandID)
+	if err != nil || stored.Status != "started" {
+		t.Fatalf("interrupted local command=%+v err=%v want started", stored, err)
+	}
+	_ = firstRunner.Close(context.Background())
+	if err := local.Close(); err != nil {
+		t.Fatalf("close first daemon store: %v", err)
+	}
+
+	reopened, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("reopen daemon store: %v", err)
+	}
+	defer reopened.Close()
+	recoveryAdapter := newP2LifecycleAdapter()
+	recoveryRunner := daemon.NewSessionRunner(reopened, map[string]adapter.Adapter{"blocking": recoveryAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer recoveryRunner.Close(context.Background())
+	recoveryLoop := newP2RecoveryLoop(reopened, server.URL, terminal.AccessToken, recoveryRunner, nil)
+	recoveryCtx, cancelRecovery := context.WithCancel(context.Background())
+	recoveryDone := make(chan error, 1)
+	go func() { recoveryDone <- recoveryLoop.RunWithRetry(recoveryCtx) }()
+	waitP2CommandStatus(t, env, owner.AccessToken, commandID, domain.CommandFailed)
+	recovered, err := reopened.RelayCommandByID(commandID)
+	if err != nil || recovered.ResultStatus != domain.CommandFailed || recovered.ErrorCode != "DAEMON_RESTART_RECOVERY" {
+		cancelRecovery()
+		<-recoveryDone
+		t.Fatalf("recovered local command=%+v err=%v", recovered, err)
+	}
+	if starts, _, _, _, _ := recoveryAdapter.snapshot(); starts != 0 {
+		cancelRecovery()
+		<-recoveryDone
+		t.Fatalf("interrupted command executed after restart: %d starts", starts)
+	}
+	cancelRecovery()
+	if runErr := <-recoveryDone; runErr != context.Canceled {
+		t.Fatalf("recovery relay loop=%v want context.Canceled", runErr)
+	}
+}
+
+// SYNC-05 / E2E-RELAY-02：Relay 已提交 result 但响应在网络中丢失时，重启重放必须接受
+// Relay 的幂等 receipt。否则本地会把已成功的命令误写成 DAEMON_RESTART_RECOVERY。
+func TestP2RelayDaemonRestartReconcilesCommittedResultReceipt(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "p2-restart-result@test.dev")
+	terminal := env.pairTerminal(t, owner, "p2-restart-result-terminal")
+	terminalID := daemonHello(t, env, terminal.AccessToken)
+	server := httptest.NewServer(env.router)
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "daemon.db")
+	local, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("open first daemon store: %v", err)
+	}
+	firstAdapter := newP2LifecycleAdapter()
+	firstRunner := daemon.NewSessionRunner(local, map[string]adapter.Adapter{"lifecycle": firstAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	drop := newP2DropCommittedResponseTransport(true, func(request *http.Request, _ []byte) bool {
+		return request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/result")
+	})
+	firstLoop := newP2RecoveryLoop(local, server.URL, terminal.AccessToken, firstRunner, &http.Client{Transport: drop})
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- firstLoop.RunWithRetry(firstCtx) }()
+	waitP2DaemonLocalTerminal(t, local)
+
+	sessionID, _ := env.createBoundSession(t, owner, terminalID, "p2-restart-result")
+	commandID := submitP2LifecycleStart(t, env, owner.AccessToken, sessionID, terminalID, "p2-restart-result")
+	waitP2TransportDrop(t, drop)
+	cancelFirst()
+	if runErr := <-firstDone; runErr != context.Canceled {
+		t.Fatalf("first relay loop=%v want context.Canceled", runErr)
+	}
+	if relayCommand, err := env.repo.CommandByID(t.Context(), commandID); err != nil || relayCommand.Status != domain.CommandSucceeded {
+		t.Fatalf("Relay result before restart=%+v err=%v want succeeded", relayCommand, err)
+	}
+	stored, err := local.RelayCommandByID(commandID)
+	if err != nil || stored.Status != "started" {
+		t.Fatalf("local result before restart=%+v err=%v want started", stored, err)
+	}
+	_ = firstRunner.Close(context.Background())
+	if err := local.Close(); err != nil {
+		t.Fatalf("close first daemon store: %v", err)
+	}
+
+	reopened, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("reopen daemon store: %v", err)
+	}
+	defer reopened.Close()
+	recoveryAdapter := newP2LifecycleAdapter()
+	recoveryRunner := daemon.NewSessionRunner(reopened, map[string]adapter.Adapter{"lifecycle": recoveryAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer recoveryRunner.Close(context.Background())
+	recoveryLoop := newP2RecoveryLoop(reopened, server.URL, terminal.AccessToken, recoveryRunner, nil)
+	recoveryCtx, cancelRecovery := context.WithCancel(context.Background())
+	recoveryDone := make(chan error, 1)
+	go func() { recoveryDone <- recoveryLoop.RunWithRetry(recoveryCtx) }()
+	waitP2CommandSucceeded(t, env, owner.AccessToken, commandID)
+	recovered := waitP2LocalCommandResult(t, reopened, commandID, domain.CommandSucceeded, "")
+	if recovered.ResultStatus != domain.CommandSucceeded || recovered.ErrorCode != "" {
+		cancelRecovery()
+		<-recoveryDone
+		t.Fatalf("local result receipt reconciliation=%+v", recovered)
+	}
+	if starts, _, _, _, _ := recoveryAdapter.snapshot(); starts != 0 {
+		cancelRecovery()
+		<-recoveryDone
+		t.Fatalf("committed result was executed again after restart: %d starts", starts)
+	}
+	cancelRecovery()
+	if runErr := <-recoveryDone; runErr != context.Canceled {
+		t.Fatalf("recovery relay loop=%v want context.Canceled", runErr)
+	}
+}
+
+// SYNC-05 / E2E-RELAY-02：event 上传的响应丢失不等于 Relay 没有收到事件。Daemon 重启后必须
+// 以相同 event_id 重放本地 outbox，Relay 只保留一条 canonical event，随后才标记本地 delivered。
+func TestP2RelayDaemonRestartReplaysCommittedEventOutbox(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "p2-restart-event@test.dev")
+	terminal := env.pairTerminal(t, owner, "p2-restart-event-terminal")
+	terminalID := daemonHello(t, env, terminal.AccessToken)
+	server := httptest.NewServer(env.router)
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "daemon.db")
+	local, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("open first daemon store: %v", err)
+	}
+	firstAdapter := newP2LifecycleAdapter()
+	firstRunner := daemon.NewSessionRunner(local, map[string]adapter.Adapter{"lifecycle": firstAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	drop := newP2DropCommittedResponseTransport(false, func(request *http.Request, _ []byte) bool {
+		return request.Method == http.MethodPost && request.URL.Path == "/v1/daemon/events"
+	})
+	firstLoop := newP2RecoveryLoop(local, server.URL, terminal.AccessToken, firstRunner, &http.Client{Transport: drop})
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- firstLoop.RunWithRetry(firstCtx) }()
+	waitP2DaemonLocalTerminal(t, local)
+
+	sessionID, _ := env.createBoundSession(t, owner, terminalID, "p2-restart-event")
+	commandID := submitP2LifecycleStart(t, env, owner.AccessToken, sessionID, terminalID, "p2-restart-event")
+	waitP2CommandSucceeded(t, env, owner.AccessToken, commandID)
+	waitP2EventOutboxEmpty(t, local)
+	drop.Enable()
+	if err := firstAdapter.emitMessageDelta(); err != nil {
+		cancelFirst()
+		<-firstDone
+		t.Fatalf("emit delayed event: %v", err)
+	}
+	waitP2TransportDrop(t, drop)
+	waitP2EventOutboxPending(t, local)
+	cancelFirst()
+	if runErr := <-firstDone; runErr != context.Canceled {
+		t.Fatalf("first relay loop=%v want context.Canceled", runErr)
+	}
+	_ = firstRunner.Close(context.Background())
+	if err := local.Close(); err != nil {
+		t.Fatalf("close first daemon store: %v", err)
+	}
+
+	reopened, err := daemon.OpenStore(statePath)
+	if err != nil {
+		t.Fatalf("reopen daemon store: %v", err)
+	}
+	defer reopened.Close()
+	recoveryAdapter := newP2LifecycleAdapter()
+	recoveryRunner := daemon.NewSessionRunner(reopened, map[string]adapter.Adapter{"lifecycle": recoveryAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer recoveryRunner.Close(context.Background())
+	recoveryLoop := newP2RecoveryLoop(reopened, server.URL, terminal.AccessToken, recoveryRunner, nil)
+	recoveryCtx, cancelRecovery := context.WithCancel(context.Background())
+	recoveryDone := make(chan error, 1)
+	go func() { recoveryDone <- recoveryLoop.RunWithRetry(recoveryCtx) }()
+	waitP2EventOutboxEmpty(t, reopened)
+
+	events, err := env.repo.ListEventsAfter(t.Context(), sessionID, 0)
+	if err != nil {
+		cancelRecovery()
+		<-recoveryDone
+		t.Fatalf("list replayed events: %v", err)
+	}
+	messageDeltas := 0
+	for _, event := range events {
+		if event.EventType == "message.delta" {
+			messageDeltas++
+		}
+	}
+	if messageDeltas != 1 {
+		cancelRecovery()
+		<-recoveryDone
+		t.Fatalf("committed event was not idempotent: message.delta count=%d want 1", messageDeltas)
+	}
+	if starts, _, _, _, _ := recoveryAdapter.snapshot(); starts != 0 {
+		cancelRecovery()
+		<-recoveryDone
+		t.Fatalf("event replay started a Provider unexpectedly: %d starts", starts)
+	}
+	cancelRecovery()
+	if runErr := <-recoveryDone; runErr != context.Canceled {
+		t.Fatalf("recovery relay loop=%v want context.Canceled", runErr)
+	}
+}
+
 // p2LifecycleAdapter 是 full gate 专用的可观测 Adapter。它只在测试进程内创建，确保测试既能
 // 验证 Runner 真正调用 Handle，又不会对任何真实 Provider、token 或本机 Workspace 产生副作用。
 type p2LifecycleAdapter struct {
 	mu      sync.Mutex
 	nextID  int
+	handles []*p2LifecycleHandle
 	starts  int
 	sends   int
 	resumes int
@@ -416,6 +729,9 @@ func (a *p2LifecycleAdapter) Start(context.Context, adapter.StartRequest) (adapt
 	id := fmt.Sprintf("lifecycle-%d", a.nextID)
 	a.mu.Unlock()
 	handle := &p2LifecycleHandle{adapter: a, id: id, events: make(chan adapter.Event, 8), done: make(chan struct{})}
+	a.mu.Lock()
+	a.handles = append(a.handles, handle)
+	a.mu.Unlock()
 	// 首条事件必须是 turn_started，供 SessionRunner 安全取得本地 instance 映射。
 	handle.events <- adapter.Event{Type: adapter.EventTurnStarted, Seq: 1, Payload: map[string]any{"instance_id": id}}
 	return handle, nil
@@ -434,6 +750,19 @@ func (a *p2LifecycleAdapter) snapshot() (starts, sends, resumes, aborts, kills i
 	return a.starts, a.sends, a.resumes, a.aborts, a.kills
 }
 
+// emitMessageDelta 仅在重连矩阵中于已完成命令之后触发一条异步 canonical event，避免把
+// event outbox 响应丢失与 command result 的响应丢失混为同一个失败窗口。
+func (a *p2LifecycleAdapter) emitMessageDelta() error {
+	a.mu.Lock()
+	if len(a.handles) == 0 {
+		a.mu.Unlock()
+		return errors.New("lifecycle handle missing")
+	}
+	handle := a.handles[len(a.handles)-1]
+	a.mu.Unlock()
+	return handle.emitMessageDelta()
+}
+
 type p2LifecycleHandle struct {
 	adapter *p2LifecycleAdapter
 	id      string
@@ -448,6 +777,10 @@ func (h *p2LifecycleHandle) Send(context.Context, string) error {
 	h.adapter.mu.Lock()
 	h.adapter.sends++
 	h.adapter.mu.Unlock()
+	return h.emitMessageDelta()
+}
+
+func (h *p2LifecycleHandle) emitMessageDelta() error {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -494,6 +827,136 @@ func (h *p2LifecycleHandle) Dispose(context.Context) error {
 	return nil
 }
 
+// p2DropCommittedResponseTransport 让请求先到达真实 httptest Relay 并提交事务，再对 Daemon
+// 伪造网络响应丢失。它不伪造 Relay 业务响应，专门覆盖“服务端已写入、客户端未收到”的恢复窗口。
+type p2DropCommittedResponseTransport struct {
+	base    http.RoundTripper
+	match   func(*http.Request, []byte) bool
+	firedCh chan struct{}
+
+	mu      sync.Mutex
+	enabled bool
+	fired   bool
+}
+
+func newP2DropCommittedResponseTransport(enabled bool, match func(*http.Request, []byte) bool) *p2DropCommittedResponseTransport {
+	return &p2DropCommittedResponseTransport{
+		base: http.DefaultTransport, match: match, firedCh: make(chan struct{}), enabled: enabled,
+	}
+}
+
+func (t *p2DropCommittedResponseTransport) Enable() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.enabled = true
+}
+
+func (t *p2DropCommittedResponseTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	var body []byte
+	if request.Body != nil {
+		var err error
+		body, err = io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		_ = request.Body.Close()
+		request.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	response, err := t.base.RoundTrip(request)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	drop := t.enabled && !t.fired && t.match(request, body)
+	if drop {
+		t.fired = true
+		close(t.firedCh)
+	}
+	t.mu.Unlock()
+	if !drop {
+		return response, nil
+	}
+	_ = response.Body.Close()
+	return nil, errors.New("fixture network response lost after relay commit")
+}
+
+func waitP2TransportDrop(t *testing.T, transport *p2DropCommittedResponseTransport) {
+	t.Helper()
+	select {
+	case <-transport.firedCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected committed Relay response to be dropped")
+	}
+}
+
+func newP2RecoveryLoop(local *daemon.Store, baseURL, token string, runner *daemon.SessionRunner, client *http.Client) *daemon.RelayLoop {
+	loop := daemon.NewRelayLoop(local, &daemon.RelayClient{BaseURL: baseURL, AccessToken: token, HTTPClient: client}, runner, daemon.FixtureEventEncoder{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	loop.DaemonVersion = "p2-recovery-fixture"
+	loop.Hostname = "p2-recovery-host"
+	loop.Platform = "test"
+	loop.Capabilities = []string{"start"}
+	return loop
+}
+
+func submitP2LifecycleStart(t *testing.T, env *testEnv, token, sessionID, terminalID, idempotencyKey string) string {
+	return submitP2Start(t, env, token, sessionID, terminalID, "lifecycle", idempotencyKey)
+}
+
+func submitP2Start(t *testing.T, env *testEnv, token, sessionID, terminalID, provider, idempotencyKey string) string {
+	t.Helper()
+	epoch := p2SessionLeaseEpoch(t, env, token, sessionID)
+	response := env.do(t, http.MethodPost, "/v1/sessions/"+sessionID+"/commands", map[string]any{
+		"kind": "session.start", "idempotency_key": idempotencyKey, "lease_epoch": epoch, "target_terminal_id": terminalID,
+		"ciphertext": map[string]any{
+			"kind": "session.start", "session_id": sessionID, "workspace_root": "/fixture/" + idempotencyKey, "provider": provider,
+			"ciphertext": map[string]any{"fixture_payload": map[string]any{"provider": provider, "prompt": "recovery fixture only"}},
+		},
+	}, token)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("submit recovery start status=%d body=%s", response.Code, response.Body.String())
+	}
+	var command struct {
+		ID string `json:"id"`
+	}
+	decodeW1(t, response.Body.Bytes(), &command)
+	if command.ID == "" {
+		t.Fatal("recovery start command id missing")
+	}
+	return command.ID
+}
+
+// p2BlockingStartAdapter 在 Start 已经可能产生 Provider 副作用时阻塞直到 Daemon context
+// 取消，模拟进程突然中止。它不启动真实子进程，只为验证重启后的 fail-closed 分支。
+type p2BlockingStartAdapter struct {
+	entered chan struct{}
+}
+
+func newP2BlockingStartAdapter() *p2BlockingStartAdapter {
+	return &p2BlockingStartAdapter{entered: make(chan struct{}, 1)}
+}
+
+func (a *p2BlockingStartAdapter) Detect(context.Context) (adapter.Capabilities, error) {
+	return adapter.Capabilities{Provider: "blocking"}, nil
+}
+
+func (a *p2BlockingStartAdapter) Capabilities() adapter.Capabilities {
+	capabilities, _ := a.Detect(context.Background())
+	return capabilities
+}
+
+func (a *p2BlockingStartAdapter) Start(ctx context.Context, _ adapter.StartRequest) (adapter.Handle, error) {
+	select {
+	case a.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (a *p2BlockingStartAdapter) Resume(context.Context, adapter.ResumeRequest) (adapter.ResumeResult, error) {
+	return adapter.ResumeResult{Result: adapter.WakeUnsupported}, nil
+}
+
 func waitP2DaemonLocalTerminal(t *testing.T, local *daemon.Store) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -507,6 +970,10 @@ func waitP2DaemonLocalTerminal(t *testing.T, local *daemon.Store) {
 }
 
 func waitP2CommandSucceeded(t *testing.T, env *testEnv, ownerToken, commandID string) {
+	waitP2CommandStatus(t, env, ownerToken, commandID, domain.CommandSucceeded)
+}
+
+func waitP2CommandStatus(t *testing.T, env *testEnv, ownerToken, commandID, expectedStatus string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -515,12 +982,55 @@ func waitP2CommandSucceeded(t *testing.T, env *testEnv, ownerToken, commandID st
 			Status string `json:"status"`
 		}
 		decodeW1(t, response.Body.Bytes(), &command)
-		if response.Code == http.StatusOK && command.Status == domain.CommandSucceeded {
+		if response.Code == http.StatusOK && command.Status == expectedStatus {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("command %s did not converge to succeeded", commandID)
+	t.Fatalf("command %s did not converge to %s", commandID, expectedStatus)
+}
+
+func waitP2LocalCommandResult(t *testing.T, local *daemon.Store, commandID, expectedStatus, expectedCode string) daemon.RelayCommand {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		command, err := local.RelayCommandByID(commandID)
+		if err == nil && command.Status == "completed" && command.ResultStatus == expectedStatus && command.ErrorCode == expectedCode {
+			return command
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	command, err := local.RelayCommandByID(commandID)
+	t.Fatalf("local command %s did not converge to %s/%s: %+v err=%v", commandID, expectedStatus, expectedCode, command, err)
+	return daemon.RelayCommand{}
+}
+
+func waitP2EventOutboxEmpty(t *testing.T, local *daemon.Store) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := local.PendingRelayEvents()
+		if err == nil && len(events) == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	events, err := local.PendingRelayEvents()
+	t.Fatalf("local event outbox did not drain: events=%d err=%v", len(events), err)
+}
+
+func waitP2EventOutboxPending(t *testing.T, local *daemon.Store) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := local.PendingRelayEvents()
+		if err == nil && len(events) > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	events, err := local.PendingRelayEvents()
+	t.Fatalf("local event outbox did not retain lost response: events=%d err=%v", len(events), err)
 }
 
 func waitP2CanonicalEvents(t *testing.T, env *testEnv, sessionID string, minimum int) []store.SessionEventRow {
