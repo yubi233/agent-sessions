@@ -21,19 +21,16 @@ import 'providers.dart';
 final appRouterProvider = Provider<GoRouter>((ref) {
   final controller = ref.read(appControllerProvider);
   final router = GoRouter(
-    initialLocation: '/login',
+    initialLocation: '/connect',
     refreshListenable: controller,
     redirect: (context, state) {
       final location = state.matchedLocation;
-      final isPublicRoute =
-          location == '/login' ||
-          location == '/recovery' ||
-          location == '/register';
+      final isPublicRoute = location == '/connect' || location == '/recovery';
       if (controller.phase == AppAuthPhase.booting) {
-        return location == '/login' ? null : '/login';
+        return location == '/connect' ? null : '/connect';
       }
       if (!controller.isAuthenticated && !isPublicRoute) {
-        return '/login';
+        return '/connect';
       }
       // 已认证但本机身份损坏时仍需允许进入恢复码页，其他公开入口照常回到控制端。
       final authenticatedRecovery =
@@ -48,10 +45,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
       GoRoute(
-        path: '/register',
-        builder: (context, state) => const RegisterScreen(),
+        path: '/connect',
+        builder: (context, state) => const ConnectDeviceScreen(),
       ),
       GoRoute(
         path: '/recovery',

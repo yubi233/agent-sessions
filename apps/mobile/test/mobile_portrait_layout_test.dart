@@ -60,7 +60,7 @@ void main() {
     expect(find.byKey(const Key('mobile-content-rail')), findsOneWidget);
     expect(find.byKey(const Key('mobile-auth-intro')), findsOneWidget);
     expect(
-      tester.getSize(find.byKey(const Key('login-submit'))).height,
+      tester.getSize(find.byKey(const Key('device-connect-submit'))).height,
       greaterThanOrEqualTo(52),
     );
 
@@ -115,15 +115,8 @@ void main() {
   });
 }
 
-Future<void> _registerOwner(WidgetTester tester, String email) async {
-  await tester.tap(find.byKey(const Key('register-link')));
-  await tester.pumpAndSettle();
-  await tester.enterText(find.byKey(const Key('register-email')), email);
-  await tester.enterText(
-    find.byKey(const Key('register-password')),
-    'test-password',
-  );
-  await tester.tap(find.byKey(const Key('register-submit')));
+Future<void> _registerOwner(WidgetTester tester, String _) async {
+  await tester.tap(find.byKey(const Key('device-connect-submit')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
 }

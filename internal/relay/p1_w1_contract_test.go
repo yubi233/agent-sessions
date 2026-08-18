@@ -103,6 +103,41 @@ func TestW1AUTH02RegisterOnlyAllowsInitialOwner(t *testing.T) {
 	}
 }
 
+// AUTH-02：Android Happy 主路径用设备公钥直接初始化 owner，不要求账号、邮箱或密码。
+func TestW1AUTH02DeviceBootstrapDoesNotRequireAccountLogin(t *testing.T) {
+	env := newTestEnv(t)
+	response := env.do(t, http.MethodPost, "/v1/auth/device-bootstrap", map[string]any{
+		"display_name":          "Android phone",
+		"platform":              "android",
+		"identity_public_key":   "device-bootstrap-identity",
+		"encryption_public_key": "device-bootstrap-encryption",
+	}, "")
+	if response.Code != http.StatusCreated {
+		t.Fatalf("device bootstrap status=%d want 201", response.Code)
+	}
+	var result struct {
+		Device w1Device    `json:"device"`
+		Tokens w1TokenPair `json:"tokens"`
+	}
+	decodeW1(t, response.Body.Bytes(), &result)
+	if result.Device.Role != domain.RoleAndroidOwner ||
+		result.Tokens.DeviceID != result.Device.ID ||
+		result.Tokens.AccessToken == "" ||
+		result.Tokens.RefreshToken == "" {
+		t.Fatalf("device bootstrap did not return owner device-bound tokens")
+	}
+
+	second := env.do(t, http.MethodPost, "/v1/auth/device-bootstrap", map[string]any{
+		"display_name":          "Second phone",
+		"platform":              "android",
+		"identity_public_key":   "device-bootstrap-identity-2",
+		"encryption_public_key": "device-bootstrap-encryption-2",
+	}, "")
+	if second.Code != http.StatusConflict {
+		t.Fatalf("second device bootstrap status=%d want 409", second.Code)
+	}
+}
+
 // PAIR-01/PAIR-02：初始 owner 完成公钥 bootstrap，待配对设备可由 owner 读取、批准且不会把公钥回显到设备列表。
 func TestW1PAIR01AndPAIR02OwnerBootstrapReadApprove(t *testing.T) {
 	env := newTestEnv(t)

@@ -8,6 +8,9 @@ import '../domain/usage_models.dart';
 
 /// Flutter 只依赖此业务契约；真实 HTTP、fixture 或未来 Daemon 命令流实现都可替换。
 abstract interface class RelayRepository {
+  /// Happy-style Android 首次启动：由本机设备密钥直接初始化首个 owner，不要求账号登录。
+  Future<DeviceBootstrapResult> bootstrapDevice(BootstrapOwnerInput input);
+
   /// 首次注册由 Relay 创建初始 owner 设备，并返回已绑定的 token。
   Future<AuthTokens> register(LoginCredentials credentials);
 

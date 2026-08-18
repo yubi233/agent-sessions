@@ -26,6 +26,39 @@ class HttpRelayRepository implements RelayRepository {
   final DateTime Function() _clock;
 
   @override
+  Future<DeviceBootstrapResult> bootstrapDevice(
+    BootstrapOwnerInput input,
+  ) async {
+    final response = await _send(
+      'POST',
+      '/v1/auth/device-bootstrap',
+      data: {
+        'display_name': input.displayName,
+        'platform': input.platform,
+        'identity_public_key': input.keys.identityPublicKey,
+        'encryption_public_key': input.keys.encryptionPublicKey,
+      },
+    );
+    final body = _asMap(response.data);
+    final devicePayload = body['device'];
+    final tokenPayload = body['tokens'];
+    if (devicePayload is! Map || tokenPayload is! Map) {
+      throw const RelayFailure(RelayFailureKind.protocol, '设备初始化响应格式错误。');
+    }
+    final device = Device.fromJson(Map<String, dynamic>.from(devicePayload));
+    final tokens = AuthTokens.fromRelayJson(
+      Map<String, dynamic>.from(tokenPayload),
+      _clock(),
+    );
+    if (tokens.deviceId == null ||
+        tokens.deviceId!.isEmpty ||
+        tokens.deviceId != device.id) {
+      throw const RelayFailure(RelayFailureKind.protocol, '设备初始化令牌绑定不一致。');
+    }
+    return DeviceBootstrapResult(tokens: tokens, device: device);
+  }
+
+  @override
   Future<AuthTokens> register(LoginCredentials credentials) async {
     credentials.validate();
     final response = await _send(
@@ -179,7 +212,7 @@ class HttpRelayRepository implements RelayRepository {
       'POST',
       '/v1/recovery-codes/restore',
       data: {
-        'email': input.email.trim(),
+        if (input.email.trim().isNotEmpty) 'email': input.email.trim(),
         'recovery_code': input.code,
         'display_name': input.displayName,
         'platform': 'android',
@@ -467,7 +500,7 @@ class HttpRelayRepository implements RelayRepository {
   }) async {
     final tokens = await _readTokens();
     if (tokens == null) {
-      throw const RelayFailure(RelayFailureKind.unauthorized, '登录状态已失效，请重新登录。');
+      throw const RelayFailure(RelayFailureKind.unauthorized, '设备连接已失效，请重新连接。');
     }
     return _send(
       method,
@@ -502,7 +535,7 @@ class HttpRelayRepository implements RelayRepository {
       throw switch (status) {
         401 => const RelayFailure(
           RelayFailureKind.unauthorized,
-          '登录状态已失效，请重新登录。',
+          '设备连接已失效，请重新连接。',
         ),
         403 => const RelayFailure(
           RelayFailureKind.forbidden,

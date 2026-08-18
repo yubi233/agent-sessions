@@ -47,8 +47,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description 为新账号创建初始 Android owner；成功时返回已绑定设备的令牌对。 */
+        /** @description 兼容旧客户端的账号式初始 owner 注册；Android Happy 主路径应使用 device-bootstrap。 */
         post: operations["register"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/device-bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Android/Happy 首次启动时用本机设备公钥直接初始化首个 owner，不要求账号、邮箱或密码。 */
+        post: operations["deviceBootstrap"];
         delete?: never;
         options?: never;
         head?: never;
@@ -759,7 +776,8 @@ export interface components {
             recovery_code: string;
         };
         RecoveryRestoreRequest: {
-            email: string;
+            /** @description 兼容旧客户端；Android Happy 主路径不要求邮箱。 */
+            email?: string;
             recovery_code: string;
             display_name: string;
             identity_public_key: string;
@@ -1336,6 +1354,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceBoundTokenPair"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deviceBootstrap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootstrapRequest"];
+            };
+        };
+        responses: {
+            /** @description created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryRestoreResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];

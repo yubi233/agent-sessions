@@ -77,6 +77,7 @@ class AppController extends ChangeNotifier {
     try {
       final stored = await _tokenStore.read();
       if (stored == null) {
+        _requiresRecovery = await _identityStore.requiresRecovery();
         _phase = AppAuthPhase.signedOut;
         return;
       }
@@ -93,15 +94,39 @@ class AppController extends ChangeNotifier {
       // token 失效时只清理本机认证与密文缓存，不将异常详情显示到日志。
       await _clearLocalSession();
       _phase = AppAuthPhase.signedOut;
-      _errorMessage = '登录状态已失效，请重新登录。';
+      _errorMessage = '设备连接已失效，请重新连接或使用恢复码。';
     } catch (_) {
       await _clearLocalSession();
       _phase = AppAuthPhase.signedOut;
-      _errorMessage = '无法恢复本机登录状态。';
+      _errorMessage = '无法恢复本机设备连接。';
     } finally {
       _initializing = false;
       _setBusy(false);
     }
+  }
+
+  /// Happy-style Android 主路径：不要求账号登录；首台手机用本机安全密钥直接初始化 owner。
+  Future<void> connectThisDevice({String displayName = '此 Android 控制端'}) async {
+    await _run(() async {
+      final keys = await _identityStore.createOrRead();
+      final result = await _relay.bootstrapDevice(
+        BootstrapOwnerInput(
+          displayName: displayName.trim().isEmpty
+              ? '此 Android 控制端'
+              : displayName.trim(),
+          platform: 'android',
+          keys: keys,
+        ),
+      );
+      _validateDeviceTokenBinding(result.device, result.tokens);
+      await _bindAcceptedDevice(result.device, tokens: result.tokens);
+      _devices = [result.device];
+      await _identityStore.markOwnerBootstrapComplete(true);
+      _needsOwnerBootstrap = false;
+      _requiresRecovery = false;
+      _phase = AppAuthPhase.authenticated;
+      await _reloadDevices();
+    });
   }
 
   Future<void> signIn(LoginCredentials credentials) async {
@@ -217,10 +242,14 @@ class AppController extends ChangeNotifier {
     });
   }
 
-  Future<void> restoreWithRecoveryCode(String email, String code) async {
+  Future<void> restoreWithRecoveryCode(
+    String code, {
+    String displayName = '恢复的 Android 控制端',
+    String email = '',
+  }) async {
     await _run(() async {
-      if (!email.contains('@') || code.trim().isEmpty) {
-        throw const RelayFailure.validation('请输入邮箱和恢复码。');
+      if (code.trim().isEmpty) {
+        throw const RelayFailure.validation('请输入恢复码。');
       }
       // 恢复码永远发送新的候选公钥；失败不会覆盖旧私钥或绑定，成功才提交替换。
       final keys = await _identityStore.createRecoveryCandidate();
@@ -229,7 +258,9 @@ class AppController extends ChangeNotifier {
           RecoveryCodeInput(
             email: email.trim(),
             code: code.trim(),
-            displayName: '恢复的 Android 控制端',
+            displayName: displayName.trim().isEmpty
+                ? '恢复的 Android 控制端'
+                : displayName.trim(),
             keys: keys,
           ),
         );

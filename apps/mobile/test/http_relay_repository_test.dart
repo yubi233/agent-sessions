@@ -14,6 +14,52 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('MOBILE-01 HttpRelayRepository 协议映射', () {
+    test('设备 bootstrap 不发送账号密码并解析绑定 owner token', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/auth/device-bootstrap');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'display_name': '此 Android 控制端',
+          'platform': 'android',
+          'identity_public_key': 'identity-public',
+          'encryption_public_key': 'encryption-public',
+        });
+        return _jsonResponse({
+          'device': {
+            'id': 'dev_owner',
+            'role': 'android_owner',
+            'status': 'active',
+            'display_name': '此 Android 控制端',
+            'platform': 'android',
+          },
+          'tokens': {
+            'account_id': 'acct_1',
+            'device_id': 'dev_owner',
+            'access_token': 'access-owner',
+            'refresh_token': 'refresh-owner',
+            'expires_in': 600,
+          },
+        }, statusCode: 201);
+      });
+      final repository = _repository(adapter);
+
+      final result = await repository.bootstrapDevice(
+        const BootstrapOwnerInput(
+          displayName: '此 Android 控制端',
+          platform: 'android',
+          keys: DeviceRegistrationMaterial(
+            identityPublicKey: 'identity-public',
+            encryptionPublicKey: 'encryption-public',
+          ),
+        ),
+      );
+
+      expect(result.device.id, 'dev_owner');
+      expect(result.device.role, DeviceRole.androidOwner);
+      expect(result.tokens.deviceId, 'dev_owner');
+      expect(result.tokens.expiresAt, DateTime.utc(2026, 8, 14, 0, 10));
+    });
+
     test('密码登录不发送 device_id 或 Android 角色，并解析未绑定 token', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/auth/login');
@@ -44,11 +90,10 @@ void main() {
       expect(tokens.expiresAt, DateTime.utc(2026, 8, 14, 0, 5));
     });
 
-    test('恢复响应需要嵌套的设备绑定 token 与 owner 设备 DTO', () async {
+    test('恢复请求不发送邮箱，并解析嵌套的设备绑定 token 与 owner 设备 DTO', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/recovery-codes/restore');
         expect(options.data, {
-          'email': 'recover@example.test',
           'recovery_code': 'RECOVERY-FIXTURE',
           'display_name': 'Recovered Android',
           'platform': 'android',
@@ -76,7 +121,7 @@ void main() {
 
       final restored = await repository.restoreWithRecoveryCode(
         const RecoveryCodeInput(
-          email: ' recover@example.test ',
+          email: '',
           code: 'RECOVERY-FIXTURE',
           displayName: 'Recovered Android',
           keys: DeviceRegistrationMaterial(

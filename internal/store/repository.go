@@ -49,6 +49,7 @@ type Repository interface {
 	// 恢复码
 	UpsertRecoveryCode(ctx context.Context, rc RecoveryRow) error
 	RecoveryByAccount(ctx context.Context, accountID string) (RecoveryRow, error)
+	RecoveryByCodeHash(ctx context.Context, codeHash string) (RecoveryRow, error)
 	ConsumeRecoveryCode(ctx context.Context, accountID, codeHash string, now time.Time) (bool, error)
 
 	// 审计（脱敏元数据，不写正文）

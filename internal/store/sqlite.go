@@ -312,6 +312,20 @@ func (r *sqliteRepo) RecoveryByAccount(ctx context.Context, accountID string) (R
 	return rc, nil
 }
 
+func (r *sqliteRepo) RecoveryByCodeHash(ctx context.Context, codeHash string) (RecoveryRow, error) {
+	var rc RecoveryRow
+	var locked int64
+	var created int64
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT account_id,code_hash,failed_attempts,locked_until,created_at FROM recovery_codes WHERE code_hash=?`, codeHash).
+		Scan(&rc.AccountID, &rc.CodeHash, &rc.FailedAttempts, &locked, &created); err != nil {
+		return RecoveryRow{}, err
+	}
+	rc.LockedUntil = time.UnixMilli(locked)
+	rc.CreatedAt = time.UnixMilli(created)
+	return rc, nil
+}
+
 // ConsumeRecoveryCode 以哈希和冷却时间作为条件原子消费恢复码，避免并发重放。
 func (r *sqliteRepo) ConsumeRecoveryCode(ctx context.Context, accountID, codeHash string, now time.Time) (bool, error) {
 	result, err := r.db.ExecContext(ctx,

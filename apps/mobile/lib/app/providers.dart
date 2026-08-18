@@ -100,7 +100,7 @@ final appControllerProvider = ChangeNotifierProvider<AppController>((ref) {
   return controller;
 });
 
-/// 会话流、lease 和 composer 与认证状态独立管理，避免登录页面 rebuild 影响已打开的时间线。
+/// 会话流、lease 和 composer 与设备连接状态独立管理，避免首屏 rebuild 影响已打开的时间线。
 final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
   ref,
 ) {

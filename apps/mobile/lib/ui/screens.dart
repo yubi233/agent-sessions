@@ -9,22 +9,20 @@ import '../state/app_controller.dart';
 import 'appearance_controls.dart';
 import 'app_theme.dart';
 
-class LoginScreen extends ConsumerStatefulWidget {
-  const LoginScreen({super.key});
+class ConnectDeviceScreen extends ConsumerStatefulWidget {
+  const ConnectDeviceScreen({super.key});
 
   @override
-  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<ConnectDeviceScreen> createState() =>
+      _ConnectDeviceScreenState();
 }
 
-class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
+class _ConnectDeviceScreenState extends ConsumerState<ConnectDeviceScreen> {
+  final _displayNameController = TextEditingController(text: '此 Android 控制端');
 
   @override
   void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
+    _displayNameController.dispose();
     super.dispose();
   }
 
@@ -40,177 +38,60 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       );
     }
     return _StatusScaffold(
-      title: '登录',
+      title: '连接设备',
       errorMessage: app.errorMessage,
       child: _ScrollableCenter(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const _AuthMark(),
-                const SizedBox(height: 28),
-                Text('登录', style: Theme.of(context).textTheme.headlineSmall),
-                const SizedBox(height: 20),
-                TextFormField(
-                  key: const Key('login-email'),
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  autofillHints: const [AutofillHints.username],
-                  decoration: const InputDecoration(labelText: '邮箱'),
-                  validator: (value) =>
-                      value != null && value.contains('@') ? null : '请输入有效邮箱。',
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  key: const Key('login-password'),
-                  controller: _passwordController,
-                  obscureText: true,
-                  autofillHints: const [AutofillHints.password],
-                  decoration: const InputDecoration(labelText: '密码'),
-                  validator: (value) =>
-                      value != null && value.isNotEmpty ? null : '请输入密码。',
-                  onFieldSubmitted: (_) => _signIn(app),
-                ),
-                const SizedBox(height: 20),
-                FilledButton.icon(
-                  key: const Key('login-submit'),
-                  onPressed: app.isBusy ? null : () => _signIn(app),
-                  icon: const Icon(Icons.login),
-                  label: app.isBusy
-                      ? const SizedBox.square(
-                          dimension: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('登录'),
-                ),
-                TextButton.icon(
-                  key: const Key('recovery-link'),
-                  onPressed: app.isBusy ? null : () => context.go('/recovery'),
-                  icon: const Icon(Icons.key_outlined),
-                  label: const Text('使用恢复码'),
-                ),
-                TextButton.icon(
-                  key: const Key('register-link'),
-                  onPressed: app.isBusy ? null : () => context.go('/register'),
-                  icon: const Icon(Icons.person_add_alt_1_outlined),
-                  label: const Text('创建首个 owner'),
-                ),
-              ],
-            ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _AuthMark(),
+              const SizedBox(height: 28),
+              Text(
+                '连接此 Android 控制端',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '无需账号登录。此设备会在本机安全存储中生成设备身份，并向 Relay 注册为首个 owner 或通过恢复码接管。',
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                key: const Key('device-display-name'),
+                controller: _displayNameController,
+                decoration: const InputDecoration(labelText: '设备名称'),
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _connect(app),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                key: const Key('device-connect-submit'),
+                onPressed: app.isBusy ? null : () => _connect(app),
+                icon: const Icon(Icons.phonelink_lock_outlined),
+                label: app.isBusy
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('初始化此设备'),
+              ),
+              TextButton.icon(
+                key: const Key('recovery-link'),
+                onPressed: app.isBusy ? null : () => context.go('/recovery'),
+                icon: const Icon(Icons.key_outlined),
+                label: const Text('使用恢复码接管'),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Future<void> _signIn(AppController app) async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
-    await app.signIn(
-      LoginCredentials(
-        email: _emailController.text,
-        password: _passwordController.text,
-      ),
-    );
-  }
-}
-
-/// 首次注册会触发 Relay 的初始 owner 创建与本机公钥 bootstrap，不能由普通登录替代。
-class RegisterScreen extends ConsumerStatefulWidget {
-  const RegisterScreen({super.key});
-
-  @override
-  ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
-}
-
-class _RegisterScreenState extends ConsumerState<RegisterScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final app = ref.watch(appControllerProvider);
-    return _StatusScaffold(
-      title: '创建 owner',
-      errorMessage: app.errorMessage,
-      child: _ScrollableCenter(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const _AuthMark(),
-                const SizedBox(height: 28),
-                Text(
-                  '创建首个 Android owner',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 20),
-                TextFormField(
-                  key: const Key('register-email'),
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: '邮箱'),
-                  validator: (value) =>
-                      value != null && value.contains('@') ? null : '请输入有效邮箱。',
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  key: const Key('register-password'),
-                  controller: _passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: '密码'),
-                  validator: (value) =>
-                      value != null && value.isNotEmpty ? null : '请输入密码。',
-                  onFieldSubmitted: (_) => _register(app),
-                ),
-                const SizedBox(height: 20),
-                FilledButton.icon(
-                  key: const Key('register-submit'),
-                  onPressed: app.isBusy ? null : () => _register(app),
-                  icon: const Icon(Icons.verified_user_outlined),
-                  label: const Text('创建并建立 owner'),
-                ),
-                TextButton.icon(
-                  onPressed: () => context.go('/login'),
-                  icon: const Icon(Icons.arrow_back),
-                  label: const Text('返回登录'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _register(AppController app) async {
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
-    await app.registerOwner(
-      LoginCredentials(
-        email: _emailController.text,
-        password: _passwordController.text,
-      ),
-    );
-  }
+  Future<void> _connect(AppController app) =>
+      app.connectThisDevice(displayName: _displayNameController.text);
 }
 
 class RecoveryScreen extends ConsumerStatefulWidget {
@@ -222,12 +103,12 @@ class RecoveryScreen extends ConsumerStatefulWidget {
 
 class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
+  final _displayNameController = TextEditingController(text: '恢复的 Android 控制端');
   final _codeController = TextEditingController();
 
   @override
   void dispose() {
-    _emailController.dispose();
+    _displayNameController.dispose();
     _codeController.dispose();
     super.dispose();
   }
@@ -236,7 +117,7 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
   Widget build(BuildContext context) {
     final app = ref.watch(appControllerProvider);
     return _StatusScaffold(
-      title: '恢复账户',
+      title: '恢复设备',
       errorMessage: app.errorMessage,
       child: _ScrollableCenter(
         child: ConstrainedBox(
@@ -253,15 +134,13 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
                   '恢复此 Android 控制端',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
+                const SizedBox(height: 12),
+                const Text('输入 owner 设备生成的一次性恢复码。这里不需要账号、邮箱或密码。'),
                 const SizedBox(height: 20),
                 TextFormField(
-                  key: const Key('recovery-email'),
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  autofillHints: const [AutofillHints.username],
-                  decoration: const InputDecoration(labelText: '邮箱'),
-                  validator: (value) =>
-                      value != null && value.contains('@') ? null : '请输入有效邮箱。',
+                  key: const Key('recovery-display-name'),
+                  controller: _displayNameController,
+                  decoration: const InputDecoration(labelText: '设备名称'),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -282,9 +161,9 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
                   label: const Text('恢复'),
                 ),
                 TextButton.icon(
-                  onPressed: () => context.go('/login'),
+                  onPressed: () => context.go('/connect'),
                   icon: const Icon(Icons.arrow_back),
-                  label: const Text('返回登录'),
+                  label: const Text('返回连接设备'),
                 ),
               ],
             ),
@@ -299,8 +178,8 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
       return;
     }
     await app.restoreWithRecoveryCode(
-      _emailController.text,
       _codeController.text,
+      displayName: _displayNameController.text,
     );
   }
 }
@@ -317,7 +196,7 @@ class HomeScreen extends ConsumerWidget {
       actions: [
         IconButton(
           key: const Key('signout-button'),
-          tooltip: '退出登录',
+          tooltip: '断开此设备',
           onPressed: app.isBusy ? null : app.signOut,
           icon: const Icon(Icons.logout),
         ),
@@ -345,21 +224,21 @@ class HomeScreen extends ConsumerWidget {
                 ? const ListTile(
                     key: Key('owner-ready-state'),
                     leading: Icon(Icons.verified_user_outlined),
-                    title: Text('Owner 已建立'),
-                    subtitle: Text('等待 Relay 授权。'),
+                    title: Text('Owner 设备已连接'),
+                    subtitle: Text('此 Android 可批准配对并控制会话。'),
                   )
                 : app.hasOwner
                 ? const ListTile(
                     key: Key('readonly-auth-state'),
                     leading: Icon(Icons.lock_outline),
-                    title: Text('当前登录没有 Android 写设备'),
-                    subtitle: Text('使用恢复码恢复。'),
+                    title: Text('当前设备没有 Android 写权限'),
+                    subtitle: Text('使用恢复码接管此设备。'),
                   )
                 : const ListTile(
                     key: Key('unprovisioned-auth-state'),
                     leading: Icon(Icons.info_outline),
-                    title: Text('尚未建立 Android owner'),
-                    subtitle: Text('创建首个 owner 或恢复既有 owner。'),
+                    title: Text('尚未连接 Android owner'),
+                    subtitle: Text('初始化此设备或使用恢复码接管。'),
                   ),
           ),
           const _MobileSectionHeading('安全与设备'),

@@ -23,7 +23,7 @@
   "cases": [
     {
       "id": "MOBILE-01",
-      "title": "登录配对与密文缓存",
+      "title": "免登录设备初始化、配对与密文缓存",
       "status": "completed",
       "phase": "v0.4/P5",
       "category": "Android",
@@ -32,10 +32,10 @@
       "precondition": "已连接并解锁 Android 实机 23113RKC6C / Android 15；runner 使用 task test:android:device 执行已登记 integration_test；真实 Provider、Push、后台恢复和网络切换不作为本 fixture gate 前置。",
       "steps": [
         "运行 task test:android:device -- --device-id d723617；runner 先执行 Android harness，再在物理设备上安装并运行已登记 integration_test。",
-        "创建首个 owner、登录、发起并批准 QR 配对、撤销设备，并验证安全存储与 Drift 密文缓存。",
+        "在首屏确认无账号/邮箱/密码登录表单，使用 Android 设备身份直接初始化首个 owner，发起并批准 QR 配对、撤销设备，并验证安全存储与 Drift 密文缓存。",
         "运行 owner 视觉 fixture integration，确认物理 Android 上的核心可见状态可启动和完成。"
       ],
-      "expected": "报告标记 real_device=true、simulated_device=false、headless=false；认证、配对、撤销、安全存储和密文缓存断言通过；真实 Provider、Push、后台恢复和网络切换字段保持 false。",
+      "expected": "报告标记 real_device=true、simulated_device=false、headless=false；免登录设备初始化、配对、撤销、安全存储和密文缓存断言通过；真实 Provider、Push、后台恢复和网络切换字段保持 false。",
       "cleanup": [
         "Flutter 默认清理测试 APK；runner 恢复本轮修改的设备 stay-awake 设置，不停止物理设备。"
       ],

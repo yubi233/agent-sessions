@@ -162,20 +162,9 @@ AttachmentDraft _attachmentDraft({
   ],
 );
 
-Future<void> _openWritableFixtureSession(
-  WidgetTester tester,
-  String email,
-) async {
-  await _waitForVisible(tester, find.byKey(const Key('register-link')));
-  await _tapVisible(tester, find.byKey(const Key('register-link')));
-  await _waitForVisible(tester, find.byKey(const Key('register-email')));
-  await _enterVisible(tester, find.byKey(const Key('register-email')), email);
-  await _enterVisible(
-    tester,
-    find.byKey(const Key('register-password')),
-    'fixture-password',
-  );
-  await _tapVisible(tester, find.byKey(const Key('register-submit')));
+Future<void> _openWritableFixtureSession(WidgetTester tester, String _) async {
+  await _waitForVisible(tester, find.byKey(const Key('device-connect-submit')));
+  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
   await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
   await _tapVisible(tester, find.byKey(const Key('session-new-button')));
   await _waitForVisible(

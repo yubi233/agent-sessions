@@ -125,16 +125,17 @@ void main() {
     expect(await harness.relay.listSessions(), hasLength(1));
   });
 
-  testWidgets('MOBILE-07：父会话内可见派发入口创建 proposed 子会话节点', (
-    tester,
-  ) async {
+  testWidgets('MOBILE-07：父会话内可见派发入口创建 proposed 子会话节点', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await _registerOwner(tester, 'delegation-propose-owner@fixture.test');
     await _createAndAcquireParent(tester);
 
     // 打开“新建子会话”底表并提交：只提交密文 envelope 与目标 Provider。
-    await _tapVisible(tester, find.byKey(const Key('delegation-propose-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('delegation-propose-button')),
+    );
     await _waitForVisible(
       tester,
       find.byKey(const Key('delegation-proposal-sheet')),
@@ -166,9 +167,7 @@ void main() {
     expect(nodes.single.summaryEnvelope.containsKey('text'), isFalse);
   });
 
-  testWidgets('MOBILE-07：无 parent lease 时派发入口给出中文原因且不创建节点', (
-    tester,
-  ) async {
+  testWidgets('MOBILE-07：无 parent lease 时派发入口给出中文原因且不创建节点', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await _registerOwner(tester, 'delegation-propose-blocked@fixture.test');
@@ -183,13 +182,19 @@ void main() {
       tester,
       find.byKey(const Key('new-session-create-button')),
     );
-    await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
 
-    await _tapVisible(tester, find.byKey(const Key('delegation-propose-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('delegation-propose-button')),
+    );
     await _waitForVisible(
       tester,
       find.byKey(const Key('delegation-proposal-sheet')),
@@ -223,16 +228,8 @@ Future<void> _createAndAcquireParent(WidgetTester tester) async {
   await _waitForVisible(tester, find.text('已获得控制权'));
 }
 
-Future<void> _registerOwner(WidgetTester tester, String email) async {
-  await _tapVisible(tester, find.byKey(const Key('register-link')));
-  await _waitForVisible(tester, find.byKey(const Key('register-email')));
-  await _enterVisible(tester, find.byKey(const Key('register-email')), email);
-  await _enterVisible(
-    tester,
-    find.byKey(const Key('register-password')),
-    'fixture-password',
-  );
-  await _tapVisible(tester, find.byKey(const Key('register-submit')));
+Future<void> _registerOwner(WidgetTester tester, String _) async {
+  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
   await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
 }
 

@@ -1059,8 +1059,10 @@ type RecoveryCodeResponse struct {
 
 // RecoveryRestoreRequest defines model for RecoveryRestoreRequest.
 type RecoveryRestoreRequest struct {
-	DisplayName         string  `json:"display_name"`
-	Email               string  `json:"email"`
+	DisplayName string `json:"display_name"`
+
+	// Email 兼容旧客户端；Android Happy 主路径不要求邮箱。
+	Email               *string `json:"email,omitempty"`
 	EncryptionPublicKey string  `json:"encryption_public_key"`
 	IdentityPublicKey   string  `json:"identity_public_key"`
 	Platform            *string `json:"platform,omitempty"`
@@ -1339,6 +1341,9 @@ type UploadAttachmentChunkJSONRequestBody = AttachmentChunkUploadRequest
 // CompleteAttachmentJSONRequestBody defines body for CompleteAttachment for application/json ContentType.
 type CompleteAttachmentJSONRequestBody = AttachmentCompleteRequest
 
+// DeviceBootstrapJSONRequestBody defines body for DeviceBootstrap for application/json ContentType.
+type DeviceBootstrapJSONRequestBody = BootstrapRequest
+
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
@@ -1547,6 +1552,9 @@ type ServerInterface interface {
 
 	// (GET /v1/audit)
 	ListAudit(c *gin.Context, params ListAuditParams)
+
+	// (POST /v1/auth/device-bootstrap)
+	DeviceBootstrap(c *gin.Context)
 
 	// (POST /v1/auth/login)
 	Login(c *gin.Context)
@@ -1778,6 +1786,19 @@ func (siw *ServerInterfaceWrapper) ListAudit(c *gin.Context) {
 	}
 
 	siw.Handler.ListAudit(c, params)
+}
+
+// DeviceBootstrap operation middleware
+func (siw *ServerInterfaceWrapper) DeviceBootstrap(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DeviceBootstrap(c)
 }
 
 // Login operation middleware
@@ -2674,6 +2695,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/healthz", wrapper.GetHealthz)
 	router.GET(options.BaseURL+"/readyz", wrapper.GetReadyz)
 	router.POST(options.BaseURL+"/v1/auth/register", wrapper.Register)
+	router.POST(options.BaseURL+"/v1/auth/device-bootstrap", wrapper.DeviceBootstrap)
 	router.POST(options.BaseURL+"/v1/auth/login", wrapper.Login)
 	router.POST(options.BaseURL+"/v1/auth/refresh", wrapper.Refresh)
 	router.POST(options.BaseURL+"/v1/auth/logout", wrapper.Logout)

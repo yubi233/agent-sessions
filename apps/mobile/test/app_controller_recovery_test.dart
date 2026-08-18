@@ -17,10 +17,7 @@ void main() {
         encryptedCache: InMemoryEncryptedCacheStore(),
       );
 
-      await controller.restoreWithRecoveryCode(
-        'recover@fixture.test',
-        'RECOVERY-FIXTURE-0001',
-      );
+      await controller.restoreWithRecoveryCode('RECOVERY-FIXTURE-0001');
 
       // Relay 设备和 token 串线属于协议失败，候选私钥被丢弃，旧身份仍可安全使用。
       final after = await identities.createOrRead();
@@ -41,10 +38,7 @@ void main() {
         encryptedCache: InMemoryEncryptedCacheStore(),
       );
 
-      await controller.restoreWithRecoveryCode(
-        'recover@fixture.test',
-        'RECOVERY-FIXTURE-0001',
-      );
+      await controller.restoreWithRecoveryCode('RECOVERY-FIXTURE-0001');
 
       final after = await identities.createOrRead();
       expect(after.identityPublicKey, isNot(before.identityPublicKey));

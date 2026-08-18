@@ -14,18 +14,13 @@ void main() {
 
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
-    await _tapVisible(tester, find.byKey(const Key('register-link')));
-    await _waitForVisible(tester, find.byKey(const Key('register-email')));
-    await tester.enterText(
-      find.byKey(const Key('register-email')),
-      'visual-owner@fixture.test',
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
     );
-    await tester.enterText(
-      find.byKey(const Key('register-password')),
-      'fixture-password',
-    );
-    await _tapVisible(tester, find.byKey(const Key('register-submit')));
+    expect(find.byKey(const Key('login-email')), findsNothing);
+    expect(find.byKey(const Key('register-email')), findsNothing);
+    await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
     await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
 
     // 只推进已知路由动画时长；可见截图由独立 flutter run fixture 负责，避免干扰测试宿主退出。

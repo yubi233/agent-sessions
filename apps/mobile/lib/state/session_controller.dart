@@ -19,12 +19,8 @@ class SessionController extends ChangeNotifier {
     DateTime Function()? clock,
     Random? random,
     AttachmentPicker? picker,
-  }) => SessionController._(
-    relay,
-    clock: clock,
-    random: random,
-    picker: picker,
-  );
+  }) =>
+      SessionController._(relay, clock: clock, random: random, picker: picker);
 
   SessionController._(
     this._relay, {
@@ -406,7 +402,7 @@ class SessionController extends ChangeNotifier {
     if (!declared.isSupported) {
       return declared.reason ?? '$capability 当前不可用。';
     }
-    if (!canWrite) return '当前登录是只读状态';
+    if (!canWrite) return '当前设备是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
     if (requiresLease && !hasSelectedLease) return '等待获取会话控制权';
     return null;
@@ -514,7 +510,8 @@ class SessionController extends ChangeNotifier {
   }
 
   /// 添加前的 MIME/大小/密文块预检在本机完成。拒绝项仅显示在内存 composer，不会发出 HTTP 请求。
-  bool addAttachmentDraft(AttachmentDraft draft) {    try {
+  bool addAttachmentDraft(AttachmentDraft draft) {
+    try {
       draft.validate();
     } on RelayFailure catch (failure) {
       _attachmentRejections = [
@@ -839,7 +836,7 @@ class SessionController extends ChangeNotifier {
   }
 
   String? composerBlockedReason({required bool canWrite}) {
-    if (!canWrite) return '当前登录是只读状态';
+    if (!canWrite) return '当前设备是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
     if (!hasSelectedLease) return '等待获取会话控制权';
     return null;
@@ -1040,7 +1037,7 @@ class SessionController extends ChangeNotifier {
 
   bool _ensureWriteAccess({required bool canWrite, required String? deviceId}) {
     if (!canWrite || deviceId == null || deviceId.isEmpty) {
-      _setError('当前登录为只读状态，没有 Android 写控制端，请使用 owner 设备继续。');
+      _setError('当前设备为只读状态，没有 Android 写控制端，请使用 owner 设备继续。');
       return false;
     }
     return true;

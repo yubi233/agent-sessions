@@ -52,7 +52,7 @@ class SessionHomeScreen extends ConsumerWidget {
           ),
           IconButton(
             key: const Key('signout-button'),
-            tooltip: '退出登录',
+            tooltip: '断开此设备',
             onPressed: app.isBusy ? null : app.signOut,
             icon: const Icon(Icons.logout_outlined),
           ),
@@ -3031,21 +3031,21 @@ class _SecurityControls extends StatelessWidget {
             ? const ListTile(
                 key: Key('owner-ready-state'),
                 leading: Icon(Icons.verified_user_outlined),
-                title: Text('Owner 已建立'),
-                subtitle: Text('此设备可获取会话控制权。'),
+                title: Text('Owner 设备已连接'),
+                subtitle: Text('此 Android 可获取会话控制权。'),
               )
             : app.hasOwner
             ? const ListTile(
                 key: Key('readonly-auth-state'),
                 leading: Icon(Icons.lock_outline),
-                title: Text('当前登录没有 Android 写设备'),
-                subtitle: Text('使用恢复码恢复。'),
+                title: Text('当前设备没有 Android 写权限'),
+                subtitle: Text('使用恢复码接管此设备。'),
               )
             : const ListTile(
                 key: Key('unprovisioned-auth-state'),
                 leading: Icon(Icons.info_outline),
-                title: Text('尚未建立 Android owner'),
-                subtitle: Text('创建首个 owner 或恢复既有 owner。'),
+                title: Text('尚未连接 Android owner'),
+                subtitle: Text('初始化此设备或使用恢复码接管。'),
               ),
       ),
       const SizedBox(height: 4),

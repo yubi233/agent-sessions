@@ -13,7 +13,10 @@ void main() {
 
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'lifecycle-ui-owner@fixture.test');
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
     await _waitForVisible(
@@ -75,16 +78,8 @@ void main() {
   });
 }
 
-Future<void> _registerOwner(WidgetTester tester, String email) async {
-  await _tapVisible(tester, find.byKey(const Key('register-link')));
-  await _waitForVisible(tester, find.byKey(const Key('register-email')));
-  await _enterVisible(tester, find.byKey(const Key('register-email')), email);
-  await _enterVisible(
-    tester,
-    find.byKey(const Key('register-password')),
-    'fixture-password',
-  );
-  await _tapVisible(tester, find.byKey(const Key('register-submit')));
+Future<void> _registerOwner(WidgetTester tester, String _) async {
+  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
   await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
 }
 

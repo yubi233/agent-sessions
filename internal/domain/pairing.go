@@ -381,12 +381,27 @@ func (s *PairingService) restoreOwnerInTx(ctx context.Context, repo store.Reposi
 		}
 		return recoveryRestoreOutcome{}, err
 	}
+	return s.restoreOwnerForRecoveryRowInTx(ctx, repo, rc, code, true, d)
+}
+
+func (s *PairingService) restoreOwnerByCodeHashInTx(ctx context.Context, repo store.Repository, code string, d Device) (recoveryRestoreOutcome, error) {
+	rc, err := repo.RecoveryByCodeHash(ctx, authz.HashToken(code))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return recoveryRestoreOutcome{businessErr: ErrRecoveryInvalid}, nil
+		}
+		return recoveryRestoreOutcome{}, err
+	}
+	return s.restoreOwnerForRecoveryRowInTx(ctx, repo, rc, code, false, d)
+}
+
+func (s *PairingService) restoreOwnerForRecoveryRowInTx(ctx context.Context, repo store.Repository, rc store.RecoveryRow, code string, checkCode bool, d Device) (recoveryRestoreOutcome, error) {
 	if s.now().Before(rc.LockedUntil) {
 		return recoveryRestoreOutcome{businessErr: ErrRecoveryLocked}, nil
 	}
 	// 服务端同样拒绝复用任何历史身份公钥；客户端的新恢复候选只是第一道防线。
 	// 先检查再消费恢复码，避免错误请求把旧 Android 全部撤销后才暴露唯一键冲突。
-	devices, err := repo.ListDevices(ctx, account.ID)
+	devices, err := repo.ListDevices(ctx, rc.AccountID)
 	if err != nil {
 		return recoveryRestoreOutcome{}, err
 	}
@@ -395,7 +410,7 @@ func (s *PairingService) restoreOwnerInTx(ctx context.Context, repo store.Reposi
 			return recoveryRestoreOutcome{businessErr: ErrPairingAlreadyHandled}, nil
 		}
 	}
-	if subtle.ConstantTimeCompare([]byte(authz.HashToken(code)), []byte(rc.CodeHash)) != 1 {
+	if checkCode && subtle.ConstantTimeCompare([]byte(authz.HashToken(code)), []byte(rc.CodeHash)) != 1 {
 		if err := s.recordRecoveryFailureWithRepo(ctx, repo, rc); err != nil {
 			return recoveryRestoreOutcome{}, err
 		}
@@ -404,7 +419,7 @@ func (s *PairingService) restoreOwnerInTx(ctx context.Context, repo store.Reposi
 		}
 		return recoveryRestoreOutcome{businessErr: ErrRecoveryInvalid}, nil
 	}
-	consumed, err := repo.ConsumeRecoveryCode(ctx, account.ID, authz.HashToken(code), s.now())
+	consumed, err := repo.ConsumeRecoveryCode(ctx, rc.AccountID, authz.HashToken(code), s.now())
 	if err != nil {
 		return recoveryRestoreOutcome{}, err
 	}
@@ -413,7 +428,7 @@ func (s *PairingService) restoreOwnerInTx(ctx context.Context, repo store.Reposi
 	}
 
 	dev := Device{
-		ID: id.New("dev"), AccountID: account.ID, Role: RoleAndroidOwner, Status: DeviceActive,
+		ID: id.New("dev"), AccountID: rc.AccountID, Role: RoleAndroidOwner, Status: DeviceActive,
 		DisplayName: d.DisplayName, Platform: d.Platform,
 		IdentityPublicKey: d.IdentityPublicKey, EncryptionPublicKey: d.EncryptionPublicKey,
 	}
@@ -430,7 +445,7 @@ func (s *PairingService) restoreOwnerInTx(ctx context.Context, repo store.Reposi
 	if err := repo.CreateDevice(ctx, toDeviceRow(dev)); err != nil {
 		return recoveryRestoreOutcome{}, err
 	}
-	if err := repo.AppendAudit(ctx, account.ID, "recovery_code.restored_owner", `{"device_id":"`+dev.ID+`"}`); err != nil {
+	if err := repo.AppendAudit(ctx, rc.AccountID, "recovery_code.restored_owner", `{"device_id":"`+dev.ID+`"}`); err != nil {
 		return recoveryRestoreOutcome{}, err
 	}
 	return recoveryRestoreOutcome{device: dev}, nil

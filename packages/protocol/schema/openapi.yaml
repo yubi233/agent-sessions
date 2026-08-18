@@ -33,7 +33,7 @@ paths:
   /v1/auth/register:
     post:
       operationId: register
-      description: 为新账号创建初始 Android owner；成功时返回已绑定设备的令牌对。
+      description: 兼容旧客户端的账号式初始 owner 注册；Android Happy 主路径应使用 device-bootstrap。
       requestBody:
         required: true
         content:
@@ -47,6 +47,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeviceBoundTokenPair"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /v1/auth/device-bootstrap:
+    post:
+      operationId: deviceBootstrap
+      description: Android/Happy 首次启动时用本机设备公钥直接初始化首个 owner，不要求账号、邮箱或密码。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BootstrapRequest"
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryRestoreResponse"
         "409":
           $ref: "#/components/responses/Conflict"
         "400":
@@ -1255,10 +1276,11 @@ components:
           type: string
     RecoveryRestoreRequest:
       type: object
-      required: [email, recovery_code, display_name, identity_public_key, encryption_public_key]
+      required: [recovery_code, display_name, identity_public_key, encryption_public_key]
       properties:
         email:
           type: string
+          description: 兼容旧客户端；Android Happy 主路径不要求邮箱。
         recovery_code:
           type: string
         display_name:

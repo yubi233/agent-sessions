@@ -54,6 +54,33 @@ class FixtureRelayRepository implements RelayRepository {
 
   int get delegationCount => _delegations.length;
 
+  @override
+  Future<DeviceBootstrapResult> bootstrapDevice(
+    BootstrapOwnerInput input,
+  ) async {
+    if (_devices.isNotEmpty) {
+      throw const RelayFailure(
+        RelayFailureKind.forbidden,
+        'fixture 账号已经完成首台 Android owner 初始化。',
+      );
+    }
+    final owner = Device(
+      id: 'android-owner-fixture',
+      role: DeviceRole.androidOwner,
+      status: DeviceStatus.active,
+      displayName: input.displayName.trim().isEmpty
+          ? '此 Android 控制端'
+          : input.displayName.trim(),
+      platform: input.platform,
+      lastSeen: _clock(),
+    );
+    _devices.add(owner);
+    return DeviceBootstrapResult(
+      tokens: _newTokens(deviceId: owner.id),
+      device: owner,
+    );
+  }
+
   /// P6 测试只用这个开关模拟 Relay 不可达；远端事件注入仍可发生，表示应用离线期间服务端继续推进。
   void setNetworkAvailable(bool value) => _networkAvailable = value;
 
@@ -126,7 +153,7 @@ class FixtureRelayRepository implements RelayRepository {
   @override
   Future<AuthTokens> refresh(String refreshToken) async {
     if (refreshToken.isEmpty) {
-      throw const RelayFailure(RelayFailureKind.unauthorized, '登录状态已失效，请重新登录。');
+      throw const RelayFailure(RelayFailureKind.unauthorized, '设备连接已失效，请重新连接。');
     }
     return _newTokens(deviceId: _deviceIdFromRefreshToken(refreshToken));
   }
@@ -273,7 +300,7 @@ class FixtureRelayRepository implements RelayRepository {
   Future<RecoveryResult> restoreWithRecoveryCode(
     RecoveryCodeInput input,
   ) async {
-    if (!input.email.contains('@') || input.code != 'RECOVERY-FIXTURE-0001') {
+    if (input.code != 'RECOVERY-FIXTURE-0001') {
       throw const RelayFailure(RelayFailureKind.unauthorized, '恢复码无效或已过期。');
     }
     final device = Device(
@@ -1147,7 +1174,7 @@ class FixtureRelayRepository implements RelayRepository {
   String? _deviceIdFromRefreshToken(String refreshToken) {
     const prefix = 'fixture-refresh-token-';
     if (!refreshToken.startsWith(prefix)) {
-      throw const RelayFailure(RelayFailureKind.unauthorized, '登录状态已失效，请重新登录。');
+      throw const RelayFailure(RelayFailureKind.unauthorized, '设备连接已失效，请重新连接。');
     }
     final deviceId = refreshToken.substring(prefix.length);
     return deviceId == 'readonly' ? null : deviceId;

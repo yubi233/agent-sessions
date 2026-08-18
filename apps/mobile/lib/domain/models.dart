@@ -127,6 +127,13 @@ class BootstrapOwnerInput {
   final DeviceRegistrationMaterial keys;
 }
 
+class DeviceBootstrapResult {
+  const DeviceBootstrapResult({required this.tokens, required this.device});
+
+  final AuthTokens tokens;
+  final Device device;
+}
+
 class PairingRequestInput {
   const PairingRequestInput({
     required this.role,

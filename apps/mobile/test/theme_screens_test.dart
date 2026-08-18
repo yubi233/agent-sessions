@@ -31,10 +31,10 @@ void main() {
       ),
     );
     expect(find.byKey(const Key('mobile-page-shell')), findsOneWidget);
-    expect(find.byKey(const Key('login-submit')), findsOneWidget);
+    expect(find.byKey(const Key('device-connect-submit')), findsOneWidget);
   });
 
-  testWidgets('MOBILE-26：系统深色和大字号下登录页不抛出布局异常', (tester) async {
+  testWidgets('MOBILE-26：系统深色和大字号下连接页不抛出布局异常', (tester) async {
     tester.binding.platformDispatcher.platformBrightnessTestValue =
         Brightness.dark;
     addTearDown(
@@ -58,7 +58,7 @@ void main() {
     final context = tester.element(find.byKey(const Key('mobile-page-shell')));
     expect(Theme.of(context).brightness, Brightness.dark);
     expect(MediaQuery.of(context).disableAnimations, isTrue);
-    expect(find.byKey(const Key('login-submit')), findsOneWidget);
+    expect(find.byKey(const Key('device-connect-submit')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

@@ -34,6 +34,7 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		pub := v1.Group("")
 		pub.POST("/auth/login", a.handleLogin)
 		pub.POST("/auth/register", a.handleRegister)
+		pub.POST("/auth/device-bootstrap", a.handleDeviceBootstrap)
 		pub.POST("/auth/refresh", a.handleRefresh)
 		// 恢复入口故意不要求现有 bearer：丢失 owner 设备时仍可用恢复码恢复控制权。
 		pub.POST("/recovery-codes/restore", a.handleRestore)
@@ -173,6 +174,29 @@ func (a *API) handleRegister(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, tokens)
+}
+
+// handleDeviceBootstrap 是 Android/Happy 主入口：首台手机以本机公钥初始化 owner，不要求账号登录。
+func (a *API) handleDeviceBootstrap(c *gin.Context) {
+	var req bootstrapRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed request"))
+		return
+	}
+	platform := req.Platform
+	if strings.TrimSpace(platform) == "" {
+		platform = "android"
+	}
+	dev, tokens, err := a.Auth.BootstrapInitialOwnerDevice(c.Request.Context(), domain.Device{
+		Role: domain.RoleAndroidOwner, Status: domain.DeviceActive,
+		DisplayName: req.DisplayName, Platform: platform,
+		IdentityPublicKey: req.IdentityPublicKey, EncryptionPublicKey: req.EncryptionPublicKey,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, recoveryRestoreView{Device: newDeviceView(dev), Tokens: tokens})
 }
 
 func (a *API) handleRefresh(c *gin.Context) {

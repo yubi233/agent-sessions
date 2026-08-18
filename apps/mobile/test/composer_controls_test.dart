@@ -5,16 +5,27 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/app_harness.dart';
 
 void main() {
-  testWidgets('MOBILE-08：composer 模型/effort 切换走 lease 命令，usage 只展示脱敏计数', (tester) async {
+  testWidgets('MOBILE-08：composer 模型/effort 切换走 lease 命令，usage 只展示脱敏计数', (
+    tester,
+  ) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await _registerOwner(tester, 'composer-controls@fixture.test');
     await _createAndAcquireLease(tester);
 
     // 控制条出现：模型/effort 下拉 + usage 计数。
-    await _waitForVisible(tester, find.byKey(const Key('composer-control-strip')));
-    await _waitForVisible(tester, find.byKey(const Key('composer-model-select')));
-    await _waitForVisible(tester, find.byKey(const Key('composer-effort-select')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-control-strip')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-model-select')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-effort-select')),
+    );
     await _waitForVisible(tester, find.byKey(const Key('composer-usage-chip')));
     // usage 只展示计数，不包含 prompt 或回复正文。
     expect(find.textContaining('↑12.5k'), findsOneWidget);
@@ -30,7 +41,9 @@ void main() {
       (await harness.relay.listSessions()).single.id,
     );
     expect(
-      snapshot.events.any((event) => event.eventType == 'session.model_selected'),
+      snapshot.events.any(
+        (event) => event.eventType == 'session.model_selected',
+      ),
       isTrue,
     );
 
@@ -48,7 +61,10 @@ void main() {
     await _createAndAcquireLease(tester, provider: 'opencode');
 
     // opencode fixture 未声明 model_select/effort_select：控制条仍显示（说明原因）但不可交互。
-    await _waitForVisible(tester, find.byKey(const Key('composer-control-strip')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-control-strip')),
+    );
     final modelDropdown = tester.widget<DropdownButtonFormField<String>>(
       find.byKey(const Key('composer-model-select')),
     );
@@ -71,8 +87,14 @@ void main() {
       find.byKey(const Key('session-composer-input')),
       '@readme',
     );
-    await _waitForVisible(tester, find.byKey(const Key('composer-suggestions')));
-    await _waitForVisible(tester, find.byKey(const Key('completion-suggestion-文件 · README.md')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-suggestions')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('completion-suggestion-文件 · README.md')),
+    );
     // 应用建议：输入框填入 @README.md。
     await _tapVisible(
       tester,
@@ -92,7 +114,10 @@ void main() {
       '@../etc',
     );
     await tester.pump(const Duration(milliseconds: 100));
-    await _waitForVisible(tester, find.byKey(const Key('composer-suggestions-empty')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-suggestions-empty')),
+    );
   });
 
   testWidgets('MOBILE-08：/ 补全给 Skill 建议并应用', (tester) async {
@@ -106,7 +131,10 @@ void main() {
       find.byKey(const Key('session-composer-input')),
       '/检查',
     );
-    await _waitForVisible(tester, find.byKey(const Key('composer-suggestions')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-suggestions')),
+    );
     await _waitForVisible(
       tester,
       find.byKey(const Key('completion-suggestion-Skill · 检查会话控制')),
@@ -133,16 +161,27 @@ void main() {
     await _registerOwner(tester, 'pick-attach@fixture.test');
     await _createAndAcquireLease(tester);
 
-    await _waitForVisible(tester, find.byKey(const Key('session-attachment-add-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-attachment-add-button')),
+    );
     expect(
       tester
-          .widget<IconButton>(find.byKey(const Key('session-attachment-add-button')))
+          .widget<IconButton>(
+            find.byKey(const Key('session-attachment-add-button')),
+          )
           .onPressed,
       isNotNull,
       reason: 'fixture 声明 DEK 可用后选附件入口必须启用',
     );
-    await _tapVisible(tester, find.byKey(const Key('session-attachment-add-button')));
-    await _waitForVisible(tester, find.byKey(const Key('session-attachment-queue')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-attachment-add-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-attachment-queue')),
+    );
     expect(find.text('fixture-picked.png'), findsOneWidget);
   });
 
@@ -154,10 +193,15 @@ void main() {
     await _registerOwner(tester, 'pick-blocked@fixture.test');
     await _createAndAcquireLease(tester);
 
-    await _waitForVisible(tester, find.byKey(const Key('session-attachment-add-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-attachment-add-button')),
+    );
     expect(
       tester
-          .widget<IconButton>(find.byKey(const Key('session-attachment-add-button')))
+          .widget<IconButton>(
+            find.byKey(const Key('session-attachment-add-button')),
+          )
           .onPressed,
       isNull,
       reason: '无会话 DEK 时附件入口必须 fail-closed',
@@ -196,7 +240,9 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-10：无 permission_mode capability 时下拉禁用且不提交命令', (tester) async {
+  testWidgets('MOBILE-10：无 permission_mode capability 时下拉禁用且不提交命令', (
+    tester,
+  ) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await _registerOwner(tester, 'permission-mode-blocked@fixture.test');
@@ -234,16 +280,8 @@ void main() {
   });
 }
 
-Future<void> _registerOwner(WidgetTester tester, String email) async {
-  await _tapVisible(tester, find.byKey(const Key('register-link')));
-  await _waitForVisible(tester, find.byKey(const Key('register-email')));
-  await _enterVisible(tester, find.byKey(const Key('register-email')), email);
-  await _enterVisible(
-    tester,
-    find.byKey(const Key('register-password')),
-    'fixture-password',
-  );
-  await _tapVisible(tester, find.byKey(const Key('register-submit')));
+Future<void> _registerOwner(WidgetTester tester, String _) async {
+  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
   await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
 }
 
@@ -257,13 +295,19 @@ Future<void> _createAndAcquireLease(
     find.byKey(const Key('new-session-workspace-input')),
   );
   if (provider != 'codex') {
-    await _tapVisible(tester, find.byKey(const Key('new-session-provider-select')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-provider-select')),
+    );
     await _waitForVisible(tester, find.text('OpenCode').last);
     await tester.tap(find.text('OpenCode').last);
   }
   await _tapVisible(tester, find.byKey(const Key('new-session-create-button')));
   await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-  await _tapVisible(tester, find.byKey(const Key('session-acquire-lease-button')));
+  await _tapVisible(
+    tester,
+    find.byKey(const Key('session-acquire-lease-button')),
+  );
   await _waitForVisible(tester, find.text('已获得控制权'));
 }
 

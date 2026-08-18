@@ -77,7 +77,7 @@ void main() {
       );
 
       expect(controller.stopBlockedReason, isNull);
-      expect(controller.resumeBlockedReason, '当前登录是只读状态');
+      expect(controller.resumeBlockedReason, '当前设备是只读状态');
     });
   });
 
@@ -103,9 +103,7 @@ void main() {
       expect(find.text('fixture-workspace'), findsOneWidget);
     });
 
-    testWidgets('机器卡只显示 hostname/平台/Daemon 版本，不显示终端 ID、路径、日志', (
-      tester,
-    ) async {
+    testWidgets('机器卡只显示 hostname/平台/Daemon 版本，不显示终端 ID、路径、日志', (tester) async {
       _usePhoneSurface(tester);
       final relay = await _fixtureWithSession(
         provider: 'codex',
@@ -153,7 +151,7 @@ void main() {
       expect(find.text('终止会话'), findsOneWidget);
       expect(find.text('当前没有会话租约。'), findsOneWidget);
       expect(find.text('恢复会话'), findsOneWidget);
-      expect(find.text('当前登录是只读状态'), findsOneWidget);
+      expect(find.text('当前设备是只读状态'), findsOneWidget);
       expect(find.text('可用'), findsNothing);
     });
 
@@ -190,7 +188,7 @@ void main() {
       await _pumpInfoScreen(tester, relay, now, sessions: sessions);
 
       expect(find.text('可用'), findsOneWidget);
-      expect(find.text('当前登录是只读状态'), findsOneWidget);
+      expect(find.text('当前设备是只读状态'), findsOneWidget);
     });
 
     testWidgets('分享恒为 unavailable，明确说明未通过安全决策门', (tester) async {
@@ -202,10 +200,7 @@ void main() {
       await _pumpInfoScreen(tester, relay, now);
 
       expect(find.text('分享'), findsOneWidget);
-      expect(
-        find.text('分享能力未通过安全决策门，当前不可用。'),
-        findsOneWidget,
-      );
+      expect(find.text('分享能力未通过安全决策门，当前不可用。'), findsOneWidget);
     });
 
     testWidgets('复制按钮只复制会话 ID 与 Provider（mock 剪贴板）', (tester) async {
@@ -277,10 +272,7 @@ void main() {
       expect(find.textContaining('fixture-access-token'), findsNothing);
       expect(find.text('RECOVERY-FIXTURE-0001'), findsNothing);
       expect(find.textContaining('/'), findsNothing);
-      expect(
-        find.textContaining('消息正文、token 与完整路径不会显示'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('消息正文、token 与完整路径不会显示'), findsOneWidget);
     });
 
     testWidgets('无会话时显示 empty 状态且不展示复制按钮', (tester) async {
@@ -362,10 +354,7 @@ Future<TerminalStatusController> _terminalController(
   FixtureRelayRepository relay,
   DateTime now,
 ) async {
-  final controller = TerminalStatusController(
-    relay: relay,
-    clock: () => now,
-  );
+  final controller = TerminalStatusController(relay: relay, clock: () => now);
   await controller.initialize();
   return controller;
 }

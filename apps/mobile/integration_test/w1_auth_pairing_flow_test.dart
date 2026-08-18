@@ -10,7 +10,9 @@ import '../test/support/pairing_scanner_fixture.dart';
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('MOBILE-01 PAIR-01 PAIR-02 PAIR-03：注册、QR 批准与撤销', (tester) async {
+  testWidgets('MOBILE-01 PAIR-01 PAIR-02 PAIR-03：免登录设备初始化、QR 批准与撤销', (
+    tester,
+  ) async {
     // 使用 integration binding 的官方 surface API 同时约束布局和输入坐标，
     // 不让桌面宿主宽度把手机内容轨道居中到 480px 测试面之外。
     await binding.setSurfaceSize(macBookPhoneLogicalSize);
@@ -24,22 +26,15 @@ void main() {
       tester.getSize(find.byKey(const Key('mobile-page-shell'))),
       macBookPhoneLogicalSize,
     );
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
-    debugPrint('[MOBILE-01] initial login ready');
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
+    expect(find.byKey(const Key('login-email')), findsNothing);
+    expect(find.byKey(const Key('register-email')), findsNothing);
+    debugPrint('[MOBILE-01] device connect ready');
 
-    await _tapVisible(tester, find.byKey(const Key('register-link')));
-    await _waitForVisible(tester, find.byKey(const Key('register-email')));
-    await _enterTextVisible(
-      tester,
-      find.byKey(const Key('register-email')),
-      'macos-owner@fixture.test',
-    );
-    await _enterTextVisible(
-      tester,
-      find.byKey(const Key('register-password')),
-      'test-password',
-    );
-    await _tapVisible(tester, find.byKey(const Key('register-submit')));
+    await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
     await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
     expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
     debugPrint('[MOBILE-01] owner ready');

@@ -12,7 +12,10 @@ void main() {
   testWidgets('MOBILE-02：owner 可完成新会话、lease、流式、确认、回答和停止', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'session-ui-owner@fixture.test');
 
     expect(find.byKey(const Key('session-empty-state')), findsOneWidget);
@@ -97,7 +100,7 @@ void main() {
     await _waitForVisible(tester, find.text('已停止'));
   });
 
-  testWidgets('MOBILE-02 CTRL-01：密码登录能查看 fixture 会话，但没有 owner 时所有写入口禁用', (
+  testWidgets('MOBILE-02 CTRL-01：未绑定设备 token 能查看 fixture 会话，但所有写入口禁用', (
     tester,
   ) async {
     final harness = MobileAppHarness();
@@ -114,19 +117,15 @@ void main() {
         deviceId: 'android-owner-fixture',
       ),
     );
+    await harness.tokens.write(
+      await harness.relay.login(
+        const LoginCredentials(
+          email: 'readonly-session@fixture.test',
+          password: 'fixture-password',
+        ),
+      ),
+    );
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('login-email')));
-    await _enterVisible(
-      tester,
-      find.byKey(const Key('login-email')),
-      'readonly-session@fixture.test',
-    );
-    await _enterVisible(
-      tester,
-      find.byKey(const Key('login-password')),
-      'fixture-password',
-    );
-    await _tapVisible(tester, find.byKey(const Key('login-submit')));
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-readonly-banner')),
@@ -155,7 +154,10 @@ void main() {
   testWidgets('MOBILE-04：会话详情通过只读 Git 入口打开 DiffView', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'git-entry-owner@fixture.test');
 
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
@@ -183,7 +185,10 @@ void main() {
   testWidgets('MOBILE-07：快捷菜单展示详情/恢复/文件/归档，capability 驱动禁用', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'quick-menu-owner@fixture.test');
 
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
@@ -201,8 +206,14 @@ void main() {
     );
 
     // 未获取 lease 时 resume 必须禁用并给出中文原因，不能发送命令。
-    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
-    await _waitForVisible(tester, find.byKey(const Key('session-quick-resume')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-quick-resume')),
+    );
     await _waitForVisible(tester, find.text('等待获取会话控制权'));
     // fork/archive 未声明能力：入口禁用并说明原因。
     await _waitForVisible(tester, find.text('Provider 未声明 fork 能力'));
@@ -211,17 +222,32 @@ void main() {
     await _tapAway(tester);
 
     // 详情入口打开详情底表，只展示白名单元数据。
-    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
     await _tapVisible(tester, find.byKey(const Key('session-quick-details')));
-    await _waitForVisible(tester, find.byKey(const Key('session-details-sheet')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-details-sheet')),
+    );
     await _waitForVisible(tester, find.text('会话详情'));
     await _tapAway(tester);
 
     // 获取 lease 后 resume 可点：提交 session.resume 命令并追加系统通知事件。
-    await _tapVisible(tester, find.byKey(const Key('session-acquire-lease-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')),
+    );
     await _waitForVisible(tester, find.text('已获得控制权'));
-    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
-    await _waitForVisible(tester, find.byKey(const Key('session-quick-resume')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-quick-resume')),
+    );
     // 有 lease 后不再显示阻断原因。
     expect(find.text('等待获取会话控制权'), findsNothing);
     await _tapVisible(tester, find.byKey(const Key('session-quick-resume')));
@@ -240,7 +266,10 @@ void main() {
   testWidgets('MOBILE-07：resume 未声明 capability 时禁用并给出中文原因', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'resume-blocked-owner@fixture.test');
 
     // 用 opencode 创建会话：fixture 未声明 resume（fail-closed）。
@@ -270,8 +299,14 @@ void main() {
       find.byKey(const Key('session-detail-screen')),
     );
 
-    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
-    await _waitForVisible(tester, find.byKey(const Key('session-quick-resume')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-quick-resume')),
+    );
     await _waitForVisible(tester, find.textContaining('不可用'));
     // 未发送任何 resume 命令：时间线只有创建通知，没有 session.resumed 事件。
     final snapshot = await harness.relay.getSessionSnapshot(
@@ -287,7 +322,10 @@ void main() {
   testWidgets('MOBILE-07：composer 草稿跨会话内存保存且发送后清除', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'draft-owner@fixture.test');
 
     // 创建两个会话。
@@ -312,7 +350,10 @@ void main() {
     final firstId = (await harness.relay.listSessions()).single.id;
 
     // composer 无 lease 时禁用（不会触发 onChanged 保存草稿）；先获取控制权再输入。
-    await _tapVisible(tester, find.byKey(const Key('session-acquire-lease-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')),
+    );
     await _waitForVisible(tester, find.text('已获得控制权'));
     await _enterVisible(
       tester,
@@ -320,7 +361,10 @@ void main() {
       '第一条草稿内容',
     );
     await tester.pump();
-    await _tapVisible(tester, find.byKey(const Key('session-detail-back-button')).first);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-detail-back-button')).first,
+    );
     await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
     await _waitForVisible(
@@ -348,29 +392,37 @@ void main() {
     // 第二个会话 composer 应为空（草稿按会话隔离）。
     expect(
       tester
-          .widget<TextField>(
-            find.byKey(const Key('session-composer-input')),
-          )
+          .widget<TextField>(find.byKey(const Key('session-composer-input')))
           .controller!
           .text,
       isEmpty,
     );
 
     // 切回第一个会话，草稿恢复。
-    await _tapVisible(tester, find.byKey(const Key('session-detail-back-button')).first);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-detail-back-button')).first,
+    );
     await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _tapVisible(tester, find.byKey(Key('session-row-$secondId')));
-    await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-    await _tapVisible(tester, find.byKey(const Key('session-detail-back-button')).first);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-detail-back-button')).first,
+    );
     await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _waitForGone(tester, find.byKey(const Key('session-detail-screen')));
     await _tapVisible(tester, find.byKey(Key('session-row-$firstId')));
-    await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
     expect(
       tester
-          .widget<TextField>(
-            find.byKey(const Key('session-composer-input')),
-          )
+          .widget<TextField>(find.byKey(const Key('session-composer-input')))
           .controller!
           .text,
       '第一条草稿内容',
@@ -380,7 +432,10 @@ void main() {
   testWidgets('MOBILE-07：文件浏览入口打开只读工作区文件页', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'files-entry-owner@fixture.test');
 
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
@@ -397,17 +452,29 @@ void main() {
       find.byKey(const Key('session-detail-screen')),
     );
 
-    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
     await _waitForVisible(tester, find.byKey(const Key('session-quick-files')));
     await _tapVisible(tester, find.byKey(const Key('session-quick-files')));
-    await _waitForVisible(tester, find.byKey(const Key('workspace-files-screen')));
-    await _waitForVisible(tester, find.byKey(const Key('workspace-files-list')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('workspace-files-screen')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('workspace-files-list')),
+    );
   });
 
   testWidgets('MOBILE-11：goal 文本编辑提交 goal.edit 命令并乐观更新', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'goal-edit-owner@fixture.test');
 
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
@@ -425,12 +492,21 @@ void main() {
     );
 
     // goal 编辑需要当前 lease（与其它写命令一致）。
-    await _tapVisible(tester, find.byKey(const Key('session-acquire-lease-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')),
+    );
     await _waitForVisible(tester, find.text('已获得控制权'));
 
     // 打开编辑对话框，修改目标文本并保存。
-    await _waitForVisible(tester, find.byKey(const Key('session-goal-edit-button')));
-    await _tapVisible(tester, find.byKey(const Key('session-goal-edit-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-goal-edit-button')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-goal-edit-button')),
+    );
     await _waitForVisible(tester, find.byKey(const Key('goal-edit-dialog')));
     await _enterVisible(
       tester,
@@ -451,10 +527,15 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-13：状态条展示 Provider 版本与连接态（fail-closed 原因）', (tester) async {
+  testWidgets('MOBILE-13：状态条展示 Provider 版本与连接态（fail-closed 原因）', (
+    tester,
+  ) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'provider-status@fixture.test');
 
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
@@ -502,10 +583,15 @@ void main() {
     expect(tooltip.message, contains('探测失败'));
   });
 
-  testWidgets('MOBILE-14：duplicate 按 capability fail-closed，details 复制白名单字段', (tester) async {
+  testWidgets('MOBILE-14：duplicate 按 capability fail-closed，details 复制白名单字段', (
+    tester,
+  ) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
-    await _waitForVisible(tester, find.byKey(const Key('register-link')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
     await _registerOwner(tester, 'duplicate-entry@fixture.test');
 
     await _tapVisible(tester, find.byKey(const Key('session-new-button')));
@@ -524,8 +610,14 @@ void main() {
     final sessionId = (await harness.relay.listSessions()).single.id;
 
     // duplicate 未声明能力：菜单项禁用并说明原因。
-    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
-    await _waitForVisible(tester, find.byKey(const Key('session-quick-duplicate')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-quick-duplicate')),
+    );
     await _waitForVisible(tester, find.text('Provider 未声明 duplicate 能力'));
     await _tapAway(tester);
 
@@ -543,25 +635,26 @@ void main() {
           .setMockMethodCallHandler(SystemChannels.platform, null);
     });
 
-    await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
     await _tapVisible(tester, find.byKey(const Key('session-quick-details')));
-    await _waitForVisible(tester, find.byKey(const Key('session-details-sheet')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-details-sheet')),
+    );
     await _tapVisible(tester, find.byKey(const Key('session-copy-id-button')));
-    await _tapVisible(tester, find.byKey(const Key('session-copy-provider-button')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-copy-provider-button')),
+    );
     expect(clipboardValues, [sessionId, 'codex']);
   });
 }
 
-Future<void> _registerOwner(WidgetTester tester, String email) async {
-  await _tapVisible(tester, find.byKey(const Key('register-link')));
-  await _waitForVisible(tester, find.byKey(const Key('register-email')));
-  await _enterVisible(tester, find.byKey(const Key('register-email')), email);
-  await _enterVisible(
-    tester,
-    find.byKey(const Key('register-password')),
-    'fixture-password',
-  );
-  await _tapVisible(tester, find.byKey(const Key('register-submit')));
+Future<void> _registerOwner(WidgetTester tester, String _) async {
+  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
   await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
 }
 

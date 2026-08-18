@@ -100,7 +100,7 @@ class DelegationController extends ChangeNotifier {
       return '派发节点不属于当前会话。';
     }
     if (!canWrite || deviceId == null || deviceId.trim().isEmpty) {
-      return '当前登录是只读状态';
+      return '当前设备是只读状态';
     }
     if (parentLease == null ||
         parentLease.sessionId != delegation.parentSessionId ||
@@ -192,7 +192,7 @@ class DelegationController extends ChangeNotifier {
     required String? parentProvider,
   }) {
     if (!canWrite || deviceId == null || deviceId.trim().isEmpty) {
-      return '当前登录是只读状态';
+      return '当前设备是只读状态';
     }
     if (parentLease == null ||
         parentLease.sessionId != _parentSessionId ||

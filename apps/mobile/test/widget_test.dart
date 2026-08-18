@@ -6,22 +6,18 @@ import 'support/app_harness.dart';
 import 'support/pairing_scanner_fixture.dart';
 
 void main() {
-  testWidgets('MOBILE-01：首次注册建立 owner，普通登录不恢复写权限', (tester) async {
+  testWidgets('MOBILE-01：Android 免登录初始化 owner，主路径不出现账号表单', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('register-link')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('register-email')),
-      'owner@fixture.test',
-    );
-    await tester.enterText(
-      find.byKey(const Key('register-password')),
-      'test-password',
-    );
-    await tester.tap(find.byKey(const Key('register-submit')));
+    expect(find.byKey(const Key('device-connect-submit')), findsOneWidget);
+    expect(find.byKey(const Key('login-email')), findsNothing);
+    expect(find.byKey(const Key('login-password')), findsNothing);
+    expect(find.byKey(const Key('register-email')), findsNothing);
+    expect(find.byKey(const Key('register-password')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('device-connect-submit')));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
@@ -29,23 +25,8 @@ void main() {
 
     await tester.tap(find.byKey(const Key('signout-button')));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('login-email')),
-      'owner@fixture.test',
-    );
-    await tester.enterText(
-      find.byKey(const Key('login-password')),
-      'test-password',
-    );
-    await tester.tap(find.byKey(const Key('login-submit')));
-    await tester.pumpAndSettle();
-
-    // 密码登录 token 没有 device_id，不能借用内存身份存储中已有 owner 绑定。
-    expect(find.byKey(const Key('readonly-auth-state')), findsOneWidget);
-    final pairingTile = tester.widget<ListTile>(
-      find.byKey(const Key('pairing-page-link')),
-    );
-    expect(pairingTile.enabled, isFalse);
+    expect(find.byKey(const Key('device-connect-submit')), findsOneWidget);
+    expect(find.byKey(const Key('login-submit')), findsNothing);
   });
 
   testWidgets('MOBILE-01：owner 恢复码只在当前页展示，确认后立即清除', (tester) async {
@@ -87,18 +68,7 @@ void main() {
     await tester.pumpWidget(harness.build());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('register-link')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('register-email')),
-      'pairing@fixture.test',
-    );
-    await tester.enterText(
-      find.byKey(const Key('register-password')),
-      'test-password',
-    );
-    await tester.tap(find.byKey(const Key('register-submit')));
-    await tester.pumpAndSettle();
+    await _registerOwner(tester, 'pairing@fixture.test');
 
     final request = await harness.relay.createPairing(
       const PairingRequestInput(
@@ -246,16 +216,13 @@ void main() {
     expect(find.byKey(Key('pairing-request-${request.id}')), findsOneWidget);
   });
 
-  testWidgets('MOBILE-01：恢复码要求邮箱并恢复已绑定 owner', (tester) async {
+  testWidgets('MOBILE-01：恢复码不要求邮箱并恢复已绑定 owner', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('recovery-link')));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.byKey(const Key('recovery-email')),
-      'recover@fixture.test',
-    );
+    expect(find.byKey(const Key('recovery-email')), findsNothing);
     await tester.enterText(
       find.byKey(const Key('recovery-code')),
       'RECOVERY-FIXTURE-0001',
@@ -268,14 +235,7 @@ void main() {
 }
 
 Future<void> _registerOwner(WidgetTester tester, String email) async {
-  await tester.tap(find.byKey(const Key('register-link')));
-  await tester.pumpAndSettle();
-  await tester.enterText(find.byKey(const Key('register-email')), email);
-  await tester.enterText(
-    find.byKey(const Key('register-password')),
-    'test-password',
-  );
-  await tester.tap(find.byKey(const Key('register-submit')));
+  await tester.tap(find.byKey(const Key('device-connect-submit')));
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
 }

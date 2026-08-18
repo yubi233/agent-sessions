@@ -75,6 +75,62 @@ func (s *AuthService) RegisterInitialOwner(ctx context.Context, email, password 
 	return owner, tokens, nil
 }
 
+// BootstrapInitialOwnerDevice 是 Android/Happy 主路径：首台移动设备用本机公钥直接初始化 owner，
+// 不要求用户先创建账号密码。账号仍作为服务端租户边界存在，但不暴露为 Android 登录墙。
+func (s *AuthService) BootstrapInitialOwnerDevice(ctx context.Context, bootstrap Device) (Device, TokenPair, error) {
+	if err := validateDeviceKeys(bootstrap); err != nil {
+		return Device{}, TokenPair{}, err
+	}
+	accountID := id.New("acct")
+	owner := Device{
+		ID:                  id.New("dev"),
+		AccountID:           accountID,
+		Role:                RoleAndroidOwner,
+		Status:              DeviceActive,
+		DisplayName:         bootstrap.DisplayName,
+		Platform:            bootstrap.Platform,
+		IdentityPublicKey:   bootstrap.IdentityPublicKey,
+		EncryptionPublicKey: bootstrap.EncryptionPublicKey,
+	}
+	if owner.DisplayName == "" || owner.Platform == "" {
+		return Device{}, TokenPair{}, ErrPairingAlreadyHandled
+	}
+
+	var tokens TokenPair
+	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		count, err := tx.CountAccounts(ctx)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return ErrRegistrationClosed
+		}
+		// 不可登录的内部账号：用于保持既有单租户授权/审计边界，不作为移动端凭据。
+		if err := tx.CreateAccount(
+			ctx,
+			accountID,
+			accountID+"@local.agent-sessions.invalid",
+			authz.HashPassword(authz.RandomToken()),
+			s.now(),
+		); err != nil {
+			return err
+		}
+		if err := tx.CreateDevice(ctx, toDeviceRow(owner)); err != nil {
+			return err
+		}
+		issued, err := s.issuePairWithRepo(ctx, tx, accountID, owner.ID, owner.Role)
+		if err != nil {
+			return err
+		}
+		tokens = issued
+		return tx.AppendAudit(ctx, accountID, "device.bootstrap_owner", `{"role":"android_owner","mode":"device"}`)
+	})
+	if err != nil {
+		return Device{}, TokenPair{}, err
+	}
+	return owner, tokens, nil
+}
+
 // registerAccountInRepo 是首账号门禁的事务内实现，供简单注册和完整 owner 注册共用。
 func (s *AuthService) registerAccountInRepo(ctx context.Context, repo store.Repository, accountID, email, password string) error {
 	count, err := repo.CountAccounts(ctx)
@@ -182,7 +238,11 @@ func (s *AuthService) RestoreOwnerWithRecoveryCode(ctx context.Context, pairing 
 	var tokens TokenPair
 	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
 		var restoreErr error
-		outcome, restoreErr = pairing.restoreOwnerInTx(ctx, tx, email, code, d)
+		if strings.TrimSpace(email) == "" {
+			outcome, restoreErr = pairing.restoreOwnerByCodeHashInTx(ctx, tx, code, d)
+		} else {
+			outcome, restoreErr = pairing.restoreOwnerInTx(ctx, tx, email, code, d)
+		}
 		if restoreErr != nil {
 			return restoreErr
 		}
