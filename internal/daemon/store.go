@@ -75,6 +75,10 @@ const confirmedWorkspaceStatePrefix = "confirmed_workspace:"
 // Relay 已接受命令就自动授予本机目录读取权限。
 var ErrWorkspaceNotConfirmed = errors.New("workspace is not locally confirmed")
 
+// ErrRelayCommandConflict 表示同一个 command_id 被重新投递时携带了不同的不可变字段。
+// 这类 delivery 不能推进 cursor，否则攻击者可用冲突命令跳过其间的合法投递。
+var ErrRelayCommandConflict = errors.New("relay command conflicts with durable record")
+
 // ConfirmedWorkspace 是本机确认后的 opaque Workspace ID 与 canonical Git 根映射。绝对路径只
 // 保留在 Daemon 本机状态中，绝不上传到 Relay、事件、日志或测试报告。
 type ConfirmedWorkspace struct {
@@ -334,8 +338,14 @@ func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {
 	if command.CommandID == "" || command.DeliverySeq <= 0 || command.Kind == "" || command.SessionID == "" {
 		return false, errors.New("invalid relay command")
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	now := time.Now().UnixMilli()
-	result, err := s.db.Exec(
+	result, err := tx.Exec(
 		`INSERT OR IGNORE INTO relay_commands(
 			command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
 			payload_json,status,result_status,error_code,created_at,updated_at
@@ -345,21 +355,64 @@ func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	inserted, err := result.RowsAffected()
-	if err != nil || inserted == 0 {
+	insertedRows, err := result.RowsAffected()
+	if err != nil {
 		return false, err
 	}
+	if insertedRows == 0 {
+		var durable RelayCommand
+		err = tx.QueryRow(
+			`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
+				payload_json,status,result_status,error_code
+			 FROM relay_commands WHERE command_id=?`, command.CommandID).Scan(
+			&durable.CommandID, &durable.DeliverySeq, &durable.SessionID, &durable.WorkspaceID, &durable.Kind,
+			&durable.LeaseEpoch, &durable.TargetInstanceID, &durable.TargetTerminalID, &durable.PayloadJSON,
+			&durable.Status, &durable.ResultStatus, &durable.ErrorCode,
+		)
+		if err != nil {
+			return false, err
+		}
+		if !sameRelayCommandDelivery(durable, command) {
+			return false, ErrRelayCommandConflict
+		}
+	}
+
 	var current int64
-	_ = s.db.QueryRow("SELECT CAST(value AS INTEGER) FROM local_state WHERE key='relay_delivery_seq'").Scan(&current)
+	var cursorValue string
+	err = tx.QueryRow("SELECT value FROM local_state WHERE key='relay_delivery_seq'").Scan(&cursorValue)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	if err == nil {
+		current, err = strconv.ParseInt(cursorValue, 10, 64)
+		if err != nil || current < 0 {
+			return false, errors.New("invalid relay delivery cursor")
+		}
+	}
 	if command.DeliverySeq > current {
-		_, err = s.db.Exec(
+		_, err = tx.Exec(
 			`INSERT INTO local_state(key,value) VALUES('relay_delivery_seq',?)
 			 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, strconv.FormatInt(command.DeliverySeq, 10))
 		if err != nil {
 			return false, err
 		}
 	}
-	return true, nil
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return insertedRows == 1, nil
+}
+
+func sameRelayCommandDelivery(left, right RelayCommand) bool {
+	return left.CommandID == right.CommandID &&
+		left.DeliverySeq == right.DeliverySeq &&
+		left.SessionID == right.SessionID &&
+		left.WorkspaceID == right.WorkspaceID &&
+		left.Kind == right.Kind &&
+		left.LeaseEpoch == right.LeaseEpoch &&
+		left.TargetInstanceID == right.TargetInstanceID &&
+		left.TargetTerminalID == right.TargetTerminalID &&
+		left.PayloadJSON == right.PayloadJSON
 }
 
 // RelayDeliveryCursor 返回已安全落盘的最大 delivery_seq。Daemon 仅在持久化后推进，
@@ -384,7 +437,7 @@ func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
 	rows, err := s.db.Query(
 		`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
 			payload_json,status,result_status,error_code
-		 FROM relay_commands WHERE status IN ('received','starting','started') ORDER BY delivery_seq`)
+			 FROM relay_commands WHERE status IN ('received','rejecting','starting','started') ORDER BY delivery_seq`)
 	if err != nil {
 		return nil, err
 	}
@@ -434,6 +487,17 @@ func (s *Store) MarkRelayCommandStarting(commandID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(`UPDATE relay_commands SET status='starting', updated_at=? WHERE command_id=?`, time.Now().UnixMilli(), commandID)
+	return err
+}
+
+// MarkRelayCommandRejecting 在发送 rejected 回执前持久化本机判定。若 Relay 已提交回执但响应
+// 丢失，重启只能重放 rejected，不能把仍标为 received 的不可信命令送入 Provider。
+func (s *Store) MarkRelayCommandRejecting(commandID, errorCode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`UPDATE relay_commands SET status='rejecting', error_code=?, updated_at=? WHERE command_id=?`,
+		errorCode, time.Now().UnixMilli(), commandID)
 	return err
 }
 

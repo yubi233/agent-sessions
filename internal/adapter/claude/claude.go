@@ -1,5 +1,5 @@
 // Package claudeadapter 实现 Claude CLI 适配器（P3）。
-// 优先 Claude CLI stream-json；未知版本只提供安全能力子集，不伪造 native。
+// 当前只探测 CLI 版本；stream-json 接入完成前所有控制能力必须 fail-closed。
 package claude
 
 import (
@@ -40,28 +40,29 @@ func (a *Adapter) detect() {
 	if err != nil {
 		return
 	}
+	version := strings.TrimSpace(string(out))
+	if version == "" {
+		return
+	}
 	a.detected = true
-	a.version = strings.TrimSpace(string(out))
+	a.version = version
 }
 
-// Detect 返回能力矩阵。未安装或版本未知时仅提供安全能力子集（unsupported）。
+// Detect 返回能力矩阵。CLI 可探测只代表已安装，不代表尚未接入的 transport 可用。
 func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	_ = ctx
-	// 以 native/emulated/unsupported 三态声明，绝不推断为可用。
-	native := map[string]bool{"start": true, "resume": true, "abort": true, "permission": true}
-	emulated := map[string]bool{"plan": true, "goal": true, "usage": true}
+	reason := "Claude CLI 未配置或探测失败，控制能力已安全禁用。"
+	if a.detected {
+		reason = "Claude CLI 已探测到，但 stream-json 传输尚未接入，控制能力已安全禁用。"
+	}
+	// Start/Resume 尚未实现，依赖会话 handle 的其余能力也不能提前宣称 native 或 emulated。
 	caps := make([]adapter.Capability, 0, len(adapter.CapabilityNames))
 	for _, name := range adapter.CapabilityNames {
-		c := adapter.Capability{Name: name, Status: adapter.CapabilityUnsupported}
-		if a.detected {
-			switch {
-			case native[name]:
-				c.Status = adapter.CapabilityNative
-			case emulated[name]:
-				c.Status = adapter.CapabilityEmulated
-			}
-		}
-		caps = append(caps, c)
+		caps = append(caps, adapter.Capability{
+			Name:   name,
+			Status: adapter.CapabilityUnsupported,
+			Reason: reason,
+		})
 	}
 	return adapter.Capabilities{Provider: "claude", Version: a.version, Capabilities: caps}, nil
 }

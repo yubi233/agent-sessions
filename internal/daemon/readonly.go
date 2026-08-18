@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yubi233/agent-sessions/internal/gitread"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
@@ -21,6 +22,7 @@ const (
 
 var (
 	ErrReadOnlyBinary    = errors.New("read-only file is binary")
+	ErrReadOnlyEncoding  = errors.New("read-only file encoding is unsupported")
 	ErrReadOnlyTooLarge  = errors.New("read-only file exceeds limit")
 	ErrReadOnlyDirectory = errors.New("read-only path is a directory")
 )
@@ -110,6 +112,9 @@ func (r *WorkspaceReader) ReadCode(relPath string) (CodeRead, error) {
 	}
 	if bytes.IndexByte(data, 0) >= 0 {
 		return CodeRead{}, ErrReadOnlyBinary
+	}
+	if !utf8.Valid(data) {
+		return CodeRead{}, ErrReadOnlyEncoding
 	}
 	return CodeRead{Path: filepath.ToSlash(filepath.Clean(relPath)), Content: data}, nil
 }

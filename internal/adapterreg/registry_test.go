@@ -2,6 +2,8 @@ package adapterreg
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
@@ -48,21 +50,66 @@ func TestUnknownCapabilityIsUnsupported(t *testing.T) {
 	}
 }
 
-// 未配置 live 二进制/地址时，所有 Provider 不可用（blocked），不伪造 native。
-func TestUnavailableWithoutCreds(t *testing.T) {
+// 未配置 live 二进制/地址时，所有 Provider 不可用，且能力必须带原因地 fail-closed。
+func TestUnavailableWithoutConfiguration(t *testing.T) {
+	t.Setenv("AGENT_SESSIONS_CLAUDE_BIN", "")
+	t.Setenv("AGENT_SESSIONS_CODEX_BIN", "")
+	t.Setenv("AGENT_SESSIONS_OPENCODE_URL", "")
+	t.Setenv("OPENCODE_SERVER_PASSWORD", "")
+	t.Setenv("AGENT_SESSIONS_OPENCLAW_URL", "")
+
 	r := New()
-	providers, _ := r.List(context.Background())
+	providers, err := r.List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
 	for _, p := range providers {
-		// 未设置 AGENT_SESSIONS_*_BIN/URL 时 Available 应为 false（除非 CI 显式配置）。
-		if p.Version != "" && p.Available == false {
-			// 允许；这里仅断言不会因为无凭据而把 unsupported 伪造成可用。
+		if p.Available || p.Version != "" {
+			t.Fatalf("%s available/version = %v/%q, want false/empty", p.Kind, p.Available, p.Version)
 		}
-		hasNative := false
 		for _, c := range p.Capabilities {
-			if c.Status == adapter.CapabilityNative {
-				hasNative = true
+			if c.Status != adapter.CapabilityUnsupported {
+				t.Fatalf("%s.%s status = %q, want unsupported", p.Kind, c.Name, c.Status)
+			}
+			if c.Reason == "" {
+				t.Fatalf("%s.%s must explain why provider is unavailable", p.Kind, c.Name)
 			}
 		}
-		_ = hasNative
+	}
+}
+
+// 已探测到 stub CLI 或配置 Gateway URL 时，Registry 也不能把未实现能力升级为 native。
+func TestStubProviderRegistrationStaysFailClosed(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "provider-fixture")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'provider 9.9.9'\n"), 0o700); err != nil {
+		t.Fatalf("write fixture CLI: %v", err)
+	}
+	t.Setenv("AGENT_SESSIONS_CLAUDE_BIN", bin)
+	t.Setenv("AGENT_SESSIONS_CODEX_BIN", bin)
+	t.Setenv("AGENT_SESSIONS_OPENCODE_URL", "")
+	t.Setenv("OPENCODE_SERVER_PASSWORD", "")
+	t.Setenv("AGENT_SESSIONS_OPENCLAW_URL", "ws://127.0.0.1:65535")
+
+	providers, err := New().List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byKind := make(map[string]Provider, len(providers))
+	for _, provider := range providers {
+		byKind[provider.Kind] = provider
+	}
+	for _, kind := range []string{"claude", "codex", "openclaw"} {
+		provider := byKind[kind]
+		for _, capability := range provider.Capabilities {
+			if capability.Status != adapter.CapabilityUnsupported {
+				t.Fatalf("%s.%s status = %q, want unsupported", kind, capability.Name, capability.Status)
+			}
+		}
+	}
+	if !byKind["claude"].Available || !byKind["codex"].Available {
+		t.Fatal("detected CLI versions should remain visible as installed providers")
+	}
+	if byKind["openclaw"].Available || byKind["openclaw"].Version != "" {
+		t.Fatalf("OpenClaw URL without handshake must not be available: %#v", byKind["openclaw"])
 	}
 }

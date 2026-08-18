@@ -211,7 +211,15 @@ test("桌面窗口观测器只接受固定应用进程名、结构化窗口元�
     "scaled_preview",
   );
   assert.equal(
+    macosPortraitWindowMode({ id: 44, pid: 304, width: 604, height: 1045 }),
+    "resized_preview",
+  );
+  assert.equal(
     isMacosPortraitMobileWindow({ id: 42, pid: 302, width: 960, height: 480 }),
+    false,
+  );
+  assert.equal(
+    isMacosPortraitMobileWindow({ id: 45, pid: 305, width: 900, height: 1100 }),
     false,
   );
   assert.deepEqual(MACOS_MOBILE_CONTENT_SIZE, { height: 960, width: 480 });

@@ -496,6 +496,124 @@ func TestP2RelayDaemonDeterministicSessionLifecycleFullLoop(t *testing.T) {
 	}
 }
 
+// CTRL-04 / SESS-05 / SYNC-05 / RELAY-LEASE-03 / DAEMON-RPC-01 / E2E-RELAY-02：
+// Relay 进程重启后，两个同账号 Terminal 必须从同一权威 SQLite 恢复，但每条 Terminal
+// 命令流、本机 Daemon SQLite 和 Adapter 仍严格隔离。此回归只使用确定性 fixture Adapter，
+// 不连接真实 Provider，也不将 fixture envelope 当作真实 E2EE 生命周期证据。
+func TestP2RelayDaemonRestartAndMultiTerminalRecovery(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "p2-relay-restart-multi-terminal@test.dev")
+	terminalA := env.pairTerminal(t, owner, "p2-restart-terminal-a")
+	terminalB := env.pairTerminal(t, owner, "p2-restart-terminal-b")
+	terminalAID := daemonHello(t, env, terminalA.AccessToken)
+	terminalBID := daemonHello(t, env, terminalB.AccessToken)
+
+	sessionA, _ := env.createBoundSession(t, owner, terminalAID, "p2-restart-multi-a")
+	sessionB, _ := env.createBoundSession(t, owner, terminalBID, "p2-restart-multi-b")
+	commandA := submitP2LifecycleStart(t, env, owner.AccessToken, sessionA, terminalAID, "p2-restart-multi-a")
+	commandB := submitP2LifecycleStart(t, env, owner.AccessToken, sessionB, terminalBID, "p2-restart-multi-b")
+	leaseABefore, err := env.repo.LeaseBySession(t.Context(), sessionA)
+	if err != nil {
+		t.Fatalf("read Terminal A lease before Relay restart: %v", err)
+	}
+	leaseBBefore, err := env.repo.LeaseBySession(t.Context(), sessionB)
+	if err != nil {
+		t.Fatalf("read Terminal B lease before Relay restart: %v", err)
+	}
+
+	// 命令已写入 SQLite、Daemon 尚未连接时真实关闭并重新打开 Relay；后续 HTTP 服务只能通过
+	// 新 db/repository/router 读取重启前的记录。
+	env.restartRelay(t)
+	for _, expected := range []store.LeaseRow{leaseABefore, leaseBBefore} {
+		actual, err := env.repo.LeaseBySession(t.Context(), expected.SessionID)
+		if err != nil || actual != expected {
+			t.Fatalf("lease did not persist Relay restart: actual=%+v expected=%+v err=%v", actual, expected, err)
+		}
+	}
+	commandView := env.do(t, http.MethodGet, "/v1/commands/"+commandA, nil, owner.AccessToken)
+	var restoredCommand struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	decodeW1(t, commandView.Body.Bytes(), &restoredCommand)
+	if commandView.Code != http.StatusOK || restoredCommand.ID != commandA || restoredCommand.Status != domain.CommandAccepted {
+		t.Fatalf("owner token or command read did not survive Relay restart: status=%d command=%+v", commandView.Code, restoredCommand)
+	}
+	server := httptest.NewServer(env.router)
+	defer server.Close()
+	localA, err := daemon.OpenStore(filepath.Join(t.TempDir(), "daemon-a.db"))
+	if err != nil {
+		t.Fatalf("open Terminal A daemon store: %v", err)
+	}
+	defer localA.Close()
+	localB, err := daemon.OpenStore(filepath.Join(t.TempDir(), "daemon-b.db"))
+	if err != nil {
+		t.Fatalf("open Terminal B daemon store: %v", err)
+	}
+	defer localB.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	adapterA := newP2LifecycleAdapter()
+	adapterB := newP2LifecycleAdapter()
+	runnerA := daemon.NewSessionRunner(localA, map[string]adapter.Adapter{"lifecycle": adapterA}, logger)
+	defer runnerA.Close(context.Background())
+	runnerB := daemon.NewSessionRunner(localB, map[string]adapter.Adapter{"lifecycle": adapterB}, logger)
+	defer runnerB.Close(context.Background())
+	loopA := newP2RecoveryLoop(localA, server.URL, terminalA.AccessToken, runnerA, nil)
+	loopB := newP2RecoveryLoop(localB, server.URL, terminalB.AccessToken, runnerB, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	doneA := make(chan error, 1)
+	doneB := make(chan error, 1)
+	go func() { doneA <- loopA.RunWithRetry(ctx) }()
+	go func() { doneB <- loopB.RunWithRetry(ctx) }()
+	defer func() {
+		cancel()
+		if runErr := <-doneA; runErr != context.Canceled {
+			t.Errorf("Terminal A relay loop=%v want context.Canceled", runErr)
+		}
+		if runErr := <-doneB; runErr != context.Canceled {
+			t.Errorf("Terminal B relay loop=%v want context.Canceled", runErr)
+		}
+	}()
+	waitP2DaemonLocalTerminal(t, localA)
+	waitP2DaemonLocalTerminal(t, localB)
+	waitP2CommandSucceeded(t, env, owner.AccessToken, commandA)
+	waitP2CommandSucceeded(t, env, owner.AccessToken, commandB)
+	waitP2LocalCommandResult(t, localA, commandA, domain.CommandSucceeded, "")
+	waitP2LocalCommandResult(t, localB, commandB, domain.CommandSucceeded, "")
+	if command, err := localA.RelayCommandByID(commandB); err == nil {
+		t.Fatalf("Terminal A local store received Terminal B command: %+v", command)
+	}
+	if command, err := localB.RelayCommandByID(commandA); err == nil {
+		t.Fatalf("Terminal B local store received Terminal A command: %+v", command)
+	}
+	if starts, _, _, _, _ := adapterA.snapshot(); starts != 1 {
+		t.Fatalf("Terminal A adapter starts=%d want 1", starts)
+	}
+	if starts, _, _, _, _ := adapterB.snapshot(); starts != 1 {
+		t.Fatalf("Terminal B adapter starts=%d want 1", starts)
+	}
+	waitP2CanonicalEvents(t, env, sessionA, 1)
+	waitP2CanonicalEvents(t, env, sessionB, 1)
+	if renewed := p2SessionLeaseEpoch(t, env, owner.AccessToken, sessionA); renewed != leaseABefore.Epoch+1 {
+		t.Fatalf("Relay restart reset lease epoch: renewed=%d previous=%d", renewed, leaseABefore.Epoch)
+	}
+
+	// 同键重放先命中已持久化 command，再返回旧回执；即使 lease 在 Relay 重启后已续租，也绝不
+	// 创建第二条 delivery 或再次调用任一 Adapter。
+	if replayed := submitP2LifecycleStart(t, env, owner.AccessToken, sessionA, terminalAID, "p2-restart-multi-a"); replayed != commandA {
+		t.Fatalf("Terminal A idempotency replay=%s want %s", replayed, commandA)
+	}
+	if replayed := submitP2LifecycleStart(t, env, owner.AccessToken, sessionB, terminalBID, "p2-restart-multi-b"); replayed != commandB {
+		t.Fatalf("Terminal B idempotency replay=%s want %s", replayed, commandB)
+	}
+	if starts, _, _, _, _ := adapterA.snapshot(); starts != 1 {
+		t.Fatalf("Terminal A idempotency replay started Adapter %d times", starts)
+	}
+	if starts, _, _, _, _ := adapterB.snapshot(); starts != 1 {
+		t.Fatalf("Terminal B idempotency replay started Adapter %d times", starts)
+	}
+}
+
 // SYNC-05 / E2E-RELAY-02：started 回执的 HTTP 响应在网络中丢失时，Relay 可能已经持久化
 // 回执，而 Daemon 只能看到错误。重启后必须重放回执并只启动一次 Provider，不能把已落盘的
 // command 直接当作新命令执行。

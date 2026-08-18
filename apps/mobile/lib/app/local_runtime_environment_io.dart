@@ -33,7 +33,9 @@ Future<void> writeLocalVisualFrame(String outputPath, Uint8List bytes) async {
   await file.parent.create(recursive: true);
   // 先写同目录临时文件再替换，避免 runner 在跨进程轮询时读取到半张 PNG。
   final temporary = File('$outputPath.part');
-  await temporary.writeAsBytes(bytes, flush: true);
+  // Runner only reads frames after the final timing file appears; forcing an
+  // fsync for every 5fps frame makes the macOS sandbox spend seconds per PNG.
+  await temporary.writeAsBytes(bytes, flush: false);
   await temporary.rename(outputPath);
 }
 

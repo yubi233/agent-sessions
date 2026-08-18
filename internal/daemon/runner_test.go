@@ -231,6 +231,46 @@ func TestSessionRunnerStartPersistsInstanceMapping(t *testing.T) {
 	waitEvent(t, s, "s1", "message_delta")
 }
 
+// P2-C：本机重启诊断只保留 canonical event 的类型、序号与计数。Provider 正文即使尚未来得及
+// 加密上传，也不能通过 local_state:last_event 旁路写入 SQLite。
+func TestSessionRunnerLastEventMetadataNeverPersistsPayload(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	const secret = "provider-body-must-not-persist-in-local-state"
+	h := fake.lastHandle()
+	if h == nil {
+		t.Fatal("missing fixture handle")
+	}
+	h.emit(adapter.Event{Type: adapter.EventMessageDelta, Seq: 99, Payload: map[string]any{"text": secret}})
+	waitEvent(t, s, "s1", `"seq":99`)
+
+	raw, err := s.Get(eventKey("s1"))
+	if err != nil {
+		t.Fatalf("read event summary: %v", err)
+	}
+	if strings.Contains(raw, secret) {
+		t.Fatalf("last_event leaked provider body: %s", raw)
+	}
+	var summary lastEvent
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		t.Fatalf("decode event summary: %v", err)
+	}
+	if summary.Type != adapter.EventMessageDelta || summary.Seq != 99 || summary.Count < 1 {
+		t.Fatalf("event summary=%+v", summary)
+	}
+	var persisted int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM local_state WHERE value LIKE ?`, "%"+secret+"%").Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != 0 {
+		t.Fatal("provider body is present in daemon local_state")
+	}
+}
+
 // b) session.send：fixture payload 的 message 被转发给 handle.Send。
 func TestSessionRunnerSendForwardsFixtureMessage(t *testing.T) {
 	_, runner, fake := newRunnerFixture(t, "opencode")

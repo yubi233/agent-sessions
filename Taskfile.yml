@@ -177,15 +177,22 @@ tasks:
       - node e2e-verify/mobile/record-macos.mjs {{.CLI_ARGS}}
 
   test:android:harness:
-    desc: 后续 Android AVD 回归编排器的纯 Node 回归
+    desc: Android AVD 与物理设备回归编排器的纯 Node 回归
     cmds:
       - node --test e2e-verify/mobile/android.test.mjs
+      - node --test e2e-verify/mobile/android-device.test.mjs
 
   test:android:e2e:
     desc: 后续 Android AVD integration diagnostic（不属于本轮 v0.1 gate）
     cmds:
       - task: test:android:harness
       - node e2e-verify/mobile/run-android.mjs {{.CLI_ARGS}}
+
+  test:android:device:
+    desc: 已连接并授权的物理 Android 设备 integration gate
+    cmds:
+      - task: test:android:harness
+      - node e2e-verify/mobile/run-android-device.mjs {{.CLI_ARGS}}
 
   docs:verify:
     cmds:

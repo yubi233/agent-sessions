@@ -209,7 +209,7 @@ func readOnlyErrorCode(err error) string {
 		return protocol.ErrSnapshotStale
 	case errors.Is(err, ErrReadOnlyTooLarge), errors.Is(err, gitread.ErrOutputLimit):
 		return protocol.ErrPayloadTooLarge
-	case errors.Is(err, ErrReadOnlyBinary), errors.Is(err, ErrReadOnlyDirectory):
+	case errors.Is(err, ErrReadOnlyBinary), errors.Is(err, ErrReadOnlyEncoding), errors.Is(err, ErrReadOnlyDirectory):
 		return protocol.ErrContentUnavailable
 	default:
 		return protocol.ErrInvalidRequest

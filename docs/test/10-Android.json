@@ -1,13 +1,15 @@
 {
   "suite": "android",
-  "suite_version": 3,
+  "suite_version": 4,
   "status": "in_progress",
   "plan_id": "ANDROID",
-  "description": "Flutter widget/integration：配对、安全缓存、会话控制、生命周期、附件、DiffView 和子会话切入。v0.1 当前 gate 在 MacBook 的可见 Flutter macOS 桌面窗口上完成；Android 原生与实机验证后续单列。跨层根因 ID 只消费不重定义。",
+  "description": "Flutter Android：配对、安全缓存、会话控制、生命周期、附件、DiffView 和子会话切入。自 2026-08-18 起，移动端闭环主 gate 统一使用 Android 实机 task test:android:device；macOS/AVD 仅保留历史或诊断补充。跨层根因 ID 只消费不重定义。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Android App",
   "environment": {
-    "macbook_local": "本轮 full gate 在 macOS 主机以 Flutter macOS 启动可见桌面窗口执行；Android AVD、Android Keystore/Drift 原生集成和外接真机验证均留待后续阶段"
+    "physical_android": "移动端闭环主 gate；最新设备 23113RKC6C / Android 15 / API 35；命令 task test:android:device -- --device-id d723617；报告 e2e-verify/reports/2026-08-18T03-34-16-992Z/ANDROID/e2e-android-02.json",
+    "macbook_local": "历史/开发诊断；不再作为移动端闭环主证据",
+    "avd": "诊断模拟器；不替代物理 Android 实机 gate"
   },
   "verification_defaults": {
     "report_kind": "not_run",
@@ -23,22 +25,26 @@
       "id": "MOBILE-01",
       "title": "登录配对与密文缓存",
       "status": "completed",
-      "phase": "P4",
+      "phase": "v0.4/P5",
       "category": "Android",
       "priority": "P0",
-      "test_layer": "Flutter widget + Flutter macOS visible fixture + Relay integration（native macOS integration 因工具链回归暂缓）",
-      "precondition": "MacBook、可见 Flutter macOS 桌面窗口、deterministic fixture Relay；runner 先构建 debug App，再直接启动该 App；Android 原生存储验证不作为本轮前置条件。",
+      "test_layer": "Flutter widget + physical Android integration gate",
+      "precondition": "已连接并解锁 Android 实机 23113RKC6C / Android 15；runner 使用 task test:android:device 执行已登记 integration_test；真实 Provider、Push、后台恢复和网络切换不作为本 fixture gate 前置。",
       "steps": [
-        "通过 task test:flutter:local 构建并直接启动可见 macOS debug App；每个已登记场景以严格 5fps（200ms 节拍）持续采集不少于 300 个候选帧，再筛选连续 100 帧作为 480x960 逻辑手机画布的最终 fixture 截图。采集没有按秒数截断，不能以 1 秒或 5 张截图结案",
-        "创建首个 owner、登录、发起并批准 QR 配对、撤销设备并以恢复码恢复",
-        "重启本地应用并检查受控认证状态；同时由 Dart/Relay 回归验证密文 envelope 和事务边界"
+        "运行 task test:android:device -- --device-id d723617；runner 先执行 Android harness，再在物理设备上安装并运行已登记 integration_test。",
+        "创建首个 owner、登录、发起并批准 QR 配对、撤销设备，并验证安全存储与 Drift 密文缓存。",
+        "运行 owner 视觉 fixture integration，确认物理 Android 上的核心可见状态可启动和完成。"
       ],
-      "expected": "认证、配对、撤销和恢复状态在 UI 中可见；macOS 本地验收不写成 Android Keystore/Drift 原生通过，Android 原生验证留待后续。",
+      "expected": "报告标记 real_device=true、simulated_device=false、headless=false；认证、配对、撤销、安全存储和密文缓存断言通过；真实 Provider、Push、后台恢复和网络切换字段保持 false。",
       "cleanup": [
-        "关闭本轮启动的 Flutter macOS 子进程并清理 fixture 状态"
+        "Flutter 默认清理测试 APK；runner 恢复本轮修改的设备 stay-awake 设置，不停止物理设备。"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+        "apps/mobile/integration_test/w1_auth_pairing_flow_test.dart",
+        "apps/mobile/integration_test/w1_macos_drift_cache_test.dart",
+        "apps/mobile/integration_test/w1_signed_native_secure_storage_test.dart",
+        "apps/mobile/integration_test/w1_visual_owner_fixture_test.dart",
+        "e2e-verify/reports/2026-08-18T03-34-16-992Z/ANDROID/e2e-android-02.json"
       ]
     },
     {
@@ -209,7 +215,7 @@
       "phase": "v0.1/W6",
       "category": "生命周期与通知",
       "priority": "P0",
-      "test_layer": "Dart unit + Flutter widget + Flutter macOS visible fixture（Android AVD/真机后续执行，不阻塞本轮 gate）",
+      "test_layer": "Dart unit + Flutter widget + historical Flutter macOS visible fixture（当前移动端闭环需由物理 Android gate 独立证明；AVD 仅诊断）",
       "precondition": "存在已确认 event cursor、唯一 idempotency_key、一条待处理应用内通知和可注入的前后台/网络状态；本轮使用 deterministic fixture Relay。",
       "steps": [
         "让 Flutter 运行时进入后台并将 fixture Relay 切为离线",
@@ -849,11 +855,11 @@
       ],
       "precondition": "Relay 已提供同账号 `GET /v1/sessions/{id}/commands?after_seq=` 安全投影；Terminal 专用 SSE、命令 payload、会话内容密钥与远程写控制均不进入 Flutter。",
       "steps": [
-        "以当前账号读取已授权会话的 Daemon 观察，验证命令种类/状态/投递状态、稳定错误码与受限事件元数据按 cursor 增量返回。",
+        "以当前账号读取已授权会话的 Daemon 观察，验证命令种类/状态/投递状态、稳定错误码（含 INVALID_REQUEST、PAYLOAD_TOO_LARGE、SCOPE_DENIED）与受限事件元数据按 cursor 增量返回。",
         "以另一账号读取同一会话，验证被拒绝；检查响应与 Flutter 页面不含 command/Terminal ID、lease、workspace、密文、nonce、AAD、key ID、路径、Provider 正文或远程写入口。",
         "向客户端注入未知命令、事件、错误码和算法，验证均安全降级；在可见 macOS fixture 窗口以严格 5fps（200ms 节拍）采集不少于 300 个候选帧，筛选连续 100 帧的 `VISUAL-MOBILE-29` 最终证据，并明确该证据不是 Android AVD/真机。"
       ],
-      "expected": "Flutter 只消费 Relay 裁剪投影且未知值 fail-closed；观察页不连接 Terminal SSE、不取得 lease、不解密事件也不发送命令。HTTP/Relay 测试证明真实契约与账号隔离，fixture 只证明本地可见状态。",
+      "expected": "Flutter 只消费 Relay 裁剪投影且未知值 fail-closed；观察页不连接 Terminal SSE、不取得 lease、不解密事件也不发送命令。HTTP/Relay 测试证明真实本地契约、账号隔离和稳定错误码投影，fixture 只证明本地可见状态。",
       "cleanup": [
         "关闭本轮 Flutter macOS 子进程并清理 deterministic fixture；不持久化或记录任何命令 payload、终端标识或密文。"
       ],
@@ -868,18 +874,18 @@
     {
       "id": "E2E-ANDROID-01",
       "title": "可见 AVD 的 v0.4 核心旅程",
-      "status": "blocked",
+      "status": "diagnostic_only",
       "phase": "v0.4/P5",
       "category": "Android E2E",
       "priority": "P0",
       "test_layer": "visible Android AVD E2E",
-      "precondition": "隔离 Relay、测试 Daemon、确定性 Adapter、Android AVD 和测试账号已按固定 seed 启动。",
+      "precondition": "AVD 仅用于诊断模拟器差异；移动端闭环主 gate 已改为物理 Android。",
       "steps": [
         "在可见 AVD 完成登录/配对、机器查看、会话创建、确定性事件观察、stop、recent 和深链。",
         "覆盖离线重连、旧 lease、错误、无权和 unsupported 状态。",
         "保存脱敏报告、截图/trace 与环境信息。"
       ],
-      "expected": "用户可见流程与跨层状态一致；报告标记 `simulated_device=true`、`real_device=false`、`headless=false`，不把 AVD 说成真机。",
+      "expected": "报告必须标记 simulated_device=true、real_device=false；不得替代 E2E-ANDROID-02。",
       "cleanup": [
         "停止测试服务，删除测试账号/会话/Workspace，并重置 AVD snapshot"
       ],
@@ -890,25 +896,26 @@
     },
     {
       "id": "E2E-ANDROID-02",
-      "title": "物理 Android 的 v0.4 核心旅程",
-      "status": "blocked",
+      "title": "物理 Android 的 v0.4 fixture integration gate",
+      "status": "partial",
       "phase": "v0.4/P5",
       "category": "Android E2E",
       "priority": "P0",
       "test_layer": "physical Android device E2E",
-      "precondition": "用户已授权物理设备、Push/Provider 所需凭据和网络；设备型号、系统版本与测试账号已记录且不含敏感信息。",
+      "precondition": "用户已授权并解锁物理设备 23113RKC6C / Android 15；本 gate 使用 fixture integration，不要求真实 Provider/Push 凭据。",
       "steps": [
-        "完成登录/配对、会话控制、后台恢复、通知深链和网络切换。",
-        "在 Keystore、权限拒绝、设备撤销和 Provider 不可用条件下重复核心流程。",
-        "收集 frame timing、内存、通知与脱敏 trace。"
+        "运行 task test:android:device -- --device-id d723617。",
+        "在物理 Android 上执行 w1_auth_pairing_flow_test.dart、w1_macos_drift_cache_test.dart、w1_signed_native_secure_storage_test.dart、w1_visual_owner_fixture_test.dart。",
+        "检查报告字段 real_device=true、simulated_device=false、test_failed=0，并确认 real_provider_called、push_called、background_recovery_tested、network_switch_tested 均为 false。"
       ],
-      "expected": "报告标记 `real_device=true`、`headless=false`，单独列出真实 Provider/Push 是否调用；任何未授权外部链路保持 blocked，不用 AVD/fixture 补齐。",
+      "expected": "物理 Android fixture integration 通过；报告记录设备型号、Android 版本、API level、测试文件、machine 事件摘要和清理状态。真实 Provider、Push、后台恢复和网络切换仍需独立 gate。",
       "cleanup": [
-        "注销并撤销测试设备，清理通知、token、会话、缓存和临时测试数据"
+        "Flutter 默认清理测试 APK；runner 恢复本轮修改的设备 stay-awake 设置，不停止物理设备。"
       ],
       "evidence": [
         "e2e-verify/mobile/run-android-device.mjs",
-        "e2e-verify/reports/<ts>/ANDROID/e2e-android-02.json"
+        "e2e-verify/mobile/android-device.test.mjs",
+        "e2e-verify/reports/2026-08-18T03-34-16-992Z/ANDROID/e2e-android-02.json"
       ]
     }
   ]

@@ -34,6 +34,23 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// 旧 Flutter plugin 可能在自己的 build.gradle 中固定 compileSdk 33；当前 AndroidX
+// runtime metadata 已要求 34+。统一到本机已安装的 API 36，不改变 targetSdk/minSdk。
+subprojects {
+    if (path != ":app") {
+        afterEvaluate {
+            plugins.withId("com.android.library") {
+                val androidExtension = extensions.findByName("android") ?: return@withId
+                val compileSdkSetter =
+                    androidExtension.javaClass.methods.firstOrNull { method ->
+                        method.name == "setCompileSdk" && method.parameterCount == 1
+                    } ?: error("Android library ${project.path} 不支持设置 compileSdk")
+                compileSdkSetter.invoke(androidExtension, 36)
+            }
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

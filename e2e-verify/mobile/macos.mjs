@@ -32,6 +32,7 @@ const MACOS_DEBUG_APP_EXECUTABLE = join(
 const MACOS_WINDOW_WIDTH_TOLERANCE = 4;
 const MACOS_WINDOW_TITLE_BAR_ALLOWANCE = 48;
 const MACOS_SCALED_PREVIEW_MIN_HEIGHT = 720;
+const MACOS_RESIZED_WINDOW_MAX_WIDTH = 720;
 const MACOS_WINDOW_OBSERVER_SOURCE = join(
   dirname(fileURLToPath(import.meta.url)),
   "macos-window-info.swift",
@@ -225,17 +226,29 @@ export function parseMacosWindowCount(output) {
 // CoreGraphics 返回整个 NSWindow 边界，包含标题栏。小屏 MacBook 会将 960pt 外壳压缩，
 // Flutter 内部仍以 480x960 逻辑画布等比预览，因此报告必须区分原生尺寸和缩放预览。
 export function macosPortraitWindowMode(window) {
+  const fixedWidth = Math.abs(window.width - MACOS_MOBILE_CONTENT_SIZE.width)
+    <= MACOS_WINDOW_WIDTH_TOLERANCE;
   if (
-    Math.abs(window.width - MACOS_MOBILE_CONTENT_SIZE.width) > MACOS_WINDOW_WIDTH_TOLERANCE
-    || window.height <= window.width
+    !fixedWidth
+    && !(
+      window.width >= MACOS_MOBILE_CONTENT_SIZE.width
+      && window.width <= MACOS_RESIZED_WINDOW_MAX_WIDTH
+      && window.height >= MACOS_SCALED_PREVIEW_MIN_HEIGHT
+      && window.height > window.width * 1.4
+    )
   ) {
     return "invalid";
   }
   if (
+    fixedWidth
+    &&
     window.height >= MACOS_MOBILE_CONTENT_SIZE.height
     && window.height <= MACOS_MOBILE_CONTENT_SIZE.height + MACOS_WINDOW_TITLE_BAR_ALLOWANCE
   ) {
     return "native";
+  }
+  if (!fixedWidth) {
+    return "resized_preview";
   }
   if (window.height >= MACOS_SCALED_PREVIEW_MIN_HEIGHT) {
     return "scaled_preview";
@@ -562,8 +575,28 @@ export function runMacosFlutterProcess({
     void pollWindow();
     timer = setTimeout(() => {
       timedOut = true;
+      if (terminateObservedWindows) {
+        // 超时也必须回收本轮已观测的 App；仅终止 /usr/bin/open 会留下
+        // LaunchServices 启动的 Flutter 进程，污染下一次 gate。
+        for (const pid of window.observedAppProcessIds) {
+          try {
+            terminateProcess(pid, "SIGTERM");
+          } catch {
+            // 已退出的本轮 app 无需升级为失败。
+          }
+        }
+      }
       if (child.exitCode == null) child.kill("SIGTERM");
       forceKillTimer = setTimeout(() => {
+        if (terminateObservedWindows) {
+          for (const pid of window.observedAppProcessIds) {
+            try {
+              terminateProcess(pid, "SIGKILL");
+            } catch {
+              // 已退出的本轮 app 无需升级为失败。
+            }
+          }
+        }
         if (child.exitCode == null) child.kill("SIGKILL");
       }, 10_000);
     }, timeoutMs);

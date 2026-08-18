@@ -4,17 +4,18 @@
 
 ## 当前入口
 
-| 命令                                                 | 场景                                                              | 可见性与证据                                                                              |
-| ---------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `task test:e2e`                                      | Web/Admin headed Playwright 回归                                  | 默认启动系统 Chrome，`real_browser=true`、`headless=false`                                |
-| `node e2e-verify/run.mjs --suite p0-health`          | 单个 headed Web smoke                                             | 报告写入 `e2e-verify/reports/<timestamp>/<plan_id>/`                                      |
-| `task test:record`                                   | 已通过 browser gate 后的 CDP 录屏                                 | 帧、manifest、mp4 写入 `e2e-verify/screencasts/<timestamp>/`                              |
-| `task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --retries 3` | 经授权的 OpenCode Go 真实模型 smoke 与 Happy 对比一致性检查 | `real_model=true`、`real_upstream=true`；无浏览器，不代表移动端 Adapter transport 已通过 |
-| `task test:flutter:local`                            | MacBook Flutter macOS fixture full gate                           | 启动可见桌面窗口；不能由 headless 或 widget 测试替代                                      |
-| `node e2e-verify/mobile/run-macos.mjs --test <path> --case <id> --visual-scenario <registered-id>` | 已登记的单场景 macOS 定向诊断 | 报告标为 `targeted_diagnostic`，不能替代 full gate或 Android 验收 |
-| `task test:flutter:record -- --gate-report <report>` | 已通过 Flutter macOS full gate 后的 fixture 录屏                  | 固定 5fps，验证全部 recording allowlist 的帧、manifest 与 MP4                            |
-| `task test:android:e2e`                              | 后续 Android AVD integration diagnostic                           | 不属于本轮 v0.1 gate                                                                      |
-| `e2e-verify/mobile/`                                 | MacBook Flutter macOS full gate、P6 录屏、后续 AVD 诊断和报告脚本 | 本轮 `run-macos.mjs` 与 `record-macos.mjs` 启动可见桌面窗口；Android 原生验收留待后续阶段 |
+| 命令                                                                                               | 场景                                                              | 可见性与证据                                                                              |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `task test:e2e`                                                                                    | Web/Admin headed Playwright 回归                                  | 默认启动系统 Chrome，`real_browser=true`、`headless=false`                                |
+| `node e2e-verify/run.mjs --suite p0-health`                                                        | 单个 headed Web smoke                                             | 报告写入 `e2e-verify/reports/<timestamp>/<plan_id>/`                                      |
+| `task test:record`                                                                                 | 已通过 browser gate 后的 CDP 录屏                                 | 帧、manifest、mp4 写入 `e2e-verify/screencasts/<timestamp>/`                              |
+| `task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --retries 3`          | 经授权的 OpenCode Go 真实模型 smoke 与 Happy 对比一致性检查       | `real_model=true`、`real_upstream=true`；无浏览器，不代表移动端 Adapter transport 已通过  |
+| `task test:flutter:local`                                                                          | MacBook Flutter macOS fixture full gate                           | 启动可见桌面窗口；不能由 headless 或 widget 测试替代                                      |
+| `node e2e-verify/mobile/run-macos.mjs --test <path> --case <id> --visual-scenario <registered-id>` | 已登记的单场景 macOS 定向诊断                                     | 报告标为 `targeted_diagnostic`，不能替代 full gate或 Android 验收                         |
+| `task test:flutter:record -- --gate-report <report>`                                               | 已通过 Flutter macOS full gate 后的 fixture 录屏                  | 固定 5fps，验证全部 recording allowlist 的帧、manifest 与 MP4                             |
+| `task test:android:e2e`                                                                            | 后续 Android AVD integration diagnostic                           | 不属于本轮 v0.1 gate                                                                      |
+| `task test:android:device -- --device-id <adb-serial>`                                             | 已授权物理 Android integration gate                               | 报告标记 `real_device=true`；fixture 不代表真实 Provider 或 Push                          |
+| `e2e-verify/mobile/`                                                                               | MacBook Flutter macOS full gate、P6 录屏、后续 AVD 诊断和报告脚本 | 本轮 `run-macos.mjs` 与 `record-macos.mjs` 启动可见桌面窗口；Android 原生验收留待后续阶段 |
 
 不要使用不存在的`pnpm --filter @agent-sessions/e2e-verify test`命令；当前 package 公开的是`test:e2e`，推荐始终从根目录`task test:e2e`运行。
 
@@ -70,3 +71,11 @@ task test:real -- --provider opencode --model opencode-go/deepseek-v4-flash --re
 4. 仅在本轮启动 AVD 时才在结束后请求关闭它；复用的用户 AVD 和其他模拟器一律不触碰。传入`--keep-avd`可保留本轮 AVD 用于人工诊断。
 
 可用参数：`--avd <name>`、重复的`--test <apps/mobile-relative-test>`和`--case <stable-test-id>`、`--keep-avd`。本阶段拒绝`--device-id`和`--headless`；录屏不属于此 gate，必须在对应 full gate 通过且录屏用例已登记后单独执行。
+
+## 物理 Android integration gate
+
+`task test:android:device -- --device-id <adb-serial>`只复用用户已连接、已启动并完成 ADB 授权的物理设备。仅连接一台真机时可省略`--device-id`；发现多台时必须显式选择。runner 会排除`emulator-*`并复核设备的`ro.kernel.qemu`，要求开始前已点亮并解锁设备；测试期间临时设置 USB 唤醒以避免构建过程中锁屏，结束后恢复原值。它不会启动或停止设备，也不传`--no-uninstall`保留测试 APK。
+
+默认发现并执行`apps/mobile/integration_test/**/*_test.dart`，报告写入`e2e-verify/reports/<timestamp>/ANDROID/e2e-android-02.json`。报告将物理执行标为`real_device=true`、`simulated_device=false`、`headless=false`，同时如实保留`fixture_data=true`、`real_upstream=false`、`real_provider_called=false`和`push_called=false`；因此它只证明这些 integration 测试在真机 Android/Keystore/SQLite 环境运行，不会把未调用的 Provider、Push、后台限制或网络切换表述为通过。
+
+可用参数：`--device-id <adb-serial>`、重复的`--test <apps/mobile-relative-test>`和`--case <stable-test-id>`、`--device-timeout-ms <ms>`、`--test-timeout-ms <ms>`与`--diagnostic`。`--diagnostic`只把 Flutter 原始输出显示在当前终端，报告仍只保存脱敏事件计数。

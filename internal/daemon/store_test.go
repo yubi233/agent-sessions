@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -102,6 +103,61 @@ func TestRelayCommandDeliveryIsDurablyDeduplicated(t *testing.T) {
 	}
 	if remaining, err := s.PendingRelayCommands(); err != nil || len(remaining) != 0 {
 		t.Fatalf("completed command still pending=%+v err=%v", remaining, err)
+	}
+}
+
+// SYNC-05：命令记录和 cursor 必须同一 SQLite 事务完成。失败时不能留下已落盘、但 cursor
+// 未推进的半条 delivery；历史半状态的重复投递只可修复同一条记录，冲突 payload 不得借机跳 cursor。
+func TestRelayCommandRecordAndCursorAreAtomicAndConflictSafe(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	command := RelayCommand{
+		CommandID: "cmd-atomic", DeliverySeq: 9, SessionID: "sess-atomic", WorkspaceID: "ws-atomic",
+		Kind: "session.abort", LeaseEpoch: 1, TargetTerminalID: "term-atomic", PayloadJSON: `{"ciphertext":"opaque"}`,
+	}
+
+	// 以 trigger 注入 cursor 写失败，验证 transaction 会一并回滚 command INSERT。
+	if _, err := s.db.Exec(`CREATE TRIGGER reject_relay_cursor BEFORE INSERT ON local_state
+		WHEN NEW.key='relay_delivery_seq' BEGIN SELECT RAISE(ABORT, 'cursor write rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := s.RecordRelayCommand(command); err == nil || inserted {
+		t.Fatalf("atomic record inserted=%v err=%v, want failed transaction", inserted, err)
+	}
+	if _, err := s.RelayCommandByID(command.CommandID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rolled back command error=%v, want sql.ErrNoRows", err)
+	}
+	if cursor, err := s.RelayDeliveryCursor(); err != nil || cursor != 0 {
+		t.Fatalf("rolled back cursor=%d err=%v, want 0", cursor, err)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER reject_relay_cursor`); err != nil {
+		t.Fatal(err)
+	}
+
+	if inserted, err := s.RecordRelayCommand(command); err != nil || !inserted {
+		t.Fatalf("record after rollback inserted=%v err=%v", inserted, err)
+	}
+	// 模拟早期版本或异常退出留下 command、却丢失 cursor。相同 delivery 可以安全修复它。
+	if _, err := s.db.Exec(`DELETE FROM local_state WHERE key='relay_delivery_seq'`); err != nil {
+		t.Fatal(err)
+	}
+	if inserted, err := s.RecordRelayCommand(command); err != nil || inserted {
+		t.Fatalf("same delivery repair inserted=%v err=%v", inserted, err)
+	}
+	if cursor, err := s.RelayDeliveryCursor(); err != nil || cursor != command.DeliverySeq {
+		t.Fatalf("repaired cursor=%d err=%v, want %d", cursor, err, command.DeliverySeq)
+	}
+
+	conflict := command
+	conflict.DeliverySeq++
+	if inserted, err := s.RecordRelayCommand(conflict); inserted || !errors.Is(err, ErrRelayCommandConflict) {
+		t.Fatalf("conflicting delivery inserted=%v err=%v", inserted, err)
+	}
+	if cursor, err := s.RelayDeliveryCursor(); err != nil || cursor != command.DeliverySeq {
+		t.Fatalf("conflict advanced cursor=%d err=%v, want %d", cursor, err, command.DeliverySeq)
 	}
 }
 

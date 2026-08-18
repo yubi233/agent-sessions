@@ -137,17 +137,21 @@
       "precondition": "ADR-009 schema、隔离 Relay、已配对 terminal 凭据、Daemon 本地 SQLite 和确定性时钟均可用。",
       "steps": [
         "启动 Daemon，执行 hello 并建立专用 SSE 命令流，检查协商版本、terminal_id 和 heartbeat 周期。",
-        "由 Relay 投递命令，依次回传 received、started、result ack；断开流并从 delivery cursor 重连。",
-        "使用撤销凭据、N-2/N+1 版本、错误 terminal、过期 cursor 和重复 ack 重复请求。"
+        "由 Relay 投递命令，依次回传 received、started、result/rejected ack；断开流并从 delivery cursor 重连。",
+        "使用撤销凭据、N-2/N+1 版本、错误 terminal、过期 cursor 和重复 ack 重复请求；模拟 rejected 回执已提交但 HTTP 响应丢失。",
+        "用具有 REST 超时的 client 建立超过该超时的 SSE，验证 stream 只受 request context/heartbeat 管理。"
       ],
-      "expected": "Daemon 只接收自己的命令；heartbeat/presence 可恢复；ack/result 幂等；撤销、版本和目标错误 fail-closed；日志不含 bearer、正文或工作区路径。",
+      "expected": "Daemon 只接收自己的命令；heartbeat/presence 可恢复；command/cursor 原子落盘；ack/result/rejected receipt 幂等；撤销、版本和目标错误 fail-closed；SSE 不继承 REST 总超时；日志不含 bearer、正文或工作区路径。",
       "cleanup": [
         "停止 Daemon/Relay，删除隔离 SQLite、凭据、SSE 流和临时日志"
       ],
       "evidence": [
         "internal/daemon/relay_test.go",
         "internal/relay/p2_daemon_contract_test.go",
-        "task test:v04:p2 (2026-08-16)",
+        "internal/daemon/relay_test.go:TestRelayLoopReplaysDurableRejectionAfterResponseLoss",
+        "internal/daemon/relay_test.go:TestRelayClientStreamDoesNotInheritRESTTimeout",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
+        "task test:v04:p2 (2026-08-18)",
         "e2e-verify/reports/<ts>/DAEMON-CORE/daemon-rpc-01.json"
       ]
     },
@@ -165,7 +169,7 @@
         "执行 force kill，检查父/子进程组均退出，重复 kill 只返回同一终态。",
         "通过 session.kill 验证仅 Process-owned Handle 可被强制终止；未声明 kill capability 或共享 HTTP Handle 均 fail-closed。"
       ],
-      "expected": "每个 ownership id 最多启动一次进程；正常、崩溃、超时和 kill 产生明确脱敏终态；Darwin/Linux 上父/子进程组均被清理；不使用 shell 拼接或泄漏输出正文。真实 Provider 进程、文件描述符/临时目录与 Relay-Daemon 断线矩阵仍需后续 gate。",
+      "expected": "每个 ownership id 最多启动一次进程；正常、崩溃、超时和 kill 产生明确脱敏终态；Darwin/Linux 上父/子进程组均被清理；不使用 shell 拼接或泄漏输出正文。真实 Provider 进程、文件描述符/临时目录和真实 Provider 异常退出仍需后续 gate。",
       "cleanup": [
         "终止残留测试进程，删除临时目录、本地 outbox、SQLite 与 trace"
       ],

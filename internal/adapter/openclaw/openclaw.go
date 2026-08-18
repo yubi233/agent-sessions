@@ -1,5 +1,5 @@
 // Package openclawadapter 实现 OpenClaw adapter（P3）。
-// 使用 Gateway WebSocket challenge/device auth；challenge 与设备授权必须在 Daemon 内完成。
+// Gateway WebSocket challenge/device auth 接入完成前，配置 URL 也不能推断服务可用。
 package openclaw
 
 import (
@@ -23,20 +23,24 @@ func New() *Adapter {
 	return &Adapter{url: strings.TrimSpace(os.Getenv(EnvURL))}
 }
 
-// Detect 返回能力矩阵。
+// Detect 返回能力矩阵。当前没有 Gateway 握手，URL 仅是配置，不是可用性证据。
 func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	_ = ctx
-	// OpenClaw 通过 Gateway 支持 chat delta/thinking/tool/skill。
-	native := map[string]bool{"start": true, "resume": true, "abort": true, "permission": true, "skill_catalog": true}
+	reason := "OpenClaw Gateway 未配置，控制能力已安全禁用。"
+	if a.url != "" {
+		reason = "OpenClaw Gateway 已配置，但 WebSocket 握手与设备授权尚未接入，控制能力已安全禁用。"
+	}
+	// Start/Resume 尚未实现，所有依赖 Gateway 会话的能力必须保持 unsupported。
 	caps := make([]adapter.Capability, 0, len(adapter.CapabilityNames))
 	for _, name := range adapter.CapabilityNames {
-		c := adapter.Capability{Name: name, Status: adapter.CapabilityUnsupported}
-		if a.url != "" && native[name] {
-			c.Status = adapter.CapabilityNative
-		}
-		caps = append(caps, c)
+		caps = append(caps, adapter.Capability{
+			Name:   name,
+			Status: adapter.CapabilityUnsupported,
+			Reason: reason,
+		})
 	}
-	return adapter.Capabilities{Provider: "openclaw", Version: "unknown", Capabilities: caps}, nil
+	// 未完成真实握手前不写伪版本，避免 Registry 将仅配置 URL 的 Provider 标成 available。
+	return adapter.Capabilities{Provider: "openclaw", Capabilities: caps}, nil
 }
 
 // Capabilities 返回能力矩阵。

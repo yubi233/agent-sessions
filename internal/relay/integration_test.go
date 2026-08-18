@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,8 @@ import (
 
 // testEnv 构造一个隔离 Relay（临时 SQLite）并返回测试用 HTTP 客户端。
 type testEnv struct {
+	db     *sql.DB
+	path   string
 	router *gin.Engine
 	repo   store.Repository
 }
@@ -25,14 +28,38 @@ type testEnv struct {
 // newTestEnv 打开隔离库并装配完整路由。
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	path := filepath.Join(t.TempDir(), "relay.db")
+	db, err := store.Open(path)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	repo := store.NewRepository(db)
-	router := NewServer(db, nil)
-	return &testEnv{router: router, repo: repo}
+	env := &testEnv{db: db, path: path, router: NewServer(db, nil), repo: store.NewRepository(db)}
+	t.Cleanup(func() {
+		if env.db != nil {
+			_ = env.db.Close()
+		}
+	})
+	return env
+}
+
+// restartRelay 关闭同一 SQLite 连接后重新打开并装配 HTTP 服务，模拟 Relay 进程退出及启动。
+// 这不是仅替换 gin router：令牌、lease、命令和事件必须都从持久化数据库重新读回。
+func (e *testEnv) restartRelay(t *testing.T) {
+	t.Helper()
+	if e.db == nil {
+		t.Fatal("Relay database is not open")
+	}
+	if err := e.db.Close(); err != nil {
+		t.Fatalf("close Relay database for restart: %v", err)
+	}
+	e.db = nil
+	db, err := store.Open(e.path)
+	if err != nil {
+		t.Fatalf("reopen Relay database after restart: %v", err)
+	}
+	e.db = db
+	e.repo = store.NewRepository(db)
+	e.router = NewServer(db, nil)
 }
 
 func (e *testEnv) do(t *testing.T, method, path string, body any, token string) *httptest.ResponseRecorder {

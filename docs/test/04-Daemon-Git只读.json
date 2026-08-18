@@ -162,13 +162,13 @@
       "category": "Git/代码只读",
       "priority": "P0",
       "test_layer": "Daemon integration + security",
-      "precondition": "由测试创建真实临时 Git 仓库，含 UTF-8 文本、二进制、大文件、嵌套目录、仓外符号链接和未确认目录；P2 Daemon RPC 已可请求只读文件/代码。",
+      "precondition": "由测试创建真实临时 Git 仓库，含 UTF-8/无效 UTF-8 文本、二进制、大文件、目录、嵌套目录、仓外符号链接和未确认目录；P2 Daemon RPC 已可请求只读文件/代码。",
       "steps": [
-        "通过已确认 Workspace 读取文本文件、定位行号、搜索片段并读取 Git 状态/diff 摘要。",
-        "读取二进制、超大、未知编码和 snapshot stale 文件。",
-        "请求绝对路径、`..`、仓外 symlink、跨仓库路径和未确认 Workspace。"
+        "通过已确认 Workspace 逐项执行 file.tree、file.read、code.read、git.status、git.changes、git.diff。",
+        "读取二进制、无效 UTF-8、超大、目录和 snapshot stale 文件，检查各自稳定错误码。",
+        "请求绝对路径、`..`、仓外 symlink、跨仓库路径和未确认 Workspace，确认没有成功 event。"
       ],
-      "expected": "有效读取只返回受限的只读内容/摘要；受限类型明确降级；所有路径逃逸被拒绝；Relay 不获得文件或 diff 明文，Daemon 不调用 shell。",
+      "expected": "六种成功 kind 只返回受限的只读内容/摘要；二进制、无效 UTF-8、目录返回 CONTENT_UNAVAILABLE，超限返回 PAYLOAD_TOO_LARGE，路径/Workspace 返回安全拒绝，stale 返回 SNAPSHOT_STALE；Relay 不获得文件或 diff 明文，Daemon 不调用 shell。",
       "cleanup": [
         "删除临时仓库、符号链接、Daemon 缓存、测试命令和事件记录"
       ],
@@ -176,7 +176,8 @@
         "internal/daemon/readonly_test.go",
         "internal/daemon/readonly_dispatcher_test.go",
         "internal/relay/p2_daemon_contract_test.go",
-        "task test:v04:p2 (2026-08-16)",
+        "internal/daemon/readonly_dispatcher_test.go:TestReadOnlyDispatcherRejectsAllP2ReadBoundaries",
+        "task test:v04:p2 (2026-08-18)",
         "e2e-verify/reports/<ts>/DAEMON-GIT/git-07.json"
       ]
     }

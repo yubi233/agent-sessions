@@ -48,11 +48,12 @@ type providerThread struct {
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
 }
 
-// lastEvent 是事件转发 goroutine 写入的最新 canonical 事件摘要。
-// 保持简单：只记最后一条事件与累计条数，不落正文日志。
+// lastEvent 是事件转发 goroutine 写入的最新 canonical 事件摘要。这里只保留类型、序号与累计
+// 条数；完整 payload 只能经 EventEncoder 进入密文 outbox，不能以 last_event 旁路明文落盘。
 type lastEvent struct {
-	Count int           `json:"count"`
-	Last  adapter.Event `json:"last"`
+	Count int               `json:"count"`
+	Type  adapter.EventType `json:"type"`
+	Seq   int64             `json:"seq"`
 }
 
 // runningSession 是运行中的实例句柄与事件转发 goroutine 的退出路径。
@@ -399,7 +400,7 @@ func (r *SessionRunner) forwardEvents(sessionID string, h adapter.Handle, fwdCtx
 
 // writeEvent 写最后一条 canonical 事件；失败只告警，不阻塞命令消费。
 func (r *SessionRunner) writeEvent(sessionID string, count int, ev adapter.Event) {
-	raw, err := json.Marshal(lastEvent{Count: count, Last: ev})
+	raw, err := json.Marshal(lastEvent{Count: count, Type: ev.Type, Seq: ev.Seq})
 	if err != nil {
 		return
 	}

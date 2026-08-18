@@ -21,14 +21,8 @@ version: 1.0.0+1
 environment:
   sdk: ^3.12.2
 
-# Android 密文缓存只使用标准 SQLite DDL/DML；显式复用系统 libsqlite.so，
-# 避免 sqlite3 native-asset hook 在每次 AVD 构建时依赖 GitHub 二进制下载。
-hooks:
-  user_defines:
-    sqlite3:
-      source: system
-      name_android: sqlite
-
+# Android 密文缓存只使用标准 SQLite DDL/DML；sqlite3 native-asset hook
+# 为各 Android ABI 打包一致的 SQLite 动态库，避免依赖设备私有系统库。
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
 # consider running `flutter pub upgrade --major-versions`. Alternatively,

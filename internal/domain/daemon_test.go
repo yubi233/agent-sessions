@@ -17,4 +17,13 @@ func TestSafeErrorCodeAllowsOnlyPublicDaemonCodes(t *testing.T) {
 	if got := safeErrorCode("  "); got != "" {
 		t.Fatalf("empty daemon code=%q", got)
 	}
+	for _, code := range []string{
+		protocol.ErrInvalidRequest,
+		protocol.ErrPayloadTooLarge,
+		protocol.ErrScopeDenied,
+	} {
+		if got := safeErrorCode(code); got != code {
+			t.Fatalf("safe P2 read error %q = %q", code, got)
+		}
+	}
 }

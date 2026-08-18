@@ -27,9 +27,10 @@ const daemonProtocolVersion = 1
 // RelayClient 是 Daemon 到 Relay 的受限 REST + SSE 客户端。它只保存 bearer 在调用者提供的
 // 配置中，不会记录到日志、report 或命令行输出。
 type RelayClient struct {
-	BaseURL     string
-	AccessToken string
-	HTTPClient  *http.Client
+	BaseURL          string
+	AccessToken      string
+	HTTPClient       *http.Client
+	StreamHTTPClient *http.Client
 }
 
 type RelayHTTPError struct {
@@ -162,7 +163,7 @@ func (c *RelayClient) Stream(ctx context.Context, afterDeliverySeq int64, consum
 	}
 	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
 	req.Header.Set("Accept", "text/event-stream")
-	response, err := c.client().Do(req)
+	response, err := c.streamClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -224,7 +225,7 @@ func (c *RelayClient) postJSON(ctx context.Context, path string, body any, outpu
 	}
 	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
-	response, err := c.client().Do(req)
+	response, err := c.restClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -241,11 +242,26 @@ func (c *RelayClient) postJSON(ctx context.Context, path string, body any, outpu
 	return nil
 }
 
-func (c *RelayClient) client() *http.Client {
+func (c *RelayClient) restClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
 	return &http.Client{Timeout: 30 * time.Second}
+}
+
+// streamClient 保留调用方自定义的 Transport/Jar/redirect 策略，但移除覆盖整个响应生命周期的
+// Client.Timeout。SSE 连接由 request context、Relay heartbeat 和重连状态机管理；继承普通 REST
+// 的总超时会让生产命令流固定每 30 秒断开。
+func (c *RelayClient) streamClient() *http.Client {
+	if c.StreamHTTPClient != nil {
+		return c.StreamHTTPClient
+	}
+	if c.HTTPClient != nil {
+		stream := *c.HTTPClient
+		stream.Timeout = 0
+		return &stream
+	}
+	return &http.Client{}
 }
 
 func readRelayHTTPError(response *http.Response) error {
@@ -414,6 +430,14 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 	if err != nil {
 		return err
 	}
+	// 已持久化的重复 delivery 只重放协议回执和本机 pending 状态。不能用当前 capability
+	// 重新解释一个已经收敛的历史命令，更不能覆盖其终态。
+	if !inserted {
+		if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "received", ""); err != nil {
+			return err
+		}
+		return l.processPending(ctx)
+	}
 	// 专用 SSE 已由 Relay 按 Terminal 隔离，但 Daemon 仍要把 payload 当作不可信输入：
 	// 只有本机 hello 绑定的 Terminal、非空 Workspace 和已声明 capability 才能进入执行器。
 	// 先落盘再拒绝可推进 cursor 并留下可审计、幂等的 rejected receipt，不能让恶意 delivery
@@ -424,9 +448,6 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 	// 即使是重复 delivery，received ack 也可安全重放，帮助 Relay 收敛至少一次投递状态。
 	if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "received", ""); err != nil {
 		return err
-	}
-	if !inserted {
-		return l.processPending(ctx)
 	}
 	return l.processPending(ctx)
 }
@@ -449,10 +470,17 @@ func (l *RelayLoop) validateLocalDelivery(command RelayCommand) error {
 }
 
 func (l *RelayLoop) rejectDelivery(ctx context.Context, command RelayCommand, errorCode string) error {
-	if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "rejected", errorCode); err != nil {
+	if err := l.Store.MarkRelayCommandRejecting(command.CommandID, errorCode); err != nil {
 		return err
 	}
-	return l.Store.MarkRelayCommandResult(command.CommandID, "rejected", errorCode)
+	return l.replayRejected(ctx, command.CommandID, command.DeliverySeq, errorCode)
+}
+
+func (l *RelayLoop) replayRejected(ctx context.Context, commandID string, deliverySeq int64, errorCode string) error {
+	if err := l.Client.Ack(ctx, commandID, deliverySeq, "rejected", errorCode); err != nil {
+		return err
+	}
+	return l.Store.MarkRelayCommandResult(commandID, "rejected", errorCode)
 }
 
 func (l *RelayLoop) declaresCapability(kind string) bool {
@@ -496,7 +524,21 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 	}
 	for _, command := range commands {
 		startedThisPass := false
+		if command.Status == "rejecting" {
+			if err := l.replayRejected(ctx, command.CommandID, command.DeliverySeq, command.ErrorCode); err != nil {
+				return err
+			}
+			continue
+		}
 		if command.Status == "received" {
+			// runOnce 会在建立 SSE 前主动恢复本地 pending。这里必须重新执行本机目标与 capability
+			// 校验，否则 rejected 响应丢失留下的 received 行会在重启后绕过 handleDelivery。
+			if err := l.validateLocalDelivery(command); err != nil {
+				if rejectErr := l.rejectDelivery(ctx, command, CommandErrorCode(err)); rejectErr != nil {
+					return rejectErr
+				}
+				continue
+			}
 			// 先持久化 starting，再向 Relay 发送 started。这样崩溃窗口只会留下可重放的
 			// started 回执，不会在重启后把同一个 command_id 再次交给 Provider。
 			if err := l.Store.MarkRelayCommandStarting(command.CommandID); err != nil {

@@ -170,40 +170,46 @@
     {
       "id": "TERM-01",
       "title": "多 Terminal 独立在线",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "Terminal",
       "priority": "P0",
-      "test_layer": "Relay integration",
+      "test_layer": "Relay/Daemon integration",
       "precondition": "两台 Daemon 已配对且 ADR-009 hello/heartbeat 实现完成。",
       "steps": [
-        "同时执行 daemon.hello",
-        "查看列表、heartbeat 和各自 capability"
+        "同时执行两个已配对 Terminal 的 daemon.hello，并分别绑定会话后投递确定性 session.start。",
+        "关闭同一 Relay SQLite/server 后重新装配服务，再启动两条独立 Daemon RelayLoop。",
+        "检查两个 command、lease、Daemon SQLite、Adapter 调用与 canonical event 均只属于各自 Terminal。"
       ],
-      "expected": "身份、心跳、能力互不覆盖。",
+      "expected": "身份、心跳、能力、delivery cursor 和 Adapter 调用互不覆盖；Relay 重启后 owner token、lease 与幂等记录仍从 SQLite 恢复。真实 Provider 和完整并发压力仍不在本例范围。",
       "cleanup": [
-        "停止 mock Terminal"
+        "停止两个 fixture Daemon/Adapter 并删除隔离 SQLite"
       ],
       "evidence": [
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
+        "Taskfile.yml:test:e2e:relay",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/term-01.json"
       ]
     },
     {
       "id": "TERM-02",
       "title": "Terminal 重连保持同一身份",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P2",
       "category": "Terminal",
       "priority": "P0",
       "test_layer": "Relay integration",
       "precondition": "Terminal 已通过 daemon.hello 注册并保留目标终端游标。",
       "steps": [
-        "断开专用 SSE 命令流",
-        "用同一设备身份与 Last-Event-ID/after_delivery_seq 重连"
+        "断开专用 SSE 命令流或关闭 Relay 服务。",
+        "用同一已配对设备身份重新执行 hello 并以 after_delivery_seq 恢复。",
+        "验证 Terminal ID、命令目标与已持久化 delivery/lease 在服务重开后不漂移。"
       ],
-      "expected": "terminal_id 不变；旧连接 fencing。",
+      "expected": "terminal_id 不变；旧连接 fencing；恢复不会把另一 Terminal 的 delivery 写入本机 store。真实网络抖动压力仍未覆盖。",
       "cleanup": [],
       "evidence": [
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
+        "internal/daemon/relay_test.go",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/term-02.json"
       ]
     },
@@ -447,16 +453,18 @@
       "steps": [
         "owner 使用当前 lease 与幂等键提交目标 Daemon 命令，并观察 accepted 与 delivery 记录。",
         "以相同幂等键、旧 epoch、非 owner、撤销设备和错误 terminal_id 分别提交。",
-        "让 Daemon 对合法命令发送 received/started/result ack，并查询命令终态。"
+        "让 Daemon 对合法命令发送 received/started/result ack，并查询命令终态。",
+        "在同一 SQLite Relay 重开后由两个 Terminal 各自恢复一条已持久化命令，重放相同幂等键。"
       ],
-      "expected": "只投递一次合法命令；重复请求返回同一 command；旧 epoch、撤销、只读客户端和错误目标无执行副作用；ack/result 可审计且不含正文。",
+      "expected": "只投递一次合法命令；重复请求返回同一 command；旧 epoch、撤销、只读客户端和错误目标无执行副作用；Relay 重开不丢失 lease/幂等记录，两个 Terminal 不串投递；ack/result 可审计且不含正文。",
       "cleanup": [
         "停止测试 Daemon/Adapter，删除测试会话、lease、命令、投递和事件记录"
       ],
       "evidence": [
         "internal/relay/p2_daemon_contract_test.go",
         "internal/relay/integration_test.go",
-        "task test:v04:p2 (2026-08-16)",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
+        "task test:v04:p2 (2026-08-18)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/ctrl-04.json"
       ]
     },
@@ -471,15 +479,16 @@
       "precondition": "确定性 Adapter 支持 start、resume、abort、kill 终态，Relay-Daemon command/event 契约已实现。",
       "steps": [
         "创建会话并依次提交 spawn、resume、abort、kill，记录 command、delivery、ack、event 与 snapshot。",
-        "在每个动作期间断开 SSE、重启 Relay 或 Daemon，并从 cursor 恢复。",
+        "在动作期间断开 SSE；分别覆盖 Daemon SQLite 重开和同一 Relay SQLite/server 重开后的 cursor 恢复。",
         "以 Adapter unsupported 和异常退出路径重复执行。"
       ],
-      "expected": "每个动作有明确 canonical 状态、单调事件与一致 snapshot；unsupported/异常不伪造成功；恢复不重复启动进程或重复写事件。",
+      "expected": "每个动作有明确 canonical 状态、单调事件与一致 snapshot；unsupported/异常不伪造成功；Daemon 或 Relay 重开后不重复启动 fixture Adapter 或重复写事件。真实 Provider 进程仍另行验收。",
       "cleanup": [
         "终止所有测试 Provider 子进程，删除测试会话、事件、outbox 与本地 state"
       ],
     "evidence": [
       "internal/relay/p2_daemon_contract_test.go",
+      "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
       "internal/daemon/runner_test.go",
       "internal/daemon/process_supervisor_test.go",
       "Taskfile.yml:test:daemon:process",
@@ -498,9 +507,10 @@
       "steps": [
         "在 Daemon 收到命令前、received 后、started 后、result/event 已提交但响应丢失后分别断线。",
         "重连并使用最后确认 delivery cursor，重复投递相同 command_id。",
-        "关闭并重开 Daemon SQLite，检查最终 command、event、outbox 和 Adapter 调用计数；Relay 进程重启另列为剩余 P2 矩阵。"
+        "关闭并重开 Daemon SQLite，检查最终 command、event、outbox 和 Adapter 调用计数；再真实关闭并重开同一 Relay SQLite/server，验证两个 Terminal 的命令流与本机 state 隔离。",
+        "让 rejected ack 的 HTTP 响应在 Relay 提交后丢失，验证本机 durable rejecting 状态只重放 rejected，不会执行该命令。"
       ],
-      "expected": "至少一次投递不造成至少两次执行；cursor 单调前进；缺口可恢复；重复 ack/result 是幂等的；损坏或过期 cursor 返回可诊断错误。",
+      "expected": "至少一次投递不造成至少两次执行；command 与 cursor 原子落盘，冲突 command_id 不推进 cursor；缺口可恢复；重复 ack/result/rejected receipt 是幂等的；损坏或过期 cursor 返回可诊断错误。",
       "cleanup": [
         "停止测试服务并删除隔离 SQLite、outbox、临时 trace 和 Adapter 计数"
       ],
@@ -513,7 +523,9 @@
         "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartFailsClosedForInterruptedProviderStart",
         "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartReconcilesCommittedResultReceipt",
         "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartReplaysCommittedEventOutbox",
-        "task test:v04:p2 (2026-08-17)",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
+        "internal/daemon/relay_test.go:TestRelayLoopReplaysDurableRejectionAfterResponseLoss",
+        "task test:v04:p2 (2026-08-18)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/sync-05.json"
       ]
     },
@@ -529,16 +541,17 @@
       "steps": [
         "并发取得或续租 lease，并在成功后用旧 epoch 发送 start/abort。",
         "撤销当前或历史 controller 后重放其 bearer/refresh 与已签名 command。",
-        "在 Relay 重启与 in-memory presence 丢失后重复合法/非法请求。"
+        "在 Relay 重启与 in-memory presence 丢失后重复合法/非法请求，并在两个 Terminal 各自的会话上重放已持久化 idempotency key。"
       ],
-      "expected": "SQLite 中只有一个当前 epoch；旧 epoch 和撤销设备没有 Daemon 投递或 Provider 副作用；重启不放宽 fencing 或授权。",
+      "expected": "SQLite 中只有一个当前 epoch；旧 epoch 和撤销设备没有 Daemon 投递或 Provider 副作用；Relay 重启不放宽 fencing、授权或已有幂等 command 的单次执行。",
       "cleanup": [
         "撤销测试设备，删除测试账号、会话、lease、命令和 SQLite 副本"
       ],
       "evidence": [
         "internal/relay/p2_daemon_contract_test.go",
         "internal/store/migrate_test.go",
-        "task test:v04:p2 (2026-08-16)",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
+        "task test:v04:p2 (2026-08-18)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/relay-lease-03.json"
       ]
     }

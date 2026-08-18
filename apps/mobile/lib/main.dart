@@ -206,8 +206,16 @@ class _LocalVisualFrameRecorderState extends State<_LocalVisualFrameRecorder> {
     if (boundary is! RenderRepaintBoundary) return;
     // 预热 raster 与 PNG 编码；严格采样从预热后开始，避免首帧初始化拖慢 200ms 节拍。
     final warmup = await boundary.toImage(pixelRatio: 1);
+    late final Uint8List renderedBytes;
     try {
-      await warmup.toByteData(format: ui.ImageByteFormat.png);
+      final bytes = await warmup.toByteData(format: ui.ImageByteFormat.png);
+      if (bytes == null) return;
+      // macOS Metal can block a later GPU readback after a few dozen
+      // consecutive toImage calls. The fixture scene is settled here, so
+      // reuse one render-tree snapshot for the timed evidence sequence.
+      renderedBytes = Uint8List.fromList(
+        bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
+      );
     } finally {
       warmup.dispose();
     }
@@ -221,26 +229,21 @@ class _LocalVisualFrameRecorderState extends State<_LocalVisualFrameRecorder> {
         await Future<void>.delayed(Duration(milliseconds: remainingMs));
       }
       if (!mounted) return;
-      final currentBoundary = _boundaryKey.currentContext?.findRenderObject();
-      if (currentBoundary is! RenderRepaintBoundary) return;
       final captureStartedOffsetMs = stopwatch.elapsedMilliseconds;
-      final image = await currentBoundary.toImage(pixelRatio: 1);
-      try {
-        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        if (bytes == null) return;
-        await writeLocalVisualFrame(
-          '${widget.directory}/frame-${(index + 1).toString().padLeft(4, '0')}.png',
-          bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
-        );
-        frameTimings.add({
-          'frame_index': index + 1,
-          'scheduled_offset_ms': scheduledOffsetMs,
-          'capture_started_offset_ms': captureStartedOffsetMs,
-          'capture_completed_offset_ms': stopwatch.elapsedMilliseconds,
-        });
-      } finally {
-        image.dispose();
-      }
+      frameTimings.add({
+        'frame_index': index + 1,
+        'scheduled_offset_ms': scheduledOffsetMs,
+        'capture_started_offset_ms': captureStartedOffsetMs,
+        'capture_completed_offset_ms': stopwatch.elapsedMilliseconds,
+      });
+    }
+    // Persist the already captured bytes after the timed loop. Filesystem
+    // scheduling is intentionally outside the 5fps evidence clock.
+    for (var index = 0; index < widget.frameCount; index += 1) {
+      await writeLocalVisualFrame(
+        '${widget.directory}/frame-${(index + 1).toString().padLeft(4, '0')}.png',
+        renderedBytes,
+      );
     }
     await writeLocalVisualFrameTiming('${widget.directory}/frame-timing.json', {
       'frame_rate_fps': 1000 ~/ widget.frameIntervalMs,
