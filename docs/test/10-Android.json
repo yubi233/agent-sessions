@@ -1,13 +1,13 @@
 {
   "suite": "android",
-  "suite_version": 4,
+  "suite_version": 5,
   "status": "in_progress",
   "plan_id": "ANDROID",
   "description": "Flutter Android：配对、安全缓存、会话控制、生命周期、附件、DiffView 和子会话切入。自 2026-08-18 起，移动端闭环主 gate 统一使用 Android 实机 task test:android:device；macOS/AVD 仅保留历史或诊断补充。跨层根因 ID 只消费不重定义。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Android App",
   "environment": {
-    "physical_android": "移动端闭环主 gate；最新设备 23113RKC6C / Android 15 / API 35；命令 task test:android:device -- --device-id d723617；报告 e2e-verify/reports/2026-08-18T03-34-16-992Z/ANDROID/e2e-android-02.json",
+    "physical_android": "移动端闭环主 gate；最新设备 23113RKC6C / Android 15 / API 35；命令 task test:android:device -- --device-id d723617；报告 e2e-verify/reports/2026-08-18T04-05-40-227Z/ANDROID/e2e-android-02.json",
     "macbook_local": "历史/开发诊断；不再作为移动端闭环主证据",
     "avd": "诊断模拟器；不替代物理 Android 实机 gate"
   },
@@ -44,7 +44,7 @@
         "apps/mobile/integration_test/w1_macos_drift_cache_test.dart",
         "apps/mobile/integration_test/w1_signed_native_secure_storage_test.dart",
         "apps/mobile/integration_test/w1_visual_owner_fixture_test.dart",
-        "e2e-verify/reports/2026-08-18T03-34-16-992Z/ANDROID/e2e-android-02.json"
+        "e2e-verify/reports/2026-08-18T04-05-40-227Z/ANDROID/e2e-android-02.json"
       ]
     },
     {
@@ -915,7 +915,7 @@
       "evidence": [
         "e2e-verify/mobile/run-android-device.mjs",
         "e2e-verify/mobile/android-device.test.mjs",
-        "e2e-verify/reports/2026-08-18T03-34-16-992Z/ANDROID/e2e-android-02.json"
+        "e2e-verify/reports/2026-08-18T04-05-40-227Z/ANDROID/e2e-android-02.json"
       ]
     }
   ]
