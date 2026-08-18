@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../app/providers.dart';
 import '../domain/terminal_models.dart';
+import '../state/session_controller.dart';
 import 'app_theme.dart';
 
 /// P3 会话 info 页：只读聚合会话元数据、机器白名单状态与终止/恢复能力。
@@ -42,6 +43,8 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
   Widget build(BuildContext context) {
     final sessionId = widget.sessionId;
     final controller = ref.watch(sessionInfoControllerProvider(sessionId));
+    final app = ref.watch(appControllerProvider);
+    final sessions = ref.watch(sessionControllerProvider);
     final session = controller.session;
     return Scaffold(
       key: const Key('session-info-screen'),
@@ -72,10 +75,7 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                     children: [
                       _InfoRow(label: '状态', value: controller.statusLabel),
                       _InfoRow(label: 'Provider', value: session.provider),
-                      _InfoRow(
-                        label: '事件序号',
-                        value: '${session.lastSequence}',
-                      ),
+                      _InfoRow(label: '事件序号', value: '${session.lastSequence}'),
                       _InfoRow(label: '工作区', value: session.workspaceLabel),
                     ],
                   ),
@@ -99,6 +99,10 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                         blockedReason: controller.stopBlockedReason,
                       ),
                       _CapabilityRow(
+                        label: '结束本机进程',
+                        blockedReason: controller.killBlockedReason,
+                      ),
+                      _CapabilityRow(
                         label: '恢复会话',
                         blockedReason: controller.resumeBlockedReason,
                       ),
@@ -110,6 +114,13 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                       ),
                     ],
                   ),
+                  if (app.canManageDevices) ...[
+                    const SizedBox(height: 12),
+                    _SessionInfoActions(
+                      sessions: sessions,
+                      deviceId: app.currentDevice?.id,
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   Wrap(
                     spacing: 8,
@@ -144,6 +155,70 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
         ),
       ),
     );
+  }
+}
+
+/// 会话详情页的写入口只在当前设备是 owner 时出现，具体动作仍由
+/// SessionController 统一执行 capability、lease、幂等和二次确认门控。
+class _SessionInfoActions extends StatelessWidget {
+  const _SessionInfoActions({required this.sessions, required this.deviceId});
+
+  final SessionController sessions;
+  final String? deviceId;
+
+  @override
+  Widget build(BuildContext context) {
+    final startBlocked = sessions.controlBlockedReason('start', canWrite: true);
+    final killBlocked = sessions.killBlockedReason(canWrite: true);
+    return _InfoCard(
+      title: '本机进程',
+      children: [
+        OutlinedButton.icon(
+          key: const Key('session-start-button'),
+          onPressed: startBlocked == null && !sessions.isBusy
+              ? () => sessions.startSelectedSession(
+                  deviceId: deviceId,
+                  canWrite: true,
+                )
+              : null,
+          icon: const Icon(Icons.play_arrow_outlined),
+          label: Text(startBlocked == null ? '启动会话' : '启动不可用：$startBlocked'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          key: const Key('session-kill-button'),
+          onPressed: killBlocked == null && !sessions.isBusy
+              ? () => _confirmKill(context)
+              : null,
+          icon: const Icon(Icons.stop_circle_outlined),
+          label: Text(killBlocked == null ? '结束本机进程' : '结束不可用：$killBlocked'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmKill(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('结束本机进程？'),
+        content: const Text('这会结束当前会话的受控本地进程，已提交的事件不会被删除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('session-kill-confirm'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('结束进程'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await sessions.killSelectedSession(deviceId: deviceId, canWrite: true);
+    }
   }
 }
 
@@ -296,10 +371,7 @@ class _InfoEmptyState extends StatelessWidget {
     key: const Key('session-info-empty'),
     child: Padding(
       padding: const EdgeInsets.symmetric(vertical: 56),
-      child: Text(
-        '未找到会话信息。',
-        style: Theme.of(context).textTheme.bodyMedium,
-      ),
+      child: Text('未找到会话信息。', style: Theme.of(context).textTheme.bodyMedium),
     ),
   );
 }

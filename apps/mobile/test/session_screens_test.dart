@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/app_harness.dart';
+import 'support/fixture_owner.dart';
 
 void main() {
   testWidgets('MOBILE-02：owner 可完成新会话、lease、流式、确认、回答和停止', (tester) async {
@@ -104,12 +105,7 @@ void main() {
     tester,
   ) async {
     final harness = MobileAppHarness();
-    await harness.relay.register(
-      const LoginCredentials(
-        email: 'readonly-session@fixture.test',
-        password: 'fixture-password',
-      ),
-    );
+    await bootstrapFixtureOwner(harness.relay);
     await harness.relay.createSession(
       const CreateMobileSessionInput(
         workspaceId: 'readonly-workspace',
@@ -215,6 +211,14 @@ void main() {
       find.byKey(const Key('session-quick-resume')),
     );
     await _waitForVisible(tester, find.text('等待获取会话控制权'));
+    expect(
+      tester
+          .widget<PopupMenuItem<String>>(
+            find.byKey(const Key('session-start-button')),
+          )
+          .enabled,
+      isFalse,
+    );
     // fork/archive 未声明能力：入口禁用并说明原因。
     await _waitForVisible(tester, find.text('Provider 未声明 fork 能力'));
     await _waitForVisible(tester, find.text('Provider 未声明归档能力'));
@@ -260,6 +264,38 @@ void main() {
       snapshot.events.any((event) => event.eventType == 'session.resumed'),
       isTrue,
       reason: 'resume 命令必须落为事件，而不是仅本地弹提示',
+    );
+
+    await _tapAway(tester);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
+    await _tapVisible(tester, find.byKey(const Key('session-start-button')));
+    final startedSnapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(
+      startedSnapshot.events.any((event) => event.eventType == 'session.started'),
+      isTrue,
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
+    await _tapVisible(tester, find.byKey(const Key('session-kill-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-kill-confirm')),
+    );
+    await _tapVisible(tester, find.byKey(const Key('session-kill-confirm')));
+    final killedSnapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(killedSnapshot.session.status, MobileSessionStatus.stopped);
+    expect(
+      killedSnapshot.events.any((event) => event.eventType == 'session.killed'),
+      isTrue,
     );
   });
 

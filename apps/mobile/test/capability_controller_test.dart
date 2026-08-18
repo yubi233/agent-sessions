@@ -6,6 +6,8 @@ import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/fixture_owner.dart';
+
 void main() {
   group('MOBILE-03 MODE-01..03 capability 控制状态机', () {
     test('未知 capability 状态和能力读取失败均 fail-closed', () async {
@@ -26,7 +28,7 @@ void main() {
       expect(unknown.reason, 'Provider 返回了未知能力状态。');
 
       final relay = _UnavailableCapabilityFixture(clock: () => _now);
-      await relay.register(_credentials());
+      await bootstrapFixtureOwner(relay);
       final controller = SessionController(relay: relay, clock: () => _now);
       await controller.initialize();
       final created = await controller.createSession(
@@ -83,15 +85,10 @@ void main() {
 const _ownerDeviceId = 'android-owner-fixture';
 final _now = DateTime.utc(2026, 8, 14, 10, 15);
 
-LoginCredentials _credentials() => const LoginCredentials(
-  email: 'p3-capability-owner@fixture.test',
-  password: 'fixture-password',
-);
-
 Future<SessionController> _prepareWritableSession(
   FixtureRelayRepository relay,
 ) async {
-  await relay.register(_credentials());
+  await bootstrapFixtureOwner(relay);
   final controller = SessionController(
     relay: relay,
     clock: () => _now,

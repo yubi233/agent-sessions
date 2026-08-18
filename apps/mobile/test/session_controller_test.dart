@@ -1,10 +1,11 @@
 import 'dart:math';
 
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fixture_owner.dart';
 
 void main() {
   group('MOBILE-02 SESS-01..02 CTRL-01..02 会话控制状态机', () {
@@ -36,6 +37,15 @@ void main() {
         canWrite: true,
       );
       expect(controller.selectedLease?.epoch, 1);
+
+      await controller.startSelectedSession(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      expect(
+        controller.timeline.any((event) => event.label == '会话已启动'),
+        isTrue,
+      );
 
       await controller.sendMessage(
         message: '请检查 fixture 会话',
@@ -83,6 +93,63 @@ void main() {
       expect(controller.selectedSession?.status, MobileSessionStatus.stopped);
       expect(controller.timeline.any((event) => event.label == '已停止'), isTrue);
       expect(controller.errorMessage, isNull);
+    });
+
+    test('start 后可通过 kill 结束 fixture 进程并进入 stopped', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      await _prepareOwner(relay);
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+      final created = await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'codex',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      await controller.acquireSelectedLease(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      await controller.startSelectedSession(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      await controller.killSelectedSession(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(controller.selectedSession?.id, created!.id);
+      expect(controller.selectedSession?.status, MobileSessionStatus.stopped);
+      expect(
+        controller.timeline.any((event) => event.label == '已结束本机进程'),
+        isTrue,
+      );
+      expect(controller.errorMessage, isNull);
+    });
+
+    test('未声明 kill capability 时保持 fail-closed', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      await _prepareOwner(relay);
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+      await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'claude',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      await controller.acquireSelectedLease(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      await controller.killSelectedSession(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(controller.errorMessage, 'fixture Provider 未声明此能力。');
     });
 
     test('只读状态不会创建会话或调用 fixture 写路径', () async {
@@ -135,12 +202,7 @@ const _ownerDeviceId = 'android-owner-fixture';
 final _now = DateTime.utc(2026, 8, 14, 9, 30);
 
 Future<void> _prepareOwner(FixtureRelayRepository relay) async {
-  await relay.register(
-    const LoginCredentials(
-      email: 'session-owner@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
 }
 
 /// 稳定随机数让幂等键的测试环境可重复，但产品默认使用 Random.secure。

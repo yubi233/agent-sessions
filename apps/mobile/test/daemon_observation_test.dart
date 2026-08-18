@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/fixture_owner.dart';
+
 void main() {
   group('P2-F Daemon 观察状态机', () {
     test('仅按 Relay cursor 追加安全事件，并在失败时保留最后观察结果', () async {
@@ -112,6 +114,50 @@ void main() {
         CipherEnvelopeState.opaque,
       );
     });
+
+    test('start/kill 命令只作为安全观察状态返回，不暴露 payload', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      final sessionId = await _prepareFixtureSession(relay);
+      final lease = await relay.acquireSessionLease(sessionId);
+      await relay.submitSessionCommand(
+        sessionId,
+        SessionCommandInput(
+          kind: SessionCommandKind.start,
+          idempotencyKey: 'p2f-observation-start',
+          leaseEpoch: lease.epoch,
+          deviceId: _ownerDeviceId,
+        ),
+      );
+      await relay.submitSessionCommand(
+        sessionId,
+        SessionCommandInput(
+          kind: SessionCommandKind.kill,
+          idempotencyKey: 'p2f-observation-kill',
+          leaseEpoch: lease.epoch,
+          deviceId: _ownerDeviceId,
+        ),
+      );
+      final controller = DaemonObservationController(
+        relay: relay,
+        sessionId: sessionId,
+      );
+      await controller.initialize();
+
+      expect(
+        controller.observation!.commands.map((command) => command.kind),
+        containsAll([
+          DaemonObservationCommandKind.start,
+          DaemonObservationCommandKind.kill,
+        ]),
+      );
+      expect(
+        controller.observation!.commands.every(
+          (command) => command.deliveryState == DaemonDeliveryState.queued,
+        ),
+        isTrue,
+      );
+      expect(controller.observation!.events, isNotEmpty);
+    });
   });
 
   group('P2-F Daemon 观察页面', () {
@@ -210,12 +256,7 @@ const _ownerDeviceId = 'android-owner-fixture';
 final _now = DateTime.utc(2026, 8, 17, 12);
 
 Future<String> _prepareFixtureSession(FixtureRelayRepository relay) async {
-  await relay.register(
-    const LoginCredentials(
-      email: 'p2f-observation@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
   await relay.bootstrapOwner(
     const BootstrapOwnerInput(
       displayName: 'P2-F owner',

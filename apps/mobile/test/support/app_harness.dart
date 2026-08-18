@@ -10,6 +10,8 @@ import 'package:agent_sessions_mobile/ui/pairing_scanner.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'fixture_owner.dart';
+
 /// 所有 Flutter UI 回归使用同一组明确 fixture，避免测试依赖本机 Keystore 或真实 Relay。
 class MobileAppHarness {
   MobileAppHarness({this.scannerBuilder, this.attachmentPicker})
@@ -28,6 +30,19 @@ class MobileAppHarness {
 
   /// v0.2/P3：附件选择器注入。null 时使用真实 SystemAttachmentPicker（无平台通道时 fail-closed）。
   final AttachmentPicker? attachmentPicker;
+
+  /// 本地 UI 测试的统一 Happy-style 设备入口。
+  ///
+  /// 该 helper 只初始化 fixture Relay 的本机 owner，不经过账号注册/登录；
+  /// 需要先把应用推进到 owner 状态的测试可复用同一套 token 与 identity。
+  Future<FixtureOwner> bootstrapLocalOwner({
+    String displayName = '本地 Android 控制端',
+  }) => bootstrapFixtureOwner(
+    relay,
+    tokens: tokens,
+    identities: identities,
+    displayName: displayName,
+  );
 
   Widget build() => ProviderScope(
     overrides: [

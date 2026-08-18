@@ -10,6 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'support/fixture_owner.dart';
+
 /// MOBILE-27：P3 单消息深链页。
 /// 只定位授权会话中的目标消息：eventFor(sequence) 命中返回事件、不存在/无权统一返回 null；
 /// 页面展示卡片 + SelectableText 消息文本 + 事件序号，不泄漏 token、恢复码或会话其他正文。
@@ -123,10 +125,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('message-deeplink-empty')), findsOneWidget);
-      expect(
-        find.text('未找到消息。链接可能已过期或无权访问。'),
-        findsOneWidget,
-      );
+      expect(find.text('未找到消息。链接可能已过期或无权访问。'), findsOneWidget);
       // 会话中真实存在 seq 2 消息，但 empty 页不渲染任何消息文本，不泄漏存在性。
       expect(find.text('深链目标消息正文'), findsNothing);
       expect(find.byKey(const Key('message-deeplink-card')), findsNothing);
@@ -151,10 +150,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('message-deeplink-empty')), findsOneWidget);
-      expect(
-        find.text('未找到消息。链接可能已过期或无权访问。'),
-        findsOneWidget,
-      );
+      expect(find.text('未找到消息。链接可能已过期或无权访问。'), findsOneWidget);
       expect(find.byKey(const Key('message-deeplink-card')), findsNothing);
       expect(find.text('深链目标消息正文'), findsNothing);
     });
@@ -223,60 +219,72 @@ void main() {
       expect(find.text('深链目标消息正文'), findsOneWidget);
     });
 
-    testWidgets('路由 harness：从 /sessions/:id 深链到 /sessions/:id/messages/:seq 并可返回', (
-      tester,
-    ) async {
-      _usePhoneSurface(tester);
-      final relay = await _fixtureWithMessage(_clock);
-      final sessions = await _readySessions(relay, _clock);
-      final controller = MessageDeepLinkController(sessionController: sessions);
-      final sessionId = (await relay.listSessions()).single.id;
+    testWidgets(
+      '路由 harness：从 /sessions/:id 深链到 /sessions/:id/messages/:seq 并可返回',
+      (tester) async {
+        _usePhoneSurface(tester);
+        final relay = await _fixtureWithMessage(_clock);
+        final sessions = await _readySessions(relay, _clock);
+        final controller = MessageDeepLinkController(
+          sessionController: sessions,
+        );
+        final sessionId = (await relay.listSessions()).single.id;
 
-      final router = GoRouter(
-        initialLocation: '/sessions/$sessionId',
-        routes: [
-          GoRoute(
-            path: '/sessions/:id',
-            builder: (context, state) =>
-                _DeepLinkLauncher(sessionId: state.pathParameters['id']!),
-          ),
-          GoRoute(
-            path: '/sessions/:id/messages/:seq',
-            builder: (context, state) => MessageDeepLinkScreen(
-              sessionId: state.pathParameters['id']!,
-              messageSequence:
-                  int.tryParse(state.pathParameters['seq'] ?? '') ?? 0,
+        final router = GoRouter(
+          initialLocation: '/sessions/$sessionId',
+          routes: [
+            GoRoute(
+              path: '/sessions/:id',
+              builder: (context, state) =>
+                  _DeepLinkLauncher(sessionId: state.pathParameters['id']!),
             ),
-          ),
-        ],
-      );
-      await tester.pumpWidget(
-        ProviderScope(
-          key: UniqueKey(),
-          overrides: [
-            relayRepositoryProvider.overrideWithValue(relay),
-            sessionControllerProvider.overrideWith((_) => sessions),
-            messageDeepLinkControllerProvider.overrideWith((_) => controller),
+            GoRoute(
+              path: '/sessions/:id/messages/:seq',
+              builder: (context, state) => MessageDeepLinkScreen(
+                sessionId: state.pathParameters['id']!,
+                messageSequence:
+                    int.tryParse(state.pathParameters['seq'] ?? '') ?? 0,
+              ),
+            ),
           ],
-          child: MaterialApp.router(routerConfig: router),
-        ),
-      );
-      await tester.pumpAndSettle();
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            key: UniqueKey(),
+            overrides: [
+              relayRepositoryProvider.overrideWithValue(relay),
+              sessionControllerProvider.overrideWith((_) => sessions),
+              messageDeepLinkControllerProvider.overrideWith((_) => controller),
+            ],
+            child: MaterialApp.router(routerConfig: router),
+          ),
+        );
+        await tester.pumpAndSettle();
 
-      // 先停在 /sessions/:id 占位页，再点按钮跳到消息深链。
-      expect(find.byKey(const Key('deeplink-launcher-button')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('deeplink-launcher-button')));
-      await tester.pumpAndSettle();
+        // 先停在 /sessions/:id 占位页，再点按钮跳到消息深链。
+        expect(
+          find.byKey(const Key('deeplink-launcher-button')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const Key('deeplink-launcher-button')));
+        await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('message-deeplink-screen')), findsOneWidget);
-      expect(find.text('深链目标消息正文'), findsOneWidget);
-      expect(find.text('事件序号 2'), findsOneWidget);
+        expect(
+          find.byKey(const Key('message-deeplink-screen')),
+          findsOneWidget,
+        );
+        expect(find.text('深链目标消息正文'), findsOneWidget);
+        expect(find.text('事件序号 2'), findsOneWidget);
 
-      // 返回按钮回到 /sessions/:id。
-      await tester.tap(find.byKey(const Key('message-deeplink-back-button')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('deeplink-launcher-button')), findsOneWidget);
-    });
+        // 返回按钮回到 /sessions/:id。
+        await tester.tap(find.byKey(const Key('message-deeplink-back-button')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('deeplink-launcher-button')),
+          findsOneWidget,
+        );
+      },
+    );
   });
 }
 
@@ -289,12 +297,7 @@ Future<FixtureRelayRepository> _fixtureWithMessage(
   DateTime Function() clock,
 ) async {
   final relay = FixtureRelayRepository(clock: clock);
-  await relay.register(
-    const LoginCredentials(
-      email: 'deeplink@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
   final session = await relay.createSession(
     const CreateMobileSessionInput(
       workspaceId: 'fixture-workspace',
@@ -310,7 +313,9 @@ Future<FixtureRelayRepository> _fixtureWithMessage(
       idempotencyKey: 'deeplink-send-1',
       leaseEpoch: lease.epoch,
       deviceId: 'android-owner-fixture',
-      ciphertext: const {'fixture_payload': {'message': '深链目标消息正文'}},
+      ciphertext: const {
+        'fixture_payload': {'message': '深链目标消息正文'},
+      },
     ),
   );
   return relay;

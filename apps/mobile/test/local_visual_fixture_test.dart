@@ -59,6 +59,31 @@ void main() {
       );
       expect(timeline.any((event) => event.permission != null), isTrue);
       expect(timeline.any((event) => event.question != null), isTrue);
+      expect(
+        snapshot.events.any((event) => event.eventType == 'session.started'),
+        isTrue,
+      );
+    });
+
+    test('会话 fixture 可以通过同一 lease 提交 kill 并追加结束事件', () async {
+      final fixture = await LocalVisualFixture.create('session-detail');
+      final sessionId = fixture!.sessionId!;
+      final lease = await fixture.relay.acquireSessionLease(sessionId);
+      await fixture.relay.submitSessionCommand(
+        sessionId,
+        SessionCommandInput(
+          kind: SessionCommandKind.kill,
+          idempotencyKey: 'local-visual-kill',
+          leaseEpoch: lease.epoch,
+          deviceId: 'android-owner-fixture',
+        ),
+      );
+      final snapshot = await fixture.relay.getSessionSnapshot(sessionId);
+      expect(snapshot.session.status, MobileSessionStatus.stopped);
+      expect(
+        snapshot.events.any((event) => event.eventType == 'session.killed'),
+        isTrue,
+      );
     });
 
     test('只读会话场景保留可读时间线，但不写入 owner 设备绑定', () async {

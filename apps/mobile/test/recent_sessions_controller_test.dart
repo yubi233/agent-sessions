@@ -10,6 +10,8 @@ import 'package:agent_sessions_mobile/relay/relay_repository.dart';
 import 'package:agent_sessions_mobile/state/recent_sessions_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/fixture_owner.dart';
+
 /// MOBILE-25：最近会话页只读状态机。
 /// 只消费 Relay 白名单会话元数据并按 updatedAt 稳定排序；
 /// 刷新失败保留最后一份可信列表，无数据时进入可重试 error。
@@ -21,7 +23,7 @@ void main() {
       // 用可变时钟推进，创建三个不同时间的会话，验证最新时间在最前。
       var clock = now;
       final relay = FixtureRelayRepository(clock: () => clock);
-      await relay.register(_credentials());
+      await bootstrapFixtureOwner(relay);
       await relay.createSession(
         _sessionInput('workspace-a'),
       ); // session-fixture-001
@@ -161,7 +163,7 @@ void main() {
 
     test('RelayFailure：有数据时保留旧数据 + errorMessage；无数据时 error 且可重试', () async {
       final relay = FixtureRelayRepository(clock: () => now);
-      await relay.register(_credentials());
+      await bootstrapFixtureOwner(relay);
       await relay.createSession(_sessionInput('workspace-retained'));
       final controller = RecentSessionsController(relay: relay);
       await controller.initialize();
@@ -215,11 +217,6 @@ CreateMobileSessionInput _sessionInput(String workspaceId) =>
       deviceId: 'android-owner-fixture',
     );
 
-LoginCredentials _credentials() => const LoginCredentials(
-  email: 'recent-controller@fixture.test',
-  password: 'fixture-password',
-);
-
 /// 包装 fixture 并注入自定义 listSessions 返回顺序（原样返回、不预排序），
 /// 用于验证 RecentSessionsController 自身的稳定排序逻辑。
 class _ListOverridingRelay implements RelayRepository {
@@ -260,6 +257,10 @@ class _ListOverridingRelay implements RelayRepository {
   @override
   Future<Device> bootstrapOwner(BootstrapOwnerInput input) =>
       _delegate.bootstrapOwner(input);
+
+  @override
+  Future<DeviceBootstrapResult> bootstrapDevice(BootstrapOwnerInput input) =>
+      _delegate.bootstrapDevice(input);
 
   @override
   Future<List<Device>> listDevices() => _delegate.listDevices();

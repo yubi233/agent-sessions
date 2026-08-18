@@ -472,10 +472,14 @@ class FixtureRelayRepository implements RelayRepository {
     }
 
     switch (input.kind) {
+      case SessionCommandKind.start:
+        _appendStart(state);
       case SessionCommandKind.send:
         _appendSendConversation(state, input.ciphertext);
       case SessionCommandKind.abort:
         _appendAbort(state);
+      case SessionCommandKind.kill:
+        _appendKill(state);
       case SessionCommandKind.resume:
         // v0.2/P2：resume 只更新会话状态并追加一条系统通知；不伪造 Provider 唤醒结果，
         // 真实结果只能来自 Daemon 的 Adapter 三态映射。
@@ -688,6 +692,7 @@ class FixtureRelayRepository implements RelayRepository {
           'codex',
           native: const {
             'start',
+            'kill',
             'resume',
             'abort',
             'usage',
@@ -907,6 +912,40 @@ class FixtureRelayRepository implements RelayRepository {
       now: now,
     );
     state.updateSession(status: MobileSessionStatus.streaming, now: now);
+  }
+
+  void _appendStart(_FixtureSessionState state) {
+    final now = _clock();
+    if (state.session.status == MobileSessionStatus.stopped) {
+      throw const RelayFailure(
+        RelayFailureKind.forbidden,
+        '已结束的 fixture 会话不能重新启动。',
+      );
+    }
+    state.append(
+      eventType: 'session.started',
+      payload: const {
+        'kind': 'system_notice',
+        'label': '会话已启动',
+        'text': '本地 deterministic fixture 已建立会话执行状态。',
+      },
+      now: now,
+    );
+    state.updateSession(status: MobileSessionStatus.idle, now: now);
+  }
+
+  void _appendKill(_FixtureSessionState state) {
+    final now = _clock();
+    state.append(
+      eventType: 'session.killed',
+      payload: const {
+        'kind': 'system_notice',
+        'label': '已结束本机进程',
+        'text': '本地 fixture 已清理受控会话进程状态。',
+      },
+      now: now,
+    );
+    state.updateSession(status: MobileSessionStatus.stopped, now: now);
   }
 
   void _appendAbort(_FixtureSessionState state) {
@@ -1210,6 +1249,7 @@ ProviderCapabilityProfile _fixtureProvider(
 }) {
   const names = [
     'start',
+    'kill',
     'resume',
     'abort',
     'usage',

@@ -1,8 +1,9 @@
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/lifecycle_recovery_controller.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fixture_owner.dart';
 
 void main() {
   group('MOBILE-06 生命周期、cursor 与应用内通知', () {
@@ -185,10 +186,5 @@ const _ownerDeviceId = 'android-owner-fixture';
 final _now = DateTime.utc(2026, 8, 14, 23, 0);
 
 Future<void> _prepareOwner(FixtureRelayRepository relay) async {
-  await relay.register(
-    const LoginCredentials(
-      email: 'lifecycle-owner@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
 }

@@ -68,6 +68,9 @@ class SessionInfoController extends ChangeNotifier {
     return null;
   }
 
+  String? get killBlockedReason =>
+      sessionController.killBlockedReason(canWrite: false);
+
   /// 恢复能力的只读三态；复用 SessionController 的阻断原因，不伪造能力。
   String? get resumeBlockedReason =>
       sessionController.resumeBlockedReason(canWrite: false);

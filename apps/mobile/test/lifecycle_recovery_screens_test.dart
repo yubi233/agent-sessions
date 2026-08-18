@@ -101,14 +101,3 @@ Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
   await tester.pump();
   await tester.tap(finder);
 }
-
-Future<void> _enterVisible(
-  WidgetTester tester,
-  Finder finder,
-  String value,
-) async {
-  await _waitForVisible(tester, finder);
-  await tester.ensureVisible(finder);
-  await tester.pump();
-  await tester.enterText(finder, value);
-}

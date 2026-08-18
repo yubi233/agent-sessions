@@ -1,5 +1,4 @@
 import 'package:agent_sessions_mobile/app/providers.dart';
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/command_palette_controller.dart';
@@ -9,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+
+import 'support/fixture_owner.dart';
 
 /// MOBILE-22：命令面板只读索引 UI。
 /// 直接 pump CommandPaletteScreen 并 override sessionControllerProvider 与
@@ -21,12 +22,7 @@ void main() {
   /// 注册 owner 并创建两个会话（codex / claude）。
   Future<FixtureRelayRepository> fixtureWithSessions() async {
     final relay = FixtureRelayRepository(clock: () => now);
-    await relay.register(
-      const LoginCredentials(
-        email: 'palette-ui@fixture.test',
-        password: 'fixture-password',
-      ),
-    );
+    await bootstrapFixtureOwner(relay);
     await relay.createSession(
       CreateMobileSessionInput(
         workspaceId: 'workspace-a',
@@ -64,7 +60,8 @@ void main() {
         ),
         GoRoute(
           path: '/settings',
-          builder: (context, state) => const _PlaceholderScreen(label: 'settings'),
+          builder: (context, state) =>
+              const _PlaceholderScreen(label: 'settings'),
         ),
         GoRoute(
           path: '/sessions/recent',
@@ -94,34 +91,21 @@ void main() {
     testWidgets('打开显示输入框与结果列表，输入后过滤生效', (tester) async {
       await usePhoneSurface(tester);
       final relay = await fixtureWithSessions();
-      final sessions = SessionController(
-        relay: relay,
-        clock: () => now,
-      );
+      final sessions = SessionController(relay: relay, clock: () => now);
       await sessions.initialize();
       final palette = CommandPaletteController(sessionController: sessions);
 
       await tester.pumpWidget(
-        buildPaletteApp(
-          relay: relay,
-          sessions: sessions,
-          palette: palette,
-        ),
+        buildPaletteApp(relay: relay, sessions: sessions, palette: palette),
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const Key('command-palette-screen')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('command-palette-screen')), findsOneWidget);
       expect(
         find.byKey(const Key('command-palette-back-button')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const Key('command-palette-input')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('command-palette-input')), findsOneWidget);
       // 未输入时索引为空，展示引导空态。
       expect(find.byKey(const Key('command-palette-empty')), findsOneWidget);
       expect(find.text('输入关键字开始搜索'), findsOneWidget);
@@ -133,10 +117,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const Key('command-palette-results')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('command-palette-results')), findsOneWidget);
       expect(find.byKey(const Key('command-palette-empty')), findsNothing);
       expect(find.byKey(const Key('command-palette-result-0')), findsOneWidget);
       expect(
@@ -152,19 +133,12 @@ void main() {
     testWidgets('输入关键字过滤会话索引', (tester) async {
       await usePhoneSurface(tester);
       final relay = await fixtureWithSessions();
-      final sessions = SessionController(
-        relay: relay,
-        clock: () => now,
-      );
+      final sessions = SessionController(relay: relay, clock: () => now);
       await sessions.initialize();
       final palette = CommandPaletteController(sessionController: sessions);
 
       await tester.pumpWidget(
-        buildPaletteApp(
-          relay: relay,
-          sessions: sessions,
-          palette: palette,
-        ),
+        buildPaletteApp(relay: relay, sessions: sessions, palette: palette),
       );
       await tester.pumpAndSettle();
 
@@ -191,19 +165,12 @@ void main() {
     testWidgets('无匹配时显示 command-palette-empty', (tester) async {
       await usePhoneSurface(tester);
       final relay = await fixtureWithSessions();
-      final sessions = SessionController(
-        relay: relay,
-        clock: () => now,
-      );
+      final sessions = SessionController(relay: relay, clock: () => now);
       await sessions.initialize();
       final palette = CommandPaletteController(sessionController: sessions);
 
       await tester.pumpWidget(
-        buildPaletteApp(
-          relay: relay,
-          sessions: sessions,
-          palette: palette,
-        ),
+        buildPaletteApp(relay: relay, sessions: sessions, palette: palette),
       );
       await tester.pumpAndSettle();
 
@@ -221,19 +188,12 @@ void main() {
     testWidgets('blocked 项 disabled 且有原因文本，点击不执行', (tester) async {
       await usePhoneSurface(tester);
       final relay = await fixtureWithSessions();
-      final sessions = SessionController(
-        relay: relay,
-        clock: () => now,
-      );
+      final sessions = SessionController(relay: relay, clock: () => now);
       await sessions.initialize();
       final palette = CommandPaletteController(sessionController: sessions);
 
       await tester.pumpWidget(
-        buildPaletteApp(
-          relay: relay,
-          sessions: sessions,
-          palette: palette,
-        ),
+        buildPaletteApp(relay: relay, sessions: sessions, palette: palette),
       );
       await tester.pumpAndSettle();
 
@@ -256,29 +216,19 @@ void main() {
         warnIfMissed: false,
       );
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(const Key('command-palette-screen')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('command-palette-screen')), findsOneWidget);
       expect(find.text('settings-placeholder'), findsNothing);
     });
 
     testWidgets('页面本身无写入口泄漏：输入框只是搜索索引', (tester) async {
       await usePhoneSurface(tester);
       final relay = await fixtureWithSessions();
-      final sessions = SessionController(
-        relay: relay,
-        clock: () => now,
-      );
+      final sessions = SessionController(relay: relay, clock: () => now);
       await sessions.initialize();
       final palette = CommandPaletteController(sessionController: sessions);
 
       await tester.pumpWidget(
-        buildPaletteApp(
-          relay: relay,
-          sessions: sessions,
-          palette: palette,
-        ),
+        buildPaletteApp(relay: relay, sessions: sessions, palette: palette),
       );
       await tester.pumpAndSettle();
 
@@ -296,19 +246,12 @@ void main() {
     testWidgets('点击导航命令跳转到对应路由', (tester) async {
       await usePhoneSurface(tester);
       final relay = await fixtureWithSessions();
-      final sessions = SessionController(
-        relay: relay,
-        clock: () => now,
-      );
+      final sessions = SessionController(relay: relay, clock: () => now);
       await sessions.initialize();
       final palette = CommandPaletteController(sessionController: sessions);
 
       await tester.pumpWidget(
-        buildPaletteApp(
-          relay: relay,
-          sessions: sessions,
-          palette: palette,
-        ),
+        buildPaletteApp(relay: relay, sessions: sessions, palette: palette),
       );
       await tester.pumpAndSettle();
 
@@ -332,7 +275,6 @@ class _PlaceholderScreen extends StatelessWidget {
   final String label;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: Center(child: Text('$label-placeholder')),
-  );
+  Widget build(BuildContext context) =>
+      Scaffold(body: Center(child: Text('$label-placeholder')));
 }

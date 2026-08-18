@@ -6,6 +6,8 @@ import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/delegation_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/fixture_owner.dart';
+
 void main() {
   group('MOBILE-05 DELEG-04..06 父子会话控制状态机', () {
     test('拒绝 proposed 节点不会创建 child session 或产生成功副作用', () async {
@@ -125,12 +127,7 @@ Future<_ParentFixture> _newParentFixture() async {
   final relay = FixtureRelayRepository(
     clock: () => DateTime.utc(2026, 8, 14, 12),
   );
-  await relay.register(
-    const LoginCredentials(
-      email: 'delegation-owner@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
   final parent = await relay.createSession(
     const CreateMobileSessionInput(
       workspaceId: 'fixture-workspace',

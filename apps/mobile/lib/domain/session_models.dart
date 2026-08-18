@@ -207,8 +207,10 @@ class CreateMobileSessionInput {
 }
 
 enum SessionCommandKind {
+  start('session.start'),
   send('session.send'),
   abort('session.abort'),
+  kill('session.kill'),
   // v0.2/P2：断线/离线后显式恢复 Provider 会话；结果映射为 resumed / restarted_with_context / unsupported。
   resume('session.resume'),
   permissionApprove('permission.approve'),

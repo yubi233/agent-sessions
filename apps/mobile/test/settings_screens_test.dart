@@ -1,5 +1,4 @@
 import 'package:agent_sessions_mobile/app/providers.dart';
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/settings_controller.dart';
@@ -11,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+
+import 'support/fixture_owner.dart';
 
 void main() {
   final now = DateTime.utc(2026, 8, 16, 12);
@@ -62,7 +63,10 @@ void main() {
       // 外观分区
       await tester.tap(find.byKey(const Key('settings-appearance-tile')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('settings-appearance-screen')), findsOneWidget);
+      expect(
+        find.byKey(const Key('settings-appearance-screen')),
+        findsOneWidget,
+      );
       await tester.tap(find.byTooltip('返回设置'));
       await tester.pumpAndSettle();
 
@@ -108,7 +112,7 @@ void main() {
         find.byKey(const Key('settings-account-device-android-owner-fixture')),
         findsOneWidget,
       );
-      expect(find.text('Android Owner'), findsOneWidget);
+      expect(find.text('本地 Android 控制端'), findsOneWidget);
       expect(find.text('owner 设备'), findsOneWidget);
       // 不显示 token/恢复码明文，也没有写入口
       expect(find.textContaining('fixture-access-token'), findsNothing);
@@ -136,7 +140,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('settings-appearance-screen')), findsOneWidget);
+      expect(
+        find.byKey(const Key('settings-appearance-screen')),
+        findsOneWidget,
+      );
       expect(find.byKey(const Key('settings-appearance-mode')), findsOneWidget);
       expect(
         find.byKey(const Key('settings-appearance-accent-ocean')),
@@ -150,7 +157,9 @@ void main() {
       await tester.tap(find.text('浅色'));
       await tester.pumpAndSettle();
       // 切换强调色为薄荷
-      await tester.tap(find.byKey(const Key('settings-appearance-accent-mint')));
+      await tester.tap(
+        find.byKey(const Key('settings-appearance-accent-mint')),
+      );
       await tester.pumpAndSettle();
 
       expect(
@@ -185,7 +194,11 @@ void main() {
       );
       // codex：start 原生、delegate_cross_provider 兼容（三态 chip）
       final nativeChip = _chipInside(tester, 'codex', 'start');
-      final emulatedChip = _chipInside(tester, 'codex', 'delegate_cross_provider');
+      final emulatedChip = _chipInside(
+        tester,
+        'codex',
+        'delegate_cross_provider',
+      );
       expect(nativeChip.backgroundColor, isNotNull);
       expect(emulatedChip.backgroundColor, isNotNull);
       expect(nativeChip.backgroundColor, isNot(emulatedChip.backgroundColor));
@@ -262,7 +275,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('settings-usage-screen')), findsOneWidget);
-      expect(find.byKey(const Key('settings-usage-unavailable')), findsOneWidget);
+      expect(
+        find.byKey(const Key('settings-usage-unavailable')),
+        findsOneWidget,
+      );
       expect(find.textContaining('用量统计暂不可用'), findsOneWidget);
       expect(find.textContaining('ADR-010'), findsOneWidget);
       // 不出现估算或伪造统计
@@ -325,7 +341,9 @@ void main() {
       expect(find.byType(TextField), findsNothing);
 
       // 配对入口跳转到配对页
-      await tester.tap(find.byKey(const Key('settings-connect-pairing-button')));
+      await tester.tap(
+        find.byKey(const Key('settings-connect-pairing-button')),
+      );
       await tester.pumpAndSettle();
       expect(find.text('pairing-placeholder'), findsOneWidget);
     });
@@ -402,7 +420,10 @@ Widget _buildSettingsApp({
   final router = GoRouter(
     initialLocation: initialLocation,
     routes: [
-      GoRoute(path: '/settings', builder: (context, state) => const SettingsScreen()),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => const SettingsScreen(),
+      ),
       GoRoute(
         path: '/settings/account',
         builder: (context, state) => const SettingsAccountScreen(),
@@ -419,10 +440,7 @@ Widget _buildSettingsApp({
         path: '/settings/usage',
         builder: (context, state) => const SettingsUsageScreen(),
       ),
-      GoRoute(
-        path: '/usage',
-        builder: (context, state) => const UsageScreen(),
-      ),
+      GoRoute(path: '/usage', builder: (context, state) => const UsageScreen()),
       GoRoute(
         path: '/settings/connect',
         builder: (context, state) => const SettingsConnectScreen(),
@@ -457,9 +475,8 @@ class _PlaceholderScreen extends StatelessWidget {
   final String label;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: Center(child: Text('$label-placeholder')),
-  );
+  Widget build(BuildContext context) =>
+      Scaffold(body: Center(child: Text('$label-placeholder')));
 }
 
 /// 在指定 Provider 卡片内按能力名找到对应 chip。
@@ -474,16 +491,12 @@ Chip _chipInside(WidgetTester tester, String providerKey, String capability) {
   return tester.widget<Chip>(finder);
 }
 
-/// 通过 fixture 注册 owner 并把 token 写入内存存储，供 AppController 恢复认证设备列表。
-Future<InMemorySecureTokenStore> _seedOwner(FixtureRelayRepository relay) async {
-  final tokens = await relay.register(
-    const LoginCredentials(
-      email: 'settings-owner@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+/// 通过 fixture bootstrap owner 并把 token 写入内存存储，供 AppController 恢复设备列表。
+Future<InMemorySecureTokenStore> _seedOwner(
+  FixtureRelayRepository relay,
+) async {
   final store = InMemorySecureTokenStore();
-  await store.write(tokens);
+  await bootstrapFixtureOwner(relay, tokens: store);
   return store;
 }
 

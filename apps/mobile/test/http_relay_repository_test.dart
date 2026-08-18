@@ -261,6 +261,49 @@ void main() {
       expect(receipt.leaseEpoch, 7);
     });
 
+    test('start/kill 使用同一 commands API，且不携带账号、密码或可伪造 device_id', () async {
+      var call = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/sessions/session_1/commands');
+        expect(options.method, 'POST');
+        final body = Map<String, dynamic>.from(options.data as Map);
+        final expectedKind = call++ == 0 ? 'session.start' : 'session.kill';
+        expect(body['kind'], expectedKind);
+        expect(body['lease_epoch'], 7);
+        expect(body.containsKey('device_id'), isFalse);
+        expect(body.containsKey('email'), isFalse);
+        expect(body.containsKey('password'), isFalse);
+        return _jsonResponse({
+          'id': 'command-$call',
+          'kind': expectedKind,
+          'status': 'accepted',
+          'idempotency_key': 'idem-$call',
+          'lease_epoch': 7,
+        }, statusCode: 202);
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      await repository.submitSessionCommand(
+        'session_1',
+        const SessionCommandInput(
+          kind: SessionCommandKind.start,
+          idempotencyKey: 'idem-1',
+          leaseEpoch: 7,
+          deviceId: 'android-owner-local-boundary',
+        ),
+      );
+      await repository.submitSessionCommand(
+        'session_1',
+        const SessionCommandInput(
+          kind: SessionCommandKind.kill,
+          idempotencyKey: 'idem-2',
+          leaseEpoch: 7,
+          deviceId: 'android-owner-local-boundary',
+        ),
+      );
+      expect(call, 2);
+    });
+
     test('会话快照保留 opaque envelope 并发送 after_seq 查询参数', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/sessions/session_1/snapshot');

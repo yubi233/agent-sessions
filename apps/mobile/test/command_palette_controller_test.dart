@@ -1,11 +1,12 @@
 import 'dart:math';
 
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/command_palette_controller.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fixture_owner.dart';
 
 /// MOBILE-22：命令面板只读索引状态机。
 /// 覆盖导航命令完整登记、无选中会话门控、capability fail-closed、
@@ -16,12 +17,7 @@ void main() {
 
   Future<FixtureRelayRepository> fixtureWithSessions() async {
     final relay = FixtureRelayRepository(clock: () => now);
-    await relay.register(
-      const LoginCredentials(
-        email: 'palette-controller@fixture.test',
-        password: 'fixture-password',
-      ),
-    );
+    await bootstrapFixtureOwner(relay);
     await relay.createSession(
       CreateMobileSessionInput(
         workspaceId: 'workspace-a',

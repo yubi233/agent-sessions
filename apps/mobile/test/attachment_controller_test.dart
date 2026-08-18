@@ -7,6 +7,8 @@ import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/fixture_owner.dart';
+
 void main() {
   group('ATTACH-01 附件控制器', () {
     test('MIME/大小预检拒绝不创建上传请求或附件状态', () async {
@@ -92,12 +94,7 @@ AttachmentDraft _draft({
 Future<SessionController> _prepareWritableSession(
   FixtureRelayRepository relay,
 ) async {
-  await relay.register(
-    const LoginCredentials(
-      email: 'p3-attachment-owner@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
   final controller = SessionController(
     relay: relay,
     clock: () => _now,

@@ -1,8 +1,9 @@
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/settings_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fixture_owner.dart';
 
 void main() {
   final now = DateTime.utc(2026, 8, 16, 12);
@@ -10,7 +11,7 @@ void main() {
   group('MOBILE-16 设置中心控制器', () {
     test('初始 loading，refresh 后 ready，设备/能力/终端均有值', () async {
       final relay = FixtureRelayRepository(clock: () => now);
-      await relay.register(_credentials());
+      await bootstrapFixtureOwner(relay);
       relay.replaceTerminals([
         _terminal(id: 'term_online', hostname: 'Build Mac', lastSeen: now),
         _terminal(
@@ -39,7 +40,7 @@ void main() {
 
     test('usageUnavailable 恒为 true（ADR-010 未落地前不展示伪造统计）', () async {
       final relay = FixtureRelayRepository(clock: () => now);
-      await relay.register(_credentials());
+      await bootstrapFixtureOwner(relay);
       final controller = SettingsController(relay: relay, clock: () => now);
 
       // 初始即不可用，读取成功后也不会打开
@@ -64,9 +65,13 @@ void main() {
 
     test('Relay 失败时保留旧数据；无数据时 error 且可重试恢复', () async {
       final relay = FixtureRelayRepository(clock: () => now);
-      await relay.register(_credentials());
+      await bootstrapFixtureOwner(relay);
       relay.replaceTerminals([
-        _terminal(id: 'term_retained', hostname: 'Retained Terminal', lastSeen: now),
+        _terminal(
+          id: 'term_retained',
+          hostname: 'Retained Terminal',
+          lastSeen: now,
+        ),
       ]);
       final controller = SettingsController(relay: relay, clock: () => now);
       await controller.initialize();
@@ -152,9 +157,4 @@ TerminalSummary _terminal({
   protocolVersion: 1,
   daemonVersion: '0.4.0',
   lastSeen: lastSeen,
-);
-
-LoginCredentials _credentials() => const LoginCredentials(
-  email: 'settings-controller@fixture.test',
-  password: 'fixture-password',
 );

@@ -200,6 +200,54 @@ class SessionController extends ChangeNotifier {
     });
   }
 
+  Future<void> startSelectedSession({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('start', canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'start:$sessionId:${selectedSession?.lastSequence ?? 0}',
+      kind: SessionCommandKind.start,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {
+          'session_id': sessionId,
+          'provider': selectedSession?.provider ?? 'unknown',
+        },
+      },
+    );
+  }
+
+  String? killBlockedReason({required bool canWrite}) =>
+      controlBlockedReason('kill', canWrite: canWrite);
+
+  Future<void> killSelectedSession({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = killBlockedReason(canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'kill:$sessionId:${selectedSession?.lastSequence ?? 0}',
+      kind: SessionCommandKind.kill,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'session_id': sessionId},
+      },
+    );
+  }
+
   /// 前后台或网络变化时本地 lease 立即失效。
   /// 已提交到 Relay 的写请求不会被这里重放；恢复阶段只会读取增量 snapshot。
   void invalidateSelectedLeaseForRuntimePause() {

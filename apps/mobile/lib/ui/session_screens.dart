@@ -522,7 +522,12 @@ class _SessionQuickMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final startBlocked = sessions.controlBlockedReason(
+      'start',
+      canWrite: canWrite,
+    );
     final resumeBlocked = sessions.resumeBlockedReason(canWrite: canWrite);
+    final killBlocked = sessions.killBlockedReason(canWrite: canWrite);
     return PopupMenuButton<String>(
       key: const Key('session-quick-menu-button'),
       tooltip: '会话操作',
@@ -538,6 +543,13 @@ class _SessionQuickMenu extends StatelessWidget {
               deviceId: deviceId,
               canWrite: canWrite,
             );
+          case 'start':
+            sessions.startSelectedSession(
+              deviceId: deviceId,
+              canWrite: canWrite,
+            );
+          case 'kill':
+            _confirmKill(context, sessions);
           case 'files':
             // 文件浏览是只读页面，与 Git 入口一样不依赖 lease。
             context.push('/sessions/${sessions.selectedSessionId}/files');
@@ -565,6 +577,28 @@ class _SessionQuickMenu extends StatelessWidget {
           ),
         ),
         PopupMenuItem(
+          key: const Key('session-start-button'),
+          value: 'start',
+          enabled: startBlocked == null && !sessions.isBusy,
+          child: ListTile(
+            leading: Icon(
+              Icons.play_arrow_outlined,
+              color: startBlocked == null
+                  ? null
+                  : Theme.of(context).disabledColor,
+            ),
+            title: const Text('启动会话'),
+            subtitle: startBlocked == null
+                ? null
+                : Text(
+                    startBlocked,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
           key: const Key('session-quick-resume'),
           value: 'resume',
           enabled: resumeBlocked == null && !sessions.isBusy,
@@ -580,6 +614,28 @@ class _SessionQuickMenu extends StatelessWidget {
                 ? null
                 : Text(
                     resumeBlocked,
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          key: const Key('session-kill-button'),
+          value: 'kill',
+          enabled: killBlocked == null && !sessions.isBusy,
+          child: ListTile(
+            leading: Icon(
+              Icons.stop_circle_outlined,
+              color: killBlocked == null
+                  ? null
+                  : Theme.of(context).disabledColor,
+            ),
+            title: const Text('结束本机进程'),
+            subtitle: killBlocked == null
+                ? const Text('需要二次确认')
+                : Text(
+                    killBlocked,
                     style: Theme.of(context).textTheme.labelSmall,
                   ),
             dense: true,
@@ -641,6 +697,36 @@ class _SessionQuickMenu extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _confirmKill(
+    BuildContext context,
+    SessionController sessions,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('结束本机进程？'),
+        content: const Text('这会结束当前会话的受控本地进程，已提交的事件不会被删除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('session-kill-confirm'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('结束进程'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await sessions.killSelectedSession(
+        deviceId: deviceId,
+        canWrite: canWrite,
+      );
+    }
   }
 
   /// 详情底表只展示 Relay 白名单元数据，不读取、不展示密文正文。

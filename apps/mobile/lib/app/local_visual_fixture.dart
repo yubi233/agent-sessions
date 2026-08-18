@@ -214,12 +214,15 @@ class LocalVisualFixture {
           ? GitFixtureScenario.restricted
           : GitFixtureScenario.main,
     );
-    final ownerTokens = await relay.register(
-      const LoginCredentials(
-        email: 'visual-owner@fixture.test',
-        password: 'fixture-password',
+    final identity = await identities.createOrRead();
+    final ownerBootstrap = await relay.bootstrapDevice(
+      BootstrapOwnerInput(
+        displayName: '本地视觉 Android 控制端',
+        platform: 'android',
+        keys: identity,
       ),
     );
+    final ownerTokens = ownerBootstrap.tokens;
     final ownerDeviceId = ownerTokens.deviceId;
     if (ownerDeviceId == null || ownerDeviceId.isEmpty) {
       throw StateError('本地视觉 fixture 缺少 owner 设备绑定。');
@@ -319,6 +322,21 @@ class LocalVisualFixture {
       ),
     );
     final lease = await relay.acquireSessionLease(primary.id);
+    await relay.submitSessionCommand(
+      primary.id,
+      SessionCommandInput(
+        kind: SessionCommandKind.start,
+        idempotencyKey: 'visual-${scenario.name}-primary-start',
+        leaseEpoch: lease.epoch,
+        deviceId: ownerDeviceId,
+        ciphertext: {
+          'fixture_payload': {
+            'session_id': primary.id,
+            'provider': primary.provider,
+          },
+        },
+      ),
+    );
     await relay.submitSessionCommand(
       primary.id,
       SessionCommandInput(

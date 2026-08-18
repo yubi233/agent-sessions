@@ -1,16 +1,20 @@
 import 'package:agent_sessions_mobile/app/providers.dart';
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
+import 'package:agent_sessions_mobile/state/app_controller.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:agent_sessions_mobile/state/session_info_controller.dart';
 import 'package:agent_sessions_mobile/state/terminal_status_controller.dart';
+import 'package:agent_sessions_mobile/storage/encrypted_cache.dart';
+import 'package:agent_sessions_mobile/storage/secure_token_store.dart';
 import 'package:agent_sessions_mobile/ui/session_info_screens.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fixture_owner.dart';
 
 /// MOBILE-19：会话 info 页只读聚合白名单元数据；不展示正文、token、恢复码或完整路径。
 /// 复制只提供会话 ID 与 Provider；分享在独立安全 ADR 通过前恒为 unavailable。
@@ -56,6 +60,7 @@ void main() {
       );
 
       expect(controller.stopBlockedReason, 'fixture Provider 未声明此能力。');
+      expect(controller.killBlockedReason, 'fixture Provider 未声明此能力。');
       expect(controller.resumeBlockedReason, 'fixture Provider 未声明此能力。');
     });
 
@@ -77,6 +82,7 @@ void main() {
       );
 
       expect(controller.stopBlockedReason, isNull);
+      expect(controller.killBlockedReason, '当前设备是只读状态');
       expect(controller.resumeBlockedReason, '当前设备是只读状态');
     });
   });
@@ -150,8 +156,9 @@ void main() {
 
       expect(find.text('终止会话'), findsOneWidget);
       expect(find.text('当前没有会话租约。'), findsOneWidget);
+      expect(find.text('结束本机进程'), findsOneWidget);
       expect(find.text('恢复会话'), findsOneWidget);
-      expect(find.text('当前设备是只读状态'), findsOneWidget);
+      expect(find.text('当前设备是只读状态'), findsNWidgets(2));
       expect(find.text('可用'), findsNothing);
     });
 
@@ -170,7 +177,7 @@ void main() {
       );
       await _pumpInfoScreen(tester, relay, now, sessions: sessions);
 
-      expect(find.text('fixture Provider 未声明此能力。'), findsNWidgets(2));
+      expect(find.text('fixture Provider 未声明此能力。'), findsNWidgets(3));
       expect(find.text('可用'), findsNothing);
     });
 
@@ -188,7 +195,50 @@ void main() {
       await _pumpInfoScreen(tester, relay, now, sessions: sessions);
 
       expect(find.text('可用'), findsOneWidget);
-      expect(find.text('当前设备是只读状态'), findsOneWidget);
+      expect(find.text('当前设备是只读状态'), findsNWidgets(2));
+    });
+
+    testWidgets('owner 会话信息显示启动/结束入口，并要求 kill 二次确认', (tester) async {
+      _usePhoneSurface(tester);
+      final tokenStore = InMemorySecureTokenStore();
+      final identities = InMemoryDeviceIdentityStore();
+      final relay = FixtureRelayRepository(clock: () => now);
+      await bootstrapFixtureOwner(
+        relay,
+        tokens: tokenStore,
+        identities: identities,
+      );
+      await relay.createSession(
+        const CreateMobileSessionInput(
+          workspaceId: 'fixture-workspace',
+          provider: 'codex',
+          deviceId: 'android-owner-fixture',
+        ),
+      );
+      final sessions = await _readySessions(relay, now);
+      await sessions.acquireSelectedLease(
+        deviceId: 'android-owner-fixture',
+        canWrite: true,
+      );
+      final app = AppController(
+        relay: relay,
+        tokenStore: tokenStore,
+        identityStore: identities,
+        encryptedCache: InMemoryEncryptedCacheStore(),
+      );
+      await app.initialize();
+      await _pumpInfoScreen(tester, relay, now, sessions: sessions, app: app);
+
+      expect(find.byKey(const Key('session-start-button')), findsOneWidget);
+      expect(find.byKey(const Key('session-kill-button')), findsOneWidget);
+      expect(find.byKey(const Key('session-kill-confirm')), findsNothing);
+
+      await _tapVisible(tester, find.byKey(const Key('session-kill-button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('session-kill-confirm')), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('session-kill-confirm')), findsNothing);
     });
 
     testWidgets('分享恒为 unavailable，明确说明未通过安全决策门', (tester) async {
@@ -279,12 +329,7 @@ void main() {
       _usePhoneSurface(tester);
       final relay = FixtureRelayRepository(clock: () => now);
       // 只有 owner 没有会话：info 页按未选择会话处理。
-      await relay.register(
-        const LoginCredentials(
-          email: 'info-empty@fixture.test',
-          password: 'fixture-password',
-        ),
-      );
+      await bootstrapFixtureOwner(relay);
       final terminals = await _terminalController(relay, now);
       final sessions = SessionController(relay: relay, clock: () => now);
       await sessions.initialize();
@@ -327,18 +372,13 @@ void main() {
   });
 }
 
-/// 用 fixture relay 注册 owner 并创建一个指定 Provider 的会话。
+/// 用 fixture relay bootstrap owner 并创建一个指定 Provider 的会话。
 Future<FixtureRelayRepository> _fixtureWithSession({
   required String provider,
   required DateTime Function() clock,
 }) async {
   final relay = FixtureRelayRepository(clock: clock);
-  await relay.register(
-    const LoginCredentials(
-      email: 'info-owner@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
   await relay.createSession(
     CreateMobileSessionInput(
       workspaceId: 'fixture-workspace',
@@ -383,6 +423,7 @@ Future<void> _pumpInfoScreen(
   FixtureRelayRepository relay,
   DateTime now, {
   SessionController? sessions,
+  AppController? app,
 }) async {
   final terminalController = await _terminalController(relay, now);
   final resolvedSessions = sessions ?? await _readySessions(relay, now);
@@ -392,6 +433,7 @@ Future<void> _pumpInfoScreen(
       relay: relay,
       sessions: resolvedSessions,
       terminals: terminalController,
+      app: app,
     ),
   );
   await tester.pumpAndSettle();
@@ -403,12 +445,14 @@ Widget _infoScreen({
   required FixtureRelayRepository relay,
   required SessionController sessions,
   required TerminalStatusController terminals,
+  AppController? app,
 }) => ProviderScope(
   key: UniqueKey(),
   overrides: [
     relayRepositoryProvider.overrideWithValue(relay),
     sessionControllerProvider.overrideWith((_) => sessions),
     terminalStatusControllerProvider.overrideWith((_) => terminals),
+    if (app != null) appControllerProvider.overrideWith((_) => app),
   ],
   child: MaterialApp(home: SessionInfoScreen(sessionId: sessionId)),
 );

@@ -1,5 +1,4 @@
 import 'package:agent_sessions_mobile/app/providers.dart';
-import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/recent_sessions_controller.dart';
@@ -8,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+
+import 'support/fixture_owner.dart';
 
 /// MOBILE-25：最近会话页只读 UI。
 /// 直接 pump RecentSessionsScreen 并 override relay/controller，
@@ -191,7 +192,10 @@ void main() {
         find.byKey(const Key('recent-session-session-fixture-002')),
       );
       await tester.pumpAndSettle();
-      expect(find.text('sessions-session-fixture-002-placeholder'), findsOneWidget);
+      expect(
+        find.text('sessions-session-fixture-002-placeholder'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('返回按钮回 /home', (tester) async {
@@ -247,12 +251,7 @@ void main() {
 Future<FixtureRelayRepository> _fixtureWithSessions(DateTime now) async {
   var clock = now.subtract(const Duration(hours: 3));
   final relay = FixtureRelayRepository(clock: () => clock);
-  await relay.register(
-    const LoginCredentials(
-      email: 'recent-ui@fixture.test',
-      password: 'fixture-password',
-    ),
-  );
+  await bootstrapFixtureOwner(relay);
   await relay.createSession(
     CreateMobileSessionInput(
       workspaceId: 'workspace-a',
@@ -298,9 +297,8 @@ Widget _buildRecentSessionsApp({
       ),
       GoRoute(
         path: '/sessions/:id',
-        builder: (context, state) => _PlaceholderScreen(
-          label: 'sessions-${state.pathParameters['id']}',
-        ),
+        builder: (context, state) =>
+            _PlaceholderScreen(label: 'sessions-${state.pathParameters['id']}'),
       ),
     ],
   );
@@ -321,9 +319,8 @@ class _PlaceholderScreen extends StatelessWidget {
   final String label;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: Center(child: Text('$label-placeholder')),
-  );
+  Widget build(BuildContext context) =>
+      Scaffold(body: Center(child: Text('$label-placeholder')));
 }
 
 /// 手机竖屏表面：480x960，保证列表整页可见、点击无需先滚动。
