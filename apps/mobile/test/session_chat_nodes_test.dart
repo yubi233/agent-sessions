@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:agent_sessions_mobile/domain/session_projection_models.dart';
 import 'package:agent_sessions_mobile/ui/session/chat/session_chat_view.dart';
@@ -102,6 +105,193 @@ void main() {
       expect(
         find.byKey(const Key('session-chat-to-bottom-button')),
         findsOneWidget,
+      );
+    });
+
+    testWidgets('消息 actions 限制 copy/time/fork 并展示已发送引用', (tester) async {
+      final clipboardValues = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              clipboardValues.add((call.arguments as Map)['text'] as String);
+            }
+            return null;
+          });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 520,
+              child: SessionChatView(
+                running: false,
+                nodes: [
+                  ConversationNode(
+                    key: 'u-actions',
+                    kind: ConversationNodeKind.user,
+                    sequence: 11,
+                    label: '你',
+                    text: '请让 @worker 执行 /goal',
+                    copyText: '请让 @worker 执行 /goal',
+                    canCopy: true,
+                    showTimestamp: true,
+                    createdAt: DateTime.utc(2026, 8, 20, 12, 5),
+                    references: const [
+                      ConversationReferenceChip(
+                        label: 'worker',
+                        kind: ConversationReferenceKind.session,
+                      ),
+                      ConversationReferenceChip(
+                        label: '/goal',
+                        kind: ConversationReferenceKind.command,
+                      ),
+                    ],
+                  ),
+                  const ConversationNode(
+                    key: 'steering-actions',
+                    kind: ConversationNodeKind.user,
+                    sequence: 12,
+                    label: '插话',
+                    text: '追加一个插话',
+                    copyText: '追加一个插话',
+                    canCopy: true,
+                    pendingSteering: true,
+                  ),
+                  ConversationNode(
+                    key: 'a-actions',
+                    kind: ConversationNodeKind.assistant,
+                    sequence: 13,
+                    label: 'Assistant',
+                    text: '处理完成',
+                    copyText: '处理完成',
+                    canCopy: true,
+                    showTimestamp: true,
+                    createdAt: DateTime.utc(2026, 8, 20, 12, 6),
+                    forkUnavailable: true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      expect(
+        find.byKey(const Key('session-reference-chip-11-0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('session-reference-chip-11-1')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('session-message-time-11')), findsOneWidget);
+      expect(
+        find.byKey(const Key('session-pending-steering-badge')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('session-message-time-12')), findsNothing);
+      expect(
+        find.byKey(const Key('session-message-fork-unavailable-12')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('session-message-fork-unavailable-13')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('session-message-copy-12')));
+      await tester.pump();
+
+      expect(clipboardValues, ['追加一个插话']);
+      expect(
+        find.byKey(const Key('session-message-action-feedback-12')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('文件打开旧请求迟到失败不会覆盖新路径错误面', (tester) async {
+      final first = Completer<void>();
+      final second = Completer<void>();
+      final openedPaths = <String>[];
+
+      Future<void> openFile(String path) {
+        openedPaths.add(path);
+        return openedPaths.length == 1 ? first.future : second.future;
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 420,
+              child: SessionChatView(
+                running: false,
+                openFile: openFile,
+                nodes: const [
+                  ConversationNode(
+                    key: 'tool-one',
+                    kind: ConversationNodeKind.tool,
+                    sequence: 21,
+                    label: '读取文件',
+                    text: '准备打开第一个路径',
+                    filePath: 'one.dart',
+                  ),
+                  ConversationNode(
+                    key: 'tool-two',
+                    kind: ConversationNodeKind.tool,
+                    sequence: 22,
+                    label: '读取文件',
+                    text: '准备打开第二个路径',
+                    filePath: 'two.dart',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      await tester.tap(find.byKey(const Key('session-tool-open-path-21')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('session-tool-open-path-22')));
+      await tester.pump();
+
+      first.completeError(StateError('旧路径拒绝'));
+      await tester.pump();
+      expect(
+        find.byKey(const Key('session-file-open-error-dialog')),
+        findsNothing,
+      );
+
+      second.completeError(StateError('新路径拒绝'));
+      await tester.pump();
+
+      expect(openedPaths, ['one.dart', 'two.dart']);
+      expect(
+        find.byKey(const Key('session-file-open-error-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('session-file-open-error-dialog')),
+          matching: find.byKey(const Key('session-file-open-error-path')),
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('新路径拒绝'), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('session-file-open-error-path')))
+            .data,
+        'two.dart',
       );
     });
   });

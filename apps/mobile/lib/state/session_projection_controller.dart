@@ -49,6 +49,16 @@ class SessionProjectionController {
           isStreaming: event.isStreaming,
           toolStatus: event.toolStatus,
           safeReasoningSummary: _safeReasoningSummary(event),
+          messageId: event.messageId,
+          createdAt: event.createdAt,
+          copyText: _copyTextFor(event, nodeKind),
+          canCopy: _canCopy(event, nodeKind),
+          showTimestamp: _showTimestamp(event, nodeKind),
+          canFork: _canFork(event, nodeKind),
+          forkUnavailable: _forkUnavailable(event, nodeKind),
+          pendingSteering: event.pendingSteering,
+          references: _referenceChipsFor(event),
+          filePath: event.filePath,
         ),
       );
     }
@@ -129,6 +139,116 @@ class SessionProjectionController {
   bool _looksLikeCommand(SessionTimelineEvent event) =>
       event.text?.trimLeft().startsWith('/') == true ||
       event.label.toLowerCase().contains('command');
+
+  String? _copyTextFor(
+    SessionTimelineEvent event,
+    ConversationNodeKind nodeKind,
+  ) {
+    final copyText = event.copyText ?? _displayTextFor(event);
+    if (!_canCopy(event, nodeKind)) return null;
+    return copyText?.trim().isNotEmpty == true ? copyText : null;
+  }
+
+  bool _canCopy(SessionTimelineEvent event, ConversationNodeKind nodeKind) {
+    final text = event.copyText ?? _displayTextFor(event);
+    if (text?.trim().isNotEmpty != true) return false;
+    if (event.pendingSteering) return nodeKind == ConversationNodeKind.user;
+    return switch (nodeKind) {
+      ConversationNodeKind.user => true,
+      ConversationNodeKind.assistant => event.completedTurn,
+      _ => false,
+    };
+  }
+
+  bool _showTimestamp(
+    SessionTimelineEvent event,
+    ConversationNodeKind nodeKind,
+  ) {
+    if (event.createdAt == null || event.pendingSteering) return false;
+    return switch (nodeKind) {
+      ConversationNodeKind.user => true,
+      ConversationNodeKind.assistant => event.completedTurn,
+      _ => false,
+    };
+  }
+
+  bool _canFork(SessionTimelineEvent event, ConversationNodeKind nodeKind) =>
+      nodeKind == ConversationNodeKind.assistant &&
+      event.completedTurn &&
+      event.forkAvailable &&
+      event.messageId?.trim().isNotEmpty == true;
+
+  bool _forkUnavailable(
+    SessionTimelineEvent event,
+    ConversationNodeKind nodeKind,
+  ) =>
+      nodeKind == ConversationNodeKind.assistant &&
+      event.completedTurn &&
+      !event.forkAvailable;
+
+  List<ConversationReferenceChip> _referenceChipsFor(
+    SessionTimelineEvent event,
+  ) => event.referenceLabels
+      .map(_referenceChipFor)
+      .whereType<ConversationReferenceChip>()
+      .toList(growable: false);
+
+  ConversationReferenceChip? _referenceChipFor(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return null;
+    // fixture 可以用 kind:target 精确声明引用类型；UI 只展示，不重新解析为输入 claim。
+    final separator = value.indexOf(':');
+    if (separator > 0) {
+      final prefix = value.substring(0, separator).toLowerCase();
+      final target = value.substring(separator + 1).trim();
+      if (target.isEmpty) return null;
+      final kind = switch (prefix) {
+        'command' => ConversationReferenceKind.command,
+        'session' => ConversationReferenceKind.session,
+        'folder' => ConversationReferenceKind.folder,
+        'file' => ConversationReferenceKind.file,
+        _ => null,
+      };
+      if (kind != null) {
+        return ConversationReferenceChip(
+          label: target,
+          kind: kind,
+          target: target,
+        );
+      }
+    }
+
+    if (value.startsWith('/')) {
+      return ConversationReferenceChip(
+        label: value,
+        kind: ConversationReferenceKind.command,
+      );
+    }
+    if (value.startsWith('@"') && value.endsWith('"')) {
+      final target = value.substring(2, value.length - 1);
+      final parts = target.split('/').where((part) => part.isNotEmpty).toList();
+      return ConversationReferenceChip(
+        label: parts.isEmpty ? target : parts.last,
+        kind: ConversationReferenceKind.file,
+        target: target,
+      );
+    }
+    if (value.startsWith('@')) {
+      final target = value.substring(1);
+      return ConversationReferenceChip(
+        label: target,
+        kind: target.endsWith('/')
+            ? ConversationReferenceKind.folder
+            : ConversationReferenceKind.file,
+        target: target,
+      );
+    }
+    return ConversationReferenceChip(
+      label: value,
+      kind: ConversationReferenceKind.file,
+      target: value,
+    );
+  }
 
   String? _resolvedStatus(SessionTimelineEvent event) {
     if (event.permission?.resolved == true ||

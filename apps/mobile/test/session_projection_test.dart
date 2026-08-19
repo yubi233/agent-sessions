@@ -101,5 +101,70 @@ void main() {
       expect(snapshot.stats.cacheTokens, 420);
       expect(snapshot.context.ratio, 0.5);
     });
+
+    test('消息动作与引用 chip 只从 display-safe 字段投影', () {
+      const projection = SessionProjectionController();
+      final snapshot = projection.buildSnapshot(
+        timeline: [
+          SessionTimelineEvent(
+            sequence: 1,
+            kind: SessionTimelineKind.userMessage,
+            label: '你',
+            text: '请继续 @worker 处理 /goal',
+            copyText: '请继续 @worker 处理 /goal',
+            createdAt: DateTime.utc(2026, 8, 20, 12, 5),
+            referenceLabels: const ['session:worker', 'command:/goal'],
+          ),
+          const SessionTimelineEvent(
+            sequence: 2,
+            kind: SessionTimelineKind.userMessage,
+            label: '插话',
+            text: '排队中的插话',
+            pendingSteering: true,
+          ),
+          SessionTimelineEvent(
+            sequence: 3,
+            kind: SessionTimelineKind.assistantMessage,
+            label: 'Assistant',
+            text: '处理完成',
+            messageId: 'msg-3',
+            createdAt: DateTime.utc(2026, 8, 20, 12, 6),
+            completedTurn: true,
+            forkAvailable: true,
+          ),
+          SessionTimelineEvent(
+            sequence: 4,
+            kind: SessionTimelineKind.toolActivity,
+            label: '读取文件',
+            text: '读取 pubspec.yaml',
+            filePath: 'pubspec.yaml',
+          ),
+        ],
+        controls: const SessionControlState.empty(),
+      );
+
+      final user = snapshot.chatNodes[0];
+      expect(user.canCopy, isTrue);
+      expect(user.showTimestamp, isTrue);
+      expect(user.references.map((chip) => chip.kind), [
+        ConversationReferenceKind.session,
+        ConversationReferenceKind.command,
+      ]);
+
+      final steering = snapshot.chatNodes[1];
+      expect(steering.pendingSteering, isTrue);
+      expect(steering.canCopy, isTrue);
+      expect(steering.showTimestamp, isFalse);
+      expect(steering.canFork, isFalse);
+
+      final assistant = snapshot.chatNodes[2];
+      expect(assistant.canCopy, isTrue);
+      expect(assistant.showTimestamp, isTrue);
+      expect(assistant.canFork, isTrue);
+
+      final tool = snapshot.chatNodes[3];
+      expect(tool.canCopy, isFalse);
+      expect(tool.filePath, 'pubspec.yaml');
+    });
   });
 }

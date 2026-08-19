@@ -340,6 +340,14 @@ class SessionTimelineEvent {
     this.toolStatus,
     this.permission,
     this.question,
+    this.messageId,
+    this.createdAt,
+    this.copyText,
+    this.completedTurn = false,
+    this.forkAvailable = false,
+    this.pendingSteering = false,
+    this.referenceLabels = const [],
+    this.filePath,
   });
 
   factory SessionTimelineEvent.fromRelayEvent(RelaySessionEvent event) {
@@ -364,6 +372,14 @@ class SessionTimelineEvent {
       toolStatus: _nullableString(payload['tool_status']),
       permission: permission,
       question: question,
+      messageId: _nullableString(payload['message_id']),
+      createdAt: _nullableDateTime(payload['created_at']),
+      copyText: _nullableString(payload['copy_text']),
+      completedTurn: payload['completed_turn'] == true,
+      forkAvailable: payload['fork_available'] == true,
+      pendingSteering: payload['pending_steering'] == true,
+      referenceLabels: _stringList(payload['references']),
+      filePath: _nullableString(payload['file_path']),
     );
   }
 
@@ -375,6 +391,17 @@ class SessionTimelineEvent {
   final String? toolStatus;
   final TimelinePermissionRequest? permission;
   final TimelineQuestionRequest? question;
+
+  /// 以下字段只来自本地 fixture 或已解密 display payload；真实 Relay envelope
+  /// 未声明时保持缺省，避免 UI 用猜测数据展示 action 或路径。
+  final String? messageId;
+  final DateTime? createdAt;
+  final String? copyText;
+  final bool completedTurn;
+  final bool forkAvailable;
+  final bool pendingSteering;
+  final List<String> referenceLabels;
+  final String? filePath;
 }
 
 SessionTimelineKind _timelineKindFromFixture(String? kind) => switch (kind) {
@@ -440,3 +467,10 @@ String? _nullableString(Object? value) =>
 
 DateTime? _nullableDateTime(Object? value) =>
     value is String ? DateTime.tryParse(value) : null;
+
+List<String> _stringList(Object? value) => value is List
+    ? value
+          .whereType<String>()
+          .where((item) => item.trim().isNotEmpty)
+          .toList(growable: false)
+    : const [];

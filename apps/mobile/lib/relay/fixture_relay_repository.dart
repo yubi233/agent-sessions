@@ -859,9 +859,17 @@ class FixtureRelayRepository implements RelayRepository {
       throw const RelayFailure(RelayFailureKind.validation, '请输入要发送的消息。');
     }
     final now = _clock();
+    final userSequence = state.nextSequence;
     state.append(
       eventType: 'message.user',
-      payload: {'kind': 'user_message', 'label': '你', 'text': message},
+      payload: {
+        'kind': 'user_message',
+        'label': '你',
+        'text': message,
+        'copy_text': message,
+        'created_at': now.toIso8601String(),
+        'message_id': 'fixture-message-$userSequence',
+      },
       now: now,
     );
     state.append(
@@ -881,6 +889,7 @@ class FixtureRelayRepository implements RelayRepository {
         'label': '读取工作区状态',
         'text': 'fixture 工具活动，不含真实命令或文件内容。',
         'tool_status': '运行中',
+        'file_path': '.',
       },
       now: now,
     );

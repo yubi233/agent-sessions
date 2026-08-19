@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../domain/session_projection_models.dart';
 
@@ -7,9 +8,10 @@ import '../../../domain/session_projection_models.dart';
 /// 这里消费的是 display-safe projection，不直接读取 Relay event，也不处理写命令。
 /// 这样 pending interaction、密文占位和隐藏推理都由投影层先裁剪，再进入 UI。
 class SessionChatNodeSeat extends StatelessWidget {
-  const SessionChatNodeSeat({required this.node, super.key});
+  const SessionChatNodeSeat({required this.node, this.onOpenFile, super.key});
 
   final ConversationNode node;
+  final Future<void> Function(String path)? onOpenFile;
 
   @override
   Widget build(BuildContext context) {
@@ -25,11 +27,15 @@ class SessionChatNodeSeat extends StatelessWidget {
             user: false,
           ),
           ConversationNodeKind.reasoning => _ReasoningRow(node: node),
-          ConversationNodeKind.tool => _ToolStepRow(node: node),
+          ConversationNodeKind.tool => _ToolStepRow(
+            node: node,
+            onOpenFile: onOpenFile,
+          ),
           ConversationNodeKind.command => _CompactSystemRow(
             node: node,
             icon: Icons.terminal_outlined,
             tone: _SystemRowTone.neutral,
+            onOpenFile: onOpenFile,
           ),
           ConversationNodeKind.compaction => _CompactSystemRow(
             node: node,
@@ -82,31 +88,250 @@ class _ChatBubble extends StatelessWidget {
     final foreground = user ? const Color(0xff1d1d1f) : scheme.onSurface;
     return Align(
       alignment: user ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
+      child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 382),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.circular(8),
-        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: user
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
-            Text(
-              node.label,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: foreground.withValues(alpha: 0.72),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: background,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        node.label,
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
+                              color: foreground.withValues(alpha: 0.72),
+                            ),
+                      ),
+                      if (node.pendingSteering) ...[
+                        const SizedBox(width: 8),
+                        _PendingSteeringBadge(foreground: foreground),
+                      ],
+                    ],
+                  ),
+                  if (node.text?.trim().isNotEmpty == true) ...[
+                    const SizedBox(height: 6),
+                    Text(node.text!, style: TextStyle(color: foreground)),
+                  ],
+                  if (node.references.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _ReferenceChips(
+                      sequence: node.sequence,
+                      references: node.references,
+                      foreground: foreground,
+                    ),
+                  ],
+                ],
               ),
             ),
-            if (node.text?.trim().isNotEmpty == true) ...[
-              const SizedBox(height: 6),
-              Text(node.text!, style: TextStyle(color: foreground)),
-            ],
+            _MessageActionsRow(node: node),
           ],
         ),
       ),
     );
+  }
+}
+
+class _PendingSteeringBadge extends StatelessWidget {
+  const _PendingSteeringBadge({required this.foreground});
+
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    key: const Key('session-pending-steering-badge'),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: foreground.withValues(alpha: 0.36)),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      child: Text(
+        '等待接管',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: foreground.withValues(alpha: 0.74),
+        ),
+      ),
+    ),
+  );
+}
+
+class _ReferenceChips extends StatelessWidget {
+  const _ReferenceChips({
+    required this.sequence,
+    required this.references,
+    required this.foreground,
+  });
+
+  final int sequence;
+  final List<ConversationReferenceChip> references;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 6,
+    runSpacing: 6,
+    children: [
+      for (var index = 0; index < references.length; index++)
+        _ReferenceChip(
+          key: Key('session-reference-chip-$sequence-$index'),
+          reference: references[index],
+          foreground: foreground,
+        ),
+    ],
+  );
+}
+
+class _ReferenceChip extends StatelessWidget {
+  const _ReferenceChip({
+    required this.reference,
+    required this.foreground,
+    super.key,
+  });
+
+  final ConversationReferenceChip reference;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = switch (reference.kind) {
+      ConversationReferenceKind.command => Icons.terminal_outlined,
+      ConversationReferenceKind.session => Icons.account_tree_outlined,
+      ConversationReferenceKind.file => Icons.insert_drive_file_outlined,
+      ConversationReferenceKind.folder => Icons.folder_outlined,
+    };
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: foreground.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: foreground.withValues(alpha: 0.74)),
+            const SizedBox(width: 4),
+            Text(
+              reference.label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: foreground.withValues(alpha: 0.86),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageActionsRow extends StatefulWidget {
+  const _MessageActionsRow({required this.node});
+
+  final ConversationNode node;
+
+  @override
+  State<_MessageActionsRow> createState() => _MessageActionsRowState();
+}
+
+class _MessageActionsRowState extends State<_MessageActionsRow> {
+  String? _feedback;
+
+  @override
+  Widget build(BuildContext context) {
+    final node = widget.node;
+    final hasActions =
+        node.canCopy ||
+        node.showTimestamp ||
+        node.canFork ||
+        node.forkUnavailable;
+    if (!hasActions) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Wrap(
+        key: Key('session-message-actions-${node.sequence}'),
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 4,
+        children: [
+          if (node.showTimestamp && node.createdAt != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                _formatTime(node.createdAt!),
+                key: Key('session-message-time-${node.sequence}'),
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+            ),
+          if (node.canCopy)
+            IconButton(
+              key: Key('session-message-copy-${node.sequence}'),
+              tooltip: '复制',
+              iconSize: 18,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              padding: EdgeInsets.zero,
+              onPressed: () => _copy(node),
+              icon: const Icon(Icons.copy_outlined),
+            ),
+          if (node.canFork || node.forkUnavailable)
+            IconButton(
+              key: Key(
+                node.canFork
+                    ? 'session-message-fork-${node.sequence}'
+                    : 'session-message-fork-unavailable-${node.sequence}',
+              ),
+              tooltip: node.canFork ? '从这里分支' : '仅可从可分支的完成轮次尾部创建分支',
+              iconSize: 18,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              padding: EdgeInsets.zero,
+              onPressed: node.canFork ? () => _markForkRequested(node) : null,
+              icon: const Icon(Icons.call_split_outlined),
+            ),
+          if (_feedback != null)
+            Text(
+              _feedback!,
+              key: Key('session-message-action-feedback-${node.sequence}'),
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _copy(ConversationNode node) async {
+    final text = node.copyText ?? node.text ?? '';
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted) return;
+      setState(() => _feedback = '已复制');
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _feedback = '复制失败');
+    }
+  }
+
+  void _markForkRequested(ConversationNode node) {
+    // P2-B 只建立 action chrome；真实 fork 写入口仍要等 Relay/Provider capability 接入。
+    setState(() => _feedback = '分支入口待接入');
+  }
+
+  String _formatTime(DateTime value) {
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 }
 
@@ -149,9 +374,10 @@ class _ReasoningRow extends StatelessWidget {
 }
 
 class _ToolStepRow extends StatelessWidget {
-  const _ToolStepRow({required this.node});
+  const _ToolStepRow({required this.node, required this.onOpenFile});
 
   final ConversationNode node;
+  final Future<void> Function(String path)? onOpenFile;
 
   @override
   Widget build(BuildContext context) => _CompactSystemRow(
@@ -159,6 +385,7 @@ class _ToolStepRow extends StatelessWidget {
     icon: Icons.build_outlined,
     tone: node.isStreaming ? _SystemRowTone.warning : _SystemRowTone.neutral,
     trailing: node.toolStatus,
+    onOpenFile: onOpenFile,
   );
 }
 
@@ -170,12 +397,14 @@ class _CompactSystemRow extends StatelessWidget {
     required this.icon,
     required this.tone,
     this.trailing,
+    this.onOpenFile,
   });
 
   final ConversationNode node;
   final IconData icon;
   final _SystemRowTone tone;
   final String? trailing;
+  final Future<void> Function(String path)? onOpenFile;
 
   @override
   Widget build(BuildContext context) {
@@ -212,6 +441,18 @@ class _CompactSystemRow extends StatelessWidget {
                 if (detail?.trim().isNotEmpty == true) ...[
                   const SizedBox(height: 4),
                   Text(detail!, style: Theme.of(context).textTheme.bodySmall),
+                ],
+                if (node.filePath?.trim().isNotEmpty == true) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      key: Key('session-tool-open-path-${node.sequence}'),
+                      onPressed: () => onOpenFile?.call(node.filePath!),
+                      icon: const Icon(Icons.open_in_new_outlined, size: 16),
+                      label: Text(node.filePath!),
+                    ),
+                  ),
                 ],
               ],
             ),

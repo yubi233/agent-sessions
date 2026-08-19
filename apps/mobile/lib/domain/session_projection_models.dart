@@ -17,6 +17,24 @@ enum ConversationNodeKind {
   notice,
 }
 
+enum ConversationReferenceKind { command, session, file, folder }
+
+/// 已发送消息中的只读引用展示。
+///
+/// 这些 chip 来自投影层已经确认的引用或保守文本扫描，只是 UI 装饰，
+/// 不会重新 claim command、打开文件或改写 composer 状态。
+class ConversationReferenceChip {
+  const ConversationReferenceChip({
+    required this.label,
+    required this.kind,
+    this.target,
+  });
+
+  final String label;
+  final ConversationReferenceKind kind;
+  final String? target;
+}
+
 /// 会话 Chat 视图的单个 display-safe 节点。
 class ConversationNode {
   const ConversationNode({
@@ -28,6 +46,16 @@ class ConversationNode {
     this.isStreaming = false,
     this.toolStatus,
     this.safeReasoningSummary,
+    this.messageId,
+    this.createdAt,
+    this.copyText,
+    this.canCopy = false,
+    this.showTimestamp = false,
+    this.canFork = false,
+    this.forkUnavailable = false,
+    this.pendingSteering = false,
+    this.references = const [],
+    this.filePath,
   });
 
   /// 稳定 key 由投影层生成，后续 UI keyed renderer 只能依赖该 key。
@@ -41,6 +69,28 @@ class ConversationNode {
 
   /// 只允许展示上游明确给出的 display-safe summary；隐藏 CoT 永远不进入该字段。
   final String? safeReasoningSummary;
+
+  /// 消息动作只认 display-only 身份；没有身份时仍可复制文本，但不能 fork。
+  final String? messageId;
+
+  /// 时间标签来自 fixture/上游投影；没有时间就不展示，不能用本地 now 补假时间。
+  final DateTime? createdAt;
+
+  /// 复制动作写入的纯文本。未提供时 UI 可使用 [text] 的展示副本。
+  final String? copyText;
+
+  final bool canCopy;
+  final bool showTimestamp;
+  final bool canFork;
+  final bool forkUnavailable;
+
+  /// Host 权威的 pre-admission steering 投影：只允许 copy，不显示时间或 fork。
+  final bool pendingSteering;
+
+  final List<ConversationReferenceChip> references;
+
+  /// 工具行或 produced file chip 的可打开路径；由 Host opener 解析，不在 UI 猜绝对路径。
+  final String? filePath;
 }
 
 enum ComposerPendingKind { approval, question }

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../../domain/session_projection_models.dart';
 import 'session_chat_node_seat.dart';
 
+typedef SessionFileOpener = Future<void> Function(String path);
+
 /// v0.5 Chat view：唯一消费 `ConversationNode` 投影的消息流入口。
 ///
 /// 该组件不接收 raw timeline event；pending interaction 已在投影层排除，并由 composer chain 处理。
@@ -13,6 +15,7 @@ class SessionChatView extends StatefulWidget {
     required this.running,
     this.emptyHero,
     this.footer = const [],
+    this.openFile,
     super.key,
   });
 
@@ -20,6 +23,7 @@ class SessionChatView extends StatefulWidget {
   final bool running;
   final Widget? emptyHero;
   final List<Widget> footer;
+  final SessionFileOpener? openFile;
 
   @override
   State<SessionChatView> createState() => _SessionChatViewState();
@@ -28,6 +32,9 @@ class SessionChatView extends StatefulWidget {
 class _SessionChatViewState extends State<SessionChatView> {
   final _controller = ScrollController();
   bool _readerPinnedToBottom = true;
+  int _fileOpenEpoch = 0;
+  _FileOpenError? _fileOpenError;
+  String? _fileOpenBusyPath;
 
   @override
   void initState() {
@@ -79,11 +86,46 @@ class _SessionChatViewState extends State<SessionChatView> {
     });
   }
 
+  Future<void> _requestOpenFile(String path) async {
+    final opener = widget.openFile;
+    final epoch = ++_fileOpenEpoch;
+    setState(() {
+      _fileOpenBusyPath = path;
+      _fileOpenError = null;
+    });
+    try {
+      if (opener == null) {
+        throw StateError('当前环境不支持从会话直接打开路径。');
+      }
+      await opener(path);
+      if (!mounted || epoch != _fileOpenEpoch) return;
+      setState(() {
+        _fileOpenBusyPath = null;
+        _fileOpenError = null;
+      });
+    } catch (error) {
+      if (!mounted || epoch != _fileOpenEpoch) return;
+      setState(() {
+        _fileOpenBusyPath = null;
+        _fileOpenError = _FileOpenError(path: path, message: '$error');
+      });
+    }
+  }
+
+  void _closeFileOpenError() {
+    _fileOpenEpoch += 1;
+    setState(() {
+      _fileOpenBusyPath = null;
+      _fileOpenError = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final children = <Widget>[
       if (widget.emptyHero != null) widget.emptyHero!,
-      for (final node in widget.nodes) SessionChatNodeSeat(node: node),
+      for (final node in widget.nodes)
+        SessionChatNodeSeat(node: node, onOpenFile: _requestOpenFile),
       if (widget.running) const _TurnStatusRow(),
       ...widget.footer,
     ];
@@ -108,7 +150,111 @@ class _SessionChatViewState extends State<SessionChatView> {
               child: const Icon(Icons.keyboard_arrow_down),
             ),
           ),
+        if (_fileOpenBusyPath != null)
+          Positioned(
+            left: 18,
+            bottom: 18,
+            child: _FileOpenStatus(path: _fileOpenBusyPath!),
+          ),
+        if (_fileOpenError != null)
+          Positioned.fill(
+            child: _FileOpenErrorDialog(
+              error: _fileOpenError!,
+              onClose: _closeFileOpenError,
+              onRetry: () => _requestOpenFile(_fileOpenError!.path),
+            ),
+          ),
       ],
+    );
+  }
+}
+
+class _FileOpenError {
+  const _FileOpenError({required this.path, required this.message});
+
+  final String path;
+  final String message;
+}
+
+class _FileOpenStatus extends StatelessWidget {
+  const _FileOpenStatus({required this.path});
+
+  final String path;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    key: const Key('session-file-open-busy'),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox.square(
+            dimension: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 8),
+          Text('正在打开 $path'),
+        ],
+      ),
+    ),
+  );
+}
+
+class _FileOpenErrorDialog extends StatelessWidget {
+  const _FileOpenErrorDialog({
+    required this.error,
+    required this.onClose,
+    required this.onRetry,
+  });
+
+  final _FileOpenError error;
+  final VoidCallback onClose;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: Colors.black.withValues(alpha: 0.24),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: AlertDialog(
+            key: const Key('session-file-open-error-dialog'),
+            title: const Text('无法打开路径'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  error.path,
+                  key: const Key('session-file-open-error-path'),
+                  style: const TextStyle(fontFamily: 'monospace'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  error.message,
+                  key: const Key('session-file-open-error-message'),
+                  style: TextStyle(color: scheme.error),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                key: const Key('session-file-open-close'),
+                onPressed: onClose,
+                child: const Text('关闭'),
+              ),
+              FilledButton(
+                key: const Key('session-file-open-retry'),
+                onPressed: onRetry,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
