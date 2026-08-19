@@ -13,6 +13,7 @@ import '../domain/session_projection_models.dart';
 import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
+import '../state/session_composer_controller.dart';
 import '../state/session_controller.dart';
 import '../state/session_projection_controller.dart';
 import '../state/session_view_controller.dart';
@@ -2237,7 +2238,8 @@ class _CompletionSuggestion {
 class _SessionComposerState extends State<_SessionComposer> {
   final _controller = TextEditingController();
   String? _draftSessionId;
-  final List<String> _queuedMessages = [];
+  SessionComposerInputMachine _inputMachine = SessionComposerInputMachine();
+  int _queueSeq = 0;
   bool _commandMenuOpen = false;
   // v0.2/P3：@ 与 / 自动补全只在内存生成；候选为空或查询越权时展示空态（fail-closed）。
   List<_CompletionSuggestion> _suggestions = const [];
@@ -2255,25 +2257,12 @@ class _SessionComposerState extends State<_SessionComposer> {
   @override
   void didUpdateWidget(covariant _SessionComposer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.sessions.isStreaming &&
-        !widget.sessions.isStreaming &&
-        _queuedMessages.isNotEmpty) {
-      final queued = List<String>.from(_queuedMessages);
-      _queuedMessages.clear();
-      for (final message in queued) {
-        unawaited(
-          widget.sessions.sendMessage(
-            message: message,
-            deviceId: widget.deviceId,
-            canWrite: widget.canWrite,
-          ),
-        );
-      }
-    }
     if (oldWidget.sessions.selectedSessionId !=
         widget.sessions.selectedSessionId) {
+      // v0.5/P3-A：queue 是会话级 transient 输入状态；切会话时重建本地 machine，
+      // 但不在 streaming 结束时隐式 flush，所有 queue 提交都必须来自显式用户动作。
+      _inputMachine = SessionComposerInputMachine();
       _restoreDraft();
-      _queuedMessages.clear();
       _commandMenuOpen = false;
     }
   }
@@ -2286,14 +2275,19 @@ class _SessionComposerState extends State<_SessionComposer> {
     }
     if (_draftSessionId == sessionId) return;
     _draftSessionId = sessionId;
-    final draft = widget.sessions.composerDraftFor(sessionId);
-    if (draft != null && draft != _controller.text) {
-      _controller.text = draft;
-      // 光标移到末尾，让用户直接继续输入。
-      _controller.selection = TextSelection.fromPosition(
-        TextPosition(offset: _controller.text.length),
-      );
+    final draft = widget.sessions.composerDraftFor(sessionId) ?? '';
+    _inputMachine.setDraft(draft);
+    if (draft != _controller.text) {
+      _setControllerText(draft);
     }
+  }
+
+  void _setControllerText(String text) {
+    _controller.text = text;
+    // 光标移到末尾，让用户直接继续输入。
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: _controller.text.length),
+    );
   }
 
   @override
@@ -2398,10 +2392,8 @@ class _SessionComposerState extends State<_SessionComposer> {
     final lastSpace = text.lastIndexOf(' ');
     final prefix = lastSpace < 0 ? '' : text.substring(0, lastSpace + 1);
     final next = prefix + suggestion.insertText;
-    _controller.text = next;
-    _controller.selection = TextSelection.fromPosition(
-      TextPosition(offset: next.length),
-    );
+    _inputMachine.setDraft(next);
+    _setControllerText(next);
     setState(() {});
     widget.sessions.saveComposerDraft(
       widget.sessions.selectedSessionId ?? '',
@@ -2416,10 +2408,18 @@ class _SessionComposerState extends State<_SessionComposer> {
       canWrite: widget.canWrite,
     );
     final streaming = widget.sessions.isStreaming;
-    final canSend =
-        blocked == null &&
-        _controller.text.trim().isNotEmpty &&
-        !widget.sessions.isBusy;
+    final input = _inputMachine.snapshot;
+    final submitMode = _inputMachine.submit(
+      running: streaming,
+      busyEnter: BusyEnterMode.queue,
+    );
+    final canSubmit =
+        blocked == null && submitMode != null && !widget.sessions.isBusy;
+    final primaryTooltip = switch (submitMode) {
+      SessionSubmitMode.queue => '排队消息',
+      SessionSubmitMode.steer => '插话',
+      SessionSubmitMode.send || null => '发送消息',
+    };
     final canStop = blocked == null && streaming && !widget.sessions.isBusy;
     final pendingPermission = widget.interactionEvents
         .where((event) => event.kind == SessionTimelineKind.permissionRequest)
@@ -2482,22 +2482,29 @@ class _SessionComposerState extends State<_SessionComposer> {
                 sessions: widget.sessions,
                 deviceId: widget.deviceId,
               ),
-            if (_queuedMessages.isNotEmpty)
+            if (input.queue.isNotEmpty)
               _QueueDock(
-                messages: _queuedMessages,
-                onRemove: (index) =>
-                    setState(() => _queuedMessages.removeAt(index)),
+                messages: input.queue.map((item) => item.text).toList(),
+                onRemove: (index) {
+                  final current = _inputMachine.snapshot.queue;
+                  if (index < 0 || index >= current.length) return;
+                  setState(
+                    () => _inputMachine.removeQueuedMessage(current[index].id),
+                  );
+                },
                 onSendAll: _sendQueuedMessages,
               ),
             if (_commandMenuOpen)
               _CommandLauncherMenu(
                 onSelect: (command) {
                   final next = '/$command ';
-                  _controller.value = TextEditingValue(
-                    text: next,
-                    selection: TextSelection.collapsed(offset: next.length),
-                  );
+                  _inputMachine.setDraft(next);
+                  _setControllerText(next);
                   _commandMenuOpen = false;
+                  final sessionId = widget.sessions.selectedSessionId;
+                  if (sessionId != null) {
+                    widget.sessions.saveComposerDraft(sessionId, next);
+                  }
                   _updateSuggestions(next);
                   setState(() {});
                 },
@@ -2585,6 +2592,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                       maxLines: 5,
                       textInputAction: TextInputAction.newline,
                       onChanged: (value) {
+                        _inputMachine.setDraft(value);
                         setState(() {});
                         // 每次输入都写内存草稿；发送成功后由 controller 清除。
                         final sessionId = widget.sessions.selectedSessionId;
@@ -2603,20 +2611,20 @@ class _SessionComposerState extends State<_SessionComposer> {
                   ),
                   IconButton(
                     key: const Key('session-composer-primary-action'),
-                    tooltip: canSend ? '发送消息' : '排队消息',
-                    onPressed: canSend ? _send : null,
+                    tooltip: primaryTooltip,
+                    onPressed: canSubmit ? _submitComposer : null,
                     style: IconButton.styleFrom(
-                      backgroundColor: canSend
+                      backgroundColor: canSubmit
                           ? Theme.of(context).colorScheme.primary
                           : Theme.of(
                               context,
                             ).colorScheme.surfaceContainerHighest,
-                      foregroundColor: canSend
+                      foregroundColor: canSubmit
                           ? Theme.of(context).colorScheme.onPrimary
                           : Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                     icon: Icon(
-                      canSend
+                      submitMode == SessionSubmitMode.send
                           ? Icons.arrow_upward
                           : Icons.schedule_send_outlined,
                     ),
@@ -2645,24 +2653,63 @@ class _SessionComposerState extends State<_SessionComposer> {
     );
   }
 
-  Future<void> _send() async {
-    final message = _controller.text;
-    if (widget.sessions.isStreaming) {
-      if (message.trim().isEmpty) return;
-      _queuedMessages.add(message.trim());
-      _controller.clear();
-      setState(() {});
+  Future<void> _submitComposer() async {
+    final snapshot = _inputMachine.snapshot;
+    final message = snapshot.draft.trim();
+    final mode = _inputMachine.submit(
+      running: widget.sessions.isStreaming,
+      busyEnter: BusyEnterMode.queue,
+    );
+    if (mode == null || message.isEmpty && mode != SessionSubmitMode.steer) {
       return;
     }
-    await widget.sessions.sendMessage(
-      message: message,
-      deviceId: widget.deviceId,
-      canWrite: widget.canWrite,
-    );
-    if (!mounted || widget.sessions.errorMessage != null) return;
-    _controller.clear();
-    _setSuggestions(const []);
-    setState(() {});
+    final sessionId = widget.sessions.selectedSessionId;
+    switch (mode) {
+      case SessionSubmitMode.queue:
+        // v0.5/P3-A：Queue 是显式 transient inbox；入队后只清本地草稿，
+        // 不向 Relay 发 send，也不在 streaming 结束后自动 flush。
+        _queueSeq += 1;
+        _inputMachine.addQueuedMessage('queue-$_queueSeq', message);
+        _inputMachine.settleSubmit(success: true);
+        if (sessionId != null) widget.sessions.clearComposerDraft(sessionId);
+        _setControllerText('');
+        _setSuggestions(const []);
+        setState(() {});
+      case SessionSubmitMode.send:
+        _inputMachine.enterSubmitting();
+        setState(() {});
+        await widget.sessions.sendMessage(
+          message: message,
+          deviceId: widget.deviceId,
+          canWrite: widget.canWrite,
+        );
+        if (!mounted) return;
+        final error = widget.sessions.errorMessage;
+        if (error != null) {
+          _inputMachine.settleSubmit(success: false, error: error);
+          if (sessionId != null) {
+            widget.sessions.saveComposerDraft(sessionId, message);
+          }
+          _setControllerText(message);
+          setState(() {});
+          return;
+        }
+        _inputMachine.settleSubmit(success: true);
+        _setControllerText('');
+        _setSuggestions(const []);
+        setState(() {});
+      case SessionSubmitMode.steer:
+        // v0.5/P3-A 暂不伪造 Host strict-steer；真实 placement/steer action
+        // 会在 QueueDock 阶段接入。当前只保留显式 queue 语义。
+        if (message.isEmpty) return;
+        _queueSeq += 1;
+        _inputMachine.addQueuedMessage('queue-$_queueSeq', message);
+        _inputMachine.settleSubmit(success: true);
+        if (sessionId != null) widget.sessions.clearComposerDraft(sessionId);
+        _setControllerText('');
+        _setSuggestions(const []);
+        setState(() {});
+    }
   }
 
   Future<void> _stop() => widget.sessions.stopStreaming(
@@ -2671,16 +2718,21 @@ class _SessionComposerState extends State<_SessionComposer> {
   );
 
   Future<void> _sendQueuedMessages() async {
-    if (_queuedMessages.isEmpty || widget.sessions.isStreaming) return;
-    final queued = List<String>.from(_queuedMessages);
-    _queuedMessages.clear();
-    setState(() {});
-    for (final message in queued) {
+    if (widget.sessions.isStreaming) return;
+    final queued = List<QueuedComposerMessage>.from(
+      _inputMachine.snapshot.queue,
+    );
+    if (queued.isEmpty) return;
+    for (final item in queued) {
+      if (widget.sessions.isStreaming) break;
       await widget.sessions.sendMessage(
-        message: message,
+        message: item.text,
         deviceId: widget.deviceId,
         canWrite: widget.canWrite,
       );
+      if (!mounted) return;
+      if (widget.sessions.errorMessage != null) break;
+      setState(() => _inputMachine.removeQueuedMessage(item.id));
       if (widget.sessions.isStreaming) break;
     }
   }

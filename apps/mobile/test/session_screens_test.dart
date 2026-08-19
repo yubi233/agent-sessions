@@ -479,6 +479,92 @@ void main() {
     );
   });
 
+  testWidgets('MOBILE-V05-07/P3-A：streaming queue 不自动 flush，需显式发送', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
+    await _registerOwner(tester, 'composer-queue-owner@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+      'fixture-workspace',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+    final sessionId = (await harness.relay.listSessions()).single.id;
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')),
+    );
+    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '先让会话进入 streaming',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+    expect(harness.relay.submittedCommandCount, 1);
+
+    const queuedText = '这条消息只进入本地 queue';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      queuedText,
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+    expect(find.text(queuedText), findsOneWidget);
+    expect(harness.relay.submittedCommandCount, 1);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('session-composer-input')))
+          .controller!
+          .text,
+      isEmpty,
+    );
+
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    await _waitForVisible(tester, find.text('已停止'));
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+    final stoppedSnapshot = await harness.relay.getSessionSnapshot(sessionId);
+    expect(_snapshotContainsText(stoppedSnapshot, queuedText), isFalse);
+
+    await _tapVisible(tester, find.byKey(const Key('session-queue-send-all')));
+    await _waitForGone(tester, find.byKey(const Key('session-queue-dock')));
+    final sentSnapshot = await harness.relay.getSessionSnapshot(sessionId);
+    expect(_snapshotContainsText(sentSnapshot, queuedText), isTrue);
+    expect(harness.relay.submittedCommandCount, 3);
+  });
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {
@@ -871,6 +957,13 @@ void main() {
       find.byKey(const Key('session-copy-provider-button')),
     );
     expect(clipboardValues, [sessionId, 'codex']);
+  });
+}
+
+bool _snapshotContainsText(SessionSnapshot snapshot, String text) {
+  return snapshot.events.any((event) {
+    final payload = event.envelope['fixture_payload'];
+    return payload is Map && payload['text'] == text;
   });
 }
 
