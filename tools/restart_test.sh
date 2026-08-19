@@ -15,6 +15,9 @@ trap cleanup EXIT INT TERM
 bash -n restart.sh tools/restart_test.sh tools/flutter_device.sh "$fake_flutter" "$fake_device_helper"
 ./restart.sh --help >/dev/null
 if ./restart.sh start --no-relay --no-web --no-admin --no-daemon --no-flutter --web-port nope --dry-run >/dev/null 2>&1; then echo 'restart.sh accepted an invalid TCP port' >&2; exit 1; fi
+missing_token_output="$(./restart.sh start --no-relay --no-web --no-admin --no-flutter --state-dir "$state_dir" --dry-run 2>&1 >/dev/null || true)"
+grep -F 'AGENT_SESSIONS_DAEMON_TOKEN=<paired-terminal-token> ./restart.sh restart' <<< "$missing_token_output" >/dev/null
+grep -F './restart.sh restart --no-daemon' <<< "$missing_token_output" >/dev/null
 if ./restart.sh start --no-relay --no-web --no-admin --no-flutter --state-dir "$state_dir" --dry-run >/dev/null 2>&1; then echo 'restart.sh accepted a missing daemon token' >&2; exit 1; fi
 test ! -e "$state_dir/relay-owned"
 FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-relay --no-daemon --no-web --no-admin --state-dir "$state_dir" --log-dir "$log_dir" --flutter-mode mac

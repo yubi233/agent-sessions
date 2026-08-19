@@ -94,6 +94,22 @@ require_command() {
   fi
 }
 
+print_missing_daemon_token_hint() {
+  cat >&2 <<'EOF'
+daemon: AGENT_SESSIONS_DAEMON_TOKEN is required; refusing to start a partial stack
+
+Next steps:
+  - Full local stack:
+      AGENT_SESSIONS_DAEMON_TOKEN=<paired-terminal-token> ./restart.sh restart
+  - Flutter + Relay only:
+      ./restart.sh restart --no-daemon
+  - Flutter macOS only:
+      ./restart.sh start --no-relay --no-daemon --flutter-mode mac
+  - Physical Android Flutter target:
+      AGENT_SESSIONS_FLUTTER_RELAY_BASE=http://<host-lan-ip>:8787 ./restart.sh restart --no-daemon --flutter-mode device
+EOF
+}
+
 absolute_path() {
   case "$1" in
     /*) printf '%s\n' "$1" ;;
@@ -440,7 +456,7 @@ resolve_flutter_target() {
 
 preflight_start() {
   if [[ "$WITH_DAEMON" == true && -z "${AGENT_SESSIONS_DAEMON_TOKEN:-}" ]]; then
-    echo "daemon: AGENT_SESSIONS_DAEMON_TOKEN is required; refusing to start a partial stack" >&2
+    print_missing_daemon_token_hint
     return 1
   fi
   if ! [[ "$FLUTTER_TIMEOUT_MS" =~ ^[0-9]+$ ]] || (( FLUTTER_TIMEOUT_MS < 100 )); then
@@ -491,7 +507,7 @@ start_admin() {
 start_daemon() {
   local token=${AGENT_SESSIONS_DAEMON_TOKEN:-}
   if [[ -z "$token" ]]; then
-    echo "daemon: AGENT_SESSIONS_DAEMON_TOKEN is required; refusing to start without Terminal credentials" >&2
+    print_missing_daemon_token_hint
     return 1
   fi
   start_process daemon "$(pid_file daemon)" "$(component_log daemon)" run_daemon
