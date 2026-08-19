@@ -209,6 +209,26 @@ tasks:
     cmds:
       - ./tools/relayctl.sh up
 
+  test:restart:
+    desc: restart.sh 本地生命周期、幂等和进程清理回归
+    cmds:
+      - bash tools/restart_test.sh
+
+  dev:start:
+    desc: 启动 Relay、Daemon、Flutter 本地开发主流程（可传 restart.sh 参数）
+    cmds:
+      - ./restart.sh restart {{.CLI_ARGS}}
+
+  dev:stop:
+    desc: 停止本脚本拥有的本地开发进程
+    cmds:
+      - ./restart.sh stop {{.CLI_ARGS}}
+
+  dev:status:
+    desc: 查看 Relay、Daemon、Flutter、Web、Admin 的 PID/状态/日志
+    cmds:
+      - ./restart.sh status {{.CLI_ARGS}}
+
   compose:down:
     desc: 停止本轮 Relay
     cmds:

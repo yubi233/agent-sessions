@@ -22,6 +22,9 @@ data/
 tmp/
 .task/
 
+# 会话绑定的本地项目目录；可供真实 Agent 读取，但不能提交。
+/testbox/
+
 # IDE 与系统
 .idea/
 .vscode/

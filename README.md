@@ -32,3 +32,28 @@
 - 单租户自托管、SQLite 权威存储、REST + 账号级 SSE 与端到端加密。
 
 首版只读 Git diff，不支持远程开机、Git 写操作、语音、社交、付费和 Happy 协议兼容。
+
+## 本地启动
+
+仓库根目录的 `restart.sh` 是完整本地开发入口，默认启动 Relay、Daemon 和 Flutter macOS 客户端：
+
+```bash
+./restart.sh start
+./restart.sh status
+./restart.sh stop
+./restart.sh restart
+
+# 本机 macOS Flutter（默认）
+./restart.sh restart --flutter-mode mac
+
+# 已连接的物理 Android：脚本自动选择唯一 online 设备
+AGENT_SESSIONS_FLUTTER_RELAY_BASE=http://<本机局域网地址>:8787 \
+  ./restart.sh restart --flutter-mode device
+
+# Web/Admin 仅在需要时显式打开
+./restart.sh restart --with-web --with-admin
+```
+
+Relay 委托给 `tools/relayctl.sh`，Daemon 使用真实 `go run ./apps/daemon run`，Flutter 使用真实 `flutter run -d <target> --no-pub`；日志和 PID 状态写入 `.task/restart/`，不会写入 `testbox/`。Daemon 默认开启，必须存在已配对的 `AGENT_SESSIONS_DAEMON_TOKEN`，否则入口在启动任何组件前 fail-closed。Flutter 目标可通过 `--flutter-mode mac|device`、`--flutter-device <adb-serial>` 或 `AGENT_SESSIONS_FLUTTER_DEVICE` 覆盖；device 模式只接受脚本发现的 online 物理 Android，不启动 AVD。设备访问 Relay 时必须设置 host 可达的 `AGENT_SESSIONS_FLUTTER_RELAY_BASE`。
+
+`restart` 会清理所选 Relay/Web/Admin 端口上遗留的监听进程；`start` 默认不清理外部进程，可显式加 `--clean-ports`，也可用 `--no-clean-ports` 禁止清理。`--no-daemon`、`--no-flutter` 可用于分段调试，`--with-web`、`--with-admin` 开启可选调试面。`stop` 只停止本脚本记录且命令签名匹配的进程。清理范围只包含配置的服务端口，不会扫描其他端口。脚本回归使用 `task test:restart`。
