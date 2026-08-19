@@ -59,8 +59,21 @@ class SessionProjectionController {
           pendingSteering: event.pendingSteering,
           references: _referenceChipsFor(event),
           filePath: event.filePath,
+          toolDetails: _toolDetailsFor(event),
         ),
       );
+      final producedFiles = _producedFilesFor(event);
+      if (producedFiles.isNotEmpty) {
+        nodes.add(
+          ConversationNode(
+            key: 'node:${event.sequence}:turnTail:producedFiles',
+            kind: ConversationNodeKind.turnTail,
+            sequence: event.sequence,
+            label: '产物文件',
+            producedFiles: producedFiles,
+          ),
+        );
+      }
     }
 
     return SessionProjectionSnapshot(
@@ -139,6 +152,31 @@ class SessionProjectionController {
   bool _looksLikeCommand(SessionTimelineEvent event) =>
       event.text?.trimLeft().startsWith('/') == true ||
       event.label.toLowerCase().contains('command');
+
+  ConversationToolDetails? _toolDetailsFor(SessionTimelineEvent event) {
+    if (event.kind != SessionTimelineKind.toolActivity) return null;
+    final details = ConversationToolDetails(
+      input: event.toolInput,
+      output: event.toolOutput,
+      inspectTarget: event.inspectTarget,
+    );
+    return details.hasContent ? details : null;
+  }
+
+  List<ConversationProducedFile> _producedFilesFor(
+    SessionTimelineEvent event,
+  ) => event.producedFilePaths
+      .where((path) => path.trim().isNotEmpty)
+      .map(
+        (path) => ConversationProducedFile(path: path, label: _basename(path)),
+      )
+      .toList(growable: false);
+
+  String _basename(String path) {
+    final normalized = path.trim();
+    final parts = normalized.split('/').where((part) => part.isNotEmpty);
+    return parts.isEmpty ? normalized : parts.last;
+  }
 
   String? _copyTextFor(
     SessionTimelineEvent event,

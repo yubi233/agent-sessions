@@ -301,11 +301,13 @@ class _SessionChatView extends StatelessWidget {
     required this.sessions,
     required this.recovery,
     required this.sessionId,
+    required this.onInspectTarget,
   });
 
   final SessionController sessions;
   final SessionRecoveryController recovery;
   final String sessionId;
+  final void Function(String target) onInspectTarget;
 
   @override
   Widget build(BuildContext context) {
@@ -324,6 +326,7 @@ class _SessionChatView extends StatelessWidget {
     return SessionChatView(
       nodes: projection.chatNodes,
       running: sessions.isStreaming,
+      onInspectTarget: onInspectTarget,
       emptyHero: hasConversationContent
           ? null
           : _ConversationEmptyHero(session: sessions.selectedSession),
@@ -391,51 +394,89 @@ class _ConversationEmptyHero extends StatelessWidget {
 }
 
 class _SessionTrajectoryView extends StatelessWidget {
-  const _SessionTrajectoryView({required this.events});
+  const _SessionTrajectoryView({
+    required this.events,
+    required this.inspectTarget,
+    required this.onInspectConsumed,
+  });
 
   final List<SessionTimelineEvent> events;
+  final String? inspectTarget;
+  final VoidCallback onInspectConsumed;
 
   @override
-  Widget build(BuildContext context) => ListView.separated(
-    key: const Key('session-trajectory-view'),
-    padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-    itemCount: events.length,
-    separatorBuilder: (_, _) => const Divider(height: 20),
-    itemBuilder: (context, index) {
-      final event = events[index];
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 28,
-            child: Text(
-              '${event.sequence}',
-              style: Theme.of(context).textTheme.labelSmall,
+  Widget build(BuildContext context) {
+    final target = inspectTarget;
+    if (target != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => onInspectConsumed());
+    }
+    return ListView.separated(
+      key: const Key('session-trajectory-view'),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      itemCount: events.length + (target == null ? 0 : 1),
+      separatorBuilder: (_, _) => const Divider(height: 20),
+      itemBuilder: (context, index) {
+        if (target != null && index == 0) {
+          return _TrajectoryInspectBanner(target: target);
+        }
+        final event = events[index - (target == null ? 0 : 1)];
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 28,
+              child: Text(
+                '${event.sequence}',
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
             ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  event.label,
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                if (event.text?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 4),
-                  Text(event.text!),
-                ],
-                if (event.toolStatus != null)
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    event.toolStatus!,
-                    style: Theme.of(context).textTheme.bodySmall,
+                    event.label,
+                    style: Theme.of(context).textTheme.titleSmall,
                   ),
-              ],
+                  if (event.text?.trim().isNotEmpty == true) ...[
+                    const SizedBox(height: 4),
+                    Text(event.text!),
+                  ],
+                  if (event.toolStatus != null)
+                    Text(
+                      event.toolStatus!,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
-      );
-    },
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _TrajectoryInspectBanner extends StatelessWidget {
+  const _TrajectoryInspectBanner({required this.target});
+
+  final String target;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('session-trajectory-inspect-target'),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.primaryContainer,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.manage_search_outlined),
+        const SizedBox(width: 8),
+        Expanded(child: Text('Inspect target: $target')),
+      ],
+    ),
   );
 }
 
@@ -536,8 +577,27 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                 sessions: sessions,
                 recovery: recovery,
                 sessionId: widget.sessionId,
+                onInspectTarget: (target) {
+                  ref
+                      .read(sessionViewControllerProvider)
+                      .setInspectTarget(widget.sessionId, target);
+                },
               )
-            : _SessionTrajectoryView(events: sessions.timeline),
+            : _SessionTrajectoryView(
+                events: sessions.timeline,
+                inspectTarget: viewController.inspectTargetFor(
+                  widget.sessionId,
+                ),
+                onInspectConsumed: () {
+                  final target = viewController.inspectTargetFor(
+                    widget.sessionId,
+                  );
+                  if (target == null) return;
+                  ref
+                      .read(sessionViewControllerProvider)
+                      .clearInspectTarget(widget.sessionId, target);
+                },
+              ),
         composer: _SessionComposer(
           sessions: sessions,
           canWrite: app.canManageDevices,

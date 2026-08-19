@@ -103,7 +103,7 @@ class FixtureRelayRepository implements RelayRepository {
     final state = _sessionState(sessionId);
     state.append(
       eventType: 'session.recovery.available',
-      payload: const {
+      payload: {
         'kind': 'system_notice',
         'label': '离线期间有新事件',
         'text': '已在恢复后按 cursor 补齐一条 fixture 状态事件。',
@@ -884,12 +884,19 @@ class FixtureRelayRepository implements RelayRepository {
     );
     state.append(
       eventType: 'tool.started',
-      payload: const {
+      payload: {
         'kind': 'tool_activity',
         'label': '读取工作区状态',
         'text': 'fixture 工具活动，不含真实命令或文件内容。',
         'tool_status': '运行中',
         'file_path': '.',
+        'tool_input': '{"kind":"workspace.status","path":"."}',
+        'tool_output': 'fixture: workspace status ready',
+        'inspect_target': 'fixture-tool-${state.nextSequence}',
+        'produced_files': const [
+          'reports/fixture-summary.md',
+          'logs/fixture.log',
+        ],
       },
       now: now,
     );

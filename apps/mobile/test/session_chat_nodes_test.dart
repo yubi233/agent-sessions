@@ -294,5 +294,128 @@ void main() {
         'two.dart',
       );
     });
+
+    testWidgets('P2-C 工具详情可展开并通过 inspect 回调交给 Trajectory', (tester) async {
+      final inspected = <String>[];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 520,
+              child: SessionChatView(
+                running: false,
+                onInspectTarget: inspected.add,
+                nodes: const [
+                  ConversationNode(
+                    key: 'tool-details',
+                    kind: ConversationNodeKind.tool,
+                    sequence: 31,
+                    label: '读取工作区状态',
+                    text: '检查完成',
+                    toolStatus: 'completed',
+                    toolDetails: ConversationToolDetails(
+                      input: '{"kind":"workspace.status","path":"."}',
+                      output: 'fixture: workspace status ready',
+                      inspectTarget: 'tool-31',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      await tester.tap(find.byKey(const Key('session-tool-details-31')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('session-tool-input-31')), findsOneWidget);
+      expect(find.byKey(const Key('session-tool-output-31')), findsOneWidget);
+      expect(find.text('IN'), findsOneWidget);
+      expect(find.text('OUT'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('session-tool-inspect-31')));
+      await tester.pump();
+
+      expect(inspected, ['tool-31']);
+    });
+
+    testWidgets('P2-C produced files 独立 turn-tail，chips 复用 openFile opener', (
+      tester,
+    ) async {
+      final opened = <String>[];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 520,
+              child: SessionChatView(
+                running: false,
+                openFile: (path) async => opened.add(path),
+                nodes: const [
+                  ConversationNode(
+                    key: 'produced-files',
+                    kind: ConversationNodeKind.turnTail,
+                    sequence: 32,
+                    label: '产物文件',
+                    producedFiles: [
+                      ConversationProducedFile(
+                        path: 'reports/fixture-summary.md',
+                        label: 'fixture-summary.md',
+                      ),
+                      ConversationProducedFile(
+                        path: 'logs/fixture.log',
+                        label: 'fixture.log',
+                      ),
+                      ConversationProducedFile(
+                        path: 'reports/raw.json',
+                        label: 'raw.json',
+                      ),
+                      ConversationProducedFile(
+                        path: 'reports/fourth.txt',
+                        label: 'fourth.txt',
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      expect(
+        find.byKey(const Key('session-produced-files-row-32')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('session-produced-file-32-0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('session-produced-file-32-2')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('session-produced-files-more-32')),
+        findsOneWidget,
+      );
+      expect(find.text('+1'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('session-produced-file-32-0')));
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('session-produced-files-open-folder-32')),
+      );
+      await tester.pump();
+
+      expect(opened, ['reports/fixture-summary.md', '.']);
+    });
   });
 }

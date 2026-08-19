@@ -166,5 +166,59 @@ void main() {
       expect(tool.canCopy, isFalse);
       expect(tool.filePath, 'pubspec.yaml');
     });
+
+    test('P2-C 工具详情留在 tool node，产物文件生成独立 turn-tail', () {
+      const projection = SessionProjectionController();
+      final snapshot = projection.buildSnapshot(
+        timeline: const [
+          SessionTimelineEvent(
+            sequence: 31,
+            kind: SessionTimelineKind.toolActivity,
+            label: '读取工作区状态',
+            text: '检查完成',
+            toolStatus: 'completed',
+            toolInput: '{"kind":"workspace.status","path":"."}',
+            toolOutput: 'fixture: workspace status ready',
+            inspectTarget: 'tool-31',
+            producedFilePaths: [
+              'reports/fixture-summary.md',
+              'logs/fixture.log',
+            ],
+          ),
+          SessionTimelineEvent(
+            sequence: 32,
+            kind: SessionTimelineKind.assistantMessage,
+            label: 'Assistant',
+            text: '我写好了 reports/from-prose.md。',
+            completedTurn: true,
+          ),
+        ],
+        controls: const SessionControlState.empty(),
+      );
+
+      expect(snapshot.chatNodes, hasLength(3));
+      final tool = snapshot.chatNodes[0];
+      expect(tool.kind, ConversationNodeKind.tool);
+      expect(tool.toolDetails?.input, '{"kind":"workspace.status","path":"."}');
+      expect(tool.toolDetails?.output, 'fixture: workspace status ready');
+      expect(tool.toolDetails?.inspectTarget, 'tool-31');
+      expect(tool.producedFiles, isEmpty);
+
+      final produced = snapshot.chatNodes[1];
+      expect(produced.kind, ConversationNodeKind.turnTail);
+      expect(produced.key, 'node:31:turnTail:producedFiles');
+      expect(produced.producedFiles.map((file) => file.path), [
+        'reports/fixture-summary.md',
+        'logs/fixture.log',
+      ]);
+      expect(produced.producedFiles.map((file) => file.label), [
+        'fixture-summary.md',
+        'fixture.log',
+      ]);
+
+      final assistant = snapshot.chatNodes[2];
+      expect(assistant.kind, ConversationNodeKind.assistant);
+      expect(assistant.producedFiles, isEmpty);
+    });
   });
 }

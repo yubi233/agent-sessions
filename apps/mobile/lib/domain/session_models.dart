@@ -348,6 +348,10 @@ class SessionTimelineEvent {
     this.pendingSteering = false,
     this.referenceLabels = const [],
     this.filePath,
+    this.toolInput,
+    this.toolOutput,
+    this.inspectTarget,
+    this.producedFilePaths = const [],
   });
 
   factory SessionTimelineEvent.fromRelayEvent(RelaySessionEvent event) {
@@ -380,6 +384,10 @@ class SessionTimelineEvent {
       pendingSteering: payload['pending_steering'] == true,
       referenceLabels: _stringList(payload['references']),
       filePath: _nullableString(payload['file_path']),
+      toolInput: _nullableString(payload['tool_input']),
+      toolOutput: _nullableString(payload['tool_output']),
+      inspectTarget: _nullableString(payload['inspect_target']),
+      producedFilePaths: _stringList(payload['produced_files']),
     );
   }
 
@@ -402,6 +410,10 @@ class SessionTimelineEvent {
   final bool pendingSteering;
   final List<String> referenceLabels;
   final String? filePath;
+  final String? toolInput;
+  final String? toolOutput;
+  final String? inspectTarget;
+  final List<String> producedFilePaths;
 }
 
 SessionTimelineKind _timelineKindFromFixture(String? kind) => switch (kind) {

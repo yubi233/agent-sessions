@@ -35,6 +35,34 @@ class ConversationReferenceChip {
   final String? target;
 }
 
+/// 工具详情的只读 display payload。
+///
+/// 这里保存的是已经裁剪/脱敏后的展示文本；真实工具参数、文件正文或隐藏输出
+/// 不得从 Relay envelope 猜测生成。
+class ConversationToolDetails {
+  const ConversationToolDetails({this.input, this.output, this.inspectTarget});
+
+  final String? input;
+  final String? output;
+  final String? inspectTarget;
+
+  bool get hasContent =>
+      input?.trim().isNotEmpty == true ||
+      output?.trim().isNotEmpty == true ||
+      inspectTarget?.trim().isNotEmpty == true;
+}
+
+/// assistant turn-tail 的产物文件 chip。
+///
+/// 路径必须来自工具 follow-along 或显式 projection，不能从 assistant prose 猜测。
+class ConversationProducedFile {
+  const ConversationProducedFile({required this.path, String? label})
+    : label = label ?? path;
+
+  final String path;
+  final String label;
+}
+
 /// 会话 Chat 视图的单个 display-safe 节点。
 class ConversationNode {
   const ConversationNode({
@@ -56,6 +84,8 @@ class ConversationNode {
     this.pendingSteering = false,
     this.references = const [],
     this.filePath,
+    this.toolDetails,
+    this.producedFiles = const [],
   });
 
   /// 稳定 key 由投影层生成，后续 UI keyed renderer 只能依赖该 key。
@@ -91,6 +121,9 @@ class ConversationNode {
 
   /// 工具行或 produced file chip 的可打开路径；由 Host opener 解析，不在 UI 猜绝对路径。
   final String? filePath;
+
+  final ConversationToolDetails? toolDetails;
+  final List<ConversationProducedFile> producedFiles;
 }
 
 enum ComposerPendingKind { approval, question }

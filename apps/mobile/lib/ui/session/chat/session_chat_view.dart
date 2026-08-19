@@ -4,6 +4,7 @@ import '../../../domain/session_projection_models.dart';
 import 'session_chat_node_seat.dart';
 
 typedef SessionFileOpener = Future<void> Function(String path);
+typedef SessionInspectTargetHandler = void Function(String target);
 
 /// v0.5 Chat view：唯一消费 `ConversationNode` 投影的消息流入口。
 ///
@@ -16,6 +17,7 @@ class SessionChatView extends StatefulWidget {
     this.emptyHero,
     this.footer = const [],
     this.openFile,
+    this.onInspectTarget,
     super.key,
   });
 
@@ -24,6 +26,7 @@ class SessionChatView extends StatefulWidget {
   final Widget? emptyHero;
   final List<Widget> footer;
   final SessionFileOpener? openFile;
+  final SessionInspectTargetHandler? onInspectTarget;
 
   @override
   State<SessionChatView> createState() => _SessionChatViewState();
@@ -125,7 +128,11 @@ class _SessionChatViewState extends State<SessionChatView> {
     final children = <Widget>[
       if (widget.emptyHero != null) widget.emptyHero!,
       for (final node in widget.nodes)
-        SessionChatNodeSeat(node: node, onOpenFile: _requestOpenFile),
+        SessionChatNodeSeat(
+          node: node,
+          onOpenFile: _requestOpenFile,
+          onInspect: widget.onInspectTarget,
+        ),
       if (widget.running) const _TurnStatusRow(),
       ...widget.footer,
     ];

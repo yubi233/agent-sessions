@@ -571,6 +571,86 @@ void main() {
     },
   );
 
+  testWidgets('MOBILE-V05-18/P2-C：Chat 工具 Inspect 一次性切到 Trajectory', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
+    await _registerOwner(tester, 'inspect-handoff-owner@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+      'fixture-workspace',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')),
+    );
+    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '请生成 P2-C inspect handoff fixture',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    final timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final tool = timeline.firstWhere(
+      (event) => event.kind == SessionTimelineKind.toolActivity,
+    );
+    expect(tool.toolInput, isNotNull);
+    expect(tool.inspectTarget, isNotNull);
+
+    final toolDetails = find.byKey(
+      Key('session-tool-details-${tool.sequence}'),
+    );
+    await _scrollChatUntilVisible(tester, toolDetails);
+    await _tapVisible(tester, toolDetails);
+    final inspectButton = find.byKey(
+      Key('session-tool-inspect-${tool.sequence}'),
+    );
+    await _scrollChatUntilVisible(tester, inspectButton);
+    await _tapVisible(tester, inspectButton);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-inspect-target')),
+    );
+    expect(find.byKey(const Key('session-trajectory-view')), findsOneWidget);
+    expect(find.textContaining(tool.inspectTarget!), findsOneWidget);
+
+    // Inspect target 是一次性 view-store handoff；应用一帧后必须清空，避免 tab 往返重复选中。
+    await tester.pump();
+    await _waitForGone(
+      tester,
+      find.byKey(const Key('session-trajectory-inspect-target')),
+    );
+  });
+
   testWidgets('MOBILE-07：文件浏览入口打开只读工作区文件页', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
@@ -844,6 +924,22 @@ Future<void> _waitForEnabledIconButton(WidgetTester tester, Key key) async {
   }
   expect(finder, findsOneWidget);
   expect(tester.widget<IconButton>(finder).onPressed, isNotNull);
+}
+
+Future<void> _scrollChatUntilVisible(WidgetTester tester, Finder finder) async {
+  await tester.scrollUntilVisible(
+    finder,
+    120,
+    scrollable: find.descendant(
+      of: find.byKey(const Key('session-chat-view')),
+      matching: find.byType(Scrollable),
+    ),
+    maxScrolls: 24,
+  );
+  for (var frame = 0; frame < 3; frame += 1) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(finder, findsOneWidget);
 }
 
 /// 等待元素完全消失（页面过渡完成后再操作列表，避免 Offstage 阶段命中失败）。

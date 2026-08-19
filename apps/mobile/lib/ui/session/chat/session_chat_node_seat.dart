@@ -8,10 +8,16 @@ import '../../../domain/session_projection_models.dart';
 /// 这里消费的是 display-safe projection，不直接读取 Relay event，也不处理写命令。
 /// 这样 pending interaction、密文占位和隐藏推理都由投影层先裁剪，再进入 UI。
 class SessionChatNodeSeat extends StatelessWidget {
-  const SessionChatNodeSeat({required this.node, this.onOpenFile, super.key});
+  const SessionChatNodeSeat({
+    required this.node,
+    this.onOpenFile,
+    this.onInspect,
+    super.key,
+  });
 
   final ConversationNode node;
   final Future<void> Function(String path)? onOpenFile;
+  final void Function(String target)? onInspect;
 
   @override
   Widget build(BuildContext context) {
@@ -30,6 +36,7 @@ class SessionChatNodeSeat extends StatelessWidget {
           ConversationNodeKind.tool => _ToolStepRow(
             node: node,
             onOpenFile: onOpenFile,
+            onInspect: onInspect,
           ),
           ConversationNodeKind.command => _CompactSystemRow(
             node: node,
@@ -66,7 +73,7 @@ class SessionChatNodeSeat extends StatelessWidget {
             node: node,
             icon: Icons.done_all_outlined,
             tone: _SystemRowTone.neutral,
-          ),
+          ).maybeProducedFiles(node, onOpenFile),
         },
       ),
     );
@@ -374,19 +381,271 @@ class _ReasoningRow extends StatelessWidget {
 }
 
 class _ToolStepRow extends StatelessWidget {
-  const _ToolStepRow({required this.node, required this.onOpenFile});
+  const _ToolStepRow({
+    required this.node,
+    required this.onOpenFile,
+    required this.onInspect,
+  });
+
+  final ConversationNode node;
+  final Future<void> Function(String path)? onOpenFile;
+  final void Function(String target)? onInspect;
+
+  @override
+  Widget build(BuildContext context) {
+    final details = node.toolDetails;
+    final hasDetails = details?.hasContent == true;
+    final hasPath = node.filePath?.trim().isNotEmpty == true;
+    if (!hasDetails) {
+      return _CompactSystemRow(
+        node: node,
+        icon: Icons.build_outlined,
+        tone: node.isStreaming
+            ? _SystemRowTone.warning
+            : _SystemRowTone.neutral,
+        trailing: node.toolStatus,
+        onOpenFile: onOpenFile,
+      );
+    }
+
+    final scheme = Theme.of(context).colorScheme;
+    final tone = node.isStreaming
+        ? _SystemRowTone.warning
+        : _SystemRowTone.neutral;
+    final color = switch (tone) {
+      _SystemRowTone.neutral => scheme.onSurfaceVariant,
+      _SystemRowTone.warning => scheme.tertiary,
+      _SystemRowTone.error => scheme.error,
+    };
+    final detail = node.toolStatus ?? node.text;
+    return Card(
+      key: Key('session-compact-node-${node.sequence}-${node.kind.name}'),
+      elevation: 0,
+      color: scheme.surfaceContainerLowest,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: color.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ExpansionTile(
+        key: Key('session-tool-details-${node.sequence}'),
+        leading: Icon(Icons.build_outlined, color: color),
+        title: Text(
+          node.label,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+            color: color,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        subtitle: _ToolRowSubtitle(
+          detail: detail,
+          node: node,
+          hasPath: hasPath,
+          onOpenFile: onOpenFile,
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        children: [
+          if (details?.input?.trim().isNotEmpty == true)
+            _ToolDetailBlock(
+              key: Key('session-tool-input-${node.sequence}'),
+              label: 'IN',
+              text: details!.input!,
+            ),
+          if (details?.output?.trim().isNotEmpty == true)
+            _ToolDetailBlock(
+              key: Key('session-tool-output-${node.sequence}'),
+              label: 'OUT',
+              text: details!.output!,
+            ),
+          if (details?.inspectTarget?.trim().isNotEmpty == true)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                key: Key('session-tool-inspect-${node.sequence}'),
+                onPressed: () => onInspect?.call(details!.inspectTarget!),
+                icon: const Icon(Icons.manage_search_outlined, size: 16),
+                label: const Text('Inspect'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ToolRowSubtitle extends StatelessWidget {
+  const _ToolRowSubtitle({
+    required this.detail,
+    required this.node,
+    required this.hasPath,
+    required this.onOpenFile,
+  });
+
+  final String? detail;
+  final ConversationNode node;
+  final bool hasPath;
+  final Future<void> Function(String path)? onOpenFile;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasDetail = detail?.trim().isNotEmpty == true;
+    if (!hasDetail && !hasPath) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (hasDetail) Text(detail!),
+        if (hasPath)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: Key('session-tool-open-path-${node.sequence}'),
+              onPressed: () => onOpenFile?.call(node.filePath!),
+              icon: const Icon(Icons.open_in_new_outlined, size: 16),
+              label: Text(node.filePath!),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ToolDetailBlock extends StatelessWidget {
+  const _ToolDetailBlock({required this.label, required this.text, super.key});
+
+  final String label;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 180),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        ),
+        child: SingleChildScrollView(
+          key: Key('session-tool-detail-scroll-$label'),
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 34,
+                child: Text(
+                  label,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  text,
+                  style: const TextStyle(fontFamily: 'monospace'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+extension _ProducedFilesRowSwitch on Widget {
+  Widget maybeProducedFiles(
+    ConversationNode node,
+    Future<void> Function(String path)? onOpenFile,
+  ) {
+    if (node.producedFiles.isEmpty) return this;
+    return _ProducedFilesRow(node: node, onOpenFile: onOpenFile);
+  }
+}
+
+class _ProducedFilesRow extends StatelessWidget {
+  const _ProducedFilesRow({required this.node, required this.onOpenFile});
+
+  static const _visibleLimit = 3;
 
   final ConversationNode node;
   final Future<void> Function(String path)? onOpenFile;
 
   @override
-  Widget build(BuildContext context) => _CompactSystemRow(
-    node: node,
-    icon: Icons.build_outlined,
-    tone: node.isStreaming ? _SystemRowTone.warning : _SystemRowTone.neutral,
-    trailing: node.toolStatus,
-    onOpenFile: onOpenFile,
-  );
+  Widget build(BuildContext context) {
+    final files = node.producedFiles;
+    final visibleCount = files.length < _visibleLimit
+        ? files.length
+        : _visibleLimit;
+    final hidden = files.length - visibleCount;
+    return Container(
+      key: Key('session-produced-files-row-${node.sequence}'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(
+            color: Theme.of(context).colorScheme.primary,
+            width: 3,
+          ),
+        ),
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.task_outlined,
+                size: 18,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '产物文件',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (var index = 0; index < visibleCount; index++)
+                ActionChip(
+                  key: Key('session-produced-file-${node.sequence}-$index'),
+                  avatar: const Icon(
+                    Icons.insert_drive_file_outlined,
+                    size: 16,
+                  ),
+                  label: Text(files[index].label),
+                  tooltip: files[index].path,
+                  onPressed: () => onOpenFile?.call(files[index].path),
+                ),
+              if (hidden > 0)
+                Chip(
+                  key: Key('session-produced-files-more-${node.sequence}'),
+                  label: Text('+$hidden'),
+                ),
+              if (hidden > 0)
+                TextButton.icon(
+                  key: Key(
+                    'session-produced-files-open-folder-${node.sequence}',
+                  ),
+                  onPressed: () => onOpenFile?.call('.'),
+                  icon: const Icon(Icons.folder_open_outlined, size: 16),
+                  label: const Text('打开目录'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 enum _SystemRowTone { neutral, warning, error }
