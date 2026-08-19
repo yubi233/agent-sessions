@@ -873,7 +873,7 @@
     },
     {
       "id": "MOBILE-V05-01",
-      "title": "Resident shell 在空白/活跃/路由切换下保持 composer 草稿",
+      "title": "Resident shell 在空白/活跃/路由切换下保持 composer 草稿，并覆盖 replay settling 防闪烁",
       "status": "planned",
       "phase": "v0.5/P1",
       "category": "Widget",
@@ -961,7 +961,7 @@
     },
     {
       "id": "MOBILE-V05-05",
-      "title": "Question takeover 优先，answer 后恢复 InputBar",
+      "title": "Question takeover 优先，answer 后恢复 InputBar；长内容滚动、失败重试和本地草稿保留",
       "status": "planned",
       "phase": "v0.5/P4",
       "category": "Composer takeover",
@@ -983,7 +983,7 @@
     },
     {
       "id": "MOBILE-V05-06",
-      "title": "Approval takeover 展示理由/命令，allow/reject 一次性",
+      "title": "Approval takeover 展示理由/命令，allow/reject 一次性；命令滚动区与按钮可达",
       "status": "planned",
       "phase": "v0.5/P4",
       "category": "Composer takeover",
@@ -1005,7 +1005,7 @@
     },
     {
       "id": "MOBILE-V05-07",
-      "title": "QueueDock 编辑、删除、逐条 steer、全部 steer，不自动 flush",
+      "title": "QueueDock 编辑、删除、逐条 steer、全部 steer，不自动 flush；非文本禁用原因与失败 toast",
       "status": "planned",
       "phase": "v0.5/P5",
       "category": "Queue",
@@ -1028,7 +1028,7 @@
     },
     {
       "id": "MOBILE-V05-08",
-      "title": "/ 与 @ selection trigger、键盘导航、IME Enter 防误发",
+      "title": "/ 与 @ selection trigger、键盘导航、IME Enter 防误发、Escape 分层和长按 Enter 防重复",
       "status": "planned",
       "phase": "v0.5/P5",
       "category": "Input trigger",
@@ -1094,7 +1094,7 @@
     },
     {
       "id": "MOBILE-V05-11",
-      "title": "Trajectory snapshot、虚拟行、load older、record inspector",
+      "title": "Trajectory snapshot、虚拟行、load older、record inspector、timeline range/zoom/selection",
       "status": "planned",
       "phase": "v0.5/P6",
       "category": "Trajectory",
@@ -1204,7 +1204,7 @@
     },
     {
       "id": "MOBILE-V05-16",
-      "title": "Workspace hero / no-session resident InputBar identity",
+      "title": "Workspace hero / no-session resident InputBar identity、pending pick、deleted workspace、error retry",
       "status": "planned",
       "phase": "v0.5/P1",
       "category": "Hero",
@@ -1314,7 +1314,7 @@
     },
     {
       "id": "MOBILE-V05-21",
-      "title": "danger-full-access 风险确认、模型两级菜单 load/select 错误面",
+      "title": "danger-full-access 风险确认、模型两级菜单 load/select 错误面、Enter 行为设置入口",
       "status": "planned",
       "phase": "v0.5/P5",
       "category": "Risk and model menu",
@@ -1403,7 +1403,7 @@
     },
     {
       "id": "MOBILE-V05-25",
-      "title": "subagent breadcrumb、hero agent preset 暂存、produced files chips 与 inline file mentions",
+      "title": "subagent breadcrumb、hero agent preset 暂存、produced files chips、inline file mentions 与核心无障碍/焦点契约",
       "status": "planned",
       "phase": "v0.5/P1-P2",
       "category": "Header and turn-tail",
