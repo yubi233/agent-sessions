@@ -23,6 +23,7 @@ import '../state/message_deep_link_controller.dart';
 import '../state/recent_sessions_controller.dart';
 import '../state/session_controller.dart';
 import '../state/session_info_controller.dart';
+import '../state/session_view_controller.dart';
 import '../state/settings_controller.dart';
 import '../state/terminal_status_controller.dart';
 import '../state/usage_controller.dart';
@@ -131,6 +132,12 @@ final sessionRecoveryControllerProvider =
       );
       return controller;
     });
+
+/// v0.5 resident shell 的本地 UI 状态：只保存 active view 等展示选择，不写 Relay。
+final sessionViewControllerProvider =
+    ChangeNotifierProvider<SessionViewController>(
+      (ref) => SessionViewController(),
+    );
 
 /// P2-F Daemon 观察按会话隔离，只消费 Relay 的裁剪只读投影；不与 composer、lease 或写命令共享状态。
 final daemonObservationControllerProvider =

@@ -38,6 +38,17 @@ void main() {
       tester,
       find.byKey(const Key('session-detail-screen')),
     );
+    expect(find.byKey(const Key('happy-session-header')), findsOneWidget);
+    expect(
+      find.byKey(const Key('happy-session-provider-avatar')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('happy-session-empty-state')), findsOneWidget);
+    expect(find.text('No messages yet'), findsOneWidget);
+    expect(find.text('输入消息...'), findsOneWidget);
+    expect(find.byKey(const Key('happy-session-model-row')), findsOneWidget);
+    expect(find.textContaining('邮箱'), findsNothing);
+    expect(find.textContaining('密码'), findsNothing);
     expect(
       find.byKey(const Key('session-composer-blocked-reason')),
       findsOneWidget,
@@ -78,7 +89,7 @@ void main() {
     );
     await _waitForVisible(
       tester,
-      find.byKey(Key('permission-resolved-${permission.requestId}')),
+      find.byKey(Key('question-freeform-${question.requestId}')),
     );
     await _enterVisible(
       tester,
@@ -89,15 +100,13 @@ void main() {
       tester,
       find.byKey(Key('question-submit-${question.requestId}')),
     );
-    await _waitForVisible(
+    await _waitForGone(
       tester,
-      find.byKey(Key('question-resolved-${question.requestId}')),
+      find.byKey(Key('question-submit-${question.requestId}')),
     );
 
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('session-composer-primary-action')),
-    );
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
     await _waitForVisible(tester, find.text('已停止'));
   });
 
@@ -170,6 +179,10 @@ void main() {
       find.byKey(const Key('session-detail-screen')),
     );
 
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-quick-menu-button')),
+    );
     await _tapVisible(tester, find.byKey(const Key('session-open-git-button')));
     await _waitForVisible(tester, find.byKey(const Key('git-diff-screen')));
     await _waitForVisible(
@@ -255,7 +268,6 @@ void main() {
     // 有 lease 后不再显示阻断原因。
     expect(find.text('等待获取会话控制权'), findsNothing);
     await _tapVisible(tester, find.byKey(const Key('session-quick-resume')));
-    await _waitForVisible(tester, find.textContaining('已提交恢复请求'));
 
     final snapshot = (await harness.relay.getSessionSnapshot(
       (await harness.relay.listSessions()).single.id,
@@ -276,7 +288,9 @@ void main() {
       (await harness.relay.listSessions()).single.id,
     );
     expect(
-      startedSnapshot.events.any((event) => event.eventType == 'session.started'),
+      startedSnapshot.events.any(
+        (event) => event.eventType == 'session.started',
+      ),
       isTrue,
     );
     await _tapVisible(
@@ -465,6 +479,98 @@ void main() {
     );
   });
 
+  testWidgets(
+    'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
+    (tester) async {
+      final harness = MobileAppHarness();
+      await tester.pumpWidget(harness.build());
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('device-connect-submit')),
+      );
+      await _registerOwner(tester, 'resident-shell-owner@fixture.test');
+
+      await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('new-session-workspace-input')),
+      );
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('new-session-create-button')),
+      );
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('session-detail-screen')),
+      );
+      final sessionId = (await harness.relay.listSessions()).single.id;
+
+      expect(
+        find.byKey(const Key('session-conversation-root')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('session-strict-header')), findsOneWidget);
+      expect(
+        find.byKey(const Key('session-conversation-scroll-owner')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('session-composer-seat')), findsOneWidget);
+
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-acquire-lease-button')),
+      );
+      await _waitForVisible(tester, find.text('已获得控制权'));
+      await _enterVisible(
+        tester,
+        find.byKey(const Key('session-composer-input')),
+        'P1 resident shell 草稿',
+      );
+      await tester.pump();
+
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-tab-trajectory')),
+      );
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('session-trajectory-view')),
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('session-composer-input')))
+            .controller!
+            .text,
+        'P1 resident shell 草稿',
+      );
+
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-detail-back-button')).first,
+      );
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('session-home-screen')),
+      );
+      await _tapVisible(tester, find.byKey(Key('session-row-$sessionId')));
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('session-detail-screen')),
+      );
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('session-trajectory-view')),
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('session-composer-input')))
+            .controller!
+            .text,
+        'P1 resident shell 草稿',
+      );
+    },
+  );
+
   testWidgets('MOBILE-07：文件浏览入口打开只读工作区文件页', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
@@ -550,7 +656,6 @@ void main() {
       '先交付回归再优化文案',
     );
     await _tapVisible(tester, find.byKey(const Key('goal-edit-submit')));
-    await _waitForVisible(tester, find.textContaining('已更新目标'));
     // 目标卡片标题乐观更新。
     await _waitForVisible(tester, find.text('先交付回归再优化文案'));
 
@@ -727,6 +832,18 @@ Future<void> _enterVisible(
   await tester.ensureVisible(finder);
   await tester.pump();
   await tester.enterText(finder, value);
+}
+
+Future<void> _waitForEnabledIconButton(WidgetTester tester, Key key) async {
+  final finder = find.byKey(key);
+  for (var frame = 0; frame < 80; frame += 1) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (finder.evaluate().isEmpty) continue;
+    final button = tester.widget<IconButton>(finder);
+    if (button.onPressed != null) return;
+  }
+  expect(finder, findsOneWidget);
+  expect(tester.widget<IconButton>(finder).onPressed, isNotNull);
 }
 
 /// 等待元素完全消失（页面过渡完成后再操作列表，避免 Offstage 阶段命中失败）。

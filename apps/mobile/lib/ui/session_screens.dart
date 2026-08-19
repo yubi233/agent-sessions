@@ -13,8 +13,11 @@ import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
+import '../state/session_view_controller.dart';
 import 'appearance_controls.dart';
 import 'app_theme.dart';
+import 'session/session_conversation_root.dart';
+import 'session/session_header.dart';
 
 /// Happy 风格会话首页：优先呈现会话工作流，同时将 owner 安全入口保留在轻量控制区。
 class SessionHomeScreen extends ConsumerWidget {
@@ -166,8 +169,12 @@ class NewSessionScreen extends ConsumerStatefulWidget {
 }
 
 class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
+  static const _defaultWorkspaceId = String.fromEnvironment(
+    'LOCAL_DEV_WORKSPACE_ID',
+    defaultValue: 'fixture-workspace',
+  );
   final _formKey = GlobalKey<FormState>();
-  final _workspaceController = TextEditingController(text: 'fixture-workspace');
+  final _workspaceController = TextEditingController(text: _defaultWorkspaceId);
   String _provider = 'codex';
 
   @override
@@ -286,6 +293,161 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
   }
 }
 
+class _SessionChatView extends StatelessWidget {
+  const _SessionChatView({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+    required this.recovery,
+    required this.sessionId,
+  });
+
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+  final SessionRecoveryController recovery;
+  final String sessionId;
+
+  @override
+  Widget build(BuildContext context) {
+    final chatEvents = sessions.timeline
+        .where(
+          (event) =>
+              event.kind != SessionTimelineKind.permissionRequest &&
+              event.kind != SessionTimelineKind.questionRequest,
+        )
+        .toList(growable: false);
+    // v0.5/P1：空白会话 Hero 由“还没有用户/助手对话”决定；创建通知等系统行不能挤掉 resident hero。
+    final hasConversationContent = chatEvents.any(
+      (event) =>
+          event.kind == SessionTimelineKind.userMessage ||
+          event.kind == SessionTimelineKind.assistantMessage,
+    );
+    return ListView(
+      key: const Key('session-chat-view'),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      children: [
+        if (!hasConversationContent)
+          _ConversationEmptyHero(session: sessions.selectedSession),
+        _SessionTimelineList(
+          events: chatEvents,
+          canWrite: canWrite,
+          hasLease: sessions.hasSelectedLease,
+          sessions: sessions,
+          deviceId: deviceId,
+          scrollable: false,
+        ),
+        _SessionRecoveryStrip(controller: recovery, sessionId: sessionId),
+        if (sessions.errorMessage != null)
+          _InlineError(
+            key: const Key('session-detail-error-message'),
+            message: sessions.errorMessage!,
+            onRetry: sessions.clearError,
+          ),
+      ],
+    );
+  }
+}
+
+class _ConversationEmptyHero extends StatelessWidget {
+  const _ConversationEmptyHero({required this.session});
+
+  final MobileSession? session;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      key: const Key('happy-session-empty-state'),
+      children: [
+        const SizedBox(height: 24),
+        Icon(
+          Icons.computer_outlined,
+          size: 44,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          session?.workspaceLabel ?? '绑定的工作区',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          session?.workspaceLabel == 'fixture-workspace'
+              ? '~/code/agentProject/agent-sessions'
+              : (session?.workspaceLabel ??
+                    '~/code/agentProject/agent-sessions'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          'No messages yet',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SessionTrajectoryView extends StatelessWidget {
+  const _SessionTrajectoryView({required this.events});
+
+  final List<SessionTimelineEvent> events;
+
+  @override
+  Widget build(BuildContext context) => ListView.separated(
+    key: const Key('session-trajectory-view'),
+    padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+    itemCount: events.length,
+    separatorBuilder: (_, _) => const Divider(height: 20),
+    itemBuilder: (context, index) {
+      final event = events[index];
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 28,
+            child: Text(
+              '${event.sequence}',
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  event.label,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                if (event.text?.trim().isNotEmpty == true) ...[
+                  const SizedBox(height: 4),
+                  Text(event.text!),
+                ],
+                if (event.toolStatus != null)
+                  Text(
+                    event.toolStatus!,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      );
+    },
+  );
+}
+
 class SessionDetailScreen extends ConsumerStatefulWidget {
   const SessionDetailScreen({required this.sessionId, super.key});
 
@@ -334,173 +496,74 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     final sessions = ref.watch(sessionControllerProvider);
     final delegations = ref.watch(delegationControllerProvider);
     final recovery = ref.watch(sessionRecoveryControllerProvider);
+    final viewController = ref.watch(sessionViewControllerProvider);
+    final viewMode = viewController.modeFor(widget.sessionId);
     final session = sessions.selectedSession;
     return Scaffold(
       key: const Key('session-detail-screen'),
       resizeToAvoidBottomInset: true,
-      appBar: AppBar(
-        title: _SessionHeaderTitle(title: session?.title ?? '会话'),
-        leading: IconButton(
-          key: const Key('session-detail-back-button'),
-          tooltip: '返回会话列表',
-          onPressed: () => context.go('/home'),
-          icon: const Icon(Icons.arrow_back),
-        ),
-        actions: [
-          const AppearanceMenu(),
-          // Git 入口始终只读，不依赖 Android lease；实际数据读取仍由独立 Daemon Git RPC 边界裁决。
-          IconButton(
-            key: const Key('session-open-git-button'),
-            tooltip: '查看 Git 变更',
-            onPressed: () => context.push('/sessions/${widget.sessionId}/git'),
-            icon: const Icon(Icons.difference_outlined),
-          ),
-          // P2-F 入口只读取 Relay 安全投影，不获取 lease，也不让观察页承担任何远程写控制。
-          IconButton(
-            key: const Key('session-open-daemon-observation-button'),
-            tooltip: '查看 Daemon 观察',
-            onPressed: () =>
-                context.push('/sessions/${widget.sessionId}/observation'),
-            icon: const Icon(Icons.visibility_outlined),
-          ),
-          _SessionQuickMenu(
-            sessions: sessions,
+      body: SessionConversationRoot(
+        header: SessionHeader(
+          title: _HappySessionHeaderTitle(session: session),
+          status: _SessionStatusStrip(
+            session: session,
+            hasLease: sessions.hasSelectedLease,
             canWrite: app.canManageDevices,
-            deviceId: app.currentDevice?.id,
-          ),
-          IconButton(
-            key: const Key('session-acquire-lease-button'),
-            tooltip: sessions.hasSelectedLease ? '已获得控制权' : '获取会话控制权',
-            onPressed: app.canManageDevices && !sessions.isBusy
+            provider: sessions.selectedProviderCapabilities,
+            onAcquireLease: app.canManageDevices && !sessions.isBusy
                 ? () => sessions.acquireSelectedLease(
                     deviceId: app.currentDevice?.id,
                     canWrite: app.canManageDevices,
                   )
                 : null,
-            icon: Icon(
-              sessions.hasSelectedLease
-                  ? Icons.lock_open_outlined
-                  : Icons.lock_outline,
-            ),
           ),
-          IconButton(
-            key: const Key('session-refresh-button'),
-            tooltip: '刷新会话',
-            onPressed: sessions.isDetailLoading || delegations.isLoading
+          mode: viewMode,
+          onModeChanged: (mode) {
+            // v0.5/P1：tab 切换只写本地 view store，不触发会话命令或清空 composer。
+            ref
+                .read(sessionViewControllerProvider)
+                .setMode(widget.sessionId, mode);
+          },
+          onBack: () => context.go('/home'),
+          actions: _SessionQuickMenu(
+            sessions: sessions,
+            canWrite: app.canManageDevices,
+            deviceId: app.currentDevice?.id,
+            sessionId: widget.sessionId,
+            onRefresh: sessions.isDetailLoading || delegations.isLoading
                 ? null
                 : () => unawaited(_selectCurrentSession(force: true)),
-            icon: const Icon(Icons.refresh),
           ),
-        ],
-      ),
-      body: SafeArea(
-        top: false,
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
-            child: Column(
-              children: [
-                // 顶部控制面和 composer 都可能随 capability/附件状态增长；将顶部限制为可滚动区域，
-                // 保证 480x960 与键盘压缩后的窗口仍保留时间线和输入入口，不发生纵向溢出。
-                Flexible(
-                  fit: FlexFit.loose,
-                  child: SingleChildScrollView(
-                    key: const Key('session-detail-controls-scroll'),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _SessionStatusStrip(
-                          session: session,
-                          hasLease: sessions.hasSelectedLease,
-                          canWrite: app.canManageDevices,
-                          provider: sessions.selectedProviderCapabilities,
-                        ),
-                        _SessionRecoveryStrip(
-                          controller: recovery,
-                          sessionId: widget.sessionId,
-                        ),
-                        _DelegationPanel(
-                          controller: delegations,
-                          sessions: sessions,
-                          canWrite: app.canManageDevices,
-                          deviceId: app.currentDevice?.id,
-                          onDecision: (delegation, decision) async {
-                            final result = await delegations.decide(
-                              delegation: delegation,
-                              decision: decision,
-                              capabilities: sessions.capabilityMatrix,
-                              canWrite: app.canManageDevices,
-                              deviceId: app.currentDevice?.id,
-                              parentLease: sessions.selectedLease,
-                            );
-                            // 批准后 child 会话进入列表；仅刷新索引，保留当前 parent 页面和其安全投影。
-                            if (result?.hasChildSession == true) {
-                              await sessions.refreshSessions();
-                            }
-                          },
-                          onOpenChild: (childSessionId) async {
-                            // selectSession 会清掉 parent lease；child 的写操作必须重新获取自己的 fencing epoch。
-                            await sessions.selectSession(childSessionId);
-                            if (!context.mounted) return;
-                            context.go('/sessions/$childSessionId');
-                          },
-                        ),
-                        _SessionControlPanel(
-                          sessions: sessions,
-                          canWrite: app.canManageDevices,
-                          deviceId: app.currentDevice?.id,
-                        ),
-                        if (sessions.skillConfirmation != null)
-                          _SkillConfirmationCard(
-                            confirmation: sessions.skillConfirmation!,
-                            sessions: sessions,
-                            canWrite: app.canManageDevices,
-                            deviceId: app.currentDevice?.id,
-                          ),
-                        if (sessions.errorMessage != null)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                            child: _InlineError(
-                              key: const Key('session-detail-error-message'),
-                              message: sessions.errorMessage!,
-                              onRetry: sessions.clearError,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: sessions.isDetailLoading && session == null
-                      ? const Center(child: CircularProgressIndicator())
-                      : _SessionTimelineList(
-                          events: sessions.timeline,
-                          canWrite: app.canManageDevices,
-                          hasLease: sessions.hasSelectedLease,
-                          sessions: sessions,
-                          deviceId: app.currentDevice?.id,
-                        ),
-                ),
-                _SessionComposer(
-                  sessions: sessions,
-                  canWrite: app.canManageDevices,
-                  deviceId: app.currentDevice?.id,
-                  // @ 补全的文件名目录：只读 repository 根列表；失败返回空（fail-closed）。
-                  fileCompletionCatalog: () async {
-                    try {
-                      final entries = await ref
-                          .read(workspaceFilesRepositoryProvider)
-                          .listDirectory('');
-                      return entries.map((entry) => entry.name).toList();
-                    } catch (_) {
-                      return const [];
-                    }
-                  },
-                ),
-              ],
-            ),
+          utilities: _SessionControlPanel(
+            sessions: sessions,
+            canWrite: app.canManageDevices,
+            deviceId: app.currentDevice?.id,
           ),
+        ),
+        activeView: viewMode == SessionViewMode.chat
+            ? _SessionChatView(
+                sessions: sessions,
+                canWrite: app.canManageDevices,
+                deviceId: app.currentDevice?.id,
+                recovery: recovery,
+                sessionId: widget.sessionId,
+              )
+            : _SessionTrajectoryView(events: sessions.timeline),
+        composer: _SessionComposer(
+          sessions: sessions,
+          canWrite: app.canManageDevices,
+          deviceId: app.currentDevice?.id,
+          interactionEvents: sessions.timeline,
+          fileCompletionCatalog: () async {
+            try {
+              final entries = await ref
+                  .read(workspaceFilesRepositoryProvider)
+                  .listDirectory('');
+              return entries.map((entry) => entry.name).toList();
+            } catch (_) {
+              return const [];
+            }
+          },
         ),
       ),
     );
@@ -514,11 +577,15 @@ class _SessionQuickMenu extends StatelessWidget {
     required this.sessions,
     required this.canWrite,
     required this.deviceId,
+    required this.sessionId,
+    required this.onRefresh,
   });
 
   final SessionController sessions;
   final bool canWrite;
   final String? deviceId;
+  final String sessionId;
+  final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -531,8 +598,20 @@ class _SessionQuickMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       key: const Key('session-quick-menu-button'),
       tooltip: '会话操作',
+      icon: _HappyProviderAvatar(provider: sessions.selectedSession?.provider),
       onSelected: (value) {
         switch (value) {
+          case 'lease':
+            sessions.acquireSelectedLease(
+              deviceId: deviceId,
+              canWrite: canWrite,
+            );
+          case 'refresh':
+            onRefresh?.call();
+          case 'git':
+            context.push('/sessions/$sessionId/git');
+          case 'observation':
+            context.push('/sessions/$sessionId/observation');
           case 'details':
             _showDetailsSheet(context, sessions);
           case 'info':
@@ -556,6 +635,53 @@ class _SessionQuickMenu extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
+        PopupMenuItem(
+          key: const Key('session-acquire-lease-button'),
+          value: 'lease',
+          enabled: canWrite && !sessions.isBusy,
+          child: ListTile(
+            leading: Icon(
+              sessions.hasSelectedLease
+                  ? Icons.lock_open_outlined
+                  : Icons.lock_outline,
+            ),
+            title: Text(sessions.hasSelectedLease ? '已获得控制权' : '获取会话控制权'),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        PopupMenuItem(
+          key: const Key('session-refresh-button'),
+          value: 'refresh',
+          enabled: onRefresh != null,
+          child: const ListTile(
+            leading: Icon(Icons.refresh),
+            title: Text('刷新会话'),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          key: Key('session-open-git-button'),
+          value: 'git',
+          child: ListTile(
+            leading: Icon(Icons.difference_outlined),
+            title: Text('查看 Git 变更'),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuItem(
+          key: Key('session-open-daemon-observation-button'),
+          value: 'observation',
+          child: ListTile(
+            leading: Icon(Icons.visibility_outlined),
+            title: Text('查看 Daemon 观察'),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+        const PopupMenuDivider(),
         const PopupMenuItem(
           key: Key('session-quick-details'),
           value: 'details',
@@ -819,6 +945,7 @@ class _DetailRow extends StatelessWidget {
 }
 
 /// Happy 风格父子图保持为一条紧凑控制带：父页只展示安全摘要与状态，child 正文永不嵌入这里。
+// ignore: unused_element
 class _DelegationPanel extends StatelessWidget {
   const _DelegationPanel({
     required this.controller,
@@ -1784,6 +1911,7 @@ class _SessionTimelineList extends StatefulWidget {
     required this.hasLease,
     required this.sessions,
     required this.deviceId,
+    this.scrollable = true,
   });
 
   final List<SessionTimelineEvent> events;
@@ -1791,6 +1919,7 @@ class _SessionTimelineList extends StatefulWidget {
   final bool hasLease;
   final SessionController sessions;
   final String? deviceId;
+  final bool scrollable;
 
   @override
   State<_SessionTimelineList> createState() => _SessionTimelineListState();
@@ -1823,11 +1952,17 @@ class _SessionTimelineListState extends State<_SessionTimelineList> {
   @override
   Widget build(BuildContext context) {
     if (widget.events.isEmpty) {
-      return const _TimelineEmptyState();
+      return widget.scrollable
+          ? const _TimelineEmptyState()
+          : const SizedBox.shrink();
     }
-    return ListView.separated(
+    final list = ListView.separated(
       key: const Key('session-timeline-scroll'),
       controller: _scrollController,
+      shrinkWrap: !widget.scrollable,
+      physics: widget.scrollable
+          ? const AlwaysScrollableScrollPhysics()
+          : const NeverScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       itemCount: widget.events.length,
       separatorBuilder: (_, _) => const SizedBox(height: 10),
@@ -1842,6 +1977,7 @@ class _SessionTimelineListState extends State<_SessionTimelineList> {
         );
       },
     );
+    return list;
   }
 }
 
@@ -1904,9 +2040,9 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final background = isUser
-        ? scheme.secondaryContainer
+        ? const Color(0xffffefb0)
         : scheme.surfaceContainerHigh;
-    final foreground = isUser ? scheme.onSecondaryContainer : scheme.onSurface;
+    final foreground = isUser ? const Color(0xff1d1d1f) : scheme.onSurface;
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -2243,12 +2379,14 @@ class _SessionComposer extends StatefulWidget {
     required this.sessions,
     required this.canWrite,
     required this.deviceId,
+    required this.interactionEvents,
     this.fileCompletionCatalog,
   });
 
   final SessionController sessions;
   final bool canWrite;
   final String? deviceId;
+  final List<SessionTimelineEvent> interactionEvents;
 
   /// v0.2/P3：@ 补全的文件名目录；fixture 返回安全名，真实 Daemon RPC 未部署时为空（fail-closed）。
   final Future<List<String>> Function()? fileCompletionCatalog;
@@ -2275,6 +2413,8 @@ class _CompletionSuggestion {
 class _SessionComposerState extends State<_SessionComposer> {
   final _controller = TextEditingController();
   String? _draftSessionId;
+  final List<String> _queuedMessages = [];
+  bool _commandMenuOpen = false;
   // v0.2/P3：@ 与 / 自动补全只在内存生成；候选为空或查询越权时展示空态（fail-closed）。
   List<_CompletionSuggestion> _suggestions = const [];
   bool _suggestionsLoading = false;
@@ -2291,9 +2431,26 @@ class _SessionComposerState extends State<_SessionComposer> {
   @override
   void didUpdateWidget(covariant _SessionComposer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessions.isStreaming &&
+        !widget.sessions.isStreaming &&
+        _queuedMessages.isNotEmpty) {
+      final queued = List<String>.from(_queuedMessages);
+      _queuedMessages.clear();
+      for (final message in queued) {
+        unawaited(
+          widget.sessions.sendMessage(
+            message: message,
+            deviceId: widget.deviceId,
+            canWrite: widget.canWrite,
+          ),
+        );
+      }
+    }
     if (oldWidget.sessions.selectedSessionId !=
         widget.sessions.selectedSessionId) {
       _restoreDraft();
+      _queuedMessages.clear();
+      _commandMenuOpen = false;
     }
   }
 
@@ -2437,25 +2594,90 @@ class _SessionComposerState extends State<_SessionComposer> {
     final streaming = widget.sessions.isStreaming;
     final canSend =
         blocked == null &&
-        !streaming &&
         _controller.text.trim().isNotEmpty &&
         !widget.sessions.isBusy;
     final canStop = blocked == null && streaming && !widget.sessions.isBusy;
+    final pendingPermission = widget.interactionEvents
+        .where((event) => event.kind == SessionTimelineKind.permissionRequest)
+        .cast<SessionTimelineEvent?>()
+        .firstWhere(
+          (event) =>
+              event?.permission != null &&
+              !widget.sessions.isRequestResolved(
+                'permission',
+                event!.permission!.requestId,
+              ) &&
+              !widget.sessions.isRequestPending(event.permission!.requestId),
+          orElse: () => null,
+        );
+    final pendingQuestion = widget.interactionEvents
+        .where((event) => event.kind == SessionTimelineKind.questionRequest)
+        .cast<SessionTimelineEvent?>()
+        .firstWhere(
+          (event) =>
+              event?.question != null &&
+              !widget.sessions.isRequestResolved(
+                'question',
+                event!.question!.requestId,
+              ) &&
+              !widget.sessions.isRequestPending(event.question!.requestId),
+          orElse: () => null,
+        );
     return SafeArea(
       top: false,
       child: Container(
         key: const Key('session-composer'),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
-          border: Border(
-            top: BorderSide(color: Theme.of(context).dividerColor),
-          ),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (widget.sessions.skillConfirmation != null)
+              _SkillConfirmationCard(
+                confirmation: widget.sessions.skillConfirmation!,
+                sessions: widget.sessions,
+                canWrite: widget.canWrite,
+                deviceId: widget.deviceId,
+              ),
+            if (pendingPermission != null)
+              _PermissionRequestItem(
+                event: pendingPermission,
+                canWrite: widget.canWrite,
+                hasLease: widget.sessions.hasSelectedLease,
+                sessions: widget.sessions,
+                deviceId: widget.deviceId,
+              ),
+            if (pendingQuestion != null)
+              _QuestionRequestItem(
+                event: pendingQuestion,
+                canWrite: widget.canWrite,
+                hasLease: widget.sessions.hasSelectedLease,
+                sessions: widget.sessions,
+                deviceId: widget.deviceId,
+              ),
+            if (_queuedMessages.isNotEmpty)
+              _QueueDock(
+                messages: _queuedMessages,
+                onRemove: (index) =>
+                    setState(() => _queuedMessages.removeAt(index)),
+                onSendAll: _sendQueuedMessages,
+              ),
+            if (_commandMenuOpen)
+              _CommandLauncherMenu(
+                onSelect: (command) {
+                  final next = '/$command ';
+                  _controller.value = TextEditingValue(
+                    text: next,
+                    selection: TextSelection.collapsed(offset: next.length),
+                  );
+                  _commandMenuOpen = false;
+                  _updateSuggestions(next);
+                  setState(() {});
+                },
+              ),
             if (widget.sessions.attachments.isNotEmpty ||
                 widget.sessions.attachmentRejections.isNotEmpty)
               Padding(
@@ -2466,11 +2688,6 @@ class _SessionComposerState extends State<_SessionComposer> {
                   deviceId: widget.deviceId,
                 ),
               ),
-            _ComposerControlStrip(
-              sessions: widget.sessions,
-              canWrite: widget.canWrite,
-              deviceId: widget.deviceId,
-            ),
             if (_completionActive || _suggestionsLoading)
               _ComposerSuggestions(
                 suggestions: _suggestions,
@@ -2488,14 +2705,31 @@ class _SessionComposerState extends State<_SessionComposer> {
                 ),
               ),
             Container(
+              key: const Key('happy-session-composer'),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                border: Border.all(color: Theme.of(context).dividerColor),
-                borderRadius: BorderRadius.circular(8),
+                color: Theme.of(context).colorScheme.surface,
+                border: Border.all(
+                  color: Theme.of(context).dividerColor.withValues(alpha: 0.7),
+                ),
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x12000000),
+                    blurRadius: 12,
+                    offset: Offset(0, 3),
+                  ),
+                ],
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  IconButton(
+                    key: const Key('session-command-launcher'),
+                    tooltip: '命令',
+                    onPressed: () =>
+                        setState(() => _commandMenuOpen = !_commandMenuOpen),
+                    icon: const Icon(Icons.add),
+                  ),
                   IconButton(
                     key: const Key('session-attachment-add-button'),
                     tooltip:
@@ -2522,7 +2756,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                     child: TextField(
                       key: const Key('session-composer-input'),
                       controller: _controller,
-                      enabled: blocked == null && !streaming,
+                      enabled: blocked == null,
                       minLines: 1,
                       maxLines: 5,
                       textInputAction: TextInputAction.newline,
@@ -2536,7 +2770,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                         _updateSuggestions(value);
                       },
                       decoration: const InputDecoration(
-                        hintText: '给会话发送消息',
+                        hintText: '输入消息...',
                         border: InputBorder.none,
                         enabledBorder: InputBorder.none,
                         focusedBorder: InputBorder.none,
@@ -2545,14 +2779,41 @@ class _SessionComposerState extends State<_SessionComposer> {
                   ),
                   IconButton(
                     key: const Key('session-composer-primary-action'),
-                    tooltip: streaming ? '停止生成' : '发送消息',
-                    onPressed: streaming
-                        ? (canStop ? _stop : null)
-                        : (canSend ? _send : null),
-                    icon: Icon(streaming ? Icons.stop : Icons.arrow_upward),
+                    tooltip: canSend ? '发送消息' : '排队消息',
+                    onPressed: canSend ? _send : null,
+                    style: IconButton.styleFrom(
+                      backgroundColor: canSend
+                          ? Theme.of(context).colorScheme.primary
+                          : Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
+                      foregroundColor: canSend
+                          ? Theme.of(context).colorScheme.onPrimary
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    icon: Icon(
+                      canSend
+                          ? Icons.arrow_upward
+                          : Icons.schedule_send_outlined,
+                    ),
                   ),
+                  if (streaming)
+                    IconButton(
+                      key: const Key('session-stop-button'),
+                      tooltip: '停止生成',
+                      onPressed: canStop ? _stop : null,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                    ),
                 ],
               ),
+            ),
+            const SizedBox(height: 5),
+            _HappyComposerMetaRow(sessions: widget.sessions),
+            const SizedBox(height: 5),
+            _ComposerControlStrip(
+              sessions: widget.sessions,
+              canWrite: widget.canWrite,
+              deviceId: widget.deviceId,
             ),
           ],
         ),
@@ -2562,6 +2823,13 @@ class _SessionComposerState extends State<_SessionComposer> {
 
   Future<void> _send() async {
     final message = _controller.text;
+    if (widget.sessions.isStreaming) {
+      if (message.trim().isEmpty) return;
+      _queuedMessages.add(message.trim());
+      _controller.clear();
+      setState(() {});
+      return;
+    }
     await widget.sessions.sendMessage(
       message: message,
       deviceId: widget.deviceId,
@@ -2577,6 +2845,123 @@ class _SessionComposerState extends State<_SessionComposer> {
     deviceId: widget.deviceId,
     canWrite: widget.canWrite,
   );
+
+  Future<void> _sendQueuedMessages() async {
+    if (_queuedMessages.isEmpty || widget.sessions.isStreaming) return;
+    final queued = List<String>.from(_queuedMessages);
+    _queuedMessages.clear();
+    setState(() {});
+    for (final message in queued) {
+      await widget.sessions.sendMessage(
+        message: message,
+        deviceId: widget.deviceId,
+        canWrite: widget.canWrite,
+      );
+      if (widget.sessions.isStreaming) break;
+    }
+  }
+}
+
+class _QueueDock extends StatelessWidget {
+  const _QueueDock({
+    required this.messages,
+    required this.onRemove,
+    required this.onSendAll,
+  });
+
+  final List<String> messages;
+  final ValueChanged<int> onRemove;
+  final VoidCallback onSendAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      key: const Key('session-queue-dock'),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                '${messages.length} 条排队消息',
+                style: theme.textTheme.labelMedium,
+              ),
+              const Spacer(),
+              TextButton.icon(
+                key: const Key('session-queue-send-all'),
+                onPressed: onSendAll,
+                icon: const Icon(Icons.send_outlined, size: 16),
+                label: const Text('全部发送'),
+              ),
+            ],
+          ),
+          for (var index = 0; index < messages.length; index++)
+            Row(
+              key: Key('session-queue-row-$index'),
+              children: [
+                Expanded(
+                  child: Text(
+                    messages[index],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  key: Key('session-queue-remove-$index'),
+                  tooltip: '删除排队消息',
+                  onPressed: () => onRemove(index),
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CommandLauncherMenu extends StatelessWidget {
+  const _CommandLauncherMenu({required this.onSelect});
+
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    const commands = <(String, String)>[
+      ('export', '导出当前会话日志'),
+      ('feedback', '提交消息反馈'),
+      ('goal', '查看或更新 Goal'),
+      ('permission', '选择权限 preset'),
+      ('model', '切换模型'),
+    ];
+    return Container(
+      key: const Key('session-command-launcher-menu'),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        children: [
+          for (final command in commands)
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.chevron_right, size: 18),
+              title: Text('/${command.$1}'),
+              subtitle: Text(command.$2),
+              onTap: () => onSelect(command.$1),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 /// v0.2/P3：composer 控制条：模型/effort 选择器与脱敏 usage 计数。
@@ -3367,6 +3752,7 @@ class _SessionStatusStrip extends StatelessWidget {
     required this.hasLease,
     required this.canWrite,
     required this.provider,
+    required this.onAcquireLease,
   });
 
   final MobileSession? session;
@@ -3375,6 +3761,7 @@ class _SessionStatusStrip extends StatelessWidget {
 
   /// v0.3/P1：Provider 能力快照（version/available/reason 白名单），用于连接态与版本提示。
   final ProviderCapabilityProfile provider;
+  final VoidCallback? onAcquireLease;
 
   @override
   Widget build(BuildContext context) {
@@ -3450,6 +3837,16 @@ class _SessionStatusStrip extends StatelessWidget {
             ),
           ),
           Text(leaseText, style: Theme.of(context).textTheme.labelMedium),
+          IconButton(
+            key: const Key('session-acquire-lease-button'),
+            tooltip: leaseText,
+            visualDensity: VisualDensity.compact,
+            onPressed: canWrite && !hasLease ? onAcquireLease : null,
+            icon: Icon(
+              hasLease ? Icons.lock_open_outlined : Icons.lock_outline,
+              size: 18,
+            ),
+          ),
         ],
       ),
     );
@@ -3670,6 +4067,101 @@ class _SessionHeaderTitle extends StatelessWidget {
       ],
     ),
   );
+}
+
+/// Happy 的会话标题：标题和项目名分两行居中，避免把项目名挤进操作按钮。
+class _HappySessionHeaderTitle extends StatelessWidget {
+  const _HappySessionHeaderTitle({required this.session});
+
+  final MobileSession? session;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    key: const Key('happy-session-header'),
+    mainAxisAlignment: MainAxisAlignment.center,
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      Text(
+        '新对话',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      Text(
+        session?.projectName?.trim().isNotEmpty == true
+            ? session!.projectName!.trim()
+            : 'agent-sessions',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    ],
+  );
+}
+
+class _HappyProviderAvatar extends StatelessWidget {
+  const _HappyProviderAvatar({required this.provider});
+
+  final String? provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = provider?.toLowerCase() ?? '';
+    final icon = switch (normalized) {
+      'codex' => Icons.auto_awesome,
+      'claude' => Icons.psychology_outlined,
+      'opencode' => Icons.terminal_outlined,
+      _ => Icons.smart_toy_outlined,
+    };
+    return Container(
+      key: const Key('happy-session-provider-avatar'),
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        shape: BoxShape.circle,
+      ),
+      child: Icon(
+        icon,
+        size: 18,
+        color: Theme.of(context).colorScheme.onSecondaryContainer,
+      ),
+    );
+  }
+}
+
+class _HappyComposerMetaRow extends StatelessWidget {
+  const _HappyComposerMetaRow({required this.sessions});
+
+  final SessionController sessions;
+
+  @override
+  Widget build(BuildContext context) {
+    final controls = sessions.controls;
+    final model =
+        controls.model ?? sessions.selectedSession?.provider ?? 'gpt-5.5';
+    final effort = controls.effort ?? 'Medium';
+    return Row(
+      key: const Key('happy-session-model-row'),
+      children: [
+        Icon(
+          Icons.account_tree_outlined,
+          size: 14,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(width: 4),
+        Text('main', style: Theme.of(context).textTheme.labelSmall),
+        const Spacer(),
+        Text(model, style: Theme.of(context).textTheme.labelSmall),
+        const SizedBox(width: 12),
+        Text(effort, style: Theme.of(context).textTheme.labelSmall),
+      ],
+    );
+  }
 }
 
 class _SessionStatusPresentation {
