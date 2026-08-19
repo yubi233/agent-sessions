@@ -9,13 +9,16 @@ import '../app/providers.dart';
 import '../domain/control_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/session_models.dart';
+import '../domain/session_projection_models.dart';
 import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_controller.dart';
+import '../state/session_projection_controller.dart';
 import '../state/session_view_controller.dart';
 import 'appearance_controls.dart';
 import 'app_theme.dart';
+import 'session/chat/session_chat_view.dart';
 import 'session/session_conversation_root.dart';
 import 'session/session_header.dart';
 
@@ -296,47 +299,35 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
 class _SessionChatView extends StatelessWidget {
   const _SessionChatView({
     required this.sessions,
-    required this.canWrite,
-    required this.deviceId,
     required this.recovery,
     required this.sessionId,
   });
 
   final SessionController sessions;
-  final bool canWrite;
-  final String? deviceId;
   final SessionRecoveryController recovery;
   final String sessionId;
 
   @override
   Widget build(BuildContext context) {
-    final chatEvents = sessions.timeline
-        .where(
-          (event) =>
-              event.kind != SessionTimelineKind.permissionRequest &&
-              event.kind != SessionTimelineKind.questionRequest,
-        )
-        .toList(growable: false);
-    // v0.5/P1：空白会话 Hero 由“还没有用户/助手对话”决定；创建通知等系统行不能挤掉 resident hero。
-    final hasConversationContent = chatEvents.any(
-      (event) =>
-          event.kind == SessionTimelineKind.userMessage ||
-          event.kind == SessionTimelineKind.assistantMessage,
+    final projection = const SessionProjectionController().buildSnapshot(
+      timeline: sessions.timeline,
+      controls: sessions.controls,
     );
-    return ListView(
-      key: const Key('session-chat-view'),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      children: [
-        if (!hasConversationContent)
-          _ConversationEmptyHero(session: sessions.selectedSession),
-        _SessionTimelineList(
-          events: chatEvents,
-          canWrite: canWrite,
-          hasLease: sessions.hasSelectedLease,
-          sessions: sessions,
-          deviceId: deviceId,
-          scrollable: false,
-        ),
+    // v0.5/P2：Chat 只消费 projection nodes；permission/question pending 已被投影层排除，
+    // 后续由 composer chain 接管，避免消息流和 composer 双重渲染同一交互。
+    final hasConversationContent = projection.chatNodes.any(
+      (node) =>
+          node.kind == ConversationNodeKind.user ||
+          node.kind == ConversationNodeKind.assistant ||
+          node.kind == ConversationNodeKind.reasoning,
+    );
+    return SessionChatView(
+      nodes: projection.chatNodes,
+      running: sessions.isStreaming,
+      emptyHero: hasConversationContent
+          ? null
+          : _ConversationEmptyHero(session: sessions.selectedSession),
+      footer: [
         _SessionRecoveryStrip(controller: recovery, sessionId: sessionId),
         if (sessions.errorMessage != null)
           _InlineError(
@@ -543,8 +534,6 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
         activeView: viewMode == SessionViewMode.chat
             ? _SessionChatView(
                 sessions: sessions,
-                canWrite: app.canManageDevices,
-                deviceId: app.currentDevice?.id,
                 recovery: recovery,
                 sessionId: widget.sessionId,
               )
@@ -1902,231 +1891,6 @@ class _SkillConfirmationCard extends StatelessWidget {
       ),
     );
   }
-}
-
-class _SessionTimelineList extends StatefulWidget {
-  const _SessionTimelineList({
-    required this.events,
-    required this.canWrite,
-    required this.hasLease,
-    required this.sessions,
-    required this.deviceId,
-    this.scrollable = true,
-  });
-
-  final List<SessionTimelineEvent> events;
-  final bool canWrite;
-  final bool hasLease;
-  final SessionController sessions;
-  final String? deviceId;
-  final bool scrollable;
-
-  @override
-  State<_SessionTimelineList> createState() => _SessionTimelineListState();
-}
-
-class _SessionTimelineListState extends State<_SessionTimelineList> {
-  final _scrollController = ScrollController();
-
-  @override
-  void didUpdateWidget(covariant _SessionTimelineList oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.events.length != widget.events.length) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!_scrollController.hasClients) return;
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-        );
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.events.isEmpty) {
-      return widget.scrollable
-          ? const _TimelineEmptyState()
-          : const SizedBox.shrink();
-    }
-    final list = ListView.separated(
-      key: const Key('session-timeline-scroll'),
-      controller: _scrollController,
-      shrinkWrap: !widget.scrollable,
-      physics: widget.scrollable
-          ? const AlwaysScrollableScrollPhysics()
-          : const NeverScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      itemCount: widget.events.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final event = widget.events[index];
-        return _TimelineEventItem(
-          event: event,
-          canWrite: widget.canWrite,
-          hasLease: widget.hasLease,
-          sessions: widget.sessions,
-          deviceId: widget.deviceId,
-        );
-      },
-    );
-    return list;
-  }
-}
-
-class _TimelineEventItem extends StatelessWidget {
-  const _TimelineEventItem({
-    required this.event,
-    required this.canWrite,
-    required this.hasLease,
-    required this.sessions,
-    required this.deviceId,
-  });
-
-  final SessionTimelineEvent event;
-  final bool canWrite;
-  final bool hasLease;
-  final SessionController sessions;
-  final String? deviceId;
-
-  @override
-  Widget build(BuildContext context) {
-    return switch (event.kind) {
-      SessionTimelineKind.userMessage => _MessageBubble(
-        key: Key('timeline-user-${event.sequence}'),
-        event: event,
-        isUser: true,
-      ),
-      SessionTimelineKind.assistantMessage => _MessageBubble(
-        key: Key('timeline-assistant-${event.sequence}'),
-        event: event,
-        isUser: false,
-      ),
-      SessionTimelineKind.toolActivity => _ToolActivityItem(event: event),
-      SessionTimelineKind.permissionRequest => _PermissionRequestItem(
-        event: event,
-        canWrite: canWrite,
-        hasLease: hasLease,
-        sessions: sessions,
-        deviceId: deviceId,
-      ),
-      SessionTimelineKind.questionRequest => _QuestionRequestItem(
-        event: event,
-        canWrite: canWrite,
-        hasLease: hasLease,
-        sessions: sessions,
-        deviceId: deviceId,
-      ),
-      SessionTimelineKind.systemNotice ||
-      SessionTimelineKind.encryptedPlaceholder => _SystemNotice(event: event),
-    };
-  }
-}
-
-class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.event, required this.isUser, super.key});
-
-  final SessionTimelineEvent event;
-  final bool isUser;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final background = isUser
-        ? const Color(0xffffefb0)
-        : scheme.surfaceContainerHigh;
-    final foreground = isUser ? const Color(0xff1d1d1f) : scheme.onSurface;
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 382),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: background,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              event.label,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: foreground.withValues(alpha: 0.72),
-              ),
-            ),
-            if (event.text != null) ...[
-              const SizedBox(height: 4),
-              Text(event.text!, style: TextStyle(color: foreground)),
-            ],
-            if (event.isStreaming) ...[
-              const SizedBox(height: 8),
-              const _StreamingIndicator(),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StreamingIndicator extends StatelessWidget {
-  const _StreamingIndicator();
-
-  @override
-  Widget build(BuildContext context) => Row(
-    key: const Key('assistant-streaming-indicator'),
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      SizedBox(
-        width: 12,
-        height: 12,
-        child: CircularProgressIndicator(
-          strokeWidth: 2,
-          color: Theme.of(context).colorScheme.secondary,
-        ),
-      ),
-      const SizedBox(width: 8),
-      const Text('生成中'),
-    ],
-  );
-}
-
-class _ToolActivityItem extends StatelessWidget {
-  const _ToolActivityItem({required this.event});
-
-  final SessionTimelineEvent event;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    key: Key('tool-activity-${event.sequence}'),
-    color: Theme.of(context).colorScheme.surfaceContainer,
-    shape: RoundedRectangleBorder(
-      side: BorderSide(color: Theme.of(context).dividerColor),
-      borderRadius: BorderRadius.circular(8),
-    ),
-    clipBehavior: Clip.antiAlias,
-    child: ExpansionTile(
-      tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-      leading: const Icon(Icons.construction_outlined),
-      title: Text(event.label),
-      subtitle: Text(event.toolStatus ?? '处理中'),
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Text(event.text ?? '工具活动不包含可展示的参数。'),
-        ),
-      ],
-    ),
-  );
 }
 
 class _PermissionRequestItem extends StatelessWidget {
@@ -3707,19 +3471,6 @@ class _SessionEmptyState extends StatelessWidget {
           style: Theme.of(context).textTheme.bodyMedium,
         ),
       ],
-    ),
-  );
-}
-
-class _TimelineEmptyState extends StatelessWidget {
-  const _TimelineEmptyState();
-
-  @override
-  Widget build(BuildContext context) => Center(
-    key: const Key('session-timeline-empty'),
-    child: Text(
-      '这个会话还没有可显示的事件。',
-      style: Theme.of(context).textTheme.bodyMedium,
     ),
   );
 }
