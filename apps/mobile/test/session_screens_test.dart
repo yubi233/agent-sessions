@@ -565,6 +565,71 @@ void main() {
     expect(harness.relay.submittedCommandCount, 3);
   });
 
+  testWidgets('MOBILE-V05-04/P3-B：提交失败显示 notice 且保留草稿', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
+    await _registerOwner(tester, 'composer-failure-owner@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+      'fixture-workspace',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')),
+    );
+    await _waitForVisible(tester, find.text('已获得控制权'));
+
+    const failedDraft = '这条提交应该保留在草稿里';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      failedDraft,
+    );
+    harness.relay.setNetworkAvailable(false);
+    addTearDown(() => harness.relay.setNetworkAvailable(true));
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-composer-machine-notice')),
+    );
+    final notice = tester.widget<Text>(
+      find.byKey(const Key('session-composer-machine-notice')),
+    );
+    expect(notice.data, contains('本地 Relay fixture 当前不可用'));
+    expect(harness.relay.submittedCommandCount, 0);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('session-composer-input')))
+          .controller!
+          .text,
+      failedDraft,
+    );
+  });
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {

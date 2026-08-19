@@ -2413,8 +2413,14 @@ class _SessionComposerState extends State<_SessionComposer> {
       running: streaming,
       busyEnter: BusyEnterMode.queue,
     );
+    final machineBusy =
+        input.phase == SessionInputPhase.adjudicating ||
+        input.phase == SessionInputPhase.submitting;
     final canSubmit =
-        blocked == null && submitMode != null && !widget.sessions.isBusy;
+        blocked == null &&
+        submitMode != null &&
+        !widget.sessions.isBusy &&
+        !machineBusy;
     final primaryTooltip = switch (submitMode) {
       SessionSubmitMode.queue => '排队消息',
       SessionSubmitMode.steer => '插话',
@@ -2535,6 +2541,17 @@ class _SessionComposerState extends State<_SessionComposer> {
                   style: Theme.of(context).textTheme.labelMedium,
                 ),
               ),
+            if (input.notice != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  input.notice!,
+                  key: const Key('session-composer-machine-notice'),
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
             Container(
               key: const Key('happy-session-composer'),
               decoration: BoxDecoration(
@@ -2588,6 +2605,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                       key: const Key('session-composer-input'),
                       controller: _controller,
                       enabled: blocked == null,
+                      readOnly: machineBusy,
                       minLines: 1,
                       maxLines: 5,
                       textInputAction: TextInputAction.newline,
@@ -2655,6 +2673,10 @@ class _SessionComposerState extends State<_SessionComposer> {
 
   Future<void> _submitComposer() async {
     final snapshot = _inputMachine.snapshot;
+    if (snapshot.phase == SessionInputPhase.adjudicating ||
+        snapshot.phase == SessionInputPhase.submitting) {
+      return;
+    }
     final message = snapshot.draft.trim();
     final mode = _inputMachine.submit(
       running: widget.sessions.isStreaming,
