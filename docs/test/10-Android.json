@@ -1,6 +1,6 @@
 {
   "suite": "android",
-  "suite_version": 5,
+  "suite_version": 6,
   "status": "in_progress",
   "plan_id": "ANDROID",
   "description": "Flutter Android：配对、安全缓存、会话控制、生命周期、附件、DiffView 和子会话切入。自 2026-08-18 起，移动端闭环主 gate 统一使用 Android 实机 task test:android:device；macOS/AVD 仅保留历史或诊断补充。跨层根因 ID 只消费不重定义。",
@@ -869,6 +869,558 @@
         "apps/mobile/test/http_relay_repository_test.dart",
         "apps/mobile/test/local_visual_fixture_test.dart",
         "e2e-verify/reports/<ts>/MOBILE/mobile-01-macos.json"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-01",
+      "title": "Resident shell 在空白/活跃/路由切换下保持 composer 草稿",
+      "status": "planned",
+      "phase": "v0.5/P1",
+      "category": "Widget",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-02",
+      "title": "Chat/Trajectory tab 切换保留 view state 与草稿",
+      "status": "planned",
+      "phase": "v0.5/P1",
+      "category": "Widget",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-03",
+      "title": "event snapshot 组装为 Chat nodes，pending waits 不进入 Chat",
+      "status": "in_progress",
+      "phase": "v0.5/P0",
+      "category": "Projection",
+      "priority": "P0",
+      "test_layer": "Dart unit",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_projection_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-04",
+      "title": "InputMachine claim/adjudicate/submit/fail/settle/release",
+      "status": "in_progress",
+      "phase": "v0.5/P0",
+      "category": "Composer",
+      "priority": "P0",
+      "test_layer": "Dart unit",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_composer_machine_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-05",
+      "title": "Question takeover 优先，answer 后恢复 InputBar",
+      "status": "planned",
+      "phase": "v0.5/P4",
+      "category": "Composer takeover",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_takeover_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-06",
+      "title": "Approval takeover 展示理由/命令，allow/reject 一次性",
+      "status": "planned",
+      "phase": "v0.5/P4",
+      "category": "Composer takeover",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_takeover_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-07",
+      "title": "QueueDock 编辑、删除、逐条 steer、全部 steer，不自动 flush",
+      "status": "planned",
+      "phase": "v0.5/P5",
+      "category": "Queue",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_composer_machine_test.dart",
+        "apps/mobile/test/session_dock_interactions_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-08",
+      "title": "/ 与 @ selection trigger、键盘导航、IME Enter 防误发",
+      "status": "planned",
+      "phase": "v0.5/P5",
+      "category": "Input trigger",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_input_textarea_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-09",
+      "title": "Model / Permission seat 的 blocked reason 与可用性",
+      "status": "planned",
+      "phase": "v0.5/P5",
+      "category": "Control seats",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-10",
+      "title": "Chat scroll bottom-follow、暂停跟随、composer 高度变化",
+      "status": "planned",
+      "phase": "v0.5/P2",
+      "category": "Scroll",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_scroll_contract_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-11",
+      "title": "Trajectory snapshot、虚拟行、load older、record inspector",
+      "status": "planned",
+      "phase": "v0.5/P6",
+      "category": "Trajectory",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_projection_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-12",
+      "title": "StatsLine / ContextMeter 缺省态、真实 usage、context warning",
+      "status": "planned",
+      "phase": "v0.5/P7",
+      "category": "Stats",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_projection_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-13",
+      "title": "owner start/send/stop、permission/question、kill、resume",
+      "status": "planned",
+      "phase": "v0.5/P7",
+      "category": "Integration",
+      "priority": "P0",
+      "test_layer": "Flutter integration + local Relay fixture",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-14",
+      "title": "read-only / no lease / unsupported capability 全部 fail-closed",
+      "status": "planned",
+      "phase": "v0.5/P7",
+      "category": "Fail closed",
+      "priority": "P0",
+      "test_layer": "Flutter integration + local Relay fixture",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-15",
+      "title": "macOS headed fixture 录制安卓风格主流程，证据标记 fixture/local",
+      "status": "planned",
+      "phase": "v0.5/P7",
+      "category": "Recording",
+      "priority": "P1",
+      "test_layer": "headed macOS Flutter recording",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "e2e-verify/mobile/record-macos.mjs"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-16",
+      "title": "Workspace hero / no-session resident InputBar identity",
+      "status": "planned",
+      "phase": "v0.5/P1",
+      "category": "Hero",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-17",
+      "title": "图片附件预检、command images 拒绝、失败保留草稿与图片",
+      "status": "planned",
+      "phase": "v0.5/P5",
+      "category": "Attachments",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-18",
+      "title": "工具详情、文件路径打开失败对话框和重试",
+      "status": "planned",
+      "phase": "v0.5/P2",
+      "category": "Tool details",
+      "priority": "P1",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-19",
+      "title": "消息复制/时间/fork 的 turn-tail 约束与 steering 交接",
+      "status": "planned",
+      "phase": "v0.5/P2",
+      "category": "Message actions",
+      "priority": "P1",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-20",
+      "title": "subagent 只读 composer、parent offline 和模型 seat 隐藏",
+      "status": "planned",
+      "phase": "v0.5/P4",
+      "category": "Subagent",
+      "priority": "P1",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-21",
+      "title": "danger-full-access 风险确认、模型两级菜单 load/select 错误面",
+      "status": "planned",
+      "phase": "v0.5/P5",
+      "category": "Risk and model menu",
+      "priority": "P0",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-22",
+      "title": "Textarea 软换行、caret reveal、滚动链式转交和按钮保焦",
+      "status": "planned",
+      "phase": "v0.5/P3",
+      "category": "Textarea",
+      "priority": "P1",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_input_textarea_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-23",
+      "title": "reference occurrence delete/copy/cut/paste-upgrade 与 undo/redo",
+      "status": "planned",
+      "phase": "v0.5/P3",
+      "category": "Reference occurrence",
+      "priority": "P1",
+      "test_layer": "Dart unit + Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_composer_machine_test.dart",
+        "apps/mobile/test/session_input_textarea_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-24",
+      "title": "Todo 折叠、Goal edit/pause/resume/clear、inline 错误和 /goal command-input 节点",
+      "status": "planned",
+      "phase": "v0.5/P5",
+      "category": "Docks",
+      "priority": "P1",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_dock_interactions_test.dart"
+      ]
+    },
+    {
+      "id": "MOBILE-V05-25",
+      "title": "subagent breadcrumb、hero agent preset 暂存、produced files chips 与 inline file mentions",
+      "status": "planned",
+      "phase": "v0.5/P1-P2",
+      "category": "Header and turn-tail",
+      "priority": "P1",
+      "test_layer": "Flutter widget",
+      "precondition": "使用本地 Flutter 测试环境和 deterministic Relay/fixture；不执行 Android 实机、真实 Provider、真实模型或真实上游。",
+      "steps": [
+        "根据 docs/zh/迭代计划/迭代计划v0.5.md 的对应契约准备 fixture 状态。",
+        "运行对应的 apps/mobile/test 长期回归文件，必要时再运行 headed macOS Flutter fixture。",
+        "检查报告字段 local_test=true、fixture_data=true、real_model=false、real_upstream=false；headed 录屏必须在回归内容制定并通过后执行。"
+      ],
+      "expected": "行为与 DeepSeek Harness 会话模块对应交互一致；未知字段、缺失 capability、只读和无 lease 均 fail-closed；不得用 fixture 结果声称真实 Provider 或 Android 实机通过。",
+      "cleanup": [
+        "清理本轮 fixture session、composer draft、queue、pending waits 和可见录制子进程。"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
       ]
     },
     {
