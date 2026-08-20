@@ -1149,6 +1149,106 @@ void main() {
     expect(_snapshotContainsLabel(snapshot, '已允许'), isFalse);
   });
 
+  testWidgets('MOBILE-V05-05/P4-E：Question 多题分页与 custom batch answer', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-question-multi-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发 multi question 多题配置',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    final timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final question = timeline
+        .firstWhere((event) => event.question != null)
+        .question!;
+    expect(question.steps.length, 2);
+
+    final routingKey = '${question.requestId}-routing';
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-progress-${question.requestId}')),
+    );
+    expect(find.text('1 / 2'), findsOneWidget);
+    await _tapVisible(tester, find.byKey(Key('question-options-$routingKey')));
+    await _waitForVisible(tester, find.text('标准路径'));
+    await tester.tap(find.text('标准路径').last);
+    await tester.pump(const Duration(milliseconds: 80));
+    await _enterVisible(
+      tester,
+      find.byKey(Key('question-freeform-$routingKey')),
+      '走自定义灰度路径',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-next-${question.requestId}')),
+    );
+
+    final checksKey = '${question.requestId}-checks';
+    await _waitForVisible(tester, find.text('2 / 2'));
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-prev-${question.requestId}')),
+    );
+    await _waitForVisible(tester, find.text('1 / 2'));
+    expect(
+      tester
+          .widget<TextField>(find.byKey(Key('question-freeform-$routingKey')))
+          .controller!
+          .text,
+      '走自定义灰度路径',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-next-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-option-$checksKey-0')),
+    );
+    await _tapVisible(tester, find.byKey(Key('question-option-$checksKey-0')));
+    await _enterVisible(
+      tester,
+      find.byKey(Key('question-freeform-$checksKey')),
+      '保留截图证据',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-next-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-approval-panel')),
+    );
+
+    final answers = _latestFixtureQuestionAnswers(
+      await harness.relay.getSessionSnapshot(sessionId),
+    );
+    expect(answers, hasLength(2));
+    expect(answers[0]['id'], 'routing');
+    expect(answers[0]['selected'], isEmpty);
+    expect(answers[0]['custom'], '走自定义灰度路径');
+    expect(answers[1]['id'], 'checks');
+    expect(answers[1]['selected'], contains('静态检查'));
+    expect(answers[1]['custom'], '保留截图证据');
+  });
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {
@@ -1556,6 +1656,20 @@ bool _snapshotContainsLabel(SessionSnapshot snapshot, String label) {
     final payload = event.envelope['fixture_payload'];
     return payload is Map && payload['label'] == label;
   });
+}
+
+List<Map<String, dynamic>> _latestFixtureQuestionAnswers(
+  SessionSnapshot snapshot,
+) {
+  for (final event in snapshot.events.reversed) {
+    final payload = event.envelope['fixture_payload'];
+    if (payload is! Map || payload['answers'] is! List) continue;
+    return (payload['answers'] as List)
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+  return const [];
 }
 
 Future<MobileAppHarness> _openWritableSession(

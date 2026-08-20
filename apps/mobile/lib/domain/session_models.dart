@@ -319,6 +319,7 @@ class TimelineQuestionRequest {
     required this.requestId,
     required this.prompt,
     required this.options,
+    this.steps = const [],
     this.allowsFreeform = false,
     this.resolved,
   });
@@ -326,8 +327,34 @@ class TimelineQuestionRequest {
   final String requestId;
   final String prompt;
   final List<String> options;
+  final List<TimelineQuestionStep> steps;
   final bool allowsFreeform;
   final bool? resolved;
+}
+
+class TimelineQuestionStep {
+  const TimelineQuestionStep({
+    required this.id,
+    required this.prompt,
+    this.detail,
+    this.options = const [],
+    this.allowsFreeform = false,
+    this.multiSelect = false,
+  });
+
+  final String id;
+  final String prompt;
+  final String? detail;
+  final List<TimelineQuestionOption> options;
+  final bool allowsFreeform;
+  final bool multiSelect;
+}
+
+class TimelineQuestionOption {
+  const TimelineQuestionOption({required this.label, this.description});
+
+  final String label;
+  final String? description;
 }
 
 /// 可显示的时间线由本地已解密事件或 deterministic fixture 构建。
@@ -448,14 +475,57 @@ TimelineQuestionRequest? _questionFromFixture(Object? value) {
   final requestId = _nullableString(data['request_id']);
   if (requestId == null) return null;
   final rawOptions = data['options'];
+  final rawQuestions = data['questions'];
+  final steps = rawQuestions is List
+      ? rawQuestions
+            .map(_questionStepFromFixture)
+            .nonNulls
+            .toList(growable: false)
+      : const <TimelineQuestionStep>[];
   return TimelineQuestionRequest(
     requestId: requestId,
     prompt: _nullableString(data['prompt']) ?? '请选择下一步。',
     options: rawOptions is List
         ? rawOptions.whereType<String>().toList(growable: false)
         : const [],
+    steps: steps,
     allowsFreeform: data['allows_freeform'] == true,
     resolved: data['resolved'] as bool?,
+  );
+}
+
+TimelineQuestionStep? _questionStepFromFixture(Object? value) {
+  if (value is! Map) return null;
+  final data = Map<String, dynamic>.from(value);
+  final id = _nullableString(data['id']);
+  final prompt =
+      _nullableString(data['prompt']) ?? _nullableString(data['question']);
+  if (id == null || prompt == null) return null;
+  final rawOptions = data['options'];
+  return TimelineQuestionStep(
+    id: id,
+    prompt: prompt,
+    detail: _nullableString(data['detail']),
+    options: rawOptions is List
+        ? rawOptions
+              .map(_questionOptionFromFixture)
+              .nonNulls
+              .toList(growable: false)
+        : const [],
+    allowsFreeform: data['allows_freeform'] == true,
+    multiSelect: data['multi_select'] == true,
+  );
+}
+
+TimelineQuestionOption? _questionOptionFromFixture(Object? value) {
+  if (value is String) return TimelineQuestionOption(label: value);
+  if (value is! Map) return null;
+  final data = Map<String, dynamic>.from(value);
+  final label = _nullableString(data['label']);
+  if (label == null) return null;
+  return TimelineQuestionOption(
+    label: label,
+    description: _nullableString(data['description']),
   );
 }
 

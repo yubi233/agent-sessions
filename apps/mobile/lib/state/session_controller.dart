@@ -413,9 +413,35 @@ class SessionController extends ChangeNotifier {
     required String? deviceId,
     required bool canWrite,
   }) async {
+    final trimmed = answer.trim();
+    if (trimmed.isEmpty) {
+      _setError('请选择或输入一个回答。');
+      return false;
+    }
+    return answerQuestionBatch(
+      requestId: requestId,
+      answers: [
+        {
+          'id': requestId,
+          'selected': [trimmed],
+        },
+      ],
+      legacyAnswer: trimmed,
+      deviceId: deviceId,
+      canWrite: canWrite,
+    );
+  }
+
+  Future<bool> answerQuestionBatch({
+    required String requestId,
+    required List<Map<String, dynamic>> answers,
+    required String? deviceId,
+    required bool canWrite,
+    String? legacyAnswer,
+  }) async {
     final sessionId = _selectedSessionId;
     final requestKey = 'question:$requestId';
-    if (answer.trim().isEmpty) {
+    if (answers.isEmpty) {
       _setError('请选择或输入一个回答。');
       return false;
     }
@@ -425,14 +451,19 @@ class SessionController extends ChangeNotifier {
         !_ensureSelectedLease(sessionId)) {
       return false;
     }
+    // v0.5/P4-E：DeepSeek question 使用一次 respond 提交完整 answer batch；
+    // Flutter 仍复用现有 question.answer 命令，只把 fixture payload 扩展为 answers[]。
+    final fixturePayload = <String, dynamic>{
+      'request_id': requestId,
+      'answers': answers,
+    };
+    if (legacyAnswer != null) fixturePayload['answer'] = legacyAnswer;
     return _submitCommand(
       sessionId: sessionId,
       operation: '$requestKey:answer',
       kind: SessionCommandKind.questionAnswer,
       deviceId: deviceId!,
-      ciphertext: {
-        'fixture_payload': {'request_id': requestId, 'answer': answer.trim()},
-      },
+      ciphertext: {'fixture_payload': fixturePayload},
       onAccepted: () => _resolvedRequestKeys.add(requestKey),
     );
   }

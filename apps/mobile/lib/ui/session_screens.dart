@@ -2141,13 +2141,15 @@ class _QuestionRequestItem extends StatefulWidget {
 }
 
 class _QuestionRequestItemState extends State<_QuestionRequestItem> {
-  final _customAnswerController = TextEditingController();
+  final Map<String, TextEditingController> _customAnswerControllers = {};
+  final Map<String, Set<String>> _selectedAnswers = {};
+  final Set<String> _skippedStepIds = {};
   String? _activeRequestId;
-  String? _selectedAnswer;
   String? _validationError;
   String? _submissionError;
   bool _minimized = false;
   bool _locallyCancelled = false;
+  int _questionIndex = 0;
 
   @override
   void initState() {
@@ -2160,19 +2162,16 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
     super.didUpdateWidget(oldWidget);
     final nextRequestId = widget.event.question?.requestId;
     if (_activeRequestId == nextRequestId) return;
-    // v0.5/P4-B：同一 request replay 保留草稿；新的 request/key 必须重置本地状态。
+    // v0.5/P4-B/P4-E：同一 request replay 保留每题草稿；新的 request/key 必须重置本地状态。
     _activeRequestId = nextRequestId;
-    _selectedAnswer = null;
-    _validationError = null;
-    _submissionError = null;
-    _minimized = false;
-    _locallyCancelled = false;
-    _customAnswerController.clear();
+    _resetDraftState();
   }
 
   @override
   void dispose() {
-    _customAnswerController.dispose();
+    for (final controller in _customAnswerControllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -2180,14 +2179,18 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
   Widget build(BuildContext context) {
     final question = widget.event.question;
     if (question == null) return _SystemNotice(event: widget.event);
+    final steps = _stepsFor(question);
+    final currentIndex = _questionIndex.clamp(0, steps.length - 1).toInt();
+    final currentStep = steps[currentIndex];
+    final stepKey = _stepKey(question, currentStep, currentIndex, steps.length);
+    final controller = _controllerFor(currentStep.id);
+    final selected = _selectedAnswers[currentStep.id] ?? const <String>{};
     final resolved =
         question.resolved == true ||
         widget.sessions.isRequestResolved('question', question.requestId);
     final pending = widget.sessions.isRequestPending(question.requestId);
     final enabled = widget.canWrite && widget.hasLease && !resolved && !pending;
-    final answer = _customAnswerController.text.trim().isNotEmpty
-        ? _customAnswerController.text.trim()
-        : _selectedAnswer;
+    final answered = _answered(currentStep);
     if (_locallyCancelled && !resolved) {
       return Container(
         key: Key('question-card-${question.requestId}'),
@@ -2233,7 +2236,7 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                question.prompt,
+                currentStep.prompt,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -2263,9 +2266,21 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
               const Icon(Icons.help_outline),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  question.prompt,
-                  style: Theme.of(context).textTheme.titleMedium,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (steps.length > 1)
+                      Text(
+                        '${currentIndex + 1} / ${steps.length}',
+                        key: Key('question-progress-${question.requestId}'),
+                        style: Theme.of(context).textTheme.labelMedium,
+                      ),
+                    Text(
+                      currentStep.prompt,
+                      key: Key('question-prompt-$stepKey'),
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
                 ),
               ),
               IconButton(
@@ -2289,39 +2304,96 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
               ),
             ],
           ),
-          if (question.options.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              key: Key('question-options-${question.requestId}'),
-              initialValue: _selectedAnswer,
-              decoration: const InputDecoration(labelText: '选择回答'),
-              items: question.options
-                  .map(
-                    (option) =>
-                        DropdownMenuItem(value: option, child: Text(option)),
-                  )
-                  .toList(growable: false),
-              onChanged: enabled
-                  ? (value) => setState(() {
-                      _selectedAnswer = value;
-                      _validationError = null;
-                      _submissionError = null;
-                    })
-                  : null,
-            ),
+          if (currentStep.detail != null) ...[
+            const SizedBox(height: 8),
+            Text(currentStep.detail!),
           ],
-          if (question.allowsFreeform) ...[
+          if (currentStep.options.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            if (currentStep.multiSelect)
+              Column(
+                key: Key('question-options-$stepKey'),
+                children: [
+                  for (
+                    var index = 0;
+                    index < currentStep.options.length;
+                    index += 1
+                  )
+                    Material(
+                      type: MaterialType.transparency,
+                      child: CheckboxListTile(
+                        key: Key('question-option-$stepKey-$index'),
+                        value: selected.contains(
+                          currentStep.options[index].label,
+                        ),
+                        onChanged: enabled
+                            ? (checked) => setState(() {
+                                final next = {...selected};
+                                if (checked == true) {
+                                  next.add(currentStep.options[index].label);
+                                } else {
+                                  next.remove(currentStep.options[index].label);
+                                }
+                                _selectedAnswers[currentStep.id] = next;
+                                _skippedStepIds.remove(currentStep.id);
+                                _validationError = null;
+                                _submissionError = null;
+                              })
+                            : null,
+                        title: Text(
+                          _displayOptionLabel(currentStep.options[index].label),
+                        ),
+                        subtitle: currentStep.options[index].description == null
+                            ? null
+                            : Text(currentStep.options[index].description!),
+                        controlAffinity: ListTileControlAffinity.leading,
+                      ),
+                    ),
+                ],
+              )
+            else
+              DropdownButtonFormField<String>(
+                key: Key('question-options-$stepKey'),
+                initialValue: selected.isEmpty ? null : selected.first,
+                decoration: const InputDecoration(labelText: '选择回答'),
+                items: currentStep.options
+                    .map(
+                      (option) => DropdownMenuItem(
+                        value: option.label,
+                        child: Text(_displayOptionLabel(option.label)),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: enabled
+                    ? (value) => setState(() {
+                        _selectedAnswers[currentStep.id] = {?value};
+                        _controllerFor(currentStep.id).clear();
+                        _skippedStepIds.remove(currentStep.id);
+                        _validationError = null;
+                        _submissionError = null;
+                      })
+                    : null,
+              ),
+          ],
+          if (currentStep.allowsFreeform || currentStep.options.isEmpty) ...[
             const SizedBox(height: 8),
             TextField(
-              key: Key('question-freeform-${question.requestId}'),
-              controller: _customAnswerController,
+              key: Key('question-freeform-$stepKey'),
+              controller: controller,
               enabled: enabled,
-              maxLines: 2,
+              maxLines: currentStep.options.isEmpty ? 3 : 2,
               onChanged: (_) => setState(() {
+                // v0.5/P4-E：单选 custom 替换已选项；多选 custom 可与已选项并存。
+                if (!currentStep.multiSelect) {
+                  _selectedAnswers[currentStep.id] = <String>{};
+                }
+                _skippedStepIds.remove(currentStep.id);
                 _validationError = null;
                 _submissionError = null;
               }),
-              decoration: const InputDecoration(labelText: '或输入回答'),
+              decoration: InputDecoration(
+                labelText: currentStep.options.isEmpty ? '输入回答' : '或输入回答',
+              ),
             ),
           ],
           if (_validationError != null) ...[
@@ -2351,18 +2423,42 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
               spacing: 8,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                if (steps.length > 1)
+                  TextButton(
+                    key: Key('question-prev-${question.requestId}'),
+                    onPressed: enabled && currentIndex > 0
+                        ? () => setState(() {
+                            _questionIndex = currentIndex - 1;
+                            _validationError = null;
+                            _submissionError = null;
+                          })
+                        : null,
+                    child: const Text('上一题'),
+                  ),
                 TextButton(
                   key: Key('question-skip-${question.requestId}'),
                   onPressed: enabled
-                      ? () => _skipQuestion(question.requestId)
+                      ? () => _skipCurrentStep(question, steps, currentIndex)
                       : null,
                   child: const Text('跳过'),
+                ),
+                TextButton(
+                  key: Key('question-next-${question.requestId}'),
+                  onPressed: enabled
+                      ? () => _continueQuestion(
+                          question,
+                          steps,
+                          currentIndex,
+                          answered,
+                        )
+                      : null,
+                  child: Text(currentIndex == steps.length - 1 ? '提交' : '下一题'),
                 ),
                 IconButton(
                   key: Key('question-submit-${question.requestId}'),
                   tooltip: '提交回答',
                   onPressed: enabled
-                      ? () => _submitQuestion(question.requestId, answer)
+                      ? () => _submitQuestionBatch(question, steps)
                       : null,
                   icon: pending
                       ? const SizedBox(
@@ -2386,11 +2482,63 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
     );
   }
 
-  Future<void> _submitQuestion(String requestId, String? answer) async {
-    final trimmed = answer?.trim();
-    if (trimmed == null || trimmed.isEmpty) {
+  Future<void> _continueQuestion(
+    TimelineQuestionRequest question,
+    List<TimelineQuestionStep> steps,
+    int currentIndex,
+    bool answered,
+  ) async {
+    final currentStep = steps[currentIndex];
+    if (!answered && !_skippedStepIds.contains(currentStep.id)) {
+      setState(() => _validationError = '请选择、输入或跳过当前问题。');
+      return;
+    }
+    if (currentIndex < steps.length - 1) {
       setState(() {
-        _validationError = '请选择或输入一个回答。';
+        _questionIndex = currentIndex + 1;
+        _validationError = null;
+        _submissionError = null;
+      });
+      return;
+    }
+    await _submitQuestionBatch(question, steps);
+  }
+
+  Future<void> _skipCurrentStep(
+    TimelineQuestionRequest question,
+    List<TimelineQuestionStep> steps,
+    int currentIndex,
+  ) async {
+    final currentStep = steps[currentIndex];
+    setState(() {
+      _selectedAnswers[currentStep.id] = <String>{};
+      _controllerFor(currentStep.id).clear();
+      _skippedStepIds.add(currentStep.id);
+      _validationError = null;
+      _submissionError = null;
+    });
+    if (steps.length == 1) {
+      await _skipQuestion(question.requestId);
+      return;
+    }
+    if (currentIndex < steps.length - 1) {
+      setState(() => _questionIndex = currentIndex + 1);
+      return;
+    }
+    await _submitQuestionBatch(question, steps);
+  }
+
+  Future<void> _submitQuestionBatch(
+    TimelineQuestionRequest question,
+    List<TimelineQuestionStep> steps,
+  ) async {
+    final missingIndex = steps.indexWhere(
+      (step) => !_answered(step) && !_skippedStepIds.contains(step.id),
+    );
+    if (missingIndex >= 0) {
+      setState(() {
+        _questionIndex = missingIndex;
+        _validationError = '请选择、输入或跳过当前问题。';
         _submissionError = null;
       });
       return;
@@ -2399,13 +2547,13 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
       _validationError = null;
       _submissionError = null;
     });
-    final accepted = await widget.sessions.answerQuestion(
-      requestId: requestId,
-      answer: trimmed,
+    final accepted = await widget.sessions.answerQuestionBatch(
+      requestId: question.requestId,
+      answers: steps.map(_answerForStep).toList(growable: false),
       deviceId: widget.deviceId,
       canWrite: widget.canWrite,
     );
-    if (!accepted && mounted && _activeRequestId == requestId) {
+    if (!accepted && mounted && _activeRequestId == question.requestId) {
       setState(() {
         _submissionError = widget.sessions.errorMessage ?? '提交失败，请重试。';
       });
@@ -2427,6 +2575,74 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
         _submissionError = widget.sessions.errorMessage ?? '跳过失败，请重试。';
       });
     }
+  }
+
+  bool _answered(TimelineQuestionStep step) {
+    final selected = _selectedAnswers[step.id] ?? const <String>{};
+    return selected.isNotEmpty ||
+        _controllerFor(step.id).text.trim().isNotEmpty;
+  }
+
+  Map<String, dynamic> _answerForStep(TimelineQuestionStep step) {
+    final custom = _controllerFor(step.id).text.trim();
+    return {
+      'id': step.id,
+      'selected': _skippedStepIds.contains(step.id)
+          ? const <String>[]
+          : (_selectedAnswers[step.id] ?? const <String>{}).toList(
+              growable: false,
+            ),
+      if (custom.isNotEmpty && !_skippedStepIds.contains(step.id))
+        'custom': custom,
+    };
+  }
+
+  TextEditingController _controllerFor(String stepId) =>
+      _customAnswerControllers.putIfAbsent(stepId, TextEditingController.new);
+
+  List<TimelineQuestionStep> _stepsFor(TimelineQuestionRequest question) {
+    if (question.steps.isNotEmpty) return question.steps;
+    return [
+      TimelineQuestionStep(
+        id: question.requestId,
+        prompt: question.prompt,
+        options: question.options
+            .map((label) => TimelineQuestionOption(label: label))
+            .toList(growable: false),
+        allowsFreeform: question.allowsFreeform,
+      ),
+    ];
+  }
+
+  String _stepKey(
+    TimelineQuestionRequest question,
+    TimelineQuestionStep step,
+    int index,
+    int count,
+  ) => count == 1 ? question.requestId : '${question.requestId}-${step.id}';
+
+  String _displayOptionLabel(String label) => label
+      .replaceFirst(
+        RegExp(
+          r'\s*(\((recommended|推荐)\)|（(recommended|推荐)）)\s*$',
+          caseSensitive: false,
+        ),
+        '',
+      )
+      .trim();
+
+  void _resetDraftState() {
+    for (final controller in _customAnswerControllers.values) {
+      controller.dispose();
+    }
+    _customAnswerControllers.clear();
+    _selectedAnswers.clear();
+    _skippedStepIds.clear();
+    _validationError = null;
+    _submissionError = null;
+    _minimized = false;
+    _locallyCancelled = false;
+    _questionIndex = 0;
   }
 }
 

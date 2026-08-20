@@ -916,17 +916,47 @@ class FixtureRelayRepository implements RelayRepository {
       },
       now: now,
     );
+    final questionId = 'question-${state.session.id}-${state.nextSequence}';
+    final multiQuestion =
+        message.contains('multi question') || message.contains('多题');
     state.append(
       eventType: 'question.requested',
       payload: {
         'kind': 'question_request',
         'label': '需要回答',
-        'question': {
-          'request_id': 'question-${state.session.id}-${state.nextSequence}',
-          'prompt': '选择 fixture 的后续处理方式。',
-          'options': const ['继续', '仅生成摘要'],
-          'allows_freeform': true,
-        },
+        'question': multiQuestion
+            ? {
+                'request_id': questionId,
+                'prompt': '请完成 fixture 多题配置。',
+                'questions': const [
+                  {
+                    'id': 'routing',
+                    'prompt': '选择执行路径。',
+                    'options': [
+                      {'label': '标准路径 (推荐)', 'description': '保留默认安全检查。'},
+                      {'label': '自定义路径'},
+                    ],
+                    'allows_freeform': true,
+                  },
+                  {
+                    'id': 'checks',
+                    'prompt': '选择需要保留的检查。',
+                    'detail': '多选 custom 应与勾选项并存。',
+                    'options': [
+                      {'label': '静态检查'},
+                      {'label': 'Widget 回归'},
+                    ],
+                    'allows_freeform': true,
+                    'multi_select': true,
+                  },
+                ],
+              }
+            : {
+                'request_id': questionId,
+                'prompt': '选择 fixture 的后续处理方式。',
+                'options': const ['继续', '仅生成摘要'],
+                'allows_freeform': true,
+              },
       },
       now: now,
     );
@@ -1132,6 +1162,7 @@ class FixtureRelayRepository implements RelayRepository {
     // v0.5/P4-C：fixture 只读取测试 envelope 中的 skipped 标记，用来证明
     // skip 仍走 question.answer 写链路；真实 Relay 仍只处理加密命令体。
     final skipped = payload is Map && payload['skipped'] == true;
+    final batchAnswered = payload is Map && payload['answers'] is List;
     state.append(
       eventType: 'question.resolved',
       payload: {
@@ -1139,7 +1170,10 @@ class FixtureRelayRepository implements RelayRepository {
         'label': skipped ? '已跳过' : '已回答',
         'text': skipped
             ? '问题 $requestId 已由 Android 控制端跳过。'
+            : batchAnswered
+            ? '问题 $requestId 已由 Android 控制端批量回答。'
             : '问题 $requestId 已由 Android 控制端回答。',
+        if (batchAnswered) 'answers': payload['answers'],
       },
       now: _clock(),
     );
