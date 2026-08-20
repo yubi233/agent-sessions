@@ -20,6 +20,7 @@ import '../state/session_view_controller.dart';
 import 'appearance_controls.dart';
 import 'app_theme.dart';
 import 'session/chat/session_chat_view.dart';
+import 'session/composer/session_queue_dock.dart';
 import 'session/session_conversation_root.dart';
 import 'session/session_header.dart';
 
@@ -3385,16 +3386,15 @@ class _SessionComposerState extends State<_SessionComposer> {
                 deviceId: widget.deviceId,
               ),
             if (input.queue.isNotEmpty)
-              _QueueDock(
-                messages: input.queue.map((item) => item.text).toList(),
-                onRemove: (index) {
-                  final current = _inputMachine.snapshot.queue;
-                  if (index < 0 || index >= current.length) return;
-                  setState(
-                    () => _inputMachine.removeQueuedMessage(current[index].id),
-                  );
-                },
+              SessionQueueDock(
+                messages: input.queue,
+                onRemove: (id) =>
+                    setState(() => _inputMachine.removeQueuedMessage(id)),
+                onEdit: (id, text) =>
+                    setState(() => _inputMachine.editQueuedMessage(id, text)),
+                onSteer: (id) => unawaited(_steerQueuedMessages(id)),
                 onSendAll: _sendQueuedMessages,
+                running: widget.sessions.isStreaming,
               ),
             if (_commandMenuOpen)
               _CommandLauncherMenu(
@@ -3656,69 +3656,34 @@ class _SessionComposerState extends State<_SessionComposer> {
       if (widget.sessions.isStreaming) break;
     }
   }
-}
 
-class _QueueDock extends StatelessWidget {
-  const _QueueDock({
-    required this.messages,
-    required this.onRemove,
-    required this.onSendAll,
-  });
-
-  final List<String> messages;
-  final ValueChanged<int> onRemove;
-  final VoidCallback onSendAll;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      key: const Key('session-queue-dock'),
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(10, 8, 6, 6),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Text(
-                '${messages.length} 条排队消息',
-                style: theme.textTheme.labelMedium,
-              ),
-              const Spacer(),
-              TextButton.icon(
-                key: const Key('session-queue-send-all'),
-                onPressed: onSendAll,
-                icon: const Icon(Icons.send_outlined, size: 16),
-                label: const Text('全部发送'),
-              ),
-            ],
-          ),
-          for (var index = 0; index < messages.length; index++)
-            Row(
-              key: Key('session-queue-row-$index'),
-              children: [
-                Expanded(
-                  child: Text(
-                    messages[index],
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                IconButton(
-                  key: Key('session-queue-remove-$index'),
-                  tooltip: '删除排队消息',
-                  onPressed: () => onRemove(index),
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                ),
-              ],
-            ),
-        ],
-      ),
+  /// v0.5/P5：逐条 strict steer——只把指定排队项作为显式动作发送，
+  /// 其余队列保留；发送成功才移除该项，失败保留并在 composer notice 呈现。
+  Future<void> _steerQueuedMessages(String id) async {
+    if (widget.sessions.isStreaming) return;
+    final queued = List<QueuedComposerMessage>.from(
+      _inputMachine.snapshot.queue,
     );
+    final item = queued.where((entry) => entry.id == id).firstOrNull;
+    if (item == null || !item.steerable) return;
+    await widget.sessions.sendMessage(
+      message: item.text,
+      deviceId: widget.deviceId,
+      canWrite: widget.canWrite,
+    );
+    if (!mounted) return;
+    final error = widget.sessions.errorMessage;
+    if (error != null) {
+      setState(
+        () => _inputMachine.setNotice(
+          '只发送 '
+          '$item.text'
+          ' 失败：$error',
+        ),
+      );
+      return;
+    }
+    setState(() => _inputMachine.removeQueuedMessage(item.id));
   }
 }
 

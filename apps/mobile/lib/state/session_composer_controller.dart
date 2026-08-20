@@ -33,10 +33,22 @@ class SessionDraftReference {
 }
 
 class QueuedComposerMessage {
-  const QueuedComposerMessage({required this.id, required this.text});
+  const QueuedComposerMessage({
+    required this.id,
+    required this.text,
+    this.editable = true,
+    this.steerable = true,
+  });
 
   final String id;
   final String text;
+
+  /// 是否为纯文本可编辑项。非文本（图片/附件）或不可变队列项不可编辑，
+  /// 并在 QueueDock 中展示禁用原因，避免被误当作已处理文本。
+  final bool editable;
+
+  /// 是否可逐条 strict steer。不可变/子代理队列只读展示。
+  final bool steerable;
 }
 
 class SessionInputSnapshot {
@@ -222,9 +234,25 @@ class SessionComposerInputMachine {
     draftRevision: draftRevision,
   );
 
-  void addQueuedMessage(String id, String text) {
+  /// 追加排队项。默认是可编辑/可 steer 的纯文本项；非文本（图片/附件）
+  /// 或不可变队列项通过 [editable]/[steerable] 传入 false，QueueDock 据此
+  /// 只读展示并禁用编辑，避免被误当作已处理文本。
+  void addQueuedMessage(
+    String id,
+    String text, {
+    bool editable = true,
+    bool steerable = true,
+  }) {
     if (text.trim().isEmpty) return;
-    _queue = [..._queue, QueuedComposerMessage(id: id, text: text)];
+    _queue = [
+      ..._queue,
+      QueuedComposerMessage(
+        id: id,
+        text: text,
+        editable: editable,
+        steerable: steerable,
+      ),
+    ];
   }
 
   void editQueuedMessage(String id, String text) {
@@ -236,6 +264,12 @@ class SessionComposerInputMachine {
 
   void removeQueuedMessage(String id) {
     _queue = _queue.where((item) => item.id != id).toList(growable: false);
+  }
+
+  /// 展示级 notice（P5 queue/steer/model/permission 操作失败等）。
+  /// 只设置提示文案，不清空草稿、引用或排队项。
+  void setNotice(String? message) {
+    _notice = message;
   }
 
   /// 提交决策只返回模式；不会隐式 flush queue。

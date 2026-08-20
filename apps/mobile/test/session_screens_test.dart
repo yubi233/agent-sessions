@@ -750,6 +750,325 @@ void main() {
     expect(_snapshotContainsText(snapshot, repeatDraft), isTrue);
   });
 
+  testWidgets('MOBILE-V05-07/P5-A：多队列 busy 强制展开、停止后默认折叠、展开/折叠切换', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-queue-multi-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '进入 streaming',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+    expect(harness.relay.submittedCommandCount, 1);
+
+    const first = '第一条排队';
+    const middle = '第二条排队（中间项）';
+    const last = '第三条排队（末尾项）';
+    for (final text in [first, middle, last]) {
+      await _enterVisible(
+        tester,
+        find.byKey(const Key('session-composer-input')),
+        text,
+      );
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-composer-primary-action')),
+      );
+      await tester.pump(const Duration(milliseconds: 80));
+    }
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+    expect(find.text('3 条排队消息'), findsOneWidget);
+
+    // busy=running 时 QueueDock 强制展开，中间项也可见，不隐藏队列。
+    expect(find.text(first), findsOneWidget);
+    expect(find.text(middle), findsOneWidget);
+    expect(find.text(last), findsOneWidget);
+    expect(find.text('还有 1 条排队消息未显示'), findsNothing);
+
+    // stop 后 running=false：多项默认折叠，只显示首尾，中间项隐藏并提示剩余。
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    await _waitForVisible(tester, find.text('已停止'));
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+    expect(find.text(first), findsOneWidget);
+    expect(find.text(last), findsOneWidget);
+    expect(find.text(middle), findsNothing);
+    expect(find.text('还有 1 条排队消息未显示'), findsOneWidget);
+    expect(find.text('展开'), findsOneWidget);
+
+    // 展开后全量可见，toggle 文案变为「折叠」。
+    await _tapVisible(tester, find.byKey(const Key('session-queue-toggle')));
+    await _waitForVisible(tester, find.text(middle));
+    expect(find.text('还有 1 条排队消息未显示'), findsNothing);
+    expect(find.text('折叠'), findsOneWidget);
+
+    // 再折叠回默认态。
+    await _tapVisible(tester, find.byKey(const Key('session-queue-toggle')));
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(find.text(middle), findsNothing);
+  });
+
+  testWidgets('MOBILE-V05-07/P5-A：单项队列不显示 count header 与折叠按钮', (tester) async {
+    await _openWritableSession(
+      tester,
+      'composer-queue-single-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '进入 streaming',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    const single = '只有一条排队消息';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      single,
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    await _waitForVisible(tester, find.text('已停止'));
+
+    // 单项无 count header：不显示折叠/展开 toggle，也不显示「还有 N 条」。
+    expect(find.text('1 条排队消息'), findsOneWidget);
+    expect(find.byKey(const Key('session-queue-toggle')), findsNothing);
+    expect(find.textContaining('未显示'), findsNothing);
+    expect(find.text(single), findsOneWidget);
+  });
+
+  testWidgets('MOBILE-V05-07/P5-A：编辑保存与取消，编辑强制展开', (tester) async {
+    await _openWritableSession(
+      tester,
+      'composer-queue-edit-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '进入 streaming',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    const first = '编辑前文本';
+    const middle = '编辑时也应可见的中间项';
+    const last = '末尾项';
+    for (final text in [first, middle, last]) {
+      await _enterVisible(
+        tester,
+        find.byKey(const Key('session-composer-input')),
+        text,
+      );
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-composer-primary-action')),
+      );
+      await tester.pump(const Duration(milliseconds: 80));
+    }
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    await _waitForVisible(tester, find.text('已停止'));
+
+    // 编辑态强制展开：点击第一项编辑后，折叠态被打破，中间项也可见。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-queue-1')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-input-queue-1')),
+    );
+    expect(find.text(middle), findsOneWidget);
+
+    const edited = '编辑后的新文本';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-input-queue-1')),
+      edited,
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-save-queue-1')),
+    );
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(find.text(edited), findsOneWidget);
+    expect(find.text(first), findsNothing);
+
+    // 取消编辑不落库：再次编辑并改文本，点取消后文本保持不变。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-queue-1')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-input-queue-1')),
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-input-queue-1')),
+      '取消不应保存的文本',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-queue-edit-cancel-queue-1')),
+    );
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(find.text(edited), findsOneWidget);
+    expect(find.text('取消不应保存的文本'), findsNothing);
+  });
+
+  testWidgets('MOBILE-V05-07/P5-A：逐条 strict steer 只发送指定项并保留其余队列', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-queue-steer-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '进入 streaming',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+    expect(harness.relay.submittedCommandCount, 1);
+
+    const steer = '只发这一条';
+    const keep = '这条保留在队列';
+    for (final text in [steer, keep]) {
+      await _enterVisible(
+        tester,
+        find.byKey(const Key('session-composer-input')),
+        text,
+      );
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-composer-primary-action')),
+      );
+      await tester.pump(const Duration(milliseconds: 80));
+    }
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    await _waitForVisible(tester, find.text('已停止'));
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    // steer 是显式动作：发送成功后该行从队列移除。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-queue-steer-queue-1')),
+    );
+    await _waitForGone(
+      tester,
+      find.byKey(const Key('session-queue-row-queue-1')),
+    );
+    // 被发送项已落进 Relay（同时作为 Chat 用户消息展示），队列行移除、keep 项保留。
+    // 计数口径：send(1)+stop(1)+steer(1)=3。
+    final sentSnapshot = await harness.relay.getSessionSnapshot(sessionId);
+    expect(_snapshotContainsText(sentSnapshot, steer), isTrue);
+    expect(find.byKey(const Key('session-queue-row-queue-1')), findsNothing);
+    expect(find.text(keep), findsOneWidget);
+    expect(harness.relay.submittedCommandCount, 3);
+  });
+
+  testWidgets('MOBILE-V05-07/P5-A：steer 发送失败保留排队项并以 composer notice 呈现', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-queue-steer-fail-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '进入 streaming',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    const queued = '发送失败的排队项';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      queued,
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    await _waitForVisible(tester, find.text('已停止'));
+
+    harness.relay.setNetworkAvailable(false);
+    addTearDown(() => harness.relay.setNetworkAvailable(true));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-queue-steer-queue-1')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-composer-machine-notice')),
+    );
+    final notice = tester.widget<Text>(
+      find.byKey(const Key('session-composer-machine-notice')),
+    );
+    expect(notice.data, contains('只发送'));
+    expect(notice.data, contains('失败'));
+    // 失败不丢排队项，也不新增 Relay 命令。计数口径：send(1)+stop(1)=2，steer 失败不 +1。
+    expect(find.text(queued), findsOneWidget);
+    expect(harness.relay.submittedCommandCount, 2);
+  });
+
   testWidgets('MOBILE-V05-05/P4-A：Question 优先接管，完成后 re-arm Approval', (
     tester,
   ) async {
