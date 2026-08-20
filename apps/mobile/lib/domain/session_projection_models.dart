@@ -134,6 +134,7 @@ class ComposerPendingWait {
     required this.requestId,
     required this.title,
     required this.summary,
+    this.command,
   }) : kind = ComposerPendingKind.approval,
        prompt = null,
        options = const [],
@@ -146,12 +147,14 @@ class ComposerPendingWait {
     required this.allowsFreeform,
   }) : kind = ComposerPendingKind.question,
        title = '需要回答',
-       summary = null;
+       summary = null,
+       command = null;
 
   final ComposerPendingKind kind;
   final String requestId;
   final String title;
   final String? summary;
+  final String? command;
   final String? prompt;
   final List<String> options;
   final bool allowsFreeform;

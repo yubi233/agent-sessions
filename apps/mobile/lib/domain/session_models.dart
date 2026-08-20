@@ -303,12 +303,14 @@ class TimelinePermissionRequest {
     required this.requestId,
     required this.title,
     required this.summary,
+    this.command,
     this.resolved,
   });
 
   final String requestId;
   final String title;
   final String summary;
+  final String? command;
   final bool? resolved;
 }
 
@@ -435,6 +437,7 @@ TimelinePermissionRequest? _permissionFromFixture(Object? value) {
     requestId: requestId,
     title: _nullableString(data['title']) ?? '需要确认',
     summary: _nullableString(data['summary']) ?? '此操作需要 Android 控制端确认。',
+    command: _nullableString(data['command']),
     resolved: data['resolved'] as bool?,
   );
 }

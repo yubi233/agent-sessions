@@ -1078,6 +1078,77 @@ void main() {
     expect(harness.relay.submittedCommandCount, 2);
   });
 
+  testWidgets('MOBILE-V05-06/P4-D：ApprovalPanel 命令滚动区与一次性决策', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-approval-panel-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发 approval panel',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    final timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final question = timeline
+        .firstWhere((event) => event.question != null)
+        .question!;
+    final permission = timeline
+        .firstWhere((event) => event.permission != null)
+        .permission!;
+
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-skip-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-approval-panel')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('permission-waiting-strip-${permission.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('permission-command-scroll-${permission.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('permission-command-text-${permission.requestId}')),
+    );
+    expect(find.textContaining('printf fixture-approval'), findsOneWidget);
+
+    final reject = find.byKey(Key('permission-reject-${permission.requestId}'));
+    final approve = find.byKey(
+      Key('permission-approve-${permission.requestId}'),
+    );
+    await _waitForVisible(tester, reject);
+    await _waitForVisible(tester, approve);
+    await tester.ensureVisible(reject);
+    await tester.ensureVisible(approve);
+    await tester.tap(reject);
+    await tester.tap(approve);
+    await _waitForGone(tester, find.byKey(const Key('session-composer-chain')));
+
+    expect(harness.relay.submittedCommandCount, 3);
+    final snapshot = await harness.relay.getSessionSnapshot(sessionId);
+    expect(_snapshotContainsLabel(snapshot, '已拒绝'), isTrue);
+    expect(_snapshotContainsLabel(snapshot, '已允许'), isFalse);
+  });
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {

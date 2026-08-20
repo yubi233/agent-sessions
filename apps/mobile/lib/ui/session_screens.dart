@@ -1989,6 +1989,44 @@ class _PermissionRequestItem extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(
+            key: Key('permission-waiting-strip-${permission.requestId}'),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.tertiary,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.circle,
+                  size: 8,
+                  color: Theme.of(context).colorScheme.onTertiary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '等待确认',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onTertiary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (pending) ...[
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Theme.of(context).colorScheme.onTertiary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
             children: [
               const Icon(Icons.shield_outlined),
@@ -1999,16 +2037,46 @@ class _PermissionRequestItem extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              if (pending)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
             ],
           ),
           const SizedBox(height: 8),
-          Text(permission.summary),
+          // v0.5/P4-D：理由和命令可能是模型生成的长文本；滚动区只包住正文，
+          // 决策按钮留在外层，避免命令过长时 allow/reject 不可达。
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 140),
+            child: SingleChildScrollView(
+              key: Key('permission-command-scroll-${permission.requestId}'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(permission.summary),
+                  if (permission.command != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      key: Key(
+                        'permission-command-text-${permission.requestId}',
+                      ),
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surface,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: Theme.of(context).dividerColor,
+                        ),
+                      ),
+                      child: Text(
+                        permission.command!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,

@@ -376,7 +376,7 @@ class SessionController extends ChangeNotifier {
     return controlBlockedReason('resume', canWrite: canWrite);
   }
 
-  Future<void> resolvePermission({
+  Future<bool> resolvePermission({
     required String requestId,
     required bool approved,
     required String? deviceId,
@@ -385,12 +385,15 @@ class SessionController extends ChangeNotifier {
     final sessionId = _selectedSessionId;
     final requestKey = 'permission:$requestId';
     if (_resolvedRequestKeys.contains(requestKey) ||
+        isRequestPending(requestId) ||
         sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
         !_ensureSelectedLease(sessionId)) {
-      return;
+      return false;
     }
-    await _submitCommand(
+    // v0.5/P4-D：同一 approval request 的 reject / approve 必须 one-shot。
+    // 这里按 requestId 阻断交叉 pending，而不是只按按钮 operation 阻断。
+    return _submitCommand(
       sessionId: sessionId,
       operation: '$requestKey:${approved ? 'approve' : 'reject'}',
       kind: approved

@@ -110,6 +110,7 @@ class SessionProjectionController {
         requestId: permission.requestId,
         title: permission.title,
         summary: permission.summary,
+        command: permission.command,
       );
     }
 

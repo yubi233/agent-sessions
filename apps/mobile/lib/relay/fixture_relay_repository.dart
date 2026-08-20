@@ -909,6 +909,9 @@ class FixtureRelayRepository implements RelayRepository {
           'request_id': 'permission-${state.session.id}-${state.nextSequence}',
           'title': '允许继续执行 fixture 工具步骤？',
           'summary': '仅用于验证确认卡和幂等控制，不会执行本地 shell。',
+          // v0.5/P4-D：仅为本地 UI 回归提供脱敏 paired command；fixture 不执行 shell。
+          'command':
+              'printf fixture-approval && echo safe-preview && echo keep-buttons-visible',
         },
       },
       now: now,
