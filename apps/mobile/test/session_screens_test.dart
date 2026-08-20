@@ -83,10 +83,6 @@ void main() {
         .firstWhere((event) => event.question != null)
         .question!;
 
-    await _tapVisible(
-      tester,
-      find.byKey(Key('permission-approve-${permission.requestId}')),
-    );
     await _waitForVisible(
       tester,
       find.byKey(Key('question-freeform-${question.requestId}')),
@@ -103,6 +99,14 @@ void main() {
     await _waitForGone(
       tester,
       find.byKey(Key('question-submit-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('permission-approve-${permission.requestId}')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('permission-approve-${permission.requestId}')),
     );
 
     await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
@@ -744,6 +748,78 @@ void main() {
       (await harness.relay.listSessions()).single.id,
     );
     expect(_snapshotContainsText(snapshot, repeatDraft), isTrue);
+  });
+
+  testWidgets('MOBILE-V05-05/P4-A：Question 优先接管，完成后 re-arm Approval', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-chain-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发 question 和 approval',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    final timeline = (await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final permission = timeline
+        .firstWhere((event) => event.permission != null)
+        .permission!;
+    final question = timeline
+        .firstWhere((event) => event.question != null)
+        .question!;
+
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-composer-chain')),
+    );
+    expect(find.byKey(const Key('session-question-panel')), findsOneWidget);
+    expect(find.byKey(const Key('session-approval-panel')), findsNothing);
+    expect(
+      find.byKey(Key('permission-approve-${permission.requestId}')),
+      findsNothing,
+    );
+
+    const fallbackDraft = 'pending takeover 不应清空输入草稿';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      fallbackDraft,
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(Key('question-freeform-${question.requestId}')),
+      '先回答 question',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-submit-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-approval-panel')),
+    );
+
+    expect(find.byKey(const Key('session-question-panel')), findsNothing);
+    expect(_composerText(tester), fallbackDraft);
+    await _tapVisible(
+      tester,
+      find.byKey(Key('permission-approve-${permission.requestId}')),
+    );
+    await _waitForGone(tester, find.byKey(const Key('session-composer-chain')));
   });
 
   testWidgets(

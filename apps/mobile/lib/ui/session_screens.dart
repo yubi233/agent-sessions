@@ -2180,6 +2180,57 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
   }
 }
 
+class _ComposerChain extends StatelessWidget {
+  const _ComposerChain({
+    required this.pendingQuestion,
+    required this.pendingPermission,
+    required this.canWrite,
+    required this.hasLease,
+    required this.sessions,
+    required this.deviceId,
+  });
+
+  final SessionTimelineEvent? pendingQuestion;
+  final SessionTimelineEvent? pendingPermission;
+  final bool canWrite;
+  final bool hasLease;
+  final SessionController sessions;
+  final String? deviceId;
+
+  @override
+  Widget build(BuildContext context) {
+    // v0.5/P4-A：composer chain 是 pending interaction 的唯一 carrier。
+    // Question 优先于 approval；question 完成后，外层 projection 重算并 re-arm approval。
+    final question = pendingQuestion;
+    final permission = pendingPermission;
+    return Padding(
+      key: const Key('session-composer-chain'),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: question != null
+          ? KeyedSubtree(
+              key: const Key('session-question-panel'),
+              child: _QuestionRequestItem(
+                event: question,
+                canWrite: canWrite,
+                hasLease: hasLease,
+                sessions: sessions,
+                deviceId: deviceId,
+              ),
+            )
+          : KeyedSubtree(
+              key: const Key('session-approval-panel'),
+              child: _PermissionRequestItem(
+                event: permission!,
+                canWrite: canWrite,
+                hasLease: hasLease,
+                sessions: sessions,
+                deviceId: deviceId,
+              ),
+            ),
+    );
+  }
+}
+
 class _SystemNotice extends StatelessWidget {
   const _SystemNotice({required this.event});
 
@@ -2523,17 +2574,10 @@ class _SessionComposerState extends State<_SessionComposer> {
                 canWrite: widget.canWrite,
                 deviceId: widget.deviceId,
               ),
-            if (pendingPermission != null)
-              _PermissionRequestItem(
-                event: pendingPermission,
-                canWrite: widget.canWrite,
-                hasLease: widget.sessions.hasSelectedLease,
-                sessions: widget.sessions,
-                deviceId: widget.deviceId,
-              ),
-            if (pendingQuestion != null)
-              _QuestionRequestItem(
-                event: pendingQuestion,
+            if (pendingQuestion != null || pendingPermission != null)
+              _ComposerChain(
+                pendingQuestion: pendingQuestion,
+                pendingPermission: pendingPermission,
                 canWrite: widget.canWrite,
                 hasLease: widget.sessions.hasSelectedLease,
                 sessions: widget.sessions,
