@@ -1249,6 +1249,163 @@ void main() {
     expect(answers[1]['custom'], '保留截图证据');
   });
 
+  testWidgets('MOBILE-V05-05/P4-F：PlanReview 计划评审接管、滚动与 approve payload', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-plan-review-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      'plan review 计划评审',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    final timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final question = timeline
+        .firstWhere((event) => event.question != null)
+        .question!;
+    expect(question.steps.length, 1);
+    expect(question.steps.first.isPlanReview, isTrue);
+
+    // plan-review 专用卡片：header 条、可滚动 plan body、按钮常驻。
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('plan-review-card-${question.requestId}')),
+    );
+    expect(
+      find.byKey(Key('plan-review-header-${question.requestId}')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(Key('plan-review-scroll-${question.requestId}')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('## 实施计划'), findsOneWidget);
+    // 通用 question 流程的分页/自定义控件不应出现在 plan-review 形态。
+    expect(
+      find.byKey(Key('question-progress-${question.requestId}')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(Key('question-freeform-${question.requestId}')),
+      findsNothing,
+    );
+
+    // 三个动作是完整决策面：approve / decline / discuss。
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('plan-review-approve-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('plan-review-decline-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('plan-review-discuss-${question.requestId}')),
+    );
+
+    // approve 回传真实选项 label（intent.approve）。
+    await _tapVisible(
+      tester,
+      find.byKey(Key('plan-review-approve-${question.requestId}')),
+    );
+    await _waitForGone(
+      tester,
+      find.byKey(Key('plan-review-approve-${question.requestId}')),
+    );
+    final snapshot = await harness.relay.getSessionSnapshot(sessionId);
+    final answers = _latestFixtureQuestionAnswers(snapshot);
+    expect(answers, hasLength(1));
+    expect(answers[0]['id'], contains('plan'));
+    expect(answers[0]['selected'], contains('批准执行'));
+  });
+
+  testWidgets(
+    'MOBILE-V05-05/P4-F：PlanReview decline payload 与本地 discuss 恢复输入上下文',
+    (tester) async {
+      final harness = await _openWritableSession(
+        tester,
+        'composer-plan-review-decline-owner@fixture.test',
+      );
+
+      await _enterVisible(
+        tester,
+        find.byKey(const Key('session-composer-input')),
+        'plan review 计划评审',
+      );
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-composer-primary-action')),
+      );
+      await _waitForVisible(
+        tester,
+        find.byKey(const Key('assistant-streaming-indicator')),
+      );
+
+      final sessionId = (await harness.relay.listSessions()).single.id;
+      final timeline = (await harness.relay.getSessionSnapshot(
+        sessionId,
+      )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+      final question = timeline
+          .firstWhere((event) => event.question != null)
+          .question!;
+
+      // discuss 本机关闭；原 compose 草稿不应被清空。
+      await _waitForVisible(
+        tester,
+        find.byKey(Key('plan-review-card-${question.requestId}')),
+      );
+      final composerTextBefore = _composerText(tester);
+      await _tapVisible(
+        tester,
+        find.byKey(Key('plan-review-discuss-${question.requestId}')),
+      );
+      await _waitForVisible(
+        tester,
+        find.byKey(Key('plan-review-dismissed-${question.requestId}')),
+      );
+      expect(find.textContaining('未向 Host 发送取消命令'), findsNothing);
+      expect(_composerText(tester), composerTextBefore);
+
+      // 恢复后可选择需要修改（decline label）。
+      await _tapVisible(
+        tester,
+        find.byKey(Key('plan-review-restore-${question.requestId}')),
+      );
+      await _waitForVisible(
+        tester,
+        find.byKey(Key('plan-review-decline-${question.requestId}')),
+      );
+      await _tapVisible(
+        tester,
+        find.byKey(Key('plan-review-decline-${question.requestId}')),
+      );
+      await _waitForGone(
+        tester,
+        find.byKey(Key('plan-review-decline-${question.requestId}')),
+      );
+      final snapshot = await harness.relay.getSessionSnapshot(sessionId);
+      final answers = _latestFixtureQuestionAnswers(snapshot);
+      expect(answers, hasLength(1));
+      expect(answers[0]['selected'], contains('需要修改'));
+    },
+  );
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {

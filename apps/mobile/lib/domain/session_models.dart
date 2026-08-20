@@ -340,6 +340,8 @@ class TimelineQuestionStep {
     this.options = const [],
     this.allowsFreeform = false,
     this.multiSelect = false,
+    this.intentKind,
+    this.intentApproveLabel,
   });
 
   final String id;
@@ -348,6 +350,22 @@ class TimelineQuestionStep {
   final List<TimelineQuestionOption> options;
   final bool allowsFreeform;
   final bool multiSelect;
+
+  /// 提问意图（display-safe）：如 `plan-review`。只由 fixture/本地投影提供，
+  /// 不猜真实 Provider 的意图；null 表示普通 question。
+  final String? intentKind;
+
+  /// 意图指定的 approve 选项 label（plan-review 专用），用于从选项里找 approve/decline。
+  final String? intentApproveLabel;
+
+  /// 是否为 plan-review 形态：单一决策 + markdown plan + binary approve 选项。
+  /// 与 DeepSeek Harness `planReviewOf()` 一致：单题、带 detail、非多选、最多两个选项、存在意图指定 approve。
+  bool get isPlanReview =>
+      intentKind == 'plan-review' &&
+      detail != null &&
+      !multiSelect &&
+      options.length <= 2 &&
+      options.any((option) => option.label == intentApproveLabel);
 }
 
 class TimelineQuestionOption {
@@ -514,6 +532,8 @@ TimelineQuestionStep? _questionStepFromFixture(Object? value) {
         : const [],
     allowsFreeform: data['allows_freeform'] == true,
     multiSelect: data['multi_select'] == true,
+    intentKind: _nullableString(data['intent']?['kind']),
+    intentApproveLabel: _nullableString(data['intent']?['approve']),
   );
 }
 

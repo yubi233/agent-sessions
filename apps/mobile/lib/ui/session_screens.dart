@@ -2681,6 +2681,283 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
   }
 }
 
+class _PlanReviewPanel extends StatefulWidget {
+  const _PlanReviewPanel({
+    required this.question,
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+    required this.hasLease,
+  });
+
+  final TimelineQuestionRequest question;
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+  final bool hasLease;
+
+  @override
+  State<_PlanReviewPanel> createState() => _PlanReviewPanelState();
+}
+
+/// v0.5/P4-F：PlanReview 专用接管面板，对照 DeepSeek Harness `PlanReviewPanel`。
+///
+/// 计划评审是"一个决策 + 一段 markdown plan"，不是被打分的选择题，因此采用
+/// 带色条的审批卡形态：等待条 + 可滚动 plan + 右对齐动作区。三个动作是完整决策面：
+/// approve / decline 用提问方给出的真实选项 label 回传；discuss 只本机关闭并恢复
+/// 输入上下文（不伪造 Host cancel）。approve/decline 是一次性动作，失败时 re-arm。
+class _PlanReviewPanelState extends State<_PlanReviewPanel> {
+  String? _submissionError;
+  bool _busy = false;
+  bool _locallyDismissed = false;
+
+  TimelineQuestionStep get _review {
+    final steps = widget.question.steps;
+    final first = steps.isNotEmpty ? steps.first : _fallbackStep();
+    // 单题 plan-review：steps 只存单个意图 step。
+    return first;
+  }
+
+  TimelineQuestionStep _fallbackStep() => TimelineQuestionStep(
+    id: widget.question.requestId,
+    prompt: widget.question.prompt,
+    detail: null,
+  );
+
+  TimelineQuestionOption? get _approve {
+    final label = _review.intentApproveLabel;
+    if (label == null) return null;
+    for (final option in _review.options) {
+      if (option.label == label) return option;
+    }
+    return null;
+  }
+
+  TimelineQuestionOption? get _decline {
+    final approveLabel = _review.intentApproveLabel;
+    if (approveLabel == null) return null;
+    for (final option in _review.options) {
+      if (option.label != approveLabel) return option;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final question = widget.question;
+    final resolved =
+        question.resolved == true ||
+        widget.sessions.isRequestResolved('question', question.requestId);
+    final enabled = widget.canWrite && widget.hasLease && !resolved && !_busy;
+    final plan = _review.detail;
+    final approve = _approve;
+    if (_locallyDismissed && !resolved) {
+      return Container(
+        key: Key('plan-review-card-${question.requestId}'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
+          border: Border.all(color: Theme.of(context).dividerColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          key: Key('plan-review-dismissed-${question.requestId}'),
+          children: [
+            const Icon(Icons.chat_bubble_outline),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '已在本地关闭计划评审，可继续输入讨论。',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+            TextButton(
+              key: Key('plan-review-restore-${question.requestId}'),
+              onPressed: () => setState(() => _locallyDismissed = false),
+              child: const Text('恢复'),
+            ),
+          ],
+        ),
+      );
+    }
+    return Container(
+      key: Key('plan-review-card-${question.requestId}'),
+      margin: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 等待/意图条：对齐 DeepSeek Harness 审批卡的 tinted strip。
+          Container(
+            key: Key('plan-review-strip-${question.requestId}'),
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(8),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.rule,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '计划评审',
+                  key: Key('plan-review-header-${question.requestId}'),
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Text(
+              _review.prompt,
+              key: Key('plan-review-question-${question.requestId}'),
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ),
+          // plan markdown 在卡内独立滚动（cap 120），按钮始终常驻可达。
+          if (plan != null) ...[
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Container(
+                key: Key('plan-review-scroll-${question.requestId}'),
+                constraints: const BoxConstraints(maxHeight: 120),
+                // 内部纵向滚动：长 plan 在卡内独立滚动，按钮始终常驻可达。
+                child: SingleChildScrollView(
+                  child: Text(
+                    plan,
+                    key: Key('plan-review-body-${question.requestId}'),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          if (_submissionError != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(
+                _submissionError!,
+                key: Key('plan-review-error-${question.requestId}'),
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ),
+          // 动作区：discuss / decline(可选) / approve。按钮常驻可达。
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 10),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  TextButton(
+                    key: Key('plan-review-discuss-${question.requestId}'),
+                    onPressed: enabled
+                        ? () => setState(() {
+                            // 只本机关闭，不伪造 Host cancel；恢复后仍可继续输入。
+                            _locallyDismissed = true;
+                            _submissionError = null;
+                          })
+                        : null,
+                    child: const Text('讨论'),
+                  ),
+                  if (_decline != null) ...[
+                    const SizedBox(width: 4),
+                    Tooltip(
+                      message: _decline!.description ?? '',
+                      child: TextButton(
+                        key: Key('plan-review-decline-${question.requestId}'),
+                        onPressed: enabled
+                            ? () => _decide(_decline!.label)
+                            : null,
+                        child: Text('需要修改'),
+                      ),
+                    ),
+                  ],
+                  if (approve != null) ...[
+                    const SizedBox(width: 4),
+                    Tooltip(
+                      message: approve.description ?? '',
+                      child: FilledButton(
+                        key: Key('plan-review-approve-${question.requestId}'),
+                        onPressed: enabled
+                            ? () => _decide(approve.label)
+                            : null,
+                        child: _busy
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('批准执行'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (resolved)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Text(
+                '已评审',
+                key: Key('plan-review-resolved-${question.requestId}'),
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _decide(String label) async {
+    setState(() {
+      _busy = true;
+      _submissionError = null;
+    });
+    // approve/decline 都以提问方给出的真实选项 label 回传 answer，与 Harness 一致。
+    final accepted = await widget.sessions.answerQuestionBatch(
+      requestId: widget.question.requestId,
+      answers: [
+        {
+          'id': _review.id,
+          'selected': [label],
+        },
+      ],
+      deviceId: widget.deviceId,
+      canWrite: widget.canWrite,
+    );
+    if (!accepted && mounted) {
+      setState(() {
+        _busy = false;
+        _submissionError = widget.sessions.errorMessage ?? '提交失败，请重试。';
+      });
+    }
+  }
+}
+
 class _ComposerChain extends StatelessWidget {
   const _ComposerChain({
     required this.pendingQuestion,
@@ -2700,23 +2977,34 @@ class _ComposerChain extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // v0.5/P4-A：composer chain 是 pending interaction 的唯一 carrier。
+    // v0.5/P4-A/P4-F：composer chain 是 pending interaction 的唯一 carrier。
     // Question 优先于 approval；question 完成后，外层 projection 重算并 re-arm approval。
+    // 普通 question 走 _QuestionRequestItem；plan-review 走专用卡片形态，避免把
+    // "一个决策 + 一段 plan" 渲染成被打分的选择题（对照 Harness PlanReviewPanel）。
     final question = pendingQuestion;
     final permission = pendingPermission;
+    final planReview = _planReviewStep(question);
     return Padding(
       key: const Key('session-composer-chain'),
       padding: const EdgeInsets.only(bottom: 8),
       child: question != null
           ? KeyedSubtree(
               key: const Key('session-question-panel'),
-              child: _QuestionRequestItem(
-                event: question,
-                canWrite: canWrite,
-                hasLease: hasLease,
-                sessions: sessions,
-                deviceId: deviceId,
-              ),
+              child: planReview != null
+                  ? _PlanReviewPanel(
+                      question: question.question!,
+                      sessions: sessions,
+                      canWrite: canWrite,
+                      deviceId: deviceId,
+                      hasLease: hasLease,
+                    )
+                  : _QuestionRequestItem(
+                      event: question,
+                      canWrite: canWrite,
+                      hasLease: hasLease,
+                      sessions: sessions,
+                      deviceId: deviceId,
+                    ),
             )
           : KeyedSubtree(
               key: const Key('session-approval-panel'),
@@ -2729,6 +3017,18 @@ class _ComposerChain extends StatelessWidget {
               ),
             ),
     );
+  }
+
+  /// 从 pending question 事件提取 plan-review step；非 plan-review 返回 null。
+  /// 对齐 DeepSeek Harness `planReviewOf()`：单题、带 detail、非多选、最多两个选项、
+  /// 且必须存在意图指定 approve 选项，否则交给普通 question 流程。
+  TimelineQuestionStep? _planReviewStep(SessionTimelineEvent? event) {
+    final question = event?.question;
+    if (question == null) return null;
+    final steps = question.steps;
+    if (steps.length != 1) return null;
+    final step = steps.first;
+    return step.isPlanReview ? step : null;
   }
 }
 

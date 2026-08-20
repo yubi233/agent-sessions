@@ -919,12 +919,37 @@ class FixtureRelayRepository implements RelayRepository {
     final questionId = 'question-${state.session.id}-${state.nextSequence}';
     final multiQuestion =
         message.contains('multi question') || message.contains('多题');
+    final planReview =
+        message.contains('plan review') || message.contains('计划评审');
     state.append(
       eventType: 'question.requested',
       payload: {
         'kind': 'question_request',
         'label': '需要回答',
-        'question': multiQuestion
+        'question': planReview
+            ? {
+                'request_id': questionId,
+                'prompt': '请评审以下实施计划。',
+                // v0.5/P4-F：plan-review 是同一 composer chain 内的专用形态，
+                // 用 intent.kind + detail(plan markdown) + binary approve/decline 表达。
+                'questions': [
+                  {
+                    'id': '$questionId-plan',
+                    'prompt': '评审结果',
+                    'detail':
+                        '## 实施计划\n\n'
+                        '1. 建立回归基线并冻结契约。\n'
+                        '2. 分阶段实现并逐阶段提交。\n'
+                        '3. 补全测试、文档与录屏证据。',
+                    'intent': {'kind': 'plan-review', 'approve': '批准执行'},
+                    'options': [
+                      {'label': '批准执行', 'description': '按计划继续实施。'},
+                      {'label': '需要修改', 'description': '先调整计划。'},
+                    ],
+                  },
+                ],
+              }
+            : multiQuestion
             ? {
                 'request_id': questionId,
                 'prompt': '请完成 fixture 多题配置。',
