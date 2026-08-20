@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../app/providers.dart';
 import '../domain/control_models.dart';
 import '../domain/delegation_models.dart';
+import '../domain/session_input_grammar.dart';
 import '../domain/session_models.dart';
 import '../domain/session_projection_models.dart';
 import '../state/app_controller.dart';
@@ -3100,11 +3101,24 @@ class _SessionComposerState extends State<_SessionComposer> {
   bool _suggestionsLoading = false;
   // 最近一次输入是否以 @ 或 / 触发补全；即使候选为空也展示空态说明（fail-closed）。
   bool _completionActive = false;
+  // v0.5/P5：增量输入 revision；每次草稿变化 +1，供异步候选 CAS 判断是否过期。
+  int _draftRev = 0;
+  // 异步候选 generation：旧请求返回时若 generation 已变则 no-op，避免 stale pick 写入。
+  int _suggestionsGeneration = 0;
+  // 最近一次 selection-based 探测到的活跃 trigger（用于 span 替换与键盘导航）。
+  InputTriggerHit? _activeTrigger;
+  // 键盘导航中高亮的候选下标（-1 = 未选中）。
+  int _selectedSuggestionIndex = -1;
+  // 上次触发重新探测时的 caret 位置，用于 selection 变化去重。
+  int? _lastCaret;
 
   @override
   void initState() {
     super.initState();
     _focusNode.onKeyEvent = (_, event) => _handleComposerKey(event);
+    // v0.5/P5：光标移动（selection 变化）也要按新位置重新探测 trigger，
+    // 满足「候选按 selection + draft revision 定位」契约；借助 controller listener。
+    _controller.addListener(_onControllerSelectionChanged);
     // 切换会话后恢复该会话的跨页内存草稿（不落明文盘）。
     _restoreDraft();
   }
@@ -3152,6 +3166,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     if (sessionId != null) {
       widget.sessions.saveComposerDraft(sessionId, _controller.text);
     }
+    _controller.removeListener(_onControllerSelectionChanged);
     _focusNode.dispose();
     _controller.dispose();
     super.dispose();
@@ -3161,6 +3176,54 @@ class _SessionComposerState extends State<_SessionComposer> {
     final enter =
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
+
+    // v0.5/P5：候选菜单键盘导航（up/down 移动、Escape 关闭、Enter 应用高亮项）。
+    // 只在候选打开且 trigger 仍活跃时接管方向键/Escape/Enter；焦点保持在输入上下文。
+    if (_completionActive &&
+        _suggestions.isNotEmpty &&
+        _activeTrigger != null) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown ||
+          event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        if (event is KeyDownEvent) {
+          final delta = event.logicalKey == LogicalKeyboardKey.arrowDown
+              ? 1
+              : -1;
+          setState(() {
+            _selectedSuggestionIndex += delta;
+            if (_selectedSuggestionIndex >= _suggestions.length) {
+              _selectedSuggestionIndex = 0;
+            } else if (_selectedSuggestionIndex < 0) {
+              _selectedSuggestionIndex = _suggestions.length - 1;
+            }
+          });
+        }
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        if (event is KeyDownEvent) _updateSuggestions();
+        return KeyEventResult.handled;
+      }
+      if (enter && event is KeyDownEvent) {
+        // 高亮项存在时 Enter 应用候选；否则交回普通提交路径。
+        if (_selectedSuggestionIndex >= 0 &&
+            _selectedSuggestionIndex < _suggestions.length) {
+          _applySuggestion(_suggestions[_selectedSuggestionIndex]);
+          _selectedSuggestionIndex = -1;
+          return KeyEventResult.handled;
+        }
+      }
+    } else if (event.logicalKey == LogicalKeyboardKey.escape &&
+        event is KeyDownEvent) {
+      // 非候选场景：Escape 先关闭 command launcher 菜单，再交给输入状态机。
+      if (_commandMenuOpen) {
+        setState(() {
+          _commandMenuOpen = false;
+          _updateSuggestions();
+        });
+        return KeyEventResult.handled;
+      }
+    }
+
     if (!enter) return KeyEventResult.ignored;
     if (event is KeyUpEvent) return KeyEventResult.ignored;
 
@@ -3205,14 +3268,48 @@ class _SessionComposerState extends State<_SessionComposer> {
     return KeyEventResult.handled;
   }
 
-  /// 根据输入末尾 token 更新补全候选。
-  void _updateSuggestions(String value) {
-    final parts = value.split(RegExp(r'\s+'));
-    final token = parts.isEmpty ? '' : parts.last;
-    _completionActive = token.startsWith('@') || token.startsWith('/');
-    if (token.startsWith('/')) {
+  /// caret 移动监听：文本未变但 selection 变化时，也按新位置重新探测 trigger。
+  /// 只在确实发生 selection 变化时才刷新，避免应用补全时的重复触发。
+  void _onControllerSelectionChanged() {
+    if (!mounted) return;
+    final selection = _controller.selection;
+    final caret = selection.isValid ? selection.end : null;
+    if (caret == null || caret == _lastCaret) return;
+    _lastCaret = caret;
+    _updateSuggestions();
+  }
+
+  /// v0.5/P5：基于 caret（selection）+ draftRev 重新探测 Input Trigger。
+  ///
+  /// 由 TextField onChanged / 光标移动触发；不再按最后一个空格截 token。
+  /// - 命中 trigger：`/` 走 skill 源，`@` 走文件目录源（异步 + CAS）；
+  /// - 未命中或 caret 移出 token：静默关闭候选（outside dismiss）；
+  /// - 源不可用 / 源被移除：静默移除对应候选组并刷新 lexicon，不展示伪错误项。
+  void _updateSuggestions() {
+    if (!mounted) return;
+    final text = _controller.text;
+    final selection = _controller.selection;
+    final caret = selection.isValid ? selection.end : text.length;
+    _draftRev += 1;
+    final hit = detectInputTrigger(
+      text,
+      caret,
+      claimed: _inputMachine.snapshot.claimToken != null,
+    );
+    _activeTrigger = hit;
+    if (hit == null) {
+      _completionActive = false;
+      _suggestionsGeneration += 1;
+      _setSuggestions(const []);
+      _selectedSuggestionIndex = -1;
+      setState(() => {});
+      return;
+    }
+    _completionActive = true;
+    _selectedSuggestionIndex = -1;
+    if (hit.isSlash) {
       // Skill 建议：只使用 controls.skills 的标题，不读取任何参数或 Provider payload。
-      final query = token.substring(1).toLowerCase();
+      final query = hit.query.toLowerCase();
       final skills = widget.sessions.controls.skills
           .where((skill) => skill.title.toLowerCase().contains(query))
           .map(
@@ -3224,30 +3321,37 @@ class _SessionComposerState extends State<_SessionComposer> {
           )
           .toList(growable: false);
       _setSuggestions(skills);
-    } else if (token.startsWith('@')) {
-      final query = token.substring(1).toLowerCase();
-      // 越权路径（绝对路径、..、路径分隔）不产生任何建议。
-      if (query.contains('/') ||
-          query.contains('..') ||
-          query.startsWith('.')) {
-        _setSuggestions(const []);
-        return;
-      }
-      final catalog = widget.fileCompletionCatalog;
-      if (catalog == null) {
-        _setSuggestions(const []);
-        return;
-      }
-      _suggestionsLoading = true;
-      setState(() {});
-      unawaited(_loadFileSuggestions(query));
-    } else {
-      _setSuggestions(const []);
+      return;
     }
+    // `@` 引用：越权路径（绝对路径、..、路径分隔、隐藏）不产生任何建议。
+    final query = hit.query;
+    if (!_isSafeSuggestionName(query)) {
+      _setSuggestions(const []);
+      return;
+    }
+    final catalog = widget.fileCompletionCatalog;
+    if (catalog == null) {
+      // 源未注册/被移除：静默关闭，不展示伪错误候选。
+      _setSuggestions(const []);
+      return;
+    }
+    _suggestionsGeneration += 1;
+    final generation = _suggestionsGeneration;
+    final rev = _draftRev;
+    _suggestionsLoading = true;
+    setState(() {});
+    unawaited(_loadFileSuggestions(query, generation: generation, rev: rev));
   }
 
   /// 异步加载文件补全候选（目录不可用或越权查询时返回空）。
-  Future<void> _loadFileSuggestions(String query) async {
+  ///
+  /// 用 [generation] / [rev] CAS：过期请求（draft 已变或已切源）返回时 no-op，
+  /// 避免 stale pick 写入新位置。
+  Future<void> _loadFileSuggestions(
+    String query, {
+    required int generation,
+    required int rev,
+  }) async {
     List<String> names = const [];
     final catalog = widget.fileCompletionCatalog;
     if (catalog != null) {
@@ -3258,6 +3362,8 @@ class _SessionComposerState extends State<_SessionComposer> {
       }
     }
     if (!mounted) return;
+    // CAS：只有仍是同一 generation 且 draftRev 未变迁时才允许落地候选。
+    if (generation != _suggestionsGeneration || rev != _draftRev) return;
     final filtered = names
         .where(
           (name) =>
@@ -3275,7 +3381,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     _setSuggestions(filtered);
   }
 
-  /// 补全候选名安全校验：拒绝绝对路径、分隔符与隐藏文件（与 Daemon workspacesafe 语义一致）。
+  /// 补全候选名安全校验：拒绝绝对路径、分隔符、隐藏与形如 `user@host` 的查询。
   bool _isSafeSuggestionName(String name) {
     if (name.trim().isEmpty || name.startsWith('/') || name.contains(':')) {
       return false;
@@ -3290,20 +3396,37 @@ class _SessionComposerState extends State<_SessionComposer> {
     setState(() => _suggestions = next);
   }
 
-  /// 应用补全：替换输入末尾的 token。
+  /// 应用补全：只替换 [activeTrigger] 的 span，不做全文 token 重建。
   void _applySuggestion(_CompletionSuggestion suggestion) {
     final text = _controller.text;
-    final lastSpace = text.lastIndexOf(' ');
-    final prefix = lastSpace < 0 ? '' : text.substring(0, lastSpace + 1);
-    final next = prefix + suggestion.insertText;
+    final hit = _activeTrigger;
+    if (hit == null) {
+      _updateSuggestions();
+      return;
+    }
+    var replacement = suggestion.insertText;
+    // 行内补全时若插入文本自带尾随空格、且目标位置后紧跟空白，去掉一个尾部空格，
+    // 避免「@README.md + 原有空格」重复成两个空格（span 替换仍只动 trigger 段）。
+    if (hit.end < text.length) {
+      final after = text[hit.end];
+      if (replacement.endsWith(' ') &&
+          (after == ' ' || after == '\t' || after == '\n')) {
+        replacement = replacement.substring(0, replacement.length - 1);
+      }
+    }
+    final next = text.replaceRange(hit.start, hit.end, replacement);
     _inputMachine.setDraft(next);
-    _setControllerText(next);
+    // 光标定位到插入内容末尾。
+    _controller.text = next;
+    _controller.selection = TextSelection.collapsed(
+      offset: hit.start + replacement.length,
+    );
     setState(() {});
     widget.sessions.saveComposerDraft(
       widget.sessions.selectedSessionId ?? '',
       next,
     );
-    _updateSuggestions(next);
+    _updateSuggestions();
   }
 
   @override
@@ -3407,7 +3530,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                   if (sessionId != null) {
                     widget.sessions.saveComposerDraft(sessionId, next);
                   }
-                  _updateSuggestions(next);
+                  _updateSuggestions();
                   setState(() {});
                 },
               ),
@@ -3427,6 +3550,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                 loading: _suggestionsLoading,
                 onApply: _applySuggestion,
                 onDismiss: () => _setSuggestions(const []),
+                selectedIndex: _selectedSuggestionIndex,
               ),
             if (blocked != null)
               Padding(
@@ -3514,7 +3638,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                         if (sessionId != null) {
                           widget.sessions.saveComposerDraft(sessionId, value);
                         }
-                        _updateSuggestions(value);
+                        _updateSuggestions();
                       },
                       decoration: const InputDecoration(
                         hintText: '输入消息...',
@@ -3940,75 +4064,97 @@ class _ComposerControlStrip extends StatelessWidget {
 }
 
 /// v0.2/P3：@ / 自动补全面板。候选为空时展示空态说明（fail-closed）。
+/// v0.5/P5：候选高度锚定在 composer 上方（max-height），支持键盘高亮下标。
 class _ComposerSuggestions extends StatelessWidget {
   const _ComposerSuggestions({
     required this.suggestions,
     required this.loading,
     required this.onApply,
     required this.onDismiss,
+    this.selectedIndex = -1,
   });
 
   final List<_CompletionSuggestion> suggestions;
   final bool loading;
   final void Function(_CompletionSuggestion suggestion) onApply;
   final VoidCallback onDismiss;
+  final int selectedIndex;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      key: const Key('composer-suggestions'),
-      margin: const EdgeInsets.only(bottom: 6),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHigh,
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (loading)
-            const Padding(
-              padding: EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  SizedBox(width: 8),
-                  Text('正在加载建议…'),
-                ],
-              ),
-            )
-          else if (suggestions.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(8),
-              child: Text(
-                '没有可用的补全建议（目录不可用或查询越权）。',
-                key: const Key('composer-suggestions-empty'),
-                style: theme.textTheme.labelSmall,
-              ),
-            )
-          else
-            for (final suggestion in suggestions)
-              Material(
-                color: Colors.transparent,
-                child: ListTile(
-                  key: Key('completion-suggestion-${suggestion.label}'),
-                  dense: true,
-                  leading: Icon(
-                    suggestion.kind == _CompletionKind.skill
-                        ? Icons.bolt_outlined
-                        : Icons.description_outlined,
-                    size: 18,
-                  ),
-                  title: Text(suggestion.label),
-                  onTap: () => onApply(suggestion),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 240),
+      child: Container(
+        key: const Key('composer-suggestions'),
+        margin: const EdgeInsets.only(bottom: 6),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHigh,
+          border: Border.all(color: theme.dividerColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    SizedBox(width: 8),
+                    Text('正在加载建议…'),
+                  ],
+                ),
+              )
+            else if (suggestions.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Text(
+                  '没有可用的补全建议（目录不可用或查询越权）。',
+                  key: const Key('composer-suggestions-empty'),
+                  style: theme.textTheme.labelSmall,
+                ),
+              )
+            else
+              Expanded(
+                child: ListView(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  children: [
+                    for (var index = 0; index < suggestions.length; index += 1)
+                      Material(
+                        color: index == selectedIndex
+                            ? theme.colorScheme.primaryContainer.withValues(
+                                alpha: 0.4,
+                              )
+                            : Colors.transparent,
+                        child: ListTile(
+                          key: Key(
+                            'completion-suggestion-${suggestions[index].label}',
+                          ),
+                          dense: true,
+                          selected: index == selectedIndex,
+                          leading: Icon(
+                            suggestions[index].kind == _CompletionKind.skill
+                                ? Icons.bolt_outlined
+                                : Icons.description_outlined,
+                            size: 18,
+                          ),
+                          title: Text(suggestions[index].label),
+                          onTap: () => onApply(suggestions[index]),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-        ],
+          ],
+        ),
       ),
     );
   }

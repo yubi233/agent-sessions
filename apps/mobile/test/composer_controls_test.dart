@@ -152,6 +152,82 @@ void main() {
     );
   });
 
+  testWidgets('MOBILE-V05-08：URL 与 user@host 中的 trigger 不弹候选', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'trigger-boundary@fixture.test');
+    await _createAndAcquireLease(tester);
+
+    // URL 中的 / 不是 trigger：不弹 slash/skill 候选，也不出现空态。
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '请看 https://example.com/path',
+    );
+    await tester.pump(const Duration(milliseconds: 120));
+    expect(find.byKey(const Key('composer-suggestions')), findsNothing);
+
+    // user@host 中的 @ 不是引用 trigger：不弹候选。
+    await tester.enterText(
+      find.byKey(const Key('session-composer-input')),
+      '发信给 user@example.com',
+    );
+    await tester.pump(const Duration(milliseconds: 120));
+    expect(find.byKey(const Key('composer-suggestions')), findsNothing);
+
+    // 真正的 / trigger 应仍弹出候选（验证探测没有整体失效）。
+    await tester.enterText(
+      find.byKey(const Key('session-composer-input')),
+      '/检查',
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-suggestions')),
+    );
+  });
+
+  testWidgets('MOBILE-V05-08：@ 引用只替换 trigger span，不重建整段草稿', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'trigger-span@fixture.test');
+    await _createAndAcquireLease(tester);
+
+    // 在行中触发 @ 后应用：只替换 @...+查询，保留前后文本。
+    // enterText 会把 caret 放到文末，这里显式把 caret 移到 @re 之后模拟真实输入位置。
+    const draft = '先写一段 @re 再继续';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      draft,
+    );
+    // 用 testTextInput.updateEditingValue 模拟“光标移动到 @re 之后”这一编辑更新，
+    // 触发 TextField 的 onSelectionChanged 重新探测 trigger。
+    tester.testTextInput.updateEditingValue(
+      TextEditingValue(
+        text: draft,
+        selection: TextSelection.collapsed(offset: '先写一段 @re'.length),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 80));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-suggestions')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('completion-suggestion-文件 · README.md')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('completion-suggestion-文件 · README.md')),
+    );
+    final text = tester
+        .widget<TextField>(find.byKey(const Key('session-composer-input')))
+        .controller!
+        .text;
+    expect(text, contains('先写一段 @README.md 再继续'));
+  });
+
   testWidgets('MOBILE-08：有会话 DEK 时选附件进入密文队列；无 DEK 时按钮禁用', (tester) async {
     // 有 DEK：fixture picker 被注入，点击后草稿进入既有密文队列。
     final harness = MobileAppHarness(
