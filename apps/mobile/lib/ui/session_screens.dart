@@ -2077,7 +2077,9 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
   String? _activeRequestId;
   String? _selectedAnswer;
   String? _validationError;
+  String? _submissionError;
   bool _minimized = false;
+  bool _locallyCancelled = false;
 
   @override
   void initState() {
@@ -2094,7 +2096,9 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
     _activeRequestId = nextRequestId;
     _selectedAnswer = null;
     _validationError = null;
+    _submissionError = null;
     _minimized = false;
+    _locallyCancelled = false;
     _customAnswerController.clear();
   }
 
@@ -2116,6 +2120,35 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
     final answer = _customAnswerController.text.trim().isNotEmpty
         ? _customAnswerController.text.trim()
         : _selectedAnswer;
+    if (_locallyCancelled && !resolved) {
+      return Container(
+        key: Key('question-card-${question.requestId}'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
+          border: Border.all(color: Theme.of(context).dividerColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          key: Key('question-local-cancelled-${question.requestId}'),
+          children: [
+            const Icon(Icons.close),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '已在本机关闭此问题，未向 Host 发送取消命令。',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+            TextButton(
+              key: Key('question-cancel-restore-${question.requestId}'),
+              onPressed: () => setState(() => _locallyCancelled = false),
+              child: const Text('恢复'),
+            ),
+          ],
+        ),
+      );
+    }
     if (_minimized) {
       return Container(
         key: Key('question-card-${question.requestId}'),
@@ -2173,6 +2206,19 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
                 onPressed: () => setState(() => _minimized = true),
                 icon: const Icon(Icons.expand_more),
               ),
+              IconButton(
+                key: Key('question-cancel-${question.requestId}'),
+                tooltip: '本机关闭问题',
+                onPressed: pending
+                    ? null
+                    // v0.5/P4-C：本地关闭只退出当前可见面板，不伪造 Relay/Host cancel。
+                    : () => setState(() {
+                        _locallyCancelled = true;
+                        _validationError = null;
+                        _submissionError = null;
+                      }),
+                icon: const Icon(Icons.close),
+              ),
             ],
           ),
           if (question.options.isNotEmpty) ...[
@@ -2191,6 +2237,7 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
                   ? (value) => setState(() {
                       _selectedAnswer = value;
                       _validationError = null;
+                      _submissionError = null;
                     })
                   : null,
             ),
@@ -2202,7 +2249,10 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
               controller: _customAnswerController,
               enabled: enabled,
               maxLines: 2,
-              onChanged: (_) => setState(() => _validationError = null),
+              onChanged: (_) => setState(() {
+                _validationError = null;
+                _submissionError = null;
+              }),
               decoration: const InputDecoration(labelText: '或输入回答'),
             ),
           ],
@@ -2216,22 +2266,45 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
               ),
             ),
           ],
+          if (_submissionError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _submissionError!,
+              key: Key('question-submit-error-${question.requestId}'),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ],
           const SizedBox(height: 4),
           Align(
             alignment: Alignment.centerRight,
-            child: IconButton(
-              key: Key('question-submit-${question.requestId}'),
-              tooltip: '提交回答',
-              onPressed: enabled
-                  ? () => _submitQuestion(question.requestId, answer)
-                  : null,
-              icon: pending
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.send),
+            child: Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton(
+                  key: Key('question-skip-${question.requestId}'),
+                  onPressed: enabled
+                      ? () => _skipQuestion(question.requestId)
+                      : null,
+                  child: const Text('跳过'),
+                ),
+                IconButton(
+                  key: Key('question-submit-${question.requestId}'),
+                  tooltip: '提交回答',
+                  onPressed: enabled
+                      ? () => _submitQuestion(question.requestId, answer)
+                      : null,
+                  icon: pending
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send),
+                ),
+              ],
             ),
           ),
           if (resolved)
@@ -2245,18 +2318,47 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
     );
   }
 
-  void _submitQuestion(String requestId, String? answer) {
+  Future<void> _submitQuestion(String requestId, String? answer) async {
     final trimmed = answer?.trim();
     if (trimmed == null || trimmed.isEmpty) {
-      setState(() => _validationError = '请选择或输入一个回答。');
+      setState(() {
+        _validationError = '请选择或输入一个回答。';
+        _submissionError = null;
+      });
       return;
     }
-    widget.sessions.answerQuestion(
+    setState(() {
+      _validationError = null;
+      _submissionError = null;
+    });
+    final accepted = await widget.sessions.answerQuestion(
       requestId: requestId,
       answer: trimmed,
       deviceId: widget.deviceId,
       canWrite: widget.canWrite,
     );
+    if (!accepted && mounted && _activeRequestId == requestId) {
+      setState(() {
+        _submissionError = widget.sessions.errorMessage ?? '提交失败，请重试。';
+      });
+    }
+  }
+
+  Future<void> _skipQuestion(String requestId) async {
+    setState(() {
+      _validationError = null;
+      _submissionError = null;
+    });
+    final accepted = await widget.sessions.skipQuestion(
+      requestId: requestId,
+      deviceId: widget.deviceId,
+      canWrite: widget.canWrite,
+    );
+    if (!accepted && mounted && _activeRequestId == requestId) {
+      setState(() {
+        _submissionError = widget.sessions.errorMessage ?? '跳过失败，请重试。';
+      });
+    }
   }
 }
 

@@ -951,6 +951,133 @@ void main() {
     );
   });
 
+  testWidgets('MOBILE-V05-05/P4-C：Question skip 与本机 cancel 边界', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-question-skip-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发可跳过 question',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    final timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final question = timeline
+        .firstWhere((event) => event.question != null)
+        .question!;
+
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-cancel-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-local-cancelled-${question.requestId}')),
+    );
+    expect(find.textContaining('未向 Host 发送取消命令'), findsOneWidget);
+    expect(harness.relay.submittedCommandCount, 1);
+
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-cancel-restore-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-skip-${question.requestId}')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-skip-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-approval-panel')),
+    );
+
+    expect(harness.relay.submittedCommandCount, 2);
+    final snapshot = await harness.relay.getSessionSnapshot(sessionId);
+    expect(_snapshotContainsLabel(snapshot, '已跳过'), isTrue);
+  });
+
+  testWidgets('MOBILE-V05-05/P4-C：Question 提交失败后保留草稿并 re-arm', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-question-retry-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发失败重试 question',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    final timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final question = timeline
+        .firstWhere((event) => event.question != null)
+        .question!;
+    const retryDraft = '失败后应该保留的回答';
+    await _enterVisible(
+      tester,
+      find.byKey(Key('question-freeform-${question.requestId}')),
+      retryDraft,
+    );
+
+    harness.relay.setNetworkAvailable(false);
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-submit-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-submit-error-${question.requestId}')),
+    );
+    expect(harness.relay.submittedCommandCount, 1);
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(Key('question-freeform-${question.requestId}')),
+          )
+          .controller!
+          .text,
+      retryDraft,
+    );
+
+    harness.relay.setNetworkAvailable(true);
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-submit-${question.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-approval-panel')),
+    );
+    expect(harness.relay.submittedCommandCount, 2);
+  });
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {
@@ -1350,6 +1477,13 @@ bool _snapshotContainsText(SessionSnapshot snapshot, String text) {
   return snapshot.events.any((event) {
     final payload = event.envelope['fixture_payload'];
     return payload is Map && payload['text'] == text;
+  });
+}
+
+bool _snapshotContainsLabel(SessionSnapshot snapshot, String label) {
+  return snapshot.events.any((event) {
+    final payload = event.envelope['fixture_payload'];
+    return payload is Map && payload['label'] == label;
   });
 }
 

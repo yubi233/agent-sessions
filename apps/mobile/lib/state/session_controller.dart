@@ -404,7 +404,7 @@ class SessionController extends ChangeNotifier {
     );
   }
 
-  Future<void> answerQuestion({
+  Future<bool> answerQuestion({
     required String requestId,
     required String answer,
     required String? deviceId,
@@ -414,21 +414,49 @@ class SessionController extends ChangeNotifier {
     final requestKey = 'question:$requestId';
     if (answer.trim().isEmpty) {
       _setError('请选择或输入一个回答。');
-      return;
+      return false;
     }
     if (_resolvedRequestKeys.contains(requestKey) ||
         sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
         !_ensureSelectedLease(sessionId)) {
-      return;
+      return false;
     }
-    await _submitCommand(
+    return _submitCommand(
       sessionId: sessionId,
       operation: '$requestKey:answer',
       kind: SessionCommandKind.questionAnswer,
       deviceId: deviceId!,
       ciphertext: {
         'fixture_payload': {'request_id': requestId, 'answer': answer.trim()},
+      },
+      onAccepted: () => _resolvedRequestKeys.add(requestKey),
+    );
+  }
+
+  Future<bool> skipQuestion({
+    required String requestId,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final requestKey = 'question:$requestId';
+    if (_resolvedRequestKeys.contains(requestKey) ||
+        sessionId == null ||
+        !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
+        !_ensureSelectedLease(sessionId)) {
+      return false;
+    }
+    // v0.5/P4-C：当前 Relay 命令集没有 question.cancel；skip 按 DeepSeek
+    // QuestionComposer 的“空选择提交”语义落到既有 question.answer 写链路，
+    // 并只在 fixture payload 中显式标记 skipped，避免伪造 Host 取消能力。
+    return _submitCommand(
+      sessionId: sessionId,
+      operation: '$requestKey:skip',
+      kind: SessionCommandKind.questionAnswer,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'request_id': requestId, 'skipped': true},
       },
       onAccepted: () => _resolvedRequestKeys.add(requestKey),
     );
@@ -969,7 +997,7 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  Future<void> _submitCommand({
+  Future<bool> _submitCommand({
     required String sessionId,
     required String operation,
     required SessionCommandKind kind,
@@ -977,8 +1005,8 @@ class SessionController extends ChangeNotifier {
     Map<String, dynamic>? ciphertext,
     VoidCallback? onAccepted,
   }) async {
-    if (!_ensureSelectedLease(sessionId)) return;
-    await _runAction<void>(operation, () async {
+    if (!_ensureSelectedLease(sessionId)) return false;
+    final accepted = await _runAction<bool>(operation, () async {
       final lease = _selectedLease;
       if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
         throw const RelayFailure(
@@ -997,7 +1025,9 @@ class SessionController extends ChangeNotifier {
       onAccepted?.call();
       final snapshot = await _relay.getSessionSnapshot(sessionId);
       if (_selectedSessionId == sessionId) _mergeSnapshot(snapshot);
+      return true;
     });
+    return accepted == true;
   }
 
   void _mergeSnapshot(SessionSnapshot snapshot, {bool appendTimeline = false}) {

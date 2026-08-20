@@ -1125,12 +1125,18 @@ class FixtureRelayRepository implements RelayRepository {
     SessionCommandInput input,
   ) {
     final requestId = _fixtureRequestId(input.ciphertext, 'question');
+    final payload = input.ciphertext?['fixture_payload'];
+    // v0.5/P4-C：fixture 只读取测试 envelope 中的 skipped 标记，用来证明
+    // skip 仍走 question.answer 写链路；真实 Relay 仍只处理加密命令体。
+    final skipped = payload is Map && payload['skipped'] == true;
     state.append(
       eventType: 'question.resolved',
       payload: {
         'kind': 'system_notice',
-        'label': '已回答',
-        'text': '问题 $requestId 已由 Android 控制端回答。',
+        'label': skipped ? '已跳过' : '已回答',
+        'text': skipped
+            ? '问题 $requestId 已由 Android 控制端跳过。'
+            : '问题 $requestId 已由 Android 控制端回答。',
       },
       now: _clock(),
     );
