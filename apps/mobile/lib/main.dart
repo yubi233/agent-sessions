@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/local_visual_fixture.dart';
+import 'app/local_dev_bootstrap.dart';
 import 'app/local_runtime_environment.dart';
 import 'app/providers.dart';
 import 'app/router.dart';
@@ -46,18 +47,37 @@ Future<void> main() async {
   final localVisualFixture = _useLocalFixtureMode
       ? await LocalVisualFixture.create(_localVisualScenarioValue)
       : null;
+  final localDevOwnerBootstrap = localVisualFixture == null && kDebugMode
+      ? await readLocalDevOwnerBootstrap()
+      : null;
+  final localDevTokens = localDevOwnerBootstrap == null
+      ? null
+      : InMemorySecureTokenStore();
+  final localDevIdentities = localDevOwnerBootstrap == null
+      ? null
+      : InMemoryDeviceIdentityStore();
+  if (localDevOwnerBootstrap != null &&
+      localDevTokens != null &&
+      localDevIdentities != null) {
+    await localDevTokens.write(localDevOwnerBootstrap.tokens);
+    await localDevIdentities.createOrRead();
+    await localDevIdentities.bindDeviceId(localDevOwnerBootstrap.device.id);
+    await localDevIdentities.markOwnerBootstrapComplete(true);
+  }
   runApp(
     ProviderScope(
       // LOCAL_FIXTURE_MODE 只供 MacBook 可见 smoke 使用，避免未签名的 macOS 调试壳触碰 Keychain；正常 Android/Web 运行仍使用安全存储。
       overrides: [
         secureTokenStoreProvider.overrideWithValue(
           localVisualFixture?.tokens ??
+              localDevTokens ??
               (_useLocalFixtureMode
                   ? InMemorySecureTokenStore()
                   : FlutterSecureTokenStore()),
         ),
         deviceIdentityStoreProvider.overrideWithValue(
           localVisualFixture?.identities ??
+              localDevIdentities ??
               (_useLocalFixtureMode
                   ? InMemoryDeviceIdentityStore()
                   : SecureDeviceIdentityStore()),

@@ -17,7 +17,7 @@ void main() {
     final proposal = await harness.relay.seedDelegationProposal(
       parentSessionId: parentId,
     );
-    await _tapVisible(tester, find.byKey(const Key('session-refresh-button')));
+    await _refreshSession(tester);
     await _waitForVisible(
       tester,
       find.byKey(Key('delegation-node-${proposal.id}')),
@@ -25,7 +25,7 @@ void main() {
     // 会话刷新会安全清空旧 epoch；确认派发前必须重新获取 parent lease。
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-acquire-lease-button')),
+      find.byKey(const Key('session-acquire-lease-button')).first,
     );
     await _waitForVisible(tester, find.text('已获得控制权'));
     expect(
@@ -74,14 +74,14 @@ void main() {
     final rejected = await harness.relay.seedDelegationProposal(
       parentSessionId: parentId,
     );
-    await _tapVisible(tester, find.byKey(const Key('session-refresh-button')));
+    await _refreshSession(tester);
     await _waitForVisible(
       tester,
       find.byKey(Key('delegation-reject-${rejected.id}')),
     );
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-acquire-lease-button')),
+      find.byKey(const Key('session-acquire-lease-button')).first,
     );
     await _waitForVisible(tester, find.text('已获得控制权'));
     await _tapVisible(
@@ -99,14 +99,14 @@ void main() {
       parentSessionId: parentId,
       targetProvider: 'claude',
     );
-    await _tapVisible(tester, find.byKey(const Key('session-refresh-button')));
+    await _refreshSession(tester);
     await _waitForVisible(
       tester,
       find.byKey(Key('delegation-approve-${unsupported.id}')),
     );
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-acquire-lease-button')),
+      find.byKey(const Key('session-acquire-lease-button')).first,
     );
     await _waitForVisible(tester, find.text('已获得控制权'));
     final approve = tester.widget<IconButton>(
@@ -188,7 +188,7 @@ void main() {
     );
     await _waitForVisible(
       tester,
-      find.byKey(const Key('session-acquire-lease-button')),
+      find.byKey(const Key('session-acquire-lease-button')).first,
     );
 
     await _tapVisible(
@@ -223,9 +223,14 @@ Future<void> _createAndAcquireParent(WidgetTester tester) async {
   await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
   await _tapVisible(
     tester,
-    find.byKey(const Key('session-acquire-lease-button')),
+    find.byKey(const Key('session-acquire-lease-button')).first,
   );
   await _waitForVisible(tester, find.text('已获得控制权'));
+}
+
+Future<void> _refreshSession(WidgetTester tester) async {
+  await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
+  await _tapVisible(tester, find.byKey(const Key('session-refresh-button')));
 }
 
 Future<void> _registerOwner(WidgetTester tester, String _) async {

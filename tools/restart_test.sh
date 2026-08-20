@@ -9,23 +9,32 @@ state_dir="$(mktemp -d /tmp/agent-sessions-restart-state.XXXXXX)"
 log_dir="$(mktemp -d /tmp/agent-sessions-restart-logs.XXXXXX)"
 fake_flutter="$ROOT_DIR/tools/test_fixtures/fake_flutter.sh"
 fake_device_helper="$ROOT_DIR/tools/test_fixtures/fake_flutter_device.sh"
-web_port="$(pick_port)"; admin_port="$(pick_port)"; occupied_port="$(pick_port)"; occupied_pid=""
+web_port="$(pick_port)"; admin_port="$(pick_port)"; occupied_port="$(pick_port)"; relay_port="$(pick_port)"; occupied_pid=""
 cleanup() { if [[ -n "$occupied_pid" ]]; then kill "$occupied_pid" 2>/dev/null || true; fi; FLUTTER_BIN="$fake_flutter" ./restart.sh stop --no-relay --no-daemon --state-dir "$state_dir" --web-port "$web_port" --admin-port "$admin_port" >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM
 bash -n restart.sh tools/restart_test.sh tools/flutter_device.sh "$fake_flutter" "$fake_device_helper"
 ./restart.sh --help >/dev/null
 if ./restart.sh start --no-relay --no-web --no-admin --no-daemon --no-flutter --web-port nope --dry-run >/dev/null 2>&1; then echo 'restart.sh accepted an invalid TCP port' >&2; exit 1; fi
-missing_token_output="$(./restart.sh start --no-relay --no-web --no-admin --no-flutter --state-dir "$state_dir" --dry-run 2>&1 >/dev/null || true)"
+dry_run_output="$(FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --no-flutter --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run)"
+grep -F 'token_source=local-dev-dry-run' <<< "$dry_run_output" >/dev/null
+grep -F 'fixture=true' <<< "$dry_run_output" >/dev/null
+dry_run_flutter_output="$(FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run)"
+grep -F 'owner_bootstrap=true' <<< "$dry_run_flutter_output" >/dev/null
+missing_token_output="$(./restart.sh start --no-relay --no-web --no-admin --no-flutter --no-local-dev-pairing --state-dir "$state_dir" --dry-run 2>&1 >/dev/null || true)"
 grep -F 'AGENT_SESSIONS_DAEMON_TOKEN=<paired-terminal-token> ./restart.sh restart' <<< "$missing_token_output" >/dev/null
 grep -F './restart.sh restart --no-daemon' <<< "$missing_token_output" >/dev/null
-if ./restart.sh start --no-relay --no-web --no-admin --no-flutter --state-dir "$state_dir" --dry-run >/dev/null 2>&1; then echo 'restart.sh accepted a missing daemon token' >&2; exit 1; fi
+if ./restart.sh start --no-relay --no-web --no-admin --no-flutter --no-local-dev-pairing --state-dir "$state_dir" --dry-run >/dev/null 2>&1; then echo 'restart.sh accepted a missing daemon token with local pairing disabled' >&2; exit 1; fi
 test ! -e "$state_dir/relay-owned"
 FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-relay --no-daemon --no-web --no-admin --state-dir "$state_dir" --log-dir "$log_dir" --flutter-mode mac
 FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-relay --no-daemon --no-web --no-admin --state-dir "$state_dir" --log-dir "$log_dir" --flutter-device macos
 status_output="$(FLUTTER_BIN="$fake_flutter" ./restart.sh status --no-relay --no-daemon --state-dir "$state_dir")"
 printf '%s\n' "$status_output"
 grep -F 'flutter selected: true (mode=mac target=macos)' <<< "$status_output"
+grep -F "restart log: $log_dir/restart.log" <<< "$status_output"
 grep -F "log $log_dir/flutter.log" <<< "$status_output"
+grep -F 'invocation command=' "$log_dir/restart.log"
+grep -F 'process starting component=flutter' "$log_dir/restart.log"
+grep -F '[restart.sh] cwd=' "$log_dir/flutter.log"
 grep -F -- '-d macos --no-pub' "$log_dir/flutter.log"
 test -f "$state_dir/flutter.pid"
 FLUTTER_BIN="$fake_flutter" ./restart.sh stop --no-relay --no-daemon --state-dir "$state_dir"

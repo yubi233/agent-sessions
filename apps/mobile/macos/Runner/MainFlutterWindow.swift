@@ -6,7 +6,12 @@ class MainFlutterWindow: NSWindow {
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
+    let windowFrame = self.frame
     self.contentViewController = flutterViewController
+    // Assigning the Flutter view controller can adopt its intrinsic size.
+    // Restore the XIB frame before the window is ordered so the macOS debug
+    // shell cannot collapse to the view's 1x32 fallback size.
+    self.setFrame(windowFrame, display: true)
     RegisterGeneratedPlugins(registry: flutterViewController)
     super.awakeFromNib()
   }

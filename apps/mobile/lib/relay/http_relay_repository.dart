@@ -545,6 +545,7 @@ class HttpRelayRepository implements RelayRepository {
           RelayFailureKind.forbidden,
           '会话控制权已更新，请重新获取。',
         ),
+        404 => const RelayFailure(RelayFailureKind.validation, '资源不存在或无权访问。'),
         408 || 429 || 500 || 502 || 503 || 504 => const RelayFailure(
           RelayFailureKind.unavailable,
           'Relay 暂时不可用，请稍后重试。',

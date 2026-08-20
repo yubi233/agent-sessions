@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${AGENT_SESSIONS_RESTART_STATE_DIR:-$ROOT_DIR/.task/restart}"
 LOG_ROOT="${AGENT_SESSIONS_RESTART_LOG_DIR:-$STATE_DIR/logs}"
 RELAY_ADDR="${AGENT_SESSIONS_RELAY_ADDR:-127.0.0.1:8787}"
-RELAY_DB_PATH="${AGENT_SESSIONS_SQLITE_PATH:-$ROOT_DIR/data/relay.db}"
+RELAY_DB_PATH="${AGENT_SESSIONS_SQLITE_PATH:-}"
 WEB_PORT="${AGENT_SESSIONS_WEB_PORT:-5173}"
 ADMIN_PORT="${AGENT_SESSIONS_ADMIN_PORT:-5174}"
 DAEMON_STATE_DIR="${AGENT_SESSIONS_DAEMON_STATE_DIR:-$STATE_DIR/daemon}"
@@ -19,6 +19,9 @@ FLUTTER_DEVICE="${AGENT_SESSIONS_FLUTTER_DEVICE:-}"
 FLUTTER_TIMEOUT_MS="${AGENT_SESSIONS_FLUTTER_TIMEOUT_MS:-30000}"
 FLUTTER_RELAY_BASE="${AGENT_SESSIONS_FLUTTER_RELAY_BASE:-}"
 FLUTTER_DEVICE_HELPER="${AGENT_SESSIONS_FLUTTER_DEVICE_HELPER:-$ROOT_DIR/tools/flutter_device.sh}"
+LOCAL_DEV_PAIRING="${AGENT_SESSIONS_LOCAL_DEV_PAIRING:-true}"
+LOCAL_DEV_PROJECT_ID="${AGENT_SESSIONS_LOCAL_DEV_PROJECT_ID:-local-dev}"
+LOCAL_DEV_WORKSPACE_ID="ws_${LOCAL_DEV_PROJECT_ID}"
 FLUTTER_TARGET=""
 if [[ -n "$FLUTTER_DEVICE" && "$FLUTTER_DEVICE" != "macos" && "$FLUTTER_MODE" == "mac" ]]; then
   FLUTTER_MODE=device
@@ -35,6 +38,12 @@ DRY_RUN=false
 CLEAN_PORTS=false
 CLEAN_PORTS_SET=false
 LOG_DIR=""
+RESTART_LOG=""
+DAEMON_ACCESS_TOKEN="${AGENT_SESSIONS_DAEMON_TOKEN:-}"
+DAEMON_TOKEN_SOURCE=""
+LOCAL_DEV_TERMINAL_DEVICE_ID=""
+LOCAL_OWNER_ACCESS_TOKEN=""
+LOCAL_OWNER_BOOTSTRAP_B64=""
 
 STARTED_RELAY=false
 STARTED_WEB=false
@@ -46,7 +55,10 @@ usage() {
   cat <<'EOF'
 Usage: ./restart.sh [start|stop|restart|status] [options]
 
-Default action is restart. The default local stack is Relay + Daemon + Flutter.
+Default action is restart. The default local stack is Relay + local dev-paired
+fixture Daemon + Flutter. When AGENT_SESSIONS_DAEMON_TOKEN is absent, the script
+uses the real Relay HTTP pairing flow to bootstrap a local owner, approve a
+Terminal, and inject the owner session into Flutter macOS.
 Web/Admin are optional inspection surfaces and require explicit flags.
 
 Options:
@@ -56,7 +68,11 @@ Options:
   --no-admin             Do not start apps/admin-web (compatibility flag)
   --with-admin           Start apps/admin-web
   --no-daemon            Do not start apps/daemon
-  --with-daemon          Start apps/daemon run (default; requires AGENT_SESSIONS_DAEMON_TOKEN)
+  --with-daemon          Start apps/daemon run (default)
+  --no-local-dev-pairing Disable automatic local owner/terminal pairing/session
+                         injection when AGENT_SESSIONS_DAEMON_TOKEN is missing
+  --local-dev-pairing    Enable automatic local owner/terminal pairing/session
+                         injection
   --no-flutter           Do not start apps/mobile
   --flutter-mode MODE    Flutter target mode: mac or device (default: mac)
   --flutter MODE         Alias for --flutter-mode
@@ -81,9 +97,10 @@ Environment:
   AGENT_SESSIONS_RESTART_STATE_DIR, AGENT_SESSIONS_RESTART_LOG_DIR,
   AGENT_SESSIONS_FLUTTER_MODE, AGENT_SESSIONS_FLUTTER_DEVICE,
   AGENT_SESSIONS_FLUTTER_TIMEOUT_MS, AGENT_SESSIONS_FLUTTER_RELAY_BASE,
-  FLUTTER_BIN
+  AGENT_SESSIONS_LOCAL_DEV_PAIRING, FLUTTER_BIN
 
-Logs never go to testbox; testbox remains the Agent session workspace only.
+Logs and local Relay data never go to testbox; testbox remains the Agent session
+workspace only.
 EOF
 }
 
@@ -99,6 +116,8 @@ print_missing_daemon_token_hint() {
 daemon: AGENT_SESSIONS_DAEMON_TOKEN is required; refusing to start a partial stack
 
 Next steps:
+  - Default local debug stack:
+      ./restart.sh restart
   - Full local stack:
       AGENT_SESSIONS_DAEMON_TOKEN=<paired-terminal-token> ./restart.sh restart
   - Flutter + Relay only:
@@ -108,6 +127,134 @@ Next steps:
   - Physical Android Flutter target:
       AGENT_SESSIONS_FLUTTER_RELAY_BASE=http://<host-lan-ip>:8787 ./restart.sh restart --no-daemon --flutter-mode device
 EOF
+}
+
+json_get() {
+  python3 -c 'import json, sys
+data=json.load(sys.stdin)
+for key in sys.argv[1].split("."):
+    data=data[key]
+print(data)' "$1"
+}
+
+json_set_tokens() {
+  python3 -c 'import json, os, sys
+path = sys.argv[1]
+doc = json.load(sys.stdin)
+tokens = doc.get("tokens") if isinstance(doc.get("tokens"), dict) else doc
+if not isinstance(tokens, dict) or "access_token" not in tokens or "refresh_token" not in tokens:
+    raise SystemExit("missing tokens")
+with open(path, "r", encoding="utf-8") as fh:
+    existing = json.load(fh)
+existing["tokens"] = tokens
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(existing, fh, separators=(",", ":"))
+    fh.write("\n")
+os.replace(tmp, path)' "$1"
+}
+
+truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+redacted_command() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '<redaction unavailable>'
+    return 0
+  fi
+  python3 - "$@" <<'PY'
+import re
+import shlex
+import sys
+
+def redact(value: str) -> str:
+    value = re.sub(r"(Authorization:\s*Bearer\s+)[^\"'\s]+", r"\1<redacted>", value)
+    value = re.sub(r'("(?:access_token|refresh_token)"\s*:\s*")[^"]+', r'\1<redacted>', value)
+    value = re.sub(r"(AGENT_SESSIONS_DAEMON_TOKEN=)[^\"'\s]+", r"\1<redacted>", value)
+    value = re.sub(r"(--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=).*", r"\1<redacted>", value)
+    return value
+
+print(" ".join(shlex.quote(redact(arg)) for arg in sys.argv[1:]))
+PY
+}
+
+redacted_body_excerpt() {
+  local file="$1"
+  if [[ ! -s "$file" ]]; then
+    printf '<empty>'
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    head -c 2000 "$file" | tr '\n' ' '
+    return 0
+  fi
+  python3 - "$file" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as fh:
+    text = fh.read(4096).decode("utf-8", "replace")
+text = re.sub(r'("(?:access_token|refresh_token)"\s*:\s*")[^"]+', r'\1<redacted>', text)
+text = re.sub(r"(Authorization:\s*Bearer\s+)[^\"'\s]+", r"\1<redacted>", text)
+text = text.replace("\n", "\\n").strip()
+if len(text) > 2000:
+    text = text[:2000] + "...<truncated>"
+print(text or "<empty>")
+PY
+}
+
+restart_log() {
+  [[ -n "${RESTART_LOG:-}" ]] || return 0
+  printf '[restart.sh] %s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$RESTART_LOG"
+}
+
+setup_restart_logging() {
+  mkdir -p "$LOG_DIR"
+  RESTART_LOG="$LOG_DIR/restart.log"
+  if [[ "${AGENT_SESSIONS_RESTART_LOGGING_ACTIVE:-}" != "$RESTART_LOG" ]]; then
+    export AGENT_SESSIONS_RESTART_LOGGING_ACTIVE="$RESTART_LOG"
+    exec 3>&1 4>&2
+    exec > >(tee -a "$RESTART_LOG" >&3) 2> >(tee -a "$RESTART_LOG" >&4)
+  fi
+  restart_log "invocation command=$(redacted_command "$0" "$@") action=$ACTION state_dir=$STATE_DIR log_dir=$LOG_DIR relay=$RELAY_ADDR relay_db=$RELAY_DB_PATH"
+}
+
+http_request() {
+  local label="$1" body_file status rc excerpt bytes
+  shift
+  body_file="$(mktemp "${TMPDIR:-/tmp}/agent-sessions-restart-http.XXXXXX")"
+  restart_log "http request label=$label command=$(redacted_command curl "$@")"
+  set +e
+  status="$(curl --silent --show-error --output "$body_file" --write-out '%{http_code}' "$@")"
+  rc=$?
+  set -e
+  if (( rc != 0 )); then
+    excerpt="$(redacted_body_excerpt "$body_file")"
+    restart_log "http transport_failed label=$label rc=$rc body=$excerpt"
+    echo "$label: curl transport failed (rc=$rc)" >&2
+    if [[ "$excerpt" != "<empty>" ]]; then
+      echo "$label: response $excerpt" >&2
+    fi
+    rm -f "$body_file"
+    return "$rc"
+  fi
+  if ! [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+    excerpt="$(redacted_body_excerpt "$body_file")"
+    restart_log "http failed label=$label status=$status body=$excerpt"
+    echo "$label: relay http status $status" >&2
+    echo "$label: response $excerpt" >&2
+    rm -f "$body_file"
+    return 22
+  fi
+  bytes="$(wc -c < "$body_file" | tr -d '[:space:]')"
+  restart_log "http ok label=$label status=$status bytes=$bytes"
+  cat "$body_file"
+  rm -f "$body_file"
 }
 
 absolute_path() {
@@ -302,8 +449,8 @@ stop_process() {
 }
 
 start_process() {
-  local component="$1" file="$2" logfile="$3" pid
-  shift 3
+  local component="$1" file="$2" logfile="$3" cwd="$4" pid command_line
+  shift 4
   mkdir -p "$STATE_DIR" "$(dirname "$logfile")"
   if pid="$(read_pid "$file" 2>/dev/null || true)"; then
     if [[ -n "$pid" ]] && is_running "$pid"; then
@@ -316,12 +463,36 @@ start_process() {
     fi
     rm -f "$file"
   fi
+  command_line="$(redacted_command "$@")"
   printf '[restart.sh] component=%s started=%s\n' "$component" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$logfile"
-  "$@" >> "$logfile" 2>&1 &
-  pid=$!
+  printf '[restart.sh] cwd=%s command=%s\n' "$cwd" "$command_line" >> "$logfile"
+  restart_log "process starting component=$component cwd=$cwd pid_file=$file log=$logfile command=$command_line"
+  pid="$(python3 - "$cwd" "$logfile" "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+cwd = sys.argv[1]
+logfile = sys.argv[2]
+args = sys.argv[3:]
+log = open(logfile, "ab", buffering=0)
+proc = subprocess.Popen(
+    args,
+    cwd=cwd,
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+    close_fds=True,
+)
+print(proc.pid)
+PY
+)"
   printf '%s\n' "$pid" > "$file"
+  restart_log "process spawned component=$component pid=$pid"
   sleep 0.2
   if ! is_running "$pid"; then
+    restart_log "process exited_during_startup component=$component pid=$pid log=$logfile"
     echo "$component: exited during startup; inspect $logfile" >&2
     rm -f "$file"
     return 1
@@ -345,7 +516,7 @@ run_daemon() {
   if [[ "$FIXTURE_DAEMON" == true ]]; then
     args+=(--fixture-adapter)
   fi
-  exec go run ./apps/daemon "${args[@]}"
+  exec env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" go run ./apps/daemon "${args[@]}"
 }
 
 run_flutter() {
@@ -455,10 +626,6 @@ resolve_flutter_target() {
 }
 
 preflight_start() {
-  if [[ "$WITH_DAEMON" == true && -z "${AGENT_SESSIONS_DAEMON_TOKEN:-}" ]]; then
-    print_missing_daemon_token_hint
-    return 1
-  fi
   if ! [[ "$FLUTTER_TIMEOUT_MS" =~ ^[0-9]+$ ]] || (( FLUTTER_TIMEOUT_MS < 100 )); then
     echo "flutter: AGENT_SESSIONS_FLUTTER_TIMEOUT_MS must be an integer >= 100: $FLUTTER_TIMEOUT_MS" >&2
     return 1
@@ -466,6 +633,243 @@ preflight_start() {
   if [[ "$WITH_FLUTTER" == true ]]; then
     resolve_flutter_target || return 1
   fi
+}
+
+local_token_file() { printf '%s/%s\n' "$STATE_DIR" "$1"; }
+
+stage_local_owner_bootstrap_for_flutter() {
+  local source="$1"
+  require_command base64 || return 1
+  LOCAL_OWNER_BOOTSTRAP_B64="$(base64 < "$source" | tr -d '\n')"
+}
+
+ensure_local_dev_workspace() {
+  if [[ "$WITH_RELAY" != true ]] || ! truthy "$LOCAL_DEV_PAIRING"; then
+    return 0
+  fi
+  if [[ "$DRY_RUN" == true ]]; then
+    return 0
+  fi
+  ensure_local_owner_bootstrap || return 1
+  require_command curl || return 1
+  require_command python3 || return 1
+
+  local daemon_approval_file workspaces response payload branch terminal_id daemon_device_id
+  daemon_approval_file="$(local_token_file local-daemon-approval.json)"
+  daemon_device_id="$LOCAL_DEV_TERMINAL_DEVICE_ID"
+  if [[ -z "$daemon_device_id" && -s "$daemon_approval_file" ]]; then
+    daemon_device_id="$(json_get id < "$daemon_approval_file" 2>/dev/null || true)"
+  fi
+  terminal_id=""
+  if [[ "$WITH_DAEMON" == true && -n "$daemon_device_id" ]]; then
+    local terminals
+    for _ in $(seq 1 50); do
+      terminals="$(http_request workspace.terminals \
+        -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+        "http://$RELAY_ADDR/v1/terminals")" || return 1
+      terminal_id="$(printf '%s' "$terminals" | LOCAL_DEV_TERMINAL_DEVICE_ID="$daemon_device_id" python3 -c 'import json, os, sys
+doc=json.load(sys.stdin)
+device_id=os.environ["LOCAL_DEV_TERMINAL_DEVICE_ID"]
+for item in doc.get("terminals", []):
+    if isinstance(item, dict) and item.get("device_id") == device_id:
+        print(item.get("id", ""))
+        raise SystemExit(0)
+raise SystemExit(1)' 2>/dev/null || true)"
+      if [[ -n "$terminal_id" ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ -z "$terminal_id" ]]; then
+      echo "workspace: local dev Terminal has not registered with Relay" >&2
+      return 1
+    fi
+  fi
+  workspaces="$(http_request workspace.list \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    "http://$RELAY_ADDR/v1/workspaces")" || return 1
+  if printf '%s' "$workspaces" | LOCAL_DEV_WORKSPACE_ID="$LOCAL_DEV_WORKSPACE_ID" python3 -c 'import json, os, sys
+doc=json.load(sys.stdin)
+target=os.environ["LOCAL_DEV_WORKSPACE_ID"]
+raise SystemExit(0 if any(isinstance(item, dict) and item.get("id")==target for item in doc.get("workspaces", [])) else 1)' 2>/dev/null; then
+    echo "workspace: using cached local dev Workspace $LOCAL_DEV_WORKSPACE_ID"
+    return 0
+  fi
+  branch=""
+  if command -v git >/dev/null 2>&1; then
+    branch="$(git -C "$ROOT_DIR" branch --show-current 2>/dev/null || true)"
+  fi
+  payload="$(python3 -c 'import json, sys
+project_id, terminal_id, canonical_root, branch = sys.argv[1:5]
+doc = {"project_id": project_id, "canonical_root": canonical_root, "status": "active"}
+if terminal_id:
+    doc["terminal_id"] = terminal_id
+if branch:
+    doc["branch"] = branch
+print(json.dumps(doc, separators=(",", ":")))' "$LOCAL_DEV_PROJECT_ID" "$terminal_id" "$ROOT_DIR" "$branch")"
+  response="$(http_request workspace.create \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    -d "$payload" \
+    "http://$RELAY_ADDR/v1/workspaces")" || return 1
+  local created_id
+  created_id="$(printf '%s' "$response" | json_get id)"
+  if [[ "$created_id" != "$LOCAL_DEV_WORKSPACE_ID" ]]; then
+    echo "workspace: Relay returned unexpected local dev Workspace id $created_id (expected $LOCAL_DEV_WORKSPACE_ID)" >&2
+    return 1
+  fi
+  echo "workspace: registered local dev Workspace $LOCAL_DEV_WORKSPACE_ID${terminal_id:+ for Terminal $terminal_id}"
+}
+
+
+reset_default_local_relay_db() {
+  if [[ -n "${AGENT_SESSIONS_SQLITE_PATH:-}" ]]; then
+    return 1
+  fi
+  echo "owner: resetting default local dev Relay DB"
+  stop_relay || return 1
+  rm -f "$RELAY_DB_PATH" "$RELAY_DB_PATH-shm" "$RELAY_DB_PATH-wal"
+  rm -f     "$(local_token_file local-owner-token)"     "$(local_token_file local-owner-bootstrap.json)"     "$(local_token_file local-daemon-token)"     "$(local_token_file local-daemon-approval.json)"
+  start_relay || return 1
+}
+
+reset_local_pairing_cache_if_scope_changed() {
+  local scope_file desired_scope existing_scope
+  scope_file="$(local_token_file local-pairing-scope)"
+  desired_scope="$RELAY_ADDR|$RELAY_DB_PATH"
+  existing_scope=""
+  [[ -f "$scope_file" ]] && existing_scope="$(cat "$scope_file")"
+  if [[ "$existing_scope" != "$desired_scope" ]]; then
+    rm -f \
+      "$(local_token_file local-owner-token)" \
+      "$(local_token_file local-owner-bootstrap.json)" \
+      "$(local_token_file local-daemon-token)" \
+      "$(local_token_file local-daemon-approval.json)"
+    printf '%s\n' "$desired_scope" > "$scope_file"
+  fi
+}
+
+ensure_local_owner_bootstrap() {
+  if [[ "$WITH_RELAY" != true ]] || ! truthy "$LOCAL_DEV_PAIRING"; then
+    return 1
+  fi
+  if [[ "$DRY_RUN" == true ]]; then
+    LOCAL_OWNER_ACCESS_TOKEN=local-dev-dry-run-owner-token
+    LOCAL_OWNER_BOOTSTRAP_B64=local-dev-dry-run-owner-bootstrap
+    return 0
+  fi
+  require_command curl || return 1
+  require_command python3 || return 1
+  mkdir -p "$STATE_DIR"
+  reset_local_pairing_cache_if_scope_changed
+
+  local owner_file response refresh_token
+  owner_file="$(local_token_file local-owner-bootstrap.json)"
+  if [[ -s "$owner_file" ]]; then
+    refresh_token="$(json_get tokens.refresh_token < "$owner_file")"
+    if response="$(http_request owner.refresh \
+      -H 'Content-Type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"refresh_token":sys.argv[1]}))' "$refresh_token")" \
+      "http://$RELAY_ADDR/v1/auth/refresh")"; then
+      printf '%s' "$response" | json_set_tokens "$owner_file"
+      LOCAL_OWNER_ACCESS_TOKEN="$(printf '%s' "$response" | json_get access_token)"
+      printf '%s\n' "$LOCAL_OWNER_ACCESS_TOKEN" > "$(local_token_file local-owner-token)"
+      chmod 600 "$owner_file" "$(local_token_file local-owner-token)"
+      stage_local_owner_bootstrap_for_flutter "$owner_file"
+      echo "owner: refreshed cached local dev owner session"
+      return 0
+    fi
+    echo "owner: cached local dev owner expired; rebuilding" >&2
+    rm -f "$owner_file" "$(local_token_file local-owner-token)" "$(local_token_file local-daemon-token)" "$(local_token_file local-daemon-approval.json)"
+    reset_default_local_relay_db || true
+  fi
+
+  if ! response="$(http_request owner.bootstrap \
+    -H 'Content-Type: application/json' \
+    -d '{"display_name":"Local Dev Android Owner","platform":"local","identity_public_key":"local-dev-owner-identity-public-key","encryption_public_key":"local-dev-owner-encryption-public-key"}' \
+    "http://$RELAY_ADDR/v1/auth/device-bootstrap")"; then
+    if reset_default_local_relay_db; then
+      response="$(http_request owner.bootstrap_after_reset \
+        -H 'Content-Type: application/json' \
+        -d '{"display_name":"Local Dev Android Owner","platform":"local","identity_public_key":"local-dev-owner-identity-public-key","encryption_public_key":"local-dev-owner-encryption-public-key"}' \
+        "http://$RELAY_ADDR/v1/auth/device-bootstrap")" || {
+          echo "owner: local dev owner bootstrap failed after resetting $RELAY_DB_PATH" >&2
+          return 1
+        }
+    else
+      echo "owner: local dev owner bootstrap failed; clear $RELAY_DB_PATH or disable local dev pairing" >&2
+      return 1
+    fi
+  fi
+  printf '%s\n' "$response" > "$owner_file"
+  LOCAL_OWNER_ACCESS_TOKEN="$(printf '%s' "$response" | json_get tokens.access_token)"
+  printf '%s\n' "$LOCAL_OWNER_ACCESS_TOKEN" > "$(local_token_file local-owner-token)"
+  chmod 600 "$owner_file" "$(local_token_file local-owner-token)"
+  stage_local_owner_bootstrap_for_flutter "$owner_file"
+  echo "owner: bootstrapped local dev owner via Relay"
+}
+
+ensure_daemon_token() {
+  if [[ "$WITH_DAEMON" != true ]]; then return 0; fi
+  if [[ -n "$DAEMON_ACCESS_TOKEN" ]]; then
+    DAEMON_TOKEN_SOURCE=env
+    return 0
+  fi
+  if [[ "$WITH_RELAY" != true ]] || ! truthy "$LOCAL_DEV_PAIRING"; then
+    print_missing_daemon_token_hint
+    return 1
+  fi
+  if [[ "$DRY_RUN" == true ]]; then
+    DAEMON_ACCESS_TOKEN=local-dev-dry-run-token
+    DAEMON_TOKEN_SOURCE=local-dev-dry-run
+    FIXTURE_DAEMON=true
+    return 0
+  fi
+  ensure_local_owner_bootstrap || return 1
+
+  local daemon_approval_file daemon_refresh
+  daemon_approval_file="$(local_token_file local-daemon-approval.json)"
+  if [[ -s "$daemon_approval_file" ]]; then
+    daemon_refresh="$(json_get tokens.refresh_token < "$daemon_approval_file")"
+    if response="$(http_request daemon.refresh \
+      -H 'Content-Type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"refresh_token":sys.argv[1]}))' "$daemon_refresh")" \
+      "http://$RELAY_ADDR/v1/auth/refresh")"; then
+      printf '%s' "$response" | json_set_tokens "$daemon_approval_file"
+      DAEMON_ACCESS_TOKEN="$(printf '%s' "$response" | json_get access_token)"
+      LOCAL_DEV_TERMINAL_DEVICE_ID="$(json_get id < "$daemon_approval_file" 2>/dev/null || true)"
+      printf '%s\n' "$DAEMON_ACCESS_TOKEN" > "$(local_token_file local-daemon-token)"
+      chmod 600 "$(local_token_file local-daemon-token)" "$daemon_approval_file"
+      DAEMON_TOKEN_SOURCE=local-dev-cache
+      FIXTURE_DAEMON=true
+      echo "daemon: refreshed cached local dev Terminal pairing"
+      return 0
+    fi
+    echo "daemon: cached local dev Terminal expired; rebuilding" >&2
+    rm -f "$(local_token_file local-daemon-token)" "$daemon_approval_file"
+    if reset_default_local_relay_db; then
+      ensure_local_owner_bootstrap || return 1
+    fi
+  fi
+
+  local response pairing_id
+  response="$(http_request daemon.pairing_request \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    -d '{"role":"terminal","display_name":"Local Dev Terminal","platform":"local","identity_public_key":"local-dev-terminal-identity-public-key","encryption_public_key":"local-dev-terminal-encryption-public-key"}' \
+    "http://$RELAY_ADDR/v1/pairing/requests")" || return 1
+  pairing_id="$(printf '%s' "$response" | json_get id)"
+  response="$(http_request daemon.pairing_approve \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    -X POST "http://$RELAY_ADDR/v1/pairing/requests/$pairing_id/approve")" || return 1
+  printf '%s\n' "$response" > "$(local_token_file local-daemon-approval.json)"
+  LOCAL_DEV_TERMINAL_DEVICE_ID="$(printf '%s' "$response" | json_get id)"
+  DAEMON_ACCESS_TOKEN="$(printf '%s' "$response" | json_get tokens.access_token)"
+  printf '%s\n' "$DAEMON_ACCESS_TOKEN" > "$(local_token_file local-daemon-token)"
+  chmod 600 "$(local_token_file local-daemon-token)" "$(local_token_file local-daemon-approval.json)"
+  DAEMON_TOKEN_SOURCE=local-dev-pairing
+  FIXTURE_DAEMON=true
+  echo "daemon: paired local dev Terminal via Relay"
 }
 
 start_web() {
@@ -480,7 +884,7 @@ start_web() {
     echo "web: port $WEB_PORT is already in use; refusing to stop an unrelated process" >&2
     return 1
   fi
-  start_process web "$file" "$(component_log web)" run_web "$WEB_PORT" "$RELAY_ADDR"
+  start_process web "$file" "$(component_log web)" "$ROOT_DIR/apps/web" env VITE_RELAY_URL="http://$RELAY_ADDR" pnpm exec vite --host 127.0.0.1 --port "$WEB_PORT" --strictPort
   STARTED_WEB=true
   pid="$(read_pid "$file")"
   wait_for_http web "http://127.0.0.1:$WEB_PORT" "$pid"
@@ -498,19 +902,22 @@ start_admin() {
     echo "admin: port $ADMIN_PORT is already in use; refusing to stop an unrelated process" >&2
     return 1
   fi
-  start_process admin "$file" "$(component_log admin)" run_admin "$ADMIN_PORT" "$RELAY_ADDR"
+  start_process admin "$file" "$(component_log admin)" "$ROOT_DIR/apps/admin-web" env VITE_RELAY_URL="http://$RELAY_ADDR" pnpm exec vite --host 127.0.0.1 --port "$ADMIN_PORT" --strictPort
   STARTED_ADMIN=true
   pid="$(read_pid "$file")"
   wait_for_http admin "http://127.0.0.1:$ADMIN_PORT" "$pid"
 }
 
 start_daemon() {
-  local token=${AGENT_SESSIONS_DAEMON_TOKEN:-}
-  if [[ -z "$token" ]]; then
-    print_missing_daemon_token_hint
+  if [[ -z "$DAEMON_ACCESS_TOKEN" ]]; then
+    echo "daemon: missing access token after pairing" >&2
     return 1
   fi
-  start_process daemon "$(pid_file daemon)" "$(component_log daemon)" run_daemon
+  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" go run ./apps/daemon run --relay-base "http://$RELAY_ADDR" --state-dir "$DAEMON_STATE_DIR")
+  if [[ "$FIXTURE_DAEMON" == true ]]; then
+    args+=(--fixture-adapter)
+  fi
+  start_process daemon "$(pid_file daemon)" "$(component_log daemon)" "$ROOT_DIR" "${args[@]}"
   STARTED_DAEMON=true
 }
 
@@ -522,7 +929,14 @@ start_flutter() {
     echo "flutter: already running (pid $pid; target $FLUTTER_TARGET)"
     return 0
   fi
-  start_process flutter "$file" "$(component_log flutter)" run_flutter
+  local args=("$FLUTTER_BIN" run -d "$FLUTTER_TARGET" --no-pub "--dart-define=RELAY_BASE_URL=$FLUTTER_RELAY_BASE")
+  if [[ -n "$LOCAL_OWNER_BOOTSTRAP_B64" && "$FLUTTER_MODE" == "mac" ]]; then
+    args+=("--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=$LOCAL_OWNER_BOOTSTRAP_B64")
+  fi
+  if [[ "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
+    args+=("--dart-define=LOCAL_DEV_WORKSPACE_ID=$LOCAL_DEV_WORKSPACE_ID")
+  fi
+  start_process flutter "$file" "$(component_log flutter)" "$ROOT_DIR/apps/mobile" "${args[@]}"
   STARTED_FLUTTER=true
   pid="$(read_pid "$file")"
   wait_for_flutter "$pid"
@@ -595,8 +1009,12 @@ start_action() {
   if [[ "$DRY_RUN" == true ]]; then
     echo "restart.sh dry-run"
     echo "  relay: $WITH_RELAY ($RELAY_ADDR; db $RELAY_DB_PATH)"
-    echo "  daemon: $WITH_DAEMON (fixture=$FIXTURE_DAEMON)"
-    echo "  flutter: $WITH_FLUTTER (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE)"
+    ensure_daemon_token || return 1
+    if [[ "$WITH_FLUTTER" == true && "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
+      ensure_local_owner_bootstrap || return 1
+    fi
+    echo "  daemon: $WITH_DAEMON (fixture=$FIXTURE_DAEMON token_source=$DAEMON_TOKEN_SOURCE)"
+    echo "  flutter: $WITH_FLUTTER (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE owner_bootstrap=${LOCAL_OWNER_BOOTSTRAP_B64:+true} workspace=$LOCAL_DEV_WORKSPACE_ID)"
     echo "  web: $WITH_WEB (127.0.0.1:$WEB_PORT)"
     echo "  admin: $WITH_ADMIN (127.0.0.1:$ADMIN_PORT)"
     return 0
@@ -606,7 +1024,14 @@ start_action() {
     return 1
   fi
   if [[ "$WITH_RELAY" == true ]] && ! start_relay; then cleanup_start_failure; return 1; fi
+  if [[ "$WITH_DAEMON" == true ]] && ! ensure_daemon_token; then cleanup_start_failure; return 1; fi
+  if [[ "$WITH_FLUTTER" == true && "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
+    if ! ensure_local_owner_bootstrap; then cleanup_start_failure; return 1; fi
+  fi
   if [[ "$WITH_DAEMON" == true ]] && ! start_daemon; then cleanup_start_failure; return 1; fi
+  if [[ "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
+    if ! ensure_local_dev_workspace; then cleanup_start_failure; return 1; fi
+  fi
   if [[ "$WITH_FLUTTER" == true ]] && ! start_flutter; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_WEB" == true ]] && ! start_web; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_ADMIN" == true ]] && ! start_admin; then cleanup_start_failure; return 1; fi
@@ -652,6 +1077,7 @@ status_action() {
   if [[ -z "$FLUTTER_TARGET" && -f "$STATE_DIR/flutter-target" ]]; then
     FLUTTER_TARGET="$(tr -d '[:space:]' < "$STATE_DIR/flutter-target")"
   fi
+  echo "restart log: $LOG_DIR/restart.log"
   echo "relay address: $RELAY_ADDR"
   status_relay
   echo "daemon selected: $WITH_DAEMON"
@@ -688,6 +1114,8 @@ parse_args() {
       --with-admin) WITH_ADMIN=true; shift ;;
       --no-daemon) WITH_DAEMON=false; shift ;;
       --with-daemon|--daemon) WITH_DAEMON=true; shift ;;
+      --no-local-dev-pairing) LOCAL_DEV_PAIRING=false; shift ;;
+      --local-dev-pairing) LOCAL_DEV_PAIRING=true; shift ;;
       --no-flutter) WITH_FLUTTER=false; shift ;;
       --flutter-mode|--flutter)
         [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; return 2; }
@@ -733,9 +1161,15 @@ parse_args() {
     return 2
   fi
   STATE_DIR="$(absolute_path "$STATE_DIR")"
-  RELAY_DB_PATH="$(absolute_path "$RELAY_DB_PATH")"
+  if [[ -z "${AGENT_SESSIONS_SQLITE_PATH:-}" ]]; then
+    RELAY_DB_PATH="$STATE_DIR/relay.db"
+  else
+    RELAY_DB_PATH="$(absolute_path "$RELAY_DB_PATH")"
+  fi
   if [[ -z "$LOG_DIR" ]]; then
-    if [[ -n "${AGENT_SESSIONS_RESTART_LOG_DIR:-}" ]]; then
+    if [[ "$ACTION" != "start" && "$ACTION" != "restart" && -f "$STATE_DIR/log-dir" ]]; then
+      LOG_DIR="$(absolute_path "$(tr -d '[:space:]' < "$STATE_DIR/log-dir")")"
+    elif [[ -n "${AGENT_SESSIONS_RESTART_LOG_DIR:-}" ]]; then
       LOG_DIR="$(absolute_path "$LOG_ROOT")"
     else
       LOG_DIR="$STATE_DIR/logs/$(date -u '+%Y%m%dT%H%M%SZ')"
@@ -752,6 +1186,7 @@ parse_args() {
 
 main() {
   parse_args "$@"
+  setup_restart_logging "$@"
   case "$ACTION" in
     start) start_action ;;
     stop) stop_action ;;

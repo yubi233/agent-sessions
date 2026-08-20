@@ -72,8 +72,10 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "delegation workspace or terminal denied")
 	case errors.Is(err, domain.ErrDelegationNotFound):
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "delegation not found")
-	case errors.Is(err, domain.ErrSessionNotFound), errors.Is(err, domain.ErrWorkspaceNotFound):
+	case errors.Is(err, domain.ErrSessionNotFound):
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "session not found")
+	case errors.Is(err, domain.ErrWorkspaceNotFound):
+		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "workspace not found")
 	case errors.Is(err, store.ErrNotFound):
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "resource not found")
 	case errors.Is(err, domain.ErrAttachmentNotFound):

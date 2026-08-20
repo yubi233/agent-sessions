@@ -21,8 +21,25 @@ start() {
   fi
   mkdir -p "$state_dir" "$(dirname "$database_path")"
   go build -o "$bin" ./apps/relay
-  "$bin" --addr "$address" --db "$database_path" >"$log_file" 2>&1 &
-  echo "$!" >"$pid_file"
+  python3 - "$root" "$log_file" "$bin" --addr "$address" --db "$database_path" >"$pid_file" <<'PY'
+import subprocess
+import sys
+
+cwd = sys.argv[1]
+logfile = sys.argv[2]
+args = sys.argv[3:]
+log = open(logfile, "ab", buffering=0)
+proc = subprocess.Popen(
+    args,
+    cwd=cwd,
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+    close_fds=True,
+)
+print(proc.pid)
+PY
 
   for _ in $(seq 1 100); do
     if curl --fail --silent --show-error "http://$address/readyz" >/dev/null; then

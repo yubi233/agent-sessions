@@ -188,6 +188,14 @@ func TestW1PAIR01AndPAIR02OwnerBootstrapReadApprove(t *testing.T) {
 	if terminal.ID == "" || terminal.Role != domain.RoleTerminal || terminal.Status != domain.DeviceActive {
 		t.Fatalf("approved terminal metadata is invalid")
 	}
+	var approvedWithToken struct {
+		ID     string      `json:"id"`
+		Tokens w1TokenPair `json:"tokens"`
+	}
+	decodeW1(t, approve.Body.Bytes(), &approvedWithToken)
+	if approvedWithToken.ID != terminal.ID || approvedWithToken.Tokens.DeviceID != terminal.ID || approvedWithToken.Tokens.AccessToken == "" {
+		t.Fatalf("approved terminal token contract invalid: %+v", approvedWithToken)
+	}
 
 	devices := env.do(t, http.MethodGet, "/v1/devices", nil, pair.AccessToken)
 	if devices.Code != http.StatusOK {

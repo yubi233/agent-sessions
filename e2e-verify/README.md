@@ -15,7 +15,7 @@
 | `task test:flutter:record -- --gate-report <report>`                                               | 已通过 Flutter macOS full gate 后的 fixture 录屏                  | 固定 5fps，验证全部 recording allowlist 的帧、manifest 与 MP4                             |
 | `task test:android:e2e`                                                                            | 后续 Android AVD integration diagnostic                           | 不属于本轮 v0.1 gate                                                                      |
 | `task test:android:device -- --device-id <adb-serial>`                                             | 已授权物理 Android integration gate                               | 报告标记 `real_device=true`；fixture 不代表真实 Provider 或 Push                          |
-| `e2e-verify/mobile/`                                                                               | MacBook Flutter macOS full gate、P6 录屏、后续 AVD 诊断和报告脚本 | 本轮 `run-macos.mjs` 与 `record-macos.mjs` 启动可见桌面窗口；Android 原生验收留待后续阶段 |
+| `e2e-verify/mobile/`                                                                               | MacBook Flutter macOS full gate、P6 录屏、后续 AVD 诊断和报告脚本 | 本轮 `run-macos.mjs` 启动可见桌面窗口；`record-macos.mjs` 的演示产物写入 `e2e-verify/screencasts/`，Android 原生验收留待后续阶段 |
 
 不要使用不存在的`pnpm --filter @agent-sessions/e2e-verify test`命令；当前 package 公开的是`test:e2e`，推荐始终从根目录`task test:e2e`运行。
 

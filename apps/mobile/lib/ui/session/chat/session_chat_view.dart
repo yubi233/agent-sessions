@@ -15,6 +15,7 @@ class SessionChatView extends StatefulWidget {
     required this.nodes,
     required this.running,
     this.emptyHero,
+    this.leading,
     this.footer = const [],
     this.openFile,
     this.onInspectTarget,
@@ -24,6 +25,10 @@ class SessionChatView extends StatefulWidget {
   final List<ConversationNode> nodes;
   final bool running;
   final Widget? emptyHero;
+
+  /// 位于消息流上方的会话级控制带（如子会话面板）。它属于 Chat 投影上下文，
+  /// 不参与 conversation node 流，也避免被滚动到底部时挤出视口。
+  final Widget? leading;
   final List<Widget> footer;
   final SessionFileOpener? openFile;
   final SessionInspectTargetHandler? onInspectTarget;
@@ -133,7 +138,6 @@ class _SessionChatViewState extends State<SessionChatView> {
           onOpenFile: _requestOpenFile,
           onInspect: widget.onInspectTarget,
         ),
-      if (widget.running) const _TurnStatusRow(),
       ...widget.footer,
     ];
     return Stack(
@@ -146,6 +150,16 @@ class _SessionChatViewState extends State<SessionChatView> {
           separatorBuilder: (_, _) => const SizedBox(height: 10),
           itemBuilder: (context, index) => children[index],
         ),
+        // v0.5/回归修复：streaming 状态行固定为一个可见 overlay，而不是懒加载列表项。
+        // 这样即使滚动到底部时 footer（如子会话面板）较高，streaming indicator 也始终在树中，
+        // 不会因为 ListView 未 build 视口外的行而被测试或用户跳过。
+        if (widget.running)
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 12,
+            child: _TurnStatusRow(),
+          ),
         if (!_readerPinnedToBottom)
           Positioned(
             right: 18,

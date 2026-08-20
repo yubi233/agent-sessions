@@ -29,6 +29,7 @@ import {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MOBILE_ROOT = join(ROOT, "apps", "mobile");
+// 录屏属于测试产物，不能进入会话绑定的 testbox 工作区。
 const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
 export const FLUTTER_RECORDING_FPS = 5;
 export const FLUTTER_RECORDING_FRAME_COUNT = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT;

@@ -301,12 +301,18 @@ class _SessionChatView extends StatelessWidget {
   const _SessionChatView({
     required this.sessions,
     required this.recovery,
+    required this.delegations,
+    required this.canWrite,
+    required this.deviceId,
     required this.sessionId,
     required this.onInspectTarget,
   });
 
   final SessionController sessions;
   final SessionRecoveryController recovery;
+  final DelegationController delegations;
+  final bool canWrite;
+  final String? deviceId;
   final String sessionId;
   final void Function(String target) onInspectTarget;
 
@@ -332,6 +338,32 @@ class _SessionChatView extends StatelessWidget {
           ? null
           : _ConversationEmptyHero(session: sessions.selectedSession),
       footer: [
+        _DelegationPanel(
+          controller: delegations,
+          sessions: sessions,
+          canWrite: canWrite,
+          deviceId: deviceId,
+          onDecision: (delegation, decision) async {
+            final result = await delegations.decide(
+              delegation: delegation,
+              decision: decision,
+              capabilities: sessions.capabilityMatrix,
+              canWrite: canWrite,
+              deviceId: deviceId,
+              parentLease: sessions.selectedLease,
+            );
+            // 批准后 child 会话进入列表；仅刷新索引，保留当前 parent 页面和其安全投影。
+            if (result?.hasChildSession == true) {
+              await sessions.refreshSessions();
+            }
+          },
+          onOpenChild: (childSessionId) async {
+            // selectSession 会清掉 parent lease；child 的写操作必须重新获取自己的 fencing epoch。
+            await sessions.selectSession(childSessionId);
+            if (!context.mounted) return;
+            context.go('/sessions/$childSessionId');
+          },
+        ),
         _SessionRecoveryStrip(controller: recovery, sessionId: sessionId),
         if (sessions.errorMessage != null)
           _InlineError(
@@ -577,6 +609,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             ? _SessionChatView(
                 sessions: sessions,
                 recovery: recovery,
+                delegations: delegations,
+                canWrite: app.canManageDevices,
+                deviceId: app.currentDevice?.id,
                 sessionId: widget.sessionId,
                 onInspectTarget: (target) {
                   ref

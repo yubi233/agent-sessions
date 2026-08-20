@@ -323,7 +323,12 @@ func (a *API) handleApprovePairing(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	writeOK(c, newDeviceView(dev))
+	tokens, err := a.Auth.IssueForDevice(c.Request.Context(), subj.AccountID, dev.ID)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newPairingApprovalView(dev, tokens))
 }
 
 func (a *API) handleCancelPairing(c *gin.Context) {
@@ -1011,6 +1016,15 @@ func newDeviceView(device domain.Device) deviceView {
 		ID: device.ID, Role: device.Role, Status: device.Status, DisplayName: device.DisplayName,
 		Platform: device.Platform, LastSeenUnixMS: device.LastSeenUnixMS,
 	}
+}
+
+type pairingApprovalView struct {
+	deviceView
+	Tokens domain.TokenPair `json:"tokens"`
+}
+
+func newPairingApprovalView(device domain.Device, tokens domain.TokenPair) pairingApprovalView {
+	return pairingApprovalView{deviceView: newDeviceView(device), Tokens: tokens}
 }
 
 // pairingView 保留待批准设备的公钥，以便 owner 在客户端完成 DEK 包装；不会出现在普通设备列表。

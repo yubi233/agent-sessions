@@ -4,6 +4,8 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
 	<!-- Release 包也必须保留 Keychain Sharing，避免本地通过而发布包无法读取安全存储。 -->
 	<key>keychain-access-groups</key>
 	<array/>
