@@ -54,6 +54,62 @@ void main() {
     await _waitForVisible(tester, find.textContaining('已切换 effort'));
   });
 
+  testWidgets('MOBILE-V05-21：danger-full-access 必须先勾选风险确认，取消不提交', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'permission-danger@fixture.test');
+    await _createAndAcquireLease(tester);
+
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
+    // 打开权限下拉并选择 danger-full-access。
+    await tester.tap(find.byKey(const Key('composer-permission-mode-select')));
+    await _waitForVisible(tester, find.text('danger-full-access').last);
+    await tester.tap(find.text('danger-full-access').last);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-permission-risk-confirm')),
+    );
+
+    // 未勾选时提交按钮禁用。
+    final submit = tester.widget<FilledButton>(
+      find.byKey(const Key('session-permission-risk-submit')),
+    );
+    expect(submit.onPressed, isNull);
+
+    // 取消：不提交任何命令。
+    await tester.tap(find.byKey(const Key('session-permission-risk-cancel')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('session-permission-risk-confirm')),
+      findsNothing,
+    );
+    expect(harness.relay.submittedCommandCount, 0);
+
+    // 重新选择并勾选确认后再提交。
+    await tester.tap(find.byKey(const Key('composer-permission-mode-select')));
+    await _waitForVisible(tester, find.text('danger-full-access').last);
+    await tester.tap(find.text('danger-full-access').last);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-permission-risk-confirm')),
+    );
+    await tester.tap(find.byKey(const Key('session-permission-risk-checkbox')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('session-permission-risk-submit')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('session-permission-risk-confirm')),
+      findsNothing,
+    );
+    // 确认后提交了 permission_mode 命令。
+    expect(harness.relay.submittedCommandCount, greaterThan(0));
+  });
+
   testWidgets('MOBILE-08：无 capability 时模型/effort 下拉禁用且不提交命令', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());

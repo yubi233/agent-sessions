@@ -3865,6 +3865,73 @@ class _CommandLauncherMenu extends StatelessWidget {
   }
 }
 
+/// v0.5/P5：danger-full-access 权限预设的风险确认对话框。
+///
+/// 未勾选确认前「提交」不可用；取消按钮、遮罩点击与 Escape 都不提交任何命令。
+/// 确认后调用 [SessionController.selectPermissionMode] 提交真实 preset。
+Future<void> _confirmDangerPermission(
+  BuildContext context, {
+  required SessionController sessions,
+  required String? deviceId,
+  required bool canWrite,
+}) async {
+  var confirmed = false;
+  final action = await showDialog<bool>(
+    context: context,
+    barrierDismissible: true,
+    builder: (dialogContext) {
+      return StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          return AlertDialog(
+            key: const Key('session-permission-risk-confirm'),
+            title: const Text('确认授予完全访问权限'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '“danger-full-access” 将授予 Host 完全访问权限。请确认你了解风险后再提交。',
+                ),
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  key: const Key('session-permission-risk-checkbox'),
+                  value: confirmed,
+                  onChanged: (value) =>
+                      setDialogState(() => confirmed = value ?? false),
+                  title: const Text('我已了解并确认授予完全访问权限'),
+                  controlAffinity: ListTileControlAffinity.leading,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                key: const Key('session-permission-risk-cancel'),
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                key: const Key('session-permission-risk-submit'),
+                onPressed: confirmed
+                    ? () => Navigator.of(dialogContext).pop(true)
+                    : null,
+                child: const Text('确认提交'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+  // 弹窗关闭后只对「确认并提交」走真实写命令；取消/遮罩/Escape 返回 null 或 false。
+  if (action == true && context.mounted) {
+    await sessions.selectPermissionMode(
+      mode: 'danger-full-access',
+      deviceId: deviceId,
+      canWrite: canWrite,
+    );
+  }
+}
+
 /// v0.2/P3：composer 控制条：模型/effort 选择器与脱敏 usage 计数。
 /// 所有入口按 capability fail-closed；无 capability 时禁用并展示中文原因。
 class _ComposerControlStrip extends StatelessWidget {
@@ -4023,13 +4090,24 @@ class _ComposerControlStrip extends StatelessWidget {
                       permissionModeBlocked == null &&
                           controls.availablePermissionModes.isNotEmpty
                       ? (value) {
-                          if (value != null) {
-                            sessions.selectPermissionMode(
-                              mode: value,
+                          if (value == null) return;
+                          // v0.5/P5：danger-full-access 必须先弹风险确认，
+                          // 勾选确认前不可提交；取消/遮罩/Escape 不提交；
+                          // custom 预设不作为可点菜单项渲染（不在 available 列表）。
+                          if (value == 'danger-full-access') {
+                            _confirmDangerPermission(
+                              context,
+                              sessions: sessions,
                               deviceId: deviceId,
                               canWrite: canWrite,
                             );
+                            return;
                           }
+                          sessions.selectPermissionMode(
+                            mode: value,
+                            deviceId: deviceId,
+                            canWrite: canWrite,
+                          );
                         }
                       : null,
                 ),

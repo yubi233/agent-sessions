@@ -1410,8 +1410,14 @@ SessionControlState _fixtureControlsForProvider(String provider) =>
         contextWindowTokens: 100000,
       ),
       // v0.3/P0：permission mode 目录（Happy permissionMode 对齐）。
+      // v0.5/P5：含 danger-full-access 用于风险确认回归；custom 预设不作为可点菜单项。
       permissionMode: 'default',
-      availablePermissionModes: const ['default', 'plan', 'acceptEdits'],
+      availablePermissionModes: const [
+        'default',
+        'plan',
+        'acceptEdits',
+        'danger-full-access',
+      ],
     );
 
 bool _sameBytes(Uint8List left, Uint8List right) {
