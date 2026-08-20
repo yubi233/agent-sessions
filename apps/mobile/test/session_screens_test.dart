@@ -630,6 +630,122 @@ void main() {
     );
   });
 
+  testWidgets('MOBILE-V05-04/P3-C：idle 硬件 Enter 提交消息', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-enter-idle-owner@fixture.test',
+    );
+
+    const draft = '硬件 Enter 应该发送这条消息';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      draft,
+    );
+    await _pressEnter(tester);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    expect(harness.relay.submittedCommandCount, 1);
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(_snapshotContainsText(snapshot, draft), isTrue);
+    expect(_composerText(tester), isEmpty);
+  });
+
+  testWidgets('MOBILE-V05-07/P3-C：streaming 硬件 Enter 只入队', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-enter-queue-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '先进入 streaming',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+    expect(harness.relay.submittedCommandCount, 1);
+
+    const queued = '硬件 Enter 运行中只进入 queue';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      queued,
+    );
+    await _pressEnter(tester);
+    await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
+
+    expect(find.text(queued), findsOneWidget);
+    expect(harness.relay.submittedCommandCount, 1);
+    expect(_composerText(tester), isEmpty);
+  });
+
+  testWidgets('MOBILE-V05-08/P3-C：Shift、IME 与 repeat Enter 不重复提交', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-enter-guard-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      'Shift Enter 只应保留草稿',
+    );
+    await _pressEnter(tester, shift: true);
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(harness.relay.submittedCommandCount, 0);
+    expect(_composerText(tester), contains('Shift Enter 只应保留草稿'));
+
+    const composingDraft = '拼音候选确认';
+    final composerController = tester
+        .widget<TextField>(find.byKey(const Key('session-composer-input')))
+        .controller!;
+    composerController.value = const TextEditingValue(
+      text: composingDraft,
+      selection: TextSelection.collapsed(offset: composingDraft.length),
+      composing: TextRange(start: 0, end: 2),
+    );
+    await tester.pump();
+    expect(composerController.value.composing.isValid, isTrue);
+    await _pressEnter(tester);
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(harness.relay.submittedCommandCount, 0);
+    expect(_composerText(tester), composingDraft);
+
+    const repeatDraft = '长按 Enter 只能提交一次';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      repeatDraft,
+    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyRepeatEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+    expect(harness.relay.submittedCommandCount, 1);
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(_snapshotContainsText(snapshot, repeatDraft), isTrue);
+  });
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {
@@ -1032,9 +1148,57 @@ bool _snapshotContainsText(SessionSnapshot snapshot, String text) {
   });
 }
 
+Future<MobileAppHarness> _openWritableSession(
+  WidgetTester tester,
+  String ownerEmail,
+) async {
+  final harness = MobileAppHarness();
+  await tester.pumpWidget(harness.build());
+  await _waitForVisible(tester, find.byKey(const Key('device-connect-submit')));
+  await _registerOwner(tester, ownerEmail);
+
+  await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+  await _waitForVisible(
+    tester,
+    find.byKey(const Key('new-session-workspace-input')),
+  );
+  await _enterVisible(
+    tester,
+    find.byKey(const Key('new-session-workspace-input')),
+    'fixture-workspace',
+  );
+  await _tapVisible(tester, find.byKey(const Key('new-session-create-button')));
+  await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
+  await _tapVisible(
+    tester,
+    find.byKey(const Key('session-acquire-lease-button')),
+  );
+  await _waitForVisible(tester, find.text('已获得控制权'));
+  return harness;
+}
+
 Future<void> _registerOwner(WidgetTester tester, String _) async {
   await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
   await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
+}
+
+String _composerText(WidgetTester tester) {
+  return tester
+      .widget<TextField>(find.byKey(const Key('session-composer-input')))
+      .controller!
+      .text;
+}
+
+Future<void> _pressEnter(WidgetTester tester, {bool shift = false}) async {
+  if (shift) {
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.enter);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.enter);
+  if (shift) {
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  await tester.pump(const Duration(milliseconds: 50));
 }
 
 /// TextField 光标会让 macOS/live binding 持续产帧；回归只等待下一项用户可见契约。

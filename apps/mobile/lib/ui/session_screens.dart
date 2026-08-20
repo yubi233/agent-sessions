@@ -2237,6 +2237,7 @@ class _CompletionSuggestion {
 
 class _SessionComposerState extends State<_SessionComposer> {
   final _controller = TextEditingController();
+  final _focusNode = FocusNode();
   String? _draftSessionId;
   SessionComposerInputMachine _inputMachine = SessionComposerInputMachine();
   int _queueSeq = 0;
@@ -2250,6 +2251,7 @@ class _SessionComposerState extends State<_SessionComposer> {
   @override
   void initState() {
     super.initState();
+    _focusNode.onKeyEvent = (_, event) => _handleComposerKey(event);
     // 切换会话后恢复该会话的跨页内存草稿（不落明文盘）。
     _restoreDraft();
   }
@@ -2297,8 +2299,57 @@ class _SessionComposerState extends State<_SessionComposer> {
     if (sessionId != null) {
       widget.sessions.saveComposerDraft(sessionId, _controller.text);
     }
+    _focusNode.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  KeyEventResult _handleComposerKey(KeyEvent event) {
+    final enter =
+        event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (!enter) return KeyEventResult.ignored;
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+
+    // Shift+Enter 永远留给 TextField 原生换行，优先级高于 IME 和提交锁。
+    if (HardwareKeyboard.instance.isShiftPressed) {
+      return KeyEventResult.ignored;
+    }
+    // 长按 Enter 的 repeat 事件只消费不提交，避免重复写入 Relay 或 queue。
+    if (event is KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    final composing = _controller.value.composing;
+    // IME 候选确认期间 Enter 只能交给输入法，不触发会话提交。
+    if (composing.isValid && !composing.isCollapsed) {
+      return KeyEventResult.handled;
+    }
+
+    final snapshot = _inputMachine.snapshot;
+    final machineBusy =
+        snapshot.phase == SessionInputPhase.adjudicating ||
+        snapshot.phase == SessionInputPhase.submitting;
+    final blocked = widget.sessions.composerBlockedReason(
+      canWrite: widget.canWrite,
+    );
+    if (blocked != null || widget.sessions.isBusy || machineBusy) {
+      return KeyEventResult.handled;
+    }
+
+    final accelerated =
+        HardwareKeyboard.instance.isMetaPressed ||
+        HardwareKeyboard.instance.isControlPressed;
+    final mode = _inputMachine.submit(
+      running: widget.sessions.isStreaming,
+      accelerated: accelerated,
+      busyEnter: BusyEnterMode.queue,
+    );
+    if (mode == null) return KeyEventResult.handled;
+
+    unawaited(_submitComposer(accelerated: accelerated));
+    return KeyEventResult.handled;
   }
 
   /// 根据输入末尾 token 更新补全候选。
@@ -2604,6 +2655,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                     child: TextField(
                       key: const Key('session-composer-input'),
                       controller: _controller,
+                      focusNode: _focusNode,
                       enabled: blocked == null,
                       readOnly: machineBusy,
                       minLines: 1,
@@ -2671,7 +2723,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     );
   }
 
-  Future<void> _submitComposer() async {
+  Future<void> _submitComposer({bool accelerated = false}) async {
     final snapshot = _inputMachine.snapshot;
     if (snapshot.phase == SessionInputPhase.adjudicating ||
         snapshot.phase == SessionInputPhase.submitting) {
@@ -2680,6 +2732,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     final message = snapshot.draft.trim();
     final mode = _inputMachine.submit(
       running: widget.sessions.isStreaming,
+      accelerated: accelerated,
       busyEnter: BusyEnterMode.queue,
     );
     if (mode == null || message.isEmpty && mode != SessionSubmitMode.steer) {
