@@ -1,5 +1,7 @@
 import 'package:agent_sessions_mobile/app/providers.dart';
+import 'package:agent_sessions_mobile/domain/composer_preferences.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
+import 'package:agent_sessions_mobile/storage/composer_preference_store.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/settings_controller.dart';
 import 'package:agent_sessions_mobile/storage/secure_token_store.dart';
@@ -41,6 +43,7 @@ void main() {
       for (final tileKey in [
         'settings-account-tile',
         'settings-appearance-tile',
+        'settings-composer-tile',
         'settings-agents-tile',
         'settings-usage-tile',
         'settings-connect-tile',
@@ -171,6 +174,43 @@ void main() {
       );
       // 只读提示仍在
       expect(find.byKey(const Key('settings-appearance-note')), findsOneWidget);
+    });
+
+    testWidgets('输入分区切换 busy Enter 行为（Queue/Steer）并持久化本机偏好', (tester) async {
+      final relay = FixtureRelayRepository(clock: () => now);
+      final controller = SettingsController(relay: relay, clock: () => now);
+      await controller.initialize();
+      final composerPrefs = InMemoryComposerPreferenceStore();
+
+      await tester.pumpWidget(
+        _buildSettingsApp(
+          relay: relay,
+          controller: controller,
+          composer: composerPrefs,
+          initialLocation: '/settings/composer',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('settings-composer-screen')), findsOneWidget);
+      expect(
+        find.byKey(const Key('settings-composer-enter-behavior')),
+        findsOneWidget,
+      );
+      expect(await composerPrefs.read(), ComposerPreferences.defaults);
+
+      // 切换为「插话」并持久化。
+      await tester.tap(find.text('插话'));
+      await tester.pumpAndSettle();
+      expect(
+        await composerPrefs.read(),
+        const ComposerPreferences(enterBehavior: ComposerEnterBehavior.steer),
+      );
+      expect(find.byKey(const Key('settings-composer-note')), findsOneWidget);
+      // 该录入设置在索引页可见副标题。
+      await tester.tap(find.byTooltip('返回设置'));
+      await tester.pumpAndSettle();
+      expect(find.text('busy Enter 行为：排队或插话'), findsOneWidget);
     });
 
     testWidgets('Agent 能力分区展示 Provider 列表与三态能力 chip', (tester) async {
@@ -415,6 +455,7 @@ Widget _buildSettingsApp({
   required SettingsController controller,
   InMemorySecureTokenStore? tokens,
   InMemoryThemePreferenceStore? appearance,
+  InMemoryComposerPreferenceStore? composer,
   String initialLocation = '/settings',
 }) {
   final router = GoRouter(
@@ -435,6 +476,10 @@ Widget _buildSettingsApp({
       GoRoute(
         path: '/settings/agents',
         builder: (context, state) => const SettingsAgentsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/composer',
+        builder: (context, state) => const SettingsComposerScreen(),
       ),
       GoRoute(
         path: '/settings/usage',
@@ -463,6 +508,8 @@ Widget _buildSettingsApp({
       if (tokens != null) secureTokenStoreProvider.overrideWithValue(tokens),
       if (appearance != null)
         themePreferenceStoreProvider.overrideWithValue(appearance),
+      if (composer != null)
+        composerPreferenceStoreProvider.overrideWithValue(composer),
     ],
     child: MaterialApp.router(routerConfig: router),
   );

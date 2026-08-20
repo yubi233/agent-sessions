@@ -123,6 +123,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const SettingsAgentsScreen(),
       ),
       GoRoute(
+        path: '/settings/composer',
+        builder: (context, state) => const SettingsComposerScreen(),
+      ),
+      GoRoute(
         path: '/settings/usage',
         builder: (context, state) => const SettingsUsageScreen(),
       ),

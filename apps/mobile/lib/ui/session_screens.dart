@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../app/providers.dart';
+import '../domain/composer_preferences.dart';
 import '../domain/control_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/session_input_grammar.dart';
@@ -641,6 +642,10 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           canWrite: app.canManageDevices,
           deviceId: app.currentDevice?.id,
           interactionEvents: sessions.timeline,
+          // v0.5/P5：busy Enter 偏好来自用户级设置（默认 Queue），与设置页同一事实来源。
+          enterBehavior: ref
+              .watch(composerPreferenceControllerProvider)
+              .enterBehavior,
           fileCompletionCatalog: () async {
             try {
               final entries = await ref
@@ -3059,6 +3064,7 @@ class _SessionComposer extends StatefulWidget {
     required this.canWrite,
     required this.deviceId,
     required this.interactionEvents,
+    this.enterBehavior = ComposerEnterBehavior.queue,
     this.fileCompletionCatalog,
   });
 
@@ -3066,6 +3072,10 @@ class _SessionComposer extends StatefulWidget {
   final bool canWrite;
   final String? deviceId;
   final List<SessionTimelineEvent> interactionEvents;
+
+  /// v0.5/P5：busy Enter 分流偏好（用户级设置，默认 Queue）。composer 与设置页
+  /// 读取同一个 [composerPreferenceControllerProvider] 事实来源。
+  final ComposerEnterBehavior enterBehavior;
 
   /// v0.2/P3：@ 补全的文件名目录；fixture 返回安全名，真实 Daemon RPC 未部署时为空（fail-closed）。
   final Future<List<String>> Function()? fileCompletionCatalog;
@@ -3111,6 +3121,12 @@ class _SessionComposerState extends State<_SessionComposer> {
   int _selectedSuggestionIndex = -1;
   // 上次触发重新探测时的 caret 位置，用于 selection 变化去重。
   int? _lastCaret;
+
+  /// v0.5/P5：把用户级 Enter 偏好映射为 InputMachine 的 busy enter 策略。
+  BusyEnterMode get _enterBusyMode => switch (widget.enterBehavior) {
+    ComposerEnterBehavior.queue => BusyEnterMode.queue,
+    ComposerEnterBehavior.steer => BusyEnterMode.steer,
+  };
 
   @override
   void initState() {
@@ -3260,7 +3276,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     final mode = _inputMachine.submit(
       running: widget.sessions.isStreaming,
       accelerated: accelerated,
-      busyEnter: BusyEnterMode.queue,
+      busyEnter: _enterBusyMode,
     );
     if (mode == null) return KeyEventResult.handled;
 
@@ -3438,7 +3454,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     final input = _inputMachine.snapshot;
     final submitMode = _inputMachine.submit(
       running: streaming,
-      busyEnter: BusyEnterMode.queue,
+      busyEnter: _enterBusyMode,
     );
     final machineBusy =
         input.phase == SessionInputPhase.adjudicating ||
@@ -3702,7 +3718,7 @@ class _SessionComposerState extends State<_SessionComposer> {
     final mode = _inputMachine.submit(
       running: widget.sessions.isStreaming,
       accelerated: accelerated,
-      busyEnter: BusyEnterMode.queue,
+      busyEnter: _enterBusyMode,
     );
     if (mode == null || message.isEmpty && mode != SessionSubmitMode.steer) {
       return;

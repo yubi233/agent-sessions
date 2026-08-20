@@ -24,10 +24,12 @@ import '../state/recent_sessions_controller.dart';
 import '../state/session_controller.dart';
 import '../state/session_info_controller.dart';
 import '../state/session_view_controller.dart';
+import '../state/composer_preference_controller.dart';
 import '../state/settings_controller.dart';
 import '../state/terminal_status_controller.dart';
 import '../state/usage_controller.dart';
 import '../state/workspace_files_controller.dart';
+import '../storage/composer_preference_store.dart';
 import '../storage/encrypted_cache.dart';
 import '../storage/secure_token_store.dart';
 import '../storage/theme_preference_store.dart';
@@ -46,6 +48,19 @@ final encryptedCacheStoreProvider = Provider<EncryptedCacheStore>(
 final themePreferenceStoreProvider = Provider<ThemePreferenceStore>(
   (ref) => InMemoryThemePreferenceStore(),
 );
+final composerPreferenceStoreProvider = Provider<ComposerPreferenceStore>(
+  (ref) => InMemoryComposerPreferenceStore(),
+);
+
+/// Composer 用户级偏好（Enter Queue/Steer）与认证、Relay 和会话控制分离。
+final composerPreferenceControllerProvider =
+    ChangeNotifierProvider<ComposerPreferenceController>((ref) {
+      final controller = ComposerPreferenceController(
+        ref.read(composerPreferenceStoreProvider),
+      );
+      unawaited(controller.initialize());
+      return controller;
+    });
 
 /// 外观状态与认证、Relay 和会话控制分离，主题切换不会触发远端读取或写入。
 final themeControllerProvider = ChangeNotifierProvider<ThemeController>((ref) {

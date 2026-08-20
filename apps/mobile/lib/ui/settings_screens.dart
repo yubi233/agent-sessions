@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../app/providers.dart';
+import '../domain/composer_preferences.dart';
 import '../domain/control_models.dart';
 import '../state/app_controller.dart';
 import '../state/settings_controller.dart';
@@ -81,6 +82,13 @@ class _SettingsBody extends ConsumerWidget {
           title: '外观',
           subtitle: '主题模式与强调色',
           onTap: () => context.push('/settings/appearance'),
+        ),
+        _SettingsSectionTile(
+          key: const Key('settings-composer-tile'),
+          icon: Icons.keyboard_outlined,
+          title: '输入',
+          subtitle: 'busy Enter 行为：排队或插话',
+          onTap: () => context.push('/settings/composer'),
         ),
         _SettingsSectionTile(
           key: const Key('settings-agents-tile'),
@@ -234,9 +242,7 @@ class SettingsAccountScreen extends ConsumerWidget {
                             : Icons.devices_other_outlined,
                       ),
                       title: Text(device.displayName),
-                      subtitle: Text(
-                        device.isOwner ? 'owner 设备' : '已确认设备',
-                      ),
+                      subtitle: Text(device.isOwner ? 'owner 设备' : '已确认设备'),
                     ),
                 const SizedBox(height: 16),
                 const _SettingsBoundaryNote(
@@ -314,18 +320,9 @@ class _AppearanceModeSelector extends ConsumerWidget {
     return SegmentedButton<ThemePreferenceMode>(
       key: const Key('settings-appearance-mode'),
       segments: const [
-        ButtonSegment(
-          value: ThemePreferenceMode.system,
-          label: Text('跟随系统'),
-        ),
-        ButtonSegment(
-          value: ThemePreferenceMode.light,
-          label: Text('浅色'),
-        ),
-        ButtonSegment(
-          value: ThemePreferenceMode.dark,
-          label: Text('深色'),
-        ),
+        ButtonSegment(value: ThemePreferenceMode.system, label: Text('跟随系统')),
+        ButtonSegment(value: ThemePreferenceMode.light, label: Text('浅色')),
+        ButtonSegment(value: ThemePreferenceMode.dark, label: Text('深色')),
       ],
       selected: {theme.mode},
       onSelectionChanged: (selection) =>
@@ -357,6 +354,72 @@ class _AppearanceAccentSelector extends ConsumerWidget {
 }
 
 /// Agent 能力分区：只读展示 Provider 能力三态，与能力矩阵页同源。
+class SettingsComposerScreen extends ConsumerWidget {
+  const SettingsComposerScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      key: const Key('settings-composer-screen'),
+      appBar: AppBar(
+        title: const Text('输入'),
+        leading: IconButton(
+          tooltip: '返回设置',
+          onPressed: () => context.go('/settings'),
+          icon: const Icon(Icons.arrow_back),
+        ),
+      ),
+      body: SafeArea(
+        top: false,
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: ListView(
+              key: const Key('settings-composer-list'),
+              padding: const EdgeInsets.all(16),
+              children: [
+                const Text(
+                  'busy Enter 行为',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                const _ComposerEnterBehaviorSelector(),
+                const SizedBox(height: 16),
+                const _SettingsBoundaryNote(
+                  key: Key('settings-composer-note'),
+                  message:
+                      '会话生成中按 Enter：排队先把消息收进本地队列，插话则直接发送。Shift+Enter 永远换行，Cmd/Ctrl+Enter 用于显式全部插话。该偏好只保存在本机。',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ComposerEnterBehaviorSelector extends ConsumerWidget {
+  const _ComposerEnterBehaviorSelector();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final preference = ref.watch(composerPreferenceControllerProvider);
+    return SegmentedButton<ComposerEnterBehavior>(
+      key: const Key('settings-composer-enter-behavior'),
+      segments: const [
+        ButtonSegment(value: ComposerEnterBehavior.queue, label: Text('排队')),
+        ButtonSegment(value: ComposerEnterBehavior.steer, label: Text('插话')),
+      ],
+      selected: {preference.enterBehavior},
+      onSelectionChanged: (selection) => ref
+          .read(composerPreferenceControllerProvider)
+          .setEnterBehavior(selection.first),
+    );
+  }
+}
+
 class SettingsAgentsScreen extends ConsumerWidget {
   const SettingsAgentsScreen({super.key});
 
@@ -413,9 +476,7 @@ class _ProviderCapabilityCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final availability = profile.available
-        ? '可用'
-        : '不可用';
+    final availability = profile.available ? '可用' : '不可用';
     return Container(
       key: Key('settings-agents-provider-${profile.kind}'),
       margin: const EdgeInsets.only(bottom: 12),
