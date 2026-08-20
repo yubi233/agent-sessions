@@ -2074,7 +2074,29 @@ class _QuestionRequestItem extends StatefulWidget {
 
 class _QuestionRequestItemState extends State<_QuestionRequestItem> {
   final _customAnswerController = TextEditingController();
+  String? _activeRequestId;
   String? _selectedAnswer;
+  String? _validationError;
+  bool _minimized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeRequestId = widget.event.question?.requestId;
+  }
+
+  @override
+  void didUpdateWidget(covariant _QuestionRequestItem oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextRequestId = widget.event.question?.requestId;
+    if (_activeRequestId == nextRequestId) return;
+    // v0.5/P4-B：同一 request replay 保留草稿；新的 request/key 必须重置本地状态。
+    _activeRequestId = nextRequestId;
+    _selectedAnswer = null;
+    _validationError = null;
+    _minimized = false;
+    _customAnswerController.clear();
+  }
 
   @override
   void dispose() {
@@ -2094,6 +2116,36 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
     final answer = _customAnswerController.text.trim().isNotEmpty
         ? _customAnswerController.text.trim()
         : _selectedAnswer;
+    if (_minimized) {
+      return Container(
+        key: Key('question-card-${question.requestId}'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
+          border: Border.all(color: Theme.of(context).dividerColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          key: Key('question-minimized-${question.requestId}'),
+          children: [
+            const Icon(Icons.help_outline),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                question.prompt,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            TextButton(
+              key: Key('question-restore-${question.requestId}'),
+              onPressed: () => setState(() => _minimized = false),
+              child: const Text('展开'),
+            ),
+          ],
+        ),
+      );
+    }
     return Container(
       key: Key('question-card-${question.requestId}'),
       padding: const EdgeInsets.all(12),
@@ -2115,6 +2167,12 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
+              IconButton(
+                key: Key('question-minimize-${question.requestId}'),
+                tooltip: '最小化问题',
+                onPressed: () => setState(() => _minimized = true),
+                icon: const Icon(Icons.expand_more),
+              ),
             ],
           ),
           if (question.options.isNotEmpty) ...[
@@ -2130,7 +2188,10 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
                   )
                   .toList(growable: false),
               onChanged: enabled
-                  ? (value) => setState(() => _selectedAnswer = value)
+                  ? (value) => setState(() {
+                      _selectedAnswer = value;
+                      _validationError = null;
+                    })
                   : null,
             ),
           ],
@@ -2141,8 +2202,18 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
               controller: _customAnswerController,
               enabled: enabled,
               maxLines: 2,
-              onChanged: (_) => setState(() {}),
+              onChanged: (_) => setState(() => _validationError = null),
               decoration: const InputDecoration(labelText: '或输入回答'),
+            ),
+          ],
+          if (_validationError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              _validationError!,
+              key: Key('question-validation-${question.requestId}'),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
             ),
           ],
           const SizedBox(height: 4),
@@ -2151,13 +2222,8 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
             child: IconButton(
               key: Key('question-submit-${question.requestId}'),
               tooltip: '提交回答',
-              onPressed: enabled && answer != null
-                  ? () => widget.sessions.answerQuestion(
-                      requestId: question.requestId,
-                      answer: answer,
-                      deviceId: widget.deviceId,
-                      canWrite: widget.canWrite,
-                    )
+              onPressed: enabled
+                  ? () => _submitQuestion(question.requestId, answer)
                   : null,
               icon: pending
                   ? const SizedBox(
@@ -2176,6 +2242,20 @@ class _QuestionRequestItemState extends State<_QuestionRequestItem> {
             ),
         ],
       ),
+    );
+  }
+
+  void _submitQuestion(String requestId, String? answer) {
+    final trimmed = answer?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      setState(() => _validationError = '请选择或输入一个回答。');
+      return;
+    }
+    widget.sessions.answerQuestion(
+      requestId: requestId,
+      answer: trimmed,
+      deviceId: widget.deviceId,
+      canWrite: widget.canWrite,
     );
   }
 }

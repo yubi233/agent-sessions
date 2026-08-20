@@ -822,6 +822,135 @@ void main() {
     await _waitForGone(tester, find.byKey(const Key('session-composer-chain')));
   });
 
+  testWidgets('MOBILE-V05-05/P4-B：Question 本地状态校验、折叠和新 key 重置', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'composer-question-state-owner@fixture.test',
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发第一个 question',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    var timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final firstPermission = timeline
+        .firstWhere((event) => event.permission != null)
+        .permission!;
+    final firstQuestion = timeline
+        .firstWhere((event) => event.question != null)
+        .question!;
+
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-submit-${firstQuestion.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-validation-${firstQuestion.requestId}')),
+    );
+    expect(harness.relay.submittedCommandCount, 1);
+
+    await _enterVisible(
+      tester,
+      find.byKey(Key('question-freeform-${firstQuestion.requestId}')),
+      '第一个 question 的本地草稿',
+    );
+    await _waitForGone(
+      tester,
+      find.byKey(Key('question-validation-${firstQuestion.requestId}')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-minimize-${firstQuestion.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-minimized-${firstQuestion.requestId}')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-restore-${firstQuestion.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-freeform-${firstQuestion.requestId}')),
+    );
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(Key('question-freeform-${firstQuestion.requestId}')),
+          )
+          .controller!
+          .text,
+      '第一个 question 的本地草稿',
+    );
+
+    await _tapVisible(
+      tester,
+      find.byKey(Key('question-submit-${firstQuestion.requestId}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-approval-panel')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('permission-approve-${firstPermission.requestId}')),
+    );
+    await _waitForGone(tester, find.byKey(const Key('session-composer-chain')));
+    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
+    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    await _waitForVisible(tester, find.text('已停止'));
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发第二个 question',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('assistant-streaming-indicator')),
+    );
+    timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final secondQuestion = timeline
+        .where((event) => event.question != null)
+        .last
+        .question!;
+    expect(secondQuestion.requestId, isNot(firstQuestion.requestId));
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('question-freeform-${secondQuestion.requestId}')),
+    );
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(Key('question-freeform-${secondQuestion.requestId}')),
+          )
+          .controller!
+          .text,
+      isEmpty,
+    );
+  });
+
   testWidgets(
     'MOBILE-V05-01/P1：resident header、view ring 与 composer seat 保持稳定',
     (tester) async {
