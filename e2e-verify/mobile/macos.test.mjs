@@ -284,7 +284,21 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
     env: { LOCAL_VISUAL_SCENARIO: "stale-host-value" },
     runProcess: (received) => received,
   });
-  assert.deepEqual(prebuilt.args, ["-W", "-n", appPath]);
+  assert.deepEqual(prebuilt.args, [
+    "-W",
+    "-n",
+    "--env",
+    "LOCAL_FIXTURE_MODE=true",
+    "--env",
+    "LOCAL_VISUAL_SCENARIO=owner-ready",
+    "--env",
+    "LOCAL_VISUAL_FRAME_DIRECTORY=",
+    "--env",
+    "LOCAL_VISUAL_FRAME_COUNT=",
+    "--env",
+    "LOCAL_VISUAL_FRAME_INTERVAL_MS=",
+    appPath,
+  ]);
   assert.equal(prebuilt.flutter, "/usr/bin/open");
   assert.equal(prebuilt.env.LOCAL_FIXTURE_MODE, "true");
   assert.equal(prebuilt.env.LOCAL_VISUAL_SCENARIO, "owner-ready");
@@ -316,6 +330,12 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
   assert.equal(
     renderFrames.env.LOCAL_VISUAL_FRAME_INTERVAL_MS,
     String(WINDOW_EVIDENCE_FRAME_INTERVAL_MS),
+  );
+  assert.ok(renderFrames.args.includes("--env"));
+  assert.ok(
+    renderFrames.args.includes(
+      "LOCAL_VISUAL_FRAME_DIRECTORY=agent-sessions-visual-mobile-08",
+    ),
   );
   assert.throws(
     () => runMacosPrebuiltApp({

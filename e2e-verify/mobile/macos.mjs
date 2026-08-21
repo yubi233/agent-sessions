@@ -732,10 +732,18 @@ export function runMacosPrebuiltApp({
     LOCAL_VISUAL_FRAME_COUNT: hasFrameRecorder ? String(localVisualFrameCount) : "",
     LOCAL_VISUAL_FRAME_INTERVAL_MS: hasFrameRecorder ? String(localVisualFrameIntervalMs) : "",
   };
+  const envArgs = [
+    "--env", "LOCAL_FIXTURE_MODE=true",
+    "--env", `LOCAL_VISUAL_SCENARIO=${fixtureEnv.LOCAL_VISUAL_SCENARIO}`,
+    "--env", `LOCAL_VISUAL_FRAME_DIRECTORY=${fixtureEnv.LOCAL_VISUAL_FRAME_DIRECTORY}`,
+    "--env", `LOCAL_VISUAL_FRAME_COUNT=${fixtureEnv.LOCAL_VISUAL_FRAME_COUNT}`,
+    "--env", `LOCAL_VISUAL_FRAME_INTERVAL_MS=${fixtureEnv.LOCAL_VISUAL_FRAME_INTERVAL_MS}`,
+  ];
   return runProcess({
     // -W 等待本轮应用退出；-n 避免复用用户已有实例，随后仍只清理本轮观察到的 PID。
+    // open(1) 不会自动转发调用进程的环境变量，必须通过 --env 逐一传给新 App 实例。
     flutter: "/usr/bin/open",
-    args: ["-W", "-n", appPath],
+    args: ["-W", "-n", ...envArgs, appPath],
     cwd,
     timeoutMs,
     observeWindow,
