@@ -30,6 +30,7 @@ const MACOS_DEBUG_APP_EXECUTABLE = join(
   MACOS_APP_PROCESS,
 );
 const MACOS_WINDOW_WIDTH_TOLERANCE = 4;
+const MACOS_SCALED_PREVIEW_MIN_WIDTH = 360;
 const MACOS_WINDOW_TITLE_BAR_ALLOWANCE = 48;
 const MACOS_SCALED_PREVIEW_MIN_HEIGHT = 720;
 const MACOS_RESIZED_WINDOW_MAX_WIDTH = 720;
@@ -231,7 +232,7 @@ export function macosPortraitWindowMode(window) {
   if (
     !fixedWidth
     && !(
-      window.width >= MACOS_MOBILE_CONTENT_SIZE.width
+      window.width >= MACOS_SCALED_PREVIEW_MIN_WIDTH
       && window.width <= MACOS_RESIZED_WINDOW_MAX_WIDTH
       && window.height >= MACOS_SCALED_PREVIEW_MIN_HEIGHT
       && window.height > window.width * 1.4

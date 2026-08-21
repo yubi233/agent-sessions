@@ -194,6 +194,9 @@ test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前
       "VISUAL-MOBILE-26",
       "VISUAL-MOBILE-27",
       "VISUAL-MOBILE-28",
+      "VISUAL-MOBILE-30",
+      "VISUAL-MOBILE-31",
+      "VISUAL-MOBILE-32",
     ],
   );
 });
@@ -212,6 +215,10 @@ test("桌面窗口观测器只接受固定应用进程名、结构化窗口元�
   );
   assert.equal(
     macosPortraitWindowMode({ id: 44, pid: 304, width: 604, height: 1045 }),
+    "resized_preview",
+  );
+  assert.equal(
+    macosPortraitWindowMode({ id: 45, pid: 305, width: 432, height: 894 }),
     "resized_preview",
   );
   assert.equal(
