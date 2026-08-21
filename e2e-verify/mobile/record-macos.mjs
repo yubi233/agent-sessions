@@ -34,7 +34,7 @@ const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
 export const FLUTTER_RECORDING_FPS = 5;
 export const FLUTTER_RECORDING_FRAME_COUNT = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT;
 // 录屏范围：P6 生命周期恢复、v0.2 快捷菜单/Resume、文件浏览、composer 控制面、
-// P3 终端状态与 P3-A 设置中心/会话信息。
+// P3 终端状态与 P3-A 设置中心/会话信息，以及 v0.5 resident shell / StatsLine / Trajectory / composer dock。
 export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-11",
   "VISUAL-MOBILE-12",
@@ -50,6 +50,9 @@ export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-26",
   "VISUAL-MOBILE-27",
   "VISUAL-MOBILE-28",
+  "VISUAL-MOBILE-30",
+  "VISUAL-MOBILE-31",
+  "VISUAL-MOBILE-32",
 ]);
 
 // 长期报告只存仓库内相对 artifact 引用，不能暴露执行主机目录。
