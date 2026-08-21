@@ -25,6 +25,8 @@ import 'session/chat/session_chat_view.dart';
 import 'session/composer/session_goal_dock.dart';
 import 'session/composer/session_queue_dock.dart';
 import 'session/composer/session_model_seat.dart';
+import 'session/composer/session_context_meter.dart';
+import 'session/composer/session_stats_line.dart';
 
 import 'session/composer/session_todo_dock.dart';
 import 'session/session_conversation_root.dart';
@@ -4428,6 +4430,18 @@ class _SessionComposerState extends State<_SessionComposer> {
             const SizedBox(height: 5),
             _HappyComposerMetaRow(sessions: widget.sessions),
             const SizedBox(height: 5),
+            // v0.5/P7：StatsLine / ContextMeter 只读投影，缺字段显示不可用。
+            SessionStatsLine(
+              stats: SessionStatsLineProjection.fromUsage(
+                widget.sessions.controls.usage,
+              ),
+            ),
+            SessionContextMeter(
+              meter: SessionContextMeterProjection.fromUsage(
+                widget.sessions.controls.usage,
+              ),
+            ),
+            const SizedBox(height: 5),
             _ComposerControlStrip(
               sessions: widget.sessions,
               canWrite: widget.canWrite,
@@ -4758,12 +4772,6 @@ class _ComposerControlStrip extends StatelessWidget {
         usageSupported;
     if (!hasContent) return const SizedBox.shrink();
 
-    // v0.3/P1：上下文占用超过 80% 窗口时显示脱敏警告（MOBILE-12）。
-    final usage = controls.usage;
-    final ratio = usage?.contextRatio;
-    final showContextWarning =
-        usageSupported && usage != null && ratio != null && ratio >= 0.8;
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Column(
@@ -4850,45 +4858,8 @@ class _ComposerControlStrip extends StatelessWidget {
                       : null,
                 ),
               ),
-              if (controls.usage != null && usageSupported) ...[
-                Tooltip(
-                  message: '仅展示脱敏计数，不包含 prompt 或回复正文。',
-                  child: Container(
-                    key: const Key('composer-usage-chip'),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Theme.of(context).dividerColor),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      controls.usage!.label,
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ),
-                ),
-              ],
             ],
           ),
-          // v0.3/P1：上下文占用超过 80% 窗口时显示脱敏警告（MOBILE-12）。
-          if (showContextWarning) ...[
-            const SizedBox(height: 6),
-            Row(
-              key: const Key('composer-context-warning'),
-              children: [
-                const Icon(Icons.warning_amber_outlined, size: 15),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '上下文占用 ${(ratio * 100).toStringAsFixed(0)}%（${SessionUsageSummary.compactForDisplay(usage.contextTokens)} / ${SessionUsageSummary.compactForDisplay(usage.contextWindowTokens)}），接近窗口上限。',
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ),
-              ],
-            ),
-          ],
         ],
       ),
     );

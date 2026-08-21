@@ -28,10 +28,10 @@ void main() {
       tester,
       find.byKey(const Key('composer-effort-select')),
     );
-    await _waitForVisible(tester, find.byKey(const Key('composer-usage-chip')));
-    // usage 只展示计数，不包含 prompt 或回复正文。
-    expect(find.textContaining('↑12.5k'), findsOneWidget);
-    expect(find.textContaining('上下文 92.0k'), findsOneWidget);
+    await _waitForVisible(tester, find.byKey(const Key('session-stats-line')));
+    // v0.5/P7：usage 只展示脱敏计数，不包含 prompt 或回复正文。
+    expect(find.textContaining('输入 12.5k'), findsOneWidget);
+    expect(find.textContaining('上下文 92%'), findsOneWidget);
     expect(find.textContaining('fixture-model-a'), findsWidgets);
 
     // 切换模型：打开两层 model seat，先进入模型 pane 再提交 session.model_select 命令。
@@ -471,15 +471,14 @@ void main() {
     await _registerOwner(tester, 'usage-depth@fixture.test');
     await _createAndAcquireLease(tester);
 
-    // cache 计数合并展示。
-    await _waitForVisible(tester, find.byKey(const Key('composer-usage-chip')));
+    // v0.5/P7：StatsLine 合并展示 cache 计数；ContextMeter 显示上下文压力。
+    await _waitForVisible(tester, find.byKey(const Key('session-stats-line')));
     expect(find.textContaining('缓存 61.8k'), findsOneWidget);
-    // fixture context 92000/100000 = 92%：显示脱敏警告。
     await _waitForVisible(
       tester,
-      find.byKey(const Key('composer-context-warning')),
+      find.byKey(const Key('session-context-meter')),
     );
-    expect(find.textContaining('上下文占用 92%'), findsOneWidget);
+    expect(find.textContaining('上下文 92%'), findsOneWidget);
     // 不渲染 prompt 或回复正文。
     expect(find.textContaining('提示词'), findsNothing);
   });
