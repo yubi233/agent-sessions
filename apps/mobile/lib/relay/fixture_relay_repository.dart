@@ -494,6 +494,10 @@ class FixtureRelayRepository implements RelayRepository {
         _appendPlanApproval(state);
       case SessionCommandKind.goalToggle:
         _appendGoalToggle(state);
+      case SessionCommandKind.goalClear:
+        _appendGoalClear(state);
+      case SessionCommandKind.goalCreate:
+        _appendGoalCreate(state, input.ciphertext);
       case SessionCommandKind.skillInvoke:
         _appendSkillInvocation(state, input);
       case SessionCommandKind.modelSelect:
@@ -1243,6 +1247,65 @@ class FixtureRelayRepository implements RelayRepository {
     );
   }
 
+  void _appendGoalClear(_FixtureSessionState state) {
+    if (state.controls.goal == null) {
+      throw const RelayFailure(RelayFailureKind.validation, '当前没有可清除的 Goal。');
+    }
+    state.controls = state.controls.copyWith(clearGoal: true);
+    state.append(
+      eventType: 'goal.cleared',
+      payload: const {
+        'kind': 'system_notice',
+        'label': 'Goal 已清除',
+        'text': 'fixture Goal 已从 input.dock 移除。',
+      },
+      now: _clock(),
+    );
+  }
+
+  /// P5-E3 fixture：`/goal ...` 先生成 command-input 节点，再更新 Goal 投影。
+  /// 目标文本只来自本地 fixture payload；真实 Relay 仍应转发加密命令体。
+  void _appendGoalCreate(
+    _FixtureSessionState state,
+    Map<String, dynamic>? ciphertext,
+  ) {
+    final objective =
+        (ciphertext?['fixture_payload'] as Map?)?['objective'] as String?;
+    if (state.controls.goal != null) {
+      throw const RelayFailure(RelayFailureKind.validation, '当前已有 Goal。');
+    }
+    if (objective == null || objective.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '目标文本无效。');
+    }
+    final trimmed = objective.trim();
+    final now = _clock();
+    state.append(
+      eventType: 'goal.command_input',
+      payload: {
+        'kind': 'system_notice',
+        'label': 'Command input',
+        'text': '/goal $trimmed',
+      },
+      now: now,
+    );
+    state.controls = state.controls.copyWith(
+      goal: SessionGoalSummary(
+        title: trimmed,
+        progressLabel: '0 / 1',
+        phase: GoalPhase.active,
+      ),
+    );
+    state.append(
+      eventType: 'goal.created',
+      payload: const {
+        'kind': 'system_notice',
+        'label': 'Goal 已创建',
+        'text': 'fixture Goal 已加入 input.dock。',
+      },
+      now: now,
+    );
+  }
+
   void _appendSkillInvocation(
     _FixtureSessionState state,
     SessionCommandInput input,
@@ -1389,6 +1452,20 @@ SessionControlState _fixtureControlsForProvider(String provider) =>
         progressLabel: '2 / 3',
         phase: GoalPhase.active,
       ),
+      todos: const [
+        SessionTodoItem(
+          content: '冻结 v0.5 移动端回归矩阵',
+          status: TodoItemStatus.completed,
+        ),
+        SessionTodoItem(
+          content: '迁移 Goal / Todo 到 input.dock',
+          status: TodoItemStatus.inProgress,
+        ),
+        SessionTodoItem(
+          content: '录屏前制定 headed 回归清单',
+          status: TodoItemStatus.pending,
+        ),
+      ],
       skills: const [
         SessionSkillDescriptor(
           id: 'fixture-review-skill',
@@ -1400,6 +1477,13 @@ SessionControlState _fixtureControlsForProvider(String provider) =>
       // v0.2/P3：模型/effort 目录与 usage 均来自 deterministic fixture；真实 Relay 无此通道时为空。
       models: const ['fixture-model-a', 'fixture-model-b'],
       efforts: const ['低', '中', '高'],
+      // v0.5/P5-E5：图片限制来自 deterministic Host projection，供 intake 预检使用。
+      imageLimits: SessionImageLimits(
+        maxImageBytes: 10 * 1024 * 1024,
+        maxImagesPerMessage: 2,
+        maxMessageImageBytes: 12 * 1024 * 1024,
+        mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+      ),
       // v0.3/P1：usage 深度——cache 计数与 context 窗口（用于上下文警告）。
       usage: const SessionUsageSummary(
         inputTokens: 12480,

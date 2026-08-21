@@ -59,7 +59,9 @@ void main() {
       find.byKey(const Key('session-composer-blocked-reason')),
       findsOneWidget,
     );
-    expect(find.text('等待获取会话控制权'), findsOneWidget);
+    // v0.5/P5-E5：GoalDock / ModelSeat 与 composer 各自 fail-closed 展示同一阻断原因，
+    // 因此这里不再假设全局只出现一次。
+    expect(find.text('等待获取会话控制权'), findsWidgets);
   });
 
   testWidgets('DELEG-04/06：拒绝无 child，unsupported target 显示禁用原因', (

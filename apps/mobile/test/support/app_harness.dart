@@ -14,12 +14,15 @@ import 'fixture_owner.dart';
 
 /// 所有 Flutter UI 回归使用同一组明确 fixture，避免测试依赖本机 Keystore 或真实 Relay。
 class MobileAppHarness {
-  MobileAppHarness({this.scannerBuilder, this.attachmentPicker})
-    : relay = FixtureRelayRepository(),
-      tokens = InMemorySecureTokenStore(),
-      identities = InMemoryDeviceIdentityStore(),
-      cache = InMemoryEncryptedCacheStore(),
-      appearance = InMemoryThemePreferenceStore();
+  MobileAppHarness({
+    this.scannerBuilder,
+    this.attachmentPicker,
+    FixtureRelayRepository? relay,
+  }) : relay = relay ?? FixtureRelayRepository(),
+       tokens = InMemorySecureTokenStore(),
+       identities = InMemoryDeviceIdentityStore(),
+       cache = InMemoryEncryptedCacheStore(),
+       appearance = InMemoryThemePreferenceStore();
 
   final FixtureRelayRepository relay;
   final InMemorySecureTokenStore tokens;

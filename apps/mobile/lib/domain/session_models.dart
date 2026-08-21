@@ -225,7 +225,11 @@ enum SessionCommandKind {
   effortSelect('session.effort_select'),
   // v0.3/P0：permission mode 选择与 goal 文本编辑（Happy sessionSetAgentModes / goal 编辑对齐）。
   permissionModeSelect('session.permission_mode'),
-  goalEdit('goal.edit');
+  goalEdit('goal.edit'),
+  // v0.5/P5-E2：GoalDock clear 仍走统一会话命令链路，不在 UI 直接清本地状态。
+  goalClear('goal.clear'),
+  // v0.5/P5-E3：`/goal ...` command-input 创建目标，同样不能走普通消息发送。
+  goalCreate('goal.create');
 
   const SessionCommandKind(this.wireValue);
 

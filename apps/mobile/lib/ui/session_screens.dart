@@ -22,7 +22,11 @@ import '../state/session_view_controller.dart';
 import 'appearance_controls.dart';
 import 'app_theme.dart';
 import 'session/chat/session_chat_view.dart';
+import 'session/composer/session_goal_dock.dart';
 import 'session/composer/session_queue_dock.dart';
+import 'session/composer/session_model_seat.dart';
+
+import 'session/composer/session_todo_dock.dart';
 import 'session/session_conversation_root.dart';
 import 'session/session_header.dart';
 
@@ -429,67 +433,271 @@ class _ConversationEmptyHero extends StatelessWidget {
   }
 }
 
-class _SessionTrajectoryView extends StatelessWidget {
+/// v0.5/P6：Trajectory 基础 ledger 视图。
+///
+/// 只消费 `SessionProjectionController` 的 `trajectoryRecords`（display-safe），
+/// 不改变 Chat projection；提供 toolbar（搜索 / 折叠 turn / 折叠 assistant call /
+/// duration/equal-width 模式）与 record inspector 展示。真实 timeline 缩放/虚拟化
+/// 与选区重映射仍在 P6 后续阶段，本切片先固化「按投影渲染 + 搜索 + 折叠」契约。
+class _SessionTrajectoryView extends StatefulWidget {
   const _SessionTrajectoryView({
-    required this.events,
+    required this.records,
     required this.inspectTarget,
     required this.onInspectConsumed,
   });
 
-  final List<SessionTimelineEvent> events;
+  final List<TrajectoryRecord> records;
   final String? inspectTarget;
   final VoidCallback onInspectConsumed;
 
   @override
+  State<_SessionTrajectoryView> createState() => _SessionTrajectoryViewState();
+}
+
+class _SessionTrajectoryViewState extends State<_SessionTrajectoryView> {
+  final _ledgerController = ScrollController();
+  String _query = '';
+  bool _equalWidth = false;
+  bool _foldTurns = false;
+  bool _foldAssistantCalls = false;
+
+  @override
+  void dispose() {
+    _ledgerController.dispose();
+    super.dispose();
+  }
+
+  /// P6-A：搜索、折叠或 mode 变化后重置 ledger offset。
+  /// 该状态只属于 Trajectory view，不回写 Chat projection 或会话写入口。
+  void _resetLedgerOffset() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_ledgerController.hasClients) return;
+      _ledgerController.jumpTo(0);
+    });
+  }
+
+  void _setQuery(String value) {
+    setState(() => _query = value);
+    _resetLedgerOffset();
+  }
+
+  void _setEqualWidth(bool value) {
+    setState(() => _equalWidth = value);
+    _resetLedgerOffset();
+  }
+
+  void _setFoldTurns(bool value) {
+    setState(() => _foldTurns = value);
+    _resetLedgerOffset();
+  }
+
+  void _setFoldAssistantCalls(bool value) {
+    setState(() => _foldAssistantCalls = value);
+    _resetLedgerOffset();
+  }
+
+  /// 按当前 toolbar 过滤后的 records；折叠/toggle 只影响本视图，不回写 Chat。
+  List<TrajectoryRecord> get _visible {
+    final q = _query.trim().toLowerCase();
+    final records = widget.records
+        .where((record) {
+          if (q.isNotEmpty) {
+            final haystack = [
+              record.label,
+              record.status ?? '',
+              record.summary ?? '',
+            ].join(' ').toLowerCase();
+            if (!haystack.contains(q)) return false;
+          }
+          // 折叠 turn：只保留 user/assistant 分组头，跳过 tool/reasoning 细粒度记录。
+          if (_foldTurns) {
+            const groupHead = {
+              ConversationNodeKind.user,
+              ConversationNodeKind.assistant,
+            };
+            if (!groupHead.contains(record.kind)) return false;
+          }
+          // 折叠 assistant call：隐藏 tool 记录。
+          if (_foldAssistantCalls && record.kind == ConversationNodeKind.tool) {
+            return false;
+          }
+          return true;
+        })
+        .toList(growable: false);
+    return records;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final target = inspectTarget;
+    final target = widget.inspectTarget;
     if (target != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => onInspectConsumed());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onInspectConsumed();
+      });
     }
-    return ListView.separated(
+    final visible = _visible;
+    return Column(
       key: const Key('session-trajectory-view'),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      itemCount: events.length + (target == null ? 0 : 1),
-      separatorBuilder: (_, _) => const Divider(height: 20),
-      itemBuilder: (context, index) {
-        if (target != null && index == 0) {
-          return _TrajectoryInspectBanner(target: target);
-        }
-        final event = events[index - (target == null ? 0 : 1)];
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 28,
-              child: Text(
-                '${event.sequence}',
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    event.label,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  if (event.text?.trim().isNotEmpty == true) ...[
-                    const SizedBox(height: 4),
-                    Text(event.text!),
-                  ],
-                  if (event.toolStatus != null)
-                    Text(
-                      event.toolStatus!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
+      children: [
+        _TrajectoryToolbar(
+          query: _query,
+          equalWidth: _equalWidth,
+          foldTurns: _foldTurns,
+          foldAssistantCalls: _foldAssistantCalls,
+          onQueryChanged: _setQuery,
+          onEqualWidth: _setEqualWidth,
+          onFoldTurns: _setFoldTurns,
+          onFoldAssistantCalls: _setFoldAssistantCalls,
+        ),
+        Expanded(
+          child: ListView.separated(
+            key: const Key('session-trajectory-ledger'),
+            controller: _ledgerController,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            itemCount: visible.length + (target == null ? 0 : 1),
+            separatorBuilder: (_, _) => const Divider(height: 20),
+            itemBuilder: (context, index) {
+              if (target != null && index == 0) {
+                return _TrajectoryInspectBanner(target: target);
+              }
+              final record = visible[index - (target == null ? 0 : 1)];
+              return _TrajectoryRow(record: record, equalWidth: _equalWidth);
+            },
+          ),
+        ),
+      ],
     );
+  }
+}
+
+/// P6 Trajectory toolbar：搜索 + duration/equal-width + turn/call 折叠。
+class _TrajectoryToolbar extends StatelessWidget {
+  const _TrajectoryToolbar({
+    required this.query,
+    required this.equalWidth,
+    required this.foldTurns,
+    required this.foldAssistantCalls,
+    required this.onQueryChanged,
+    required this.onEqualWidth,
+    required this.onFoldTurns,
+    required this.onFoldAssistantCalls,
+  });
+
+  final String query;
+  final bool equalWidth;
+  final bool foldTurns;
+  final bool foldAssistantCalls;
+  final ValueChanged<String> onQueryChanged;
+  final ValueChanged<bool> onEqualWidth;
+  final ValueChanged<bool> onFoldTurns;
+  final ValueChanged<bool> onFoldAssistantCalls;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Column(
+        children: [
+          TextField(
+            key: const Key('session-trajectory-search'),
+            decoration: const InputDecoration(
+              labelText: '搜索轨迹',
+              isDense: true,
+              prefixIcon: Icon(Icons.search, size: 18),
+            ),
+            onChanged: onQueryChanged,
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              FilterChip(
+                key: const Key('session-trajectory-mode-toggle'),
+                label: Text(equalWidth ? '等宽' : '时长'),
+                selected: equalWidth,
+                onSelected: onEqualWidth,
+              ),
+              const SizedBox(width: 6),
+              FilterChip(
+                key: const Key('session-trajectory-fold-turns'),
+                label: const Text('折叠轮次'),
+                selected: foldTurns,
+                onSelected: onFoldTurns,
+              ),
+              const SizedBox(width: 6),
+              FilterChip(
+                key: const Key('session-trajectory-fold-calls'),
+                label: const Text('折叠调用'),
+                selected: foldAssistantCalls,
+                onSelected: onFoldAssistantCalls,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// P6 Trajectory 单条记录行：序列 + 语义标签 + 状态 + 摘要。
+class _TrajectoryRow extends StatelessWidget {
+  const _TrajectoryRow({required this.record, required this.equalWidth});
+
+  final TrajectoryRecord record;
+  final bool equalWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      key: Key('trajectory-row-${record.key}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 28,
+          child: Text('${record.sequence}', style: theme.textTheme.labelSmall),
+        ),
+        // v0.5/P6：duration/equal-width 切换只改展示条，不触碰 Chat projection。
+        if (equalWidth)
+          const SizedBox(width: 2)
+        else
+          Padding(
+            padding: const EdgeInsets.only(right: 6, top: 2),
+            child: Container(
+              width: 3,
+              height: 30,
+              decoration: BoxDecoration(
+                color: _kindColor(theme, record.kind),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(record.label, style: theme.textTheme.titleSmall),
+              if (record.status?.isNotEmpty == true) ...[
+                const SizedBox(height: 2),
+                Text(record.status!, style: theme.textTheme.bodySmall),
+              ],
+              if (record.summary?.trim().isNotEmpty == true) ...[
+                const SizedBox(height: 4),
+                Text(record.summary!),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Color _kindColor(ThemeData theme, ConversationNodeKind kind) {
+    return switch (kind) {
+      ConversationNodeKind.user => theme.colorScheme.primary,
+      ConversationNodeKind.assistant => theme.colorScheme.tertiary,
+      ConversationNodeKind.tool => theme.colorScheme.secondary,
+      _ => theme.colorScheme.outlineVariant,
+    };
   }
 }
 
@@ -623,7 +831,13 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                 },
               )
             : _SessionTrajectoryView(
-                events: sessions.timeline,
+                // v0.5/P6：Trajectory 消费 projection 的 display-safe records，不读 raw events。
+                records: const SessionProjectionController()
+                    .buildSnapshot(
+                      timeline: sessions.timeline,
+                      controls: sessions.controls,
+                    )
+                    .trajectoryRecords,
                 inspectTarget: viewController.inspectTargetFor(
                   widget.sessionId,
                 ),
@@ -3496,6 +3710,10 @@ class _SessionComposerState extends State<_SessionComposer> {
               !widget.sessions.isRequestPending(event.question!.requestId),
           orElse: () => null,
         );
+    // v0.5/P4/P5：Question/Approval 接管整个 composer seat；
+    // input.dock（Todo/Goal/Queue）必须让位，避免长 takeover 面板被 dock 挤出可触达区域。
+    final hasComposerTakeover =
+        pendingQuestion != null || pendingPermission != null;
     return SafeArea(
       top: false,
       child: Container(
@@ -3523,6 +3741,39 @@ class _SessionComposerState extends State<_SessionComposer> {
                 hasLease: widget.sessions.hasSelectedLease,
                 sessions: widget.sessions,
                 deviceId: widget.deviceId,
+              ),
+            if (!hasComposerTakeover)
+              SessionTodoDock(todos: widget.sessions.controls.todos),
+            if (!hasComposerTakeover)
+              SessionGoalDock(
+                goal: widget.sessions.controls.goal,
+                blockedReason: widget.sessions.controlBlockedReason(
+                  'goal',
+                  canWrite: widget.canWrite,
+                ),
+                busy: widget.sessions.isBusy,
+                onSave: (objective) async {
+                  await widget.sessions.editGoal(
+                    objective: objective,
+                    deviceId: widget.deviceId,
+                    canWrite: widget.canWrite,
+                  );
+                  return widget.sessions.errorMessage;
+                },
+                onToggle: () async {
+                  await widget.sessions.toggleGoal(
+                    deviceId: widget.deviceId,
+                    canWrite: widget.canWrite,
+                  );
+                  return widget.sessions.errorMessage;
+                },
+                onClear: () async {
+                  await widget.sessions.clearGoal(
+                    deviceId: widget.deviceId,
+                    canWrite: widget.canWrite,
+                  );
+                  return widget.sessions.errorMessage;
+                },
               ),
             if (input.queue.isNotEmpty)
               SessionQueueDock(
@@ -3708,6 +3959,46 @@ class _SessionComposerState extends State<_SessionComposer> {
     );
   }
 
+  bool _isGoalCommand(String message) {
+    final trimmed = message.trimLeft();
+    return trimmed == '/goal' || trimmed.startsWith('/goal ');
+  }
+
+  /// P5-E3：`/goal ...` 是 command-input 创建链路，不能走普通消息发送。
+  ///
+  /// 成功后 fixture 会先追加 `goal.command_input`，投影为 Chat command node；
+  /// 再追加 `goal.created` 并更新 input.dock。失败时保留原草稿与 claim。
+  Future<void> _submitGoalCommand(String message, String? sessionId) async {
+    final objective = message.trimLeft().substring('/goal'.length).trim();
+    if (objective.isEmpty) {
+      _inputMachine.settleSubmit(success: false, error: '请输入 /goal 后的目标文本。');
+      _setControllerText(message);
+      setState(() {});
+      return;
+    }
+    await widget.sessions.createGoal(
+      objective: objective,
+      deviceId: widget.deviceId,
+      canWrite: widget.canWrite,
+    );
+    if (!mounted) return;
+    final error = widget.sessions.errorMessage;
+    if (error != null) {
+      _inputMachine.settleSubmit(success: false, error: error);
+      if (sessionId != null) {
+        widget.sessions.saveComposerDraft(sessionId, message);
+      }
+      _setControllerText(message);
+      setState(() {});
+      return;
+    }
+    _inputMachine.settleSubmit(success: true);
+    if (sessionId != null) widget.sessions.clearComposerDraft(sessionId);
+    _setControllerText('');
+    _setSuggestions(const []);
+    setState(() {});
+  }
+
   Future<void> _submitComposer({bool accelerated = false}) async {
     final snapshot = _inputMachine.snapshot;
     if (snapshot.phase == SessionInputPhase.adjudicating ||
@@ -3736,8 +4027,23 @@ class _SessionComposerState extends State<_SessionComposer> {
         _setSuggestions(const []);
         setState(() {});
       case SessionSubmitMode.send:
+        // v0.5/P5-E5：已知 slash command 若带图片且没有 images 能力，
+        // 整次提交在进入 submitting 前拒绝，保留 draft、引用和图片。
+        final imageError = widget.sessions.commandImageAdmissionError(message);
+        if (imageError != null) {
+          _inputMachine.setNotice(imageError);
+          if (sessionId != null) {
+            widget.sessions.saveComposerDraft(sessionId, message);
+          }
+          setState(() {});
+          return;
+        }
         _inputMachine.enterSubmitting();
         setState(() {});
+        if (_isGoalCommand(message)) {
+          await _submitGoalCommand(message, sessionId);
+          return;
+        }
         await widget.sessions.sendMessage(
           message: message,
           deviceId: widget.deviceId,
@@ -3983,80 +4289,32 @@ class _ComposerControlStrip extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          SessionModelSeat(
             key: const Key('composer-control-strip'),
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  key: const Key('composer-model-select'),
-                  initialValue: controls.model,
-                  isDense: true,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText: '模型',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                  ),
-                  items: [
-                    for (final model in controls.models)
-                      DropdownMenuItem(value: model, child: Text(model)),
-                  ],
-                  onChanged: modelBlocked == null && controls.models.isNotEmpty
-                      ? (value) {
-                          if (value != null) {
-                            sessions.selectModel(
-                              model: value,
-                              deviceId: deviceId,
-                              canWrite: canWrite,
-                            );
-                          }
-                        }
-                      : null,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  key: const Key('composer-effort-select'),
-                  initialValue: controls.effort,
-                  isDense: true,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText: 'Effort',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                  ),
-                  items: [
-                    for (final effort in controls.efforts)
-                      DropdownMenuItem(value: effort, child: Text(effort)),
-                  ],
-                  onChanged:
-                      effortBlocked == null && controls.efforts.isNotEmpty
-                      ? (value) {
-                          if (value != null) {
-                            sessions.selectEffort(
-                              effort: value,
-                              deviceId: deviceId,
-                              canWrite: canWrite,
-                            );
-                          }
-                        }
-                      : null,
-                ),
-              ),
-            ],
+            model: controls.model,
+            effort: controls.effort,
+            models: controls.models,
+            efforts: controls.efforts,
+            modelBlockedReason: modelBlocked,
+            effortBlockedReason: effortBlocked,
+            busy: sessions.isBusy,
+            onRefresh: sessions.refreshSelectedControls,
+            onSelectModel: (model) async {
+              await sessions.selectModel(
+                model: model,
+                deviceId: deviceId,
+                canWrite: canWrite,
+              );
+              return sessions.errorMessage;
+            },
+            onSelectEffort: (effort) async {
+              await sessions.selectEffort(
+                effort: effort,
+                deviceId: deviceId,
+                canWrite: canWrite,
+              );
+              return sessions.errorMessage;
+            },
           ),
           const SizedBox(height: 6),
           Wrap(

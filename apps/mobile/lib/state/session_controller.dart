@@ -619,24 +619,125 @@ class SessionController extends ChangeNotifier {
     );
   }
 
-  /// 添加前的 MIME/大小/密文块预检在本机完成。拒绝项仅显示在内存 composer，不会发出 HTTP 请求。
-  bool addAttachmentDraft(AttachmentDraft draft) {
-    try {
-      draft.validate();
-    } on RelayFailure catch (failure) {
+  /// v0.5/P5-E2：清除当前 Goal 只通过统一写命令完成。
+  ///
+  /// UI 不能直接把 Goal 从本地 state 移除；这里继续复用 capability、lease、deviceId
+  /// 和幂等 key，fixture / 真实 Relay 都应只返回 receipt 后才更新展示态。
+  Future<void> clearGoal({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final goal = _controls.goal;
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('goal', canWrite: canWrite);
+    if (goal == null || sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'goal-clear:$sessionId',
+      kind: SessionCommandKind.goalClear,
+      deviceId: deviceId!,
+      ciphertext: const {
+        'fixture_payload': {'action': 'clear'},
+      },
+      onAccepted: () => _controls = _controls.copyWith(clearGoal: true),
+    );
+  }
+
+  /// v0.5/P5-E3：通过 `/goal ...` command-input 创建当前 Goal。
+  ///
+  /// 这是 slash command 的专用 adjudication 结果，不走普通 `session.send`，
+  /// 也不把创建动作伪装成 assistant 回复；Host/Relay receipt accepted 后才更新 dock。
+  Future<void> createGoal({
+    required String objective,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final blocked = controlBlockedReason('goal', canWrite: canWrite);
+    if (sessionId == null || blocked != null) {
+      if (blocked != null) _setError(blocked);
+      return;
+    }
+    if (_controls.goal != null) {
+      _setError('当前已有 Goal，请先编辑或清除后再创建。');
+      return;
+    }
+    final trimmed = objective.trim();
+    if (trimmed.isEmpty) {
+      _setError('请输入 /goal 后的目标文本。');
+      return;
+    }
+    await _submitCommand(
+      sessionId: sessionId,
+      operation: 'goal-create:$sessionId:${trimmed.hashCode}',
+      kind: SessionCommandKind.goalCreate,
+      deviceId: deviceId!,
+      ciphertext: {
+        'fixture_payload': {'objective': trimmed},
+      },
+      onAccepted: () => _controls = _controls.copyWith(
+        goal: SessionGoalSummary(
+          title: trimmed,
+          progressLabel: '0 / 1',
+          phase: GoalPhase.active,
+        ),
+      ),
+    );
+  }
+
+  /// 单项入口复用批量预检，保证 picker、paste 和未来 drop 入口使用同一 oracle。
+  bool addAttachmentDraft(AttachmentDraft draft) =>
+      addAttachmentDrafts([draft]);
+
+  /// 原子接纳一批附件：任何一项失败都不写入本地队列，也不生成上传请求。
+  ///
+  /// 图片预检顺序与 DeepSeek Harness 对齐：unsupported type -> count ->
+  /// single size -> total size；之后才执行通用密文结构校验。
+  bool addAttachmentDrafts(Iterable<AttachmentDraft> drafts) {
+    final incoming = drafts.toList(growable: false);
+    if (incoming.isEmpty) return true;
+    String? reason;
+    final imageIncoming = incoming.where((draft) => draft.isImage).toList();
+    if (imageIncoming.isNotEmpty) {
+      final limits = _controls.imageLimits;
+      reason = limits == null
+          ? '当前会话尚未提供图片限制，图片入口已安全禁用。'
+          : limits.validateBatch(
+              existing: _attachments.map((item) => item.draft),
+              incoming: incoming,
+            );
+    }
+    if (reason == null) {
+      for (final draft in incoming) {
+        try {
+          draft.validate();
+        } on RelayFailure catch (failure) {
+          reason = failure.message;
+          break;
+        }
+      }
+    }
+    if (reason != null) {
       _attachmentRejections = [
         ..._attachmentRejections,
         AttachmentRejection(
-          localName: draft.localName,
-          reason: failure.message,
+          localName: incoming.map((draft) => draft.localName).join('、'),
+          reason: '整批拒收：$reason',
         ),
       ];
+      _errorMessage = reason;
       notifyListeners();
       return false;
     }
+
+    final incomingIds = incoming.map((draft) => draft.id).toSet();
     _attachments = [
-      ..._attachments.where((item) => item.draft.id != draft.id),
-      AttachmentTransfer(draft: draft, phase: AttachmentTransferPhase.queued),
+      ..._attachments.where((item) => !incomingIds.contains(item.draft.id)),
+      for (final draft in incoming)
+        AttachmentTransfer(draft: draft, phase: AttachmentTransferPhase.queued),
     ];
     notifyListeners();
     return true;
@@ -781,6 +882,7 @@ class SessionController extends ChangeNotifier {
     final blocked = controlBlockedReason('attachments', canWrite: canWrite);
     if (blocked != null) return blocked;
     if (!_contentKeyAvailable) return '等待会话附件密钥';
+    if (_controls.imageLimits == null) return '等待图片限制投影';
     if (_picker == null) return '附件选择器不可用';
     return null;
   }
@@ -956,6 +1058,41 @@ class SessionController extends ChangeNotifier {
     if (_errorMessage == null) return;
     _errorMessage = null;
     notifyListeners();
+  }
+
+  /// 打开模型 seat 时重新读取当前会话目录；失败只返回 notice，不清空旧目录。
+  ///
+  /// 这样 reconnect 或 catalog reload 失败不会把原本可用的 Host target 假装成空目录。
+  Future<String?> refreshSelectedControls() async {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return '请选择一个会话。';
+    final refreshed = await _runAction<SessionControlState?>(
+      'controls-refresh:$sessionId',
+      () => _relay.getSessionControls(sessionId),
+    );
+    if (refreshed == null) return _errorMessage ?? '模型目录暂时不可用，请重试。';
+    if (_selectedSessionId != sessionId) return '会话已切换，请重新打开模型目录。';
+    _controls = refreshed;
+    notifyListeners();
+    return null;
+  }
+
+  /// 已知 slash command 是否声明了图片输入能力。
+  ///
+  /// 未知 slash 文本仍按普通消息处理；已知控制命令带图片时整次提交拒绝，
+  /// 不消费 draft、引用或图片，避免命令载荷被部分提交。
+  String? commandImageAdmissionError(String message) {
+    if (!attachments.any((item) => item.draft.isImage)) return null;
+    final token = message.trimLeft().split(RegExp(r'\s+')).first;
+    const knownCommands = {
+      '/goal',
+      '/permission',
+      '/model',
+      '/export',
+      '/feedback',
+    };
+    if (!knownCommands.contains(token)) return null;
+    return '当前 $token 命令不支持图片附件，请移除图片后重试。';
   }
 
   /// 读取指定会话的草稿（仅内存；真实写入仍只在用户显式发送时发生）。

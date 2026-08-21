@@ -1,4 +1,6 @@
 import 'package:agent_sessions_mobile/attachments/attachment_picker.dart';
+import 'package:agent_sessions_mobile/domain/control_models.dart';
+import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -13,7 +15,7 @@ void main() {
     await _registerOwner(tester, 'composer-controls@fixture.test');
     await _createAndAcquireLease(tester);
 
-    // 控制条出现：模型/effort 下拉 + usage 计数。
+    // 控制条出现：模型/effort named seats + usage 计数。
     await _waitForVisible(
       tester,
       find.byKey(const Key('composer-control-strip')),
@@ -32,10 +34,24 @@ void main() {
     expect(find.textContaining('上下文 92.0k'), findsOneWidget);
     expect(find.textContaining('fixture-model-a'), findsWidgets);
 
-    // 切换模型：提交 session.model_select 命令并乐观更新。
+    // 切换模型：打开两层 model seat，先进入模型 pane 再提交 session.model_select 命令。
     await _tapVisible(tester, find.byKey(const Key('composer-model-select')));
-    await _waitForVisible(tester, find.text('fixture-model-b').last);
-    await tester.tap(find.text('fixture-model-b').last);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-model-menu-model')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-menu-model')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-model-option-fixture-model-b')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-option-fixture-model-b')),
+    );
     await _waitForVisible(tester, find.textContaining('已切换模型'));
     final snapshot = await harness.relay.getSessionSnapshot(
       (await harness.relay.listSessions()).single.id,
@@ -47,10 +63,21 @@ void main() {
       isTrue,
     );
 
-    // 切换 effort。
+    // 切换 effort：打开两层 model seat，进入 effort pane。
     await _tapVisible(tester, find.byKey(const Key('composer-effort-select')));
-    await _waitForVisible(tester, find.text('中').last);
-    await tester.tap(find.text('中').last);
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-model-menu-effort')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-menu-effort')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-effort-option-中')),
+    );
+    await _tapVisible(tester, find.byKey(const Key('session-effort-option-中')));
     await _waitForVisible(tester, find.textContaining('已切换 effort'));
   });
 
@@ -67,9 +94,12 @@ void main() {
       find.byKey(const Key('composer-permission-mode-select')),
     );
     // 打开权限下拉并选择 danger-full-access。
-    await tester.tap(find.byKey(const Key('composer-permission-mode-select')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
     await _waitForVisible(tester, find.text('danger-full-access').last);
-    await tester.tap(find.text('danger-full-access').last);
+    await _tapVisible(tester, find.text('danger-full-access').last);
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-permission-risk-confirm')),
@@ -91,9 +121,12 @@ void main() {
     expect(harness.relay.submittedCommandCount, 0);
 
     // 重新选择并勾选确认后再提交。
-    await tester.tap(find.byKey(const Key('composer-permission-mode-select')));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
     await _waitForVisible(tester, find.text('danger-full-access').last);
-    await tester.tap(find.text('danger-full-access').last);
+    await _tapVisible(tester, find.text('danger-full-access').last);
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-permission-risk-confirm')),
@@ -121,14 +154,15 @@ void main() {
       tester,
       find.byKey(const Key('composer-control-strip')),
     );
-    final modelDropdown = tester.widget<DropdownButtonFormField<String>>(
+    final modelSeat = tester.widget<OutlinedButton>(
       find.byKey(const Key('composer-model-select')),
     );
-    expect(modelDropdown.onChanged, isNull);
-    final effortDropdown = tester.widget<DropdownButtonFormField<String>>(
+    expect(modelSeat.onPressed, isNull);
+    final effortSeat = tester.widget<OutlinedButton>(
       find.byKey(const Key('composer-effort-select')),
     );
-    expect(effortDropdown.onChanged, isNull);
+    expect(effortSeat.onPressed, isNull);
+    expect(find.byKey(const Key('session-model-seat-blocked')), findsOneWidget);
     expect(harness.relay.submittedCommandCount, 0);
   });
 
@@ -389,6 +423,45 @@ void main() {
       find.byKey(const Key('composer-permission-mode-select')),
     );
     expect(dropdown.onChanged, isNull);
+    // capability 锁定时菜单不可打开，也不会有 danger-full-access 风险确认残留。
+    await tester.tap(
+      find.byKey(const Key('composer-permission-mode-select')),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('session-permission-risk-confirm')),
+      findsNothing,
+    );
+    expect(harness.relay.submittedCommandCount, 0);
+  });
+
+  testWidgets('MOBILE-V05-09/P5-E5：permission projection 缺失时菜单关闭且无风险确认残留', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness(relay: _EmptyPermissionModesRelay());
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'permission-empty@fixture.test');
+    // codex 仍声明 permission_mode capability，但 Host 投影未提供可用目录。
+    await _createAndAcquireLease(tester);
+
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
+    final dropdown = tester.widget<DropdownButtonFormField<String>>(
+      find.byKey(const Key('composer-permission-mode-select')),
+    );
+    expect(dropdown.onChanged, isNull);
+    await tester.tap(
+      find.byKey(const Key('composer-permission-mode-select')),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('session-permission-risk-confirm')),
+      findsNothing,
+    );
     expect(harness.relay.submittedCommandCount, 0);
   });
 
@@ -410,6 +483,76 @@ void main() {
     // 不渲染 prompt 或回复正文。
     expect(find.textContaining('提示词'), findsNothing);
   });
+
+  testWidgets('MOBILE-V05-17/P5-E5：已知 slash command 带图片整批拒绝并保留草稿与附件', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness(
+      attachmentPicker: const FixtureAttachmentPicker(),
+    );
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'command-image-reject@fixture.test');
+    await _createAndAcquireLease(tester);
+
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-attachment-add-button')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-attachment-add-button')),
+    );
+    await _waitForVisible(tester, find.text('fixture-picked.png'));
+
+    const message = '/goal 创建目标';
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      message,
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+
+    // 整批原子拒绝：composer notice 展示原因，不清空草稿，不移除附件。
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-composer-machine-notice')),
+    );
+    expect(find.textContaining('不支持图片附件'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('session-composer-input')))
+          .controller!
+          .text,
+      message,
+    );
+    expect(find.text('fixture-picked.png'), findsOneWidget);
+
+    // 不产生 goal.command_input / goal.created 事件。
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(
+      snapshot.events.any((event) => event.eventType == 'goal.command_input'),
+      isFalse,
+    );
+    expect(
+      snapshot.events.any((event) => event.eventType == 'goal.created'),
+      isFalse,
+    );
+  });
+}
+
+/// fixture relay 变体：Host 投影缺失 permission 目录，用于验证 locked/projection
+/// 缺失时菜单关闭且不残留 danger-full-access 风险确认态。
+class _EmptyPermissionModesRelay extends FixtureRelayRepository {
+  @override
+  Future<SessionControlState> getSessionControls(String sessionId) async {
+    final controls = await super.getSessionControls(sessionId);
+    return controls.copyWith(availablePermissionModes: const []);
+  }
 }
 
 Future<void> _registerOwner(WidgetTester tester, String _) async {

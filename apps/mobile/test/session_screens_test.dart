@@ -1897,6 +1897,102 @@ void main() {
     );
   });
 
+  testWidgets('MOBILE-V05-11/P6-A：Trajectory toolbar 搜索、折叠和模式切换不污染 Chat', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'trajectory-p6-owner@fixture.test',
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '请生成 P6 trajectory fixture',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+
+    final sessionId = (await harness.relay.listSessions()).single.id;
+    final timeline = (await harness.relay.getSessionSnapshot(
+      sessionId,
+    )).events.map(SessionTimelineEvent.fromRelayEvent).toList();
+    final user = timeline.firstWhere(
+      (event) => event.kind == SessionTimelineKind.userMessage,
+    );
+    final assistant = timeline.firstWhere(
+      (event) => event.kind == SessionTimelineKind.assistantMessage,
+    );
+    final tool = timeline.firstWhere(
+      (event) => event.kind == SessionTimelineKind.toolActivity,
+    );
+    final userRow = find.byKey(
+      Key('trajectory-row-trajectory:${user.sequence}'),
+    );
+    final assistantRow = find.byKey(
+      Key('trajectory-row-trajectory:${assistant.sequence}'),
+    );
+    final toolRow = find.byKey(
+      Key('trajectory-row-trajectory:${tool.sequence}'),
+    );
+
+    await _tapVisible(tester, find.byKey(const Key('session-tab-trajectory')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-view')),
+    );
+    await _scrollTrajectoryUntilVisible(tester, toolRow);
+    expect(find.text('读取工作区状态'), findsOneWidget);
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-fold-calls')),
+    );
+    await _waitForGone(tester, toolRow);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-fold-calls')),
+    );
+    await _scrollTrajectoryUntilVisible(tester, toolRow);
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-mode-toggle')),
+    );
+    await _waitForVisible(tester, find.text('等宽'));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-fold-turns')),
+    );
+    await _waitForVisible(tester, userRow);
+    await _scrollTrajectoryUntilVisible(tester, assistantRow);
+    await _waitForGone(tester, toolRow);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-fold-turns')),
+    );
+    await _scrollTrajectoryUntilVisible(tester, toolRow);
+
+    // P6-A：搜索只过滤 Trajectory ledger 的本地 records，不回写 Chat projection。
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-trajectory-search')),
+      '读取工作区状态',
+    );
+    await tester.pump();
+    await _waitForVisible(tester, toolRow);
+    expect(userRow, findsNothing);
+
+    await _tapVisible(tester, find.byKey(const Key('session-tab-chat')));
+    await _waitForVisible(tester, find.byKey(const Key('session-chat-view')));
+    final chatToolNode = find.byKey(
+      Key('session-chat-node-node:${tool.sequence}:tool'),
+    );
+    await _scrollChatUntilVisible(tester, chatToolNode);
+    expect(chatToolNode, findsOneWidget);
+  });
+
   testWidgets('MOBILE-07：文件浏览入口打开只读工作区文件页', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
@@ -1934,6 +2030,187 @@ void main() {
       tester,
       find.byKey(const Key('workspace-files-list')),
     );
+  });
+
+  testWidgets('MOBILE-V05-24/P5-E1：GoalDock 内联编辑、暂停和恢复走统一写入口', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'goal-dock-owner@fixture.test',
+    );
+    await _waitForVisible(tester, find.byKey(const Key('session-goal-dock')));
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('session-goal-dock')),
+        matching: find.text('保持移动端控制链路可回归'),
+      ),
+      findsOneWidget,
+    );
+
+    await _tapVisible(tester, find.byKey(const Key('session-goal-dock-edit')));
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-goal-dock-input')),
+      '',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-goal-dock-submit')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-goal-dock-error')),
+    );
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-goal-dock-input')),
+      'P5-E GoalDock 回归目标',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-goal-dock-submit')),
+    );
+    await _waitForVisible(
+      tester,
+      find.descendant(
+        of: find.byKey(const Key('session-goal-dock')),
+        matching: find.text('P5-E GoalDock 回归目标'),
+      ),
+    );
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-goal-dock-toggle')),
+    );
+    await _waitForVisible(
+      tester,
+      find.descendant(
+        of: find.byKey(const Key('session-goal-dock')),
+        matching: find.textContaining('已暂停'),
+      ),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-goal-dock-toggle')),
+    );
+    await _waitForVisible(
+      tester,
+      find.descendant(
+        of: find.byKey(const Key('session-goal-dock')),
+        matching: find.textContaining('进行中'),
+      ),
+    );
+
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(
+      snapshot.events.any((event) => event.eventType == 'session.goal_edited'),
+      isTrue,
+    );
+    expect(
+      snapshot.events.where((event) => event.eventType == 'goal.changed'),
+      hasLength(2),
+    );
+  });
+
+  testWidgets('MOBILE-V05-24/P5-E2：GoalDock clear 清除目标且不留下占位', (tester) async {
+    final harness = await _openWritableSession(
+      tester,
+      'goal-dock-clear-owner@fixture.test',
+    );
+    await _waitForVisible(tester, find.byKey(const Key('session-goal-dock')));
+    await _tapVisible(tester, find.byKey(const Key('session-goal-dock-clear')));
+    await _waitForGone(tester, find.byKey(const Key('session-goal-dock')));
+    expect(find.byKey(const Key('session-goal-dock-title')), findsNothing);
+
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(
+      snapshot.events.any((event) => event.eventType == 'goal.cleared'),
+      isTrue,
+    );
+  });
+
+  testWidgets('MOBILE-V05-24/P5-E3：/goal command-input 创建 GoalDock', (
+    tester,
+  ) async {
+    final harness = await _openWritableSession(
+      tester,
+      'goal-command-owner@fixture.test',
+    );
+    await _tapVisible(tester, find.byKey(const Key('session-goal-dock-clear')));
+    await _waitForGone(tester, find.byKey(const Key('session-goal-dock')));
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '/goal 用 slash command 创建目标',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(tester, find.byKey(const Key('session-goal-dock')));
+    await _waitForVisible(
+      tester,
+      find.descendant(
+        of: find.byKey(const Key('session-goal-dock')),
+        matching: find.text('用 slash command 创建目标'),
+      ),
+    );
+
+    final snapshot = await harness.relay.getSessionSnapshot(
+      (await harness.relay.listSessions()).single.id,
+    );
+    expect(
+      snapshot.events.any((event) => event.eventType == 'goal.command_input'),
+      isTrue,
+    );
+    expect(
+      snapshot.events.any((event) => event.eventType == 'goal.created'),
+      isTrue,
+    );
+    final timeline = snapshot.events
+        .map(SessionTimelineEvent.fromRelayEvent)
+        .toList();
+    final command = timeline.firstWhere(
+      (event) => event.text == '/goal 用 slash command 创建目标',
+    );
+    await _scrollChatUntilVisible(
+      tester,
+      find.byKey(Key('session-chat-node-node:${command.sequence}:command')),
+    );
+  });
+
+  testWidgets('MOBILE-V05-24/P5-E4：TodoDock 只读折叠展示 Host todo 投影', (
+    tester,
+  ) async {
+    await _openWritableSession(tester, 'todo-dock-owner@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-todo-dock')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-todo-dock-progress')),
+    );
+    expect(find.text('冻结 v0.5 移动端回归矩阵'), findsNothing);
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-todo-dock-toggle')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-todo-dock-list')),
+    );
+    await _waitForVisible(tester, find.text('冻结 v0.5 移动端回归矩阵'));
+    await _waitForVisible(tester, find.text('迁移 Goal / Todo 到 input.dock'));
+    await _waitForVisible(tester, find.text('录屏前制定 headed 回归清单'));
+
+    // TodoDock 是 Host 投影的只读列表：不暴露编辑、删除或 steer 写入口。
+    expect(find.byKey(const Key('session-todo-dock-edit')), findsNothing);
+    expect(find.byKey(const Key('session-todo-dock-delete')), findsNothing);
+    expect(find.byKey(const Key('session-todo-dock-steer')), findsNothing);
   });
 
   testWidgets('MOBILE-11：goal 文本编辑提交 goal.edit 命令并乐观更新', (tester) async {
@@ -2254,6 +2531,26 @@ Future<void> _scrollChatUntilVisible(WidgetTester tester, Finder finder) async {
     120,
     scrollable: find.descendant(
       of: find.byKey(const Key('session-chat-view')),
+      matching: find.byType(Scrollable),
+    ),
+    maxScrolls: 24,
+  );
+  for (var frame = 0; frame < 3; frame += 1) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(finder, findsOneWidget);
+}
+
+Future<void> _scrollTrajectoryUntilVisible(
+  WidgetTester tester,
+  Finder finder, {
+  double delta = 120,
+}) async {
+  await tester.scrollUntilVisible(
+    finder,
+    delta,
+    scrollable: find.descendant(
+      of: find.byKey(const Key('session-trajectory-ledger')),
       matching: find.byType(Scrollable),
     ),
     maxScrolls: 24,

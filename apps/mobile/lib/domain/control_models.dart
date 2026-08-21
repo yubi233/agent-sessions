@@ -233,6 +233,27 @@ enum SkillRisk {
   final String label;
 }
 
+enum TodoItemStatus {
+  pending('pending', '待处理'),
+  inProgress('in_progress', '进行中'),
+  completed('completed', '已完成');
+
+  const TodoItemStatus(this.wireValue, this.label);
+
+  final String wireValue;
+  final String label;
+}
+
+/// v0.5/P5-E4：Todo 是 Host 投影的 whole-list snapshot。
+///
+/// Flutter 端只读展示，不提供本地编辑、删除或重排；列表为空时 input.dock 不渲染。
+class SessionTodoItem {
+  const SessionTodoItem({required this.content, required this.status});
+
+  final String content;
+  final TodoItemStatus status;
+}
+
 /// Skill catalog 只保留可展示的最小摘要；参数和 Provider 私有 payload 留在加密边界内。
 class SessionSkillDescriptor {
   const SessionSkillDescriptor({
@@ -294,6 +315,74 @@ class SessionUsageSummary {
   static String compactForDisplay(int value) => _compact(value);
 }
 
+/// Host 投影的图片接纳限制。
+///
+/// 这些值只用于 composer 的快速预检，Relay/Daemon 仍必须在真正接收密文时
+/// 重新校验。投影缺失时不能由客户端猜测 Provider 的图片词汇或额度。
+class SessionImageLimits {
+  const SessionImageLimits({
+    required this.maxImageBytes,
+    required this.maxImagesPerMessage,
+    required this.maxMessageImageBytes,
+    required this.mediaTypes,
+  });
+
+  final int maxImageBytes;
+  final int maxImagesPerMessage;
+  final int maxMessageImageBytes;
+  final List<String> mediaTypes;
+
+  bool accepts(String mimeType) => mediaTypes.contains(mimeType);
+
+  /// 按 DeepSeek Harness 的 intake 顺序检查整批图片：类型、数量、单张大小、总大小。
+  /// 返回 null 表示快速预检通过；结构和密文分块校验仍由 [AttachmentDraft.validate] 完成。
+  String? validateBatch({
+    required Iterable<AttachmentDraft> existing,
+    required Iterable<AttachmentDraft> incoming,
+  }) {
+    final currentImages = existing.where((draft) => draft.isImage).toList();
+    final incomingImages = incoming.where((draft) => draft.isImage).toList();
+
+    for (final draft in incomingImages) {
+      if (!accepts(draft.mimeType)) {
+        return '图片类型 ${draft.mimeType} 不受当前会话支持。';
+      }
+    }
+
+    // 替换同 id 草稿时不重复计数，避免重试/重新选择把旧项算两次。
+    final replacedIds = incoming.map((draft) => draft.id).toSet();
+    final retainedImages = currentImages
+        .where((draft) => !replacedIds.contains(draft.id))
+        .toList(growable: false);
+    if (retainedImages.length + incomingImages.length > maxImagesPerMessage) {
+      return '图片数量超过上限（最多 $maxImagesPerMessage 张）。';
+    }
+
+    for (final draft in incomingImages) {
+      if (draft.byteSize > maxImageBytes) {
+        return '单张图片超过限制（最大 ${formatByteCount(maxImageBytes)}）。';
+      }
+    }
+    final totalBytes = [
+      ...retainedImages,
+      ...incomingImages,
+    ].fold<int>(0, (sum, draft) => sum + draft.byteSize);
+    if (totalBytes > maxMessageImageBytes) {
+      return '图片总大小超过限制（最大 ${formatByteCount(maxMessageImageBytes)}）。';
+    }
+    return null;
+  }
+}
+
+/// 统一的脱敏字节数文案；只展示限制，不输出文件内容或路径。
+String formatByteCount(int bytes) {
+  if (bytes >= 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(0)} MiB';
+  }
+  if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(0)} KiB';
+  return '$bytes B';
+}
+
 /// 会话控制面由已解密事件或 fixture 填充；空状态明确说明尚未获得该类事件。
 class SessionControlState {
   const SessionControlState({
@@ -301,10 +390,12 @@ class SessionControlState {
     required this.effort,
     this.plan,
     this.goal,
+    this.todos = const [],
     this.skills = const [],
     // v0.2/P3：模型/effort 目录与 usage 只来自已解密事件或 deterministic fixture。
     this.models = const [],
     this.efforts = const [],
+    this.imageLimits,
     this.usage,
     // v0.3/P0：permission mode 选择器（Happy sessionSetAgentModes 对齐）。
     this.permissionMode,
@@ -316,9 +407,11 @@ class SessionControlState {
       effort = null,
       plan = null,
       goal = null,
+      todos = const [],
       skills = const [],
       models = const [],
       efforts = const [],
+      imageLimits = null,
       usage = null,
       permissionMode = null,
       availablePermissionModes = const [];
@@ -327,9 +420,11 @@ class SessionControlState {
   final String? effort;
   final SessionPlanSummary? plan;
   final SessionGoalSummary? goal;
+  final List<SessionTodoItem> todos;
   final List<SessionSkillDescriptor> skills;
   final List<String> models;
   final List<String> efforts;
+  final SessionImageLimits? imageLimits;
   final SessionUsageSummary? usage;
   final String? permissionMode;
   final List<String> availablePermissionModes;
@@ -339,9 +434,12 @@ class SessionControlState {
     String? effort,
     SessionPlanSummary? plan,
     SessionGoalSummary? goal,
+    bool clearGoal = false,
+    List<SessionTodoItem>? todos,
     List<SessionSkillDescriptor>? skills,
     List<String>? models,
     List<String>? efforts,
+    SessionImageLimits? imageLimits,
     SessionUsageSummary? usage,
     String? permissionMode,
     List<String>? availablePermissionModes,
@@ -349,10 +447,12 @@ class SessionControlState {
     model: model ?? this.model,
     effort: effort ?? this.effort,
     plan: plan ?? this.plan,
-    goal: goal ?? this.goal,
+    goal: clearGoal ? null : goal ?? this.goal,
+    todos: todos ?? this.todos,
     skills: skills ?? this.skills,
     models: models ?? this.models,
     efforts: efforts ?? this.efforts,
+    imageLimits: imageLimits ?? this.imageLimits,
     usage: usage ?? this.usage,
     permissionMode: permissionMode ?? this.permissionMode,
     availablePermissionModes:
@@ -413,7 +513,7 @@ class AttachmentDraft {
       throw const RelayFailure.validation('附件元数据密文无效。');
     }
     final accepted = switch (mimeType) {
-      'image/png' || 'image/jpeg' || 'image/webp' =>
+      'image/png' || 'image/jpeg' || 'image/webp' || 'image/gif' =>
         compression == 'none' && byteSize <= maxImageAttachmentBytes,
       'text/plain' || 'text/markdown' =>
         (compression == 'none' || compression == 'gzip') &&

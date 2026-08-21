@@ -69,6 +69,103 @@ void main() {
       expect(relay.completeAttemptCount, 1);
     });
   });
+
+  group('MOBILE-V05-17/P5-E5 图片 intake 预检', () {
+    const limits = SessionImageLimits(
+      maxImageBytes: 10 * 1024 * 1024,
+      maxImagesPerMessage: 2,
+      maxMessageImageBytes: 12 * 1024 * 1024,
+      mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+    );
+
+    test('类型 -> 数量 -> 单张 -> 总大小的错误优先级由同一 oracle 保证', () {
+      AttachmentDraft image(String id, String mimeType, int bytes) => _draft(
+        id: id,
+        localName: '$id.png',
+        mimeType: mimeType,
+        byteSize: bytes,
+      );
+
+      expect(
+        limits.validateBatch(
+          existing: const [],
+          incoming: [image('bad', 'image/tiff', 1)],
+        ),
+        contains('图片类型'),
+      );
+
+      expect(
+        limits.validateBatch(
+          existing: const [],
+          incoming: [
+            image('a', 'image/png', 1),
+            image('b', 'image/png', 1),
+            image('c', 'image/png', 1),
+          ],
+        ),
+        contains('图片数量超过上限'),
+      );
+
+      expect(
+        limits.validateBatch(
+          existing: const [],
+          incoming: [image('big', 'image/png', 11 * 1024 * 1024)],
+        ),
+        contains('单张图片超过限制'),
+      );
+
+      expect(
+        limits.validateBatch(
+          existing: const [],
+          incoming: [
+            image('a', 'image/png', 7 * 1024 * 1024),
+            image('b', 'image/png', 7 * 1024 * 1024),
+          ],
+        ),
+        contains('图片总大小超过限制'),
+      );
+
+      expect(
+        limits.validateBatch(
+          existing: const [],
+          incoming: [
+            image('a', 'image/png', 1),
+            image('b', 'image/jpeg', 2),
+          ],
+        ),
+        isNull,
+      );
+    });
+
+    test('SessionController.addAttachmentDrafts 整批原子拒绝并保留原附件', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      final controller = await _prepareWritableSession(relay);
+      expect(controller.addAttachmentDraft(_draft(id: 'img-1', localName: 'a.png', mimeType: 'image/png')), isTrue);
+      expect(controller.addAttachmentDraft(_draft(id: 'img-2', localName: 'b.png', mimeType: 'image/png')), isTrue);
+      expect(controller.attachments, hasLength(2));
+
+      // 第三张超过 fixture 数量上限：整批拒收，不新增也不移除已有附件。
+      final rejected = controller.addAttachmentDraft(
+        _draft(id: 'img-3', localName: 'c.png', mimeType: 'image/png'),
+      );
+      expect(rejected, isFalse);
+      expect(controller.attachments, hasLength(2));
+      expect(controller.attachmentRejections, hasLength(1));
+      expect(controller.attachmentRejections.single.reason, contains('图片数量超过上限'));
+
+      // 未知 slash command 带图不阻断普通文本；已知 command 才原子拒绝。
+      expect(controller.commandImageAdmissionError('普通文本'), isNull);
+      expect(controller.commandImageAdmissionError('/unknown-command 文本'), isNull);
+      expect(
+        controller.commandImageAdmissionError('/goal 创建目标'),
+        contains('不支持图片附件'),
+      );
+      expect(
+        controller.commandImageAdmissionError('/permission danger-full-access'),
+        contains('不支持图片附件'),
+      );
+    });
+  });
 }
 
 const _ownerDeviceId = 'android-owner-fixture';
@@ -78,11 +175,12 @@ AttachmentDraft _draft({
   required String id,
   required String localName,
   String mimeType = 'text/markdown',
+  int byteSize = 128,
 }) => AttachmentDraft(
   id: id,
   localName: localName,
   mimeType: mimeType,
-  byteSize: 128,
+  byteSize: byteSize,
   compression: 'none',
   metadataCiphertext: Uint8List.fromList([1, 2, 3]),
   ciphertextChunks: [
