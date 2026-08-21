@@ -168,6 +168,8 @@ class SessionStatsLineProjection {
     this.cacheTokens,
     this.turnCount,
     this.stepCount,
+    this.ttftMs,
+    this.decodeThroughput,
   });
 
   factory SessionStatsLineProjection.fromUsage(SessionUsageSummary? usage) {
@@ -185,12 +187,19 @@ class SessionStatsLineProjection {
   final int? turnCount;
   final int? stepCount;
 
+  /// v0.5/P7-B：首 token 延迟（毫秒）与解码吞吐（token/s）。
+  /// 真实 Relay/Provider 未提供时保持 null，UI 不显示假值。
+  final int? ttftMs;
+  final double? decodeThroughput;
+
   bool get isUnavailable =>
       inputTokens == null &&
       outputTokens == null &&
       cacheTokens == null &&
       turnCount == null &&
-      stepCount == null;
+      stepCount == null &&
+      ttftMs == null &&
+      decodeThroughput == null;
 }
 
 /// ContextMeter 是窗口压力近似值，不能和真实 usage 混为一谈。

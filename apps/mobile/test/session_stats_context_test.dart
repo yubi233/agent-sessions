@@ -19,6 +19,8 @@ void main() {
               cacheTokens: 61800,
               turnCount: 3,
               stepCount: 12,
+              ttftMs: 1200,
+              decodeThroughput: 12.5,
             ),
           ),
         ),
@@ -31,7 +33,11 @@ void main() {
     expect(find.byKey(const Key('session-stats-cache')), findsOneWidget);
     expect(find.byKey(const Key('session-stats-turns')), findsOneWidget);
     expect(find.byKey(const Key('session-stats-steps')), findsOneWidget);
+    expect(find.byKey(const Key('session-stats-ttft')), findsOneWidget);
+    expect(find.byKey(const Key('session-stats-throughput')), findsOneWidget);
     expect(find.textContaining('输入 12.5k'), findsOneWidget);
+    expect(find.textContaining('首字 1.2s'), findsOneWidget);
+    expect(find.textContaining('解码 12.5 tok/s'), findsOneWidget);
     expect(find.textContaining('上下文'), findsNothing);
 
     await tester.pumpWidget(

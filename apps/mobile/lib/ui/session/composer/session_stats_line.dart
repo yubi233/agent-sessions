@@ -44,6 +44,16 @@ class SessionStatsLine extends StatelessWidget {
           key: const Key('session-stats-steps'),
           label: '步骤 ${stats.stepCount}',
         ),
+        if (stats.ttftMs != null)
+          _StatsChip(
+            key: const Key('session-stats-ttft'),
+            label: '首字 ${(stats.ttftMs! / 1000).toStringAsFixed(1)}s',
+          ),
+        if (stats.decodeThroughput != null)
+          _StatsChip(
+            key: const Key('session-stats-throughput'),
+            label: '解码 ${stats.decodeThroughput!.toStringAsFixed(1)} tok/s',
+          ),
     ];
 
     if (items.isEmpty) {
