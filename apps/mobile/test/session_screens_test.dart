@@ -1945,29 +1945,34 @@ void main() {
     await _scrollTrajectoryUntilVisible(tester, toolRow);
     expect(find.text('读取工作区状态'), findsOneWidget);
 
+    await _scrollTrajectoryToTop(tester);
     await _tapVisible(
       tester,
       find.byKey(const Key('session-trajectory-fold-calls')),
     );
     await _waitForGone(tester, toolRow);
+    await _scrollTrajectoryToTop(tester);
     await _tapVisible(
       tester,
       find.byKey(const Key('session-trajectory-fold-calls')),
     );
     await _scrollTrajectoryUntilVisible(tester, toolRow);
 
+    await _scrollTrajectoryToTop(tester);
     await _tapVisible(
       tester,
       find.byKey(const Key('session-trajectory-mode-toggle')),
     );
     await _waitForVisible(tester, find.text('等宽'));
+    await _scrollTrajectoryToTop(tester);
     await _tapVisible(
       tester,
       find.byKey(const Key('session-trajectory-fold-turns')),
     );
-    await _waitForVisible(tester, userRow);
+    await _scrollTrajectoryUntilVisible(tester, userRow);
     await _scrollTrajectoryUntilVisible(tester, assistantRow);
     await _waitForGone(tester, toolRow);
+    await _scrollTrajectoryToTop(tester);
     await _tapVisible(
       tester,
       find.byKey(const Key('session-trajectory-fold-turns')),
@@ -1975,13 +1980,14 @@ void main() {
     await _scrollTrajectoryUntilVisible(tester, toolRow);
 
     // P6-A：搜索只过滤 Trajectory ledger 的本地 records，不回写 Chat projection。
+    await _scrollTrajectoryToTop(tester);
     await _enterVisible(
       tester,
       find.byKey(const Key('session-trajectory-search')),
       '读取工作区状态',
     );
-    await tester.pump();
-    await _waitForVisible(tester, toolRow);
+    await tester.pump(const Duration(milliseconds: 300));
+    await _scrollTrajectoryUntilVisible(tester, toolRow);
     expect(userRow, findsNothing);
 
     await _tapVisible(tester, find.byKey(const Key('session-tab-chat')));
@@ -2549,16 +2555,32 @@ Future<void> _scrollTrajectoryUntilVisible(
   await tester.scrollUntilVisible(
     finder,
     delta,
-    scrollable: find.descendant(
-      of: find.byKey(const Key('session-trajectory-ledger')),
-      matching: find.byType(Scrollable),
-    ),
+    // P6-B：Trajectory ledger 现在是包含 toolbar/timeline 的单一 ListView，
+    // 内部 TextField 也有 Scrollable，因此必须取第一个外层 Scrollable。
+    scrollable: find
+        .descendant(
+          of: find.byKey(const Key('session-trajectory-ledger')),
+          matching: find.byType(Scrollable),
+        )
+        .first,
     maxScrolls: 24,
   );
   for (var frame = 0; frame < 3; frame += 1) {
     await tester.pump(const Duration(milliseconds: 50));
   }
   expect(finder, findsOneWidget);
+}
+
+/// 把 Trajectory 单一 ListView 滚回顶部，使 toolbar/timeline 重新可见可点。
+Future<void> _scrollTrajectoryToTop(WidgetTester tester) async {
+  final scrollable = find
+      .descendant(
+        of: find.byKey(const Key('session-trajectory-ledger')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  tester.state<ScrollableState>(scrollable).position.jumpTo(0);
+  await tester.pumpAndSettle();
 }
 
 /// 等待元素完全消失（页面过渡完成后再操作列表，避免 Offstage 阶段命中失败）。

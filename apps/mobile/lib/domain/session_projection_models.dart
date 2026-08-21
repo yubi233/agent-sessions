@@ -227,6 +227,11 @@ class TrajectoryRecord {
     required this.label,
     this.status,
     this.summary,
+    this.createdAt,
+    this.duration,
+    this.turnId,
+    this.isStreaming = false,
+    this.inspectTarget,
   });
 
   final String key;
@@ -235,6 +240,19 @@ class TrajectoryRecord {
   final String label;
   final String? status;
   final String? summary;
+
+  /// 仅来自上游/fixture 的时间字段；缺失时 timeline 回退到等宽布局，不伪造时长。
+  final DateTime? createdAt;
+  final Duration? duration;
+
+  /// 用于 turn 分组的 display-only 标识；不写回 Relay。
+  final String? turnId;
+
+  /// streaming partial 也要进入 Trajectory 搜索/timeline 结构。
+  final bool isStreaming;
+
+  /// 从 Chat 一次性 inspect handoff 带来的目标；展示后由 view store 清空。
+  final String? inspectTarget;
 }
 
 /// 会话详情页共享的展示投影快照。

@@ -17,8 +17,21 @@ class SessionProjectionController {
     final waits = <ComposerPendingWait>[];
     final trajectory = <TrajectoryRecord>[];
 
+    // v0.5/P6-B：用 user 事件作为 turn 分组锚点；无 user 时统一归到 turn-0。
+    // 该 turnId 只是展示层分组标识，不写回 Relay / Chat projection。
+    var currentTurn = 'turn-0';
+    DateTime? previousCreatedAt;
+
     for (final event in timeline) {
+      if (event.kind == SessionTimelineKind.userMessage) {
+        currentTurn = 'turn-${event.sequence}';
+      }
       final nodeKind = _nodeKindFor(event);
+      final createdAt = event.createdAt;
+      final duration = (createdAt != null && previousCreatedAt != null)
+          ? createdAt.difference(previousCreatedAt)
+          : null;
+      if (createdAt != null) previousCreatedAt = createdAt;
       trajectory.add(
         TrajectoryRecord(
           key: 'trajectory:${event.sequence}',
@@ -29,6 +42,11 @@ class SessionProjectionController {
               ? 'streaming'
               : event.toolStatus ?? _resolvedStatus(event),
           summary: event.text,
+          createdAt: createdAt,
+          duration: duration,
+          turnId: currentTurn,
+          isStreaming: event.isStreaming,
+          inspectTarget: event.inspectTarget,
         ),
       );
 
