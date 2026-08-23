@@ -13,6 +13,10 @@ RELAY_DB_PATH="${AGENT_SESSIONS_SQLITE_PATH:-}"
 WEB_PORT="${AGENT_SESSIONS_WEB_PORT:-5173}"
 ADMIN_PORT="${AGENT_SESSIONS_ADMIN_PORT:-5174}"
 DAEMON_STATE_DIR="${AGENT_SESSIONS_DAEMON_STATE_DIR:-$STATE_DIR/daemon}"
+OPENCODE_BIN="${OPENCODE_BIN:-opencode}"
+OPENCODE_HOST="${AGENT_SESSIONS_OPENCODE_HOST:-127.0.0.1}"
+OPENCODE_PORT="${AGENT_SESSIONS_OPENCODE_PORT:-4096}"
+OPENCODE_URL="${AGENT_SESSIONS_OPENCODE_URL:-http://$OPENCODE_HOST:$OPENCODE_PORT}"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 FLUTTER_MODE="${AGENT_SESSIONS_FLUTTER_MODE:-mac}"
 FLUTTER_DEVICE="${AGENT_SESSIONS_FLUTTER_DEVICE:-}"
@@ -32,6 +36,7 @@ WITH_RELAY=true
 WITH_WEB=false
 WITH_ADMIN=false
 WITH_DAEMON=true
+WITH_OPENCODE=true
 WITH_FLUTTER=true
 FIXTURE_DAEMON=false
 DRY_RUN=false
@@ -49,6 +54,7 @@ STARTED_RELAY=false
 STARTED_WEB=false
 STARTED_ADMIN=false
 STARTED_DAEMON=false
+STARTED_OPENCODE=false
 STARTED_FLUTTER=false
 
 usage() {
@@ -69,6 +75,10 @@ Options:
   --with-admin           Start apps/admin-web
   --no-daemon            Do not start apps/daemon
   --with-daemon          Start apps/daemon run (default)
+  --no-opencode          Do not start OpenCode Server
+  --with-opencode        Start OpenCode Server (default)
+  --opencode-port PORT   OpenCode Server port (default: 4096)
+  --opencode-url URL     OpenCode URL passed to Daemon
   --no-local-dev-pairing Disable automatic local owner/terminal pairing/session
                          injection when AGENT_SESSIONS_DAEMON_TOKEN is missing
   --local-dev-pairing    Enable automatic local owner/terminal pairing/session
@@ -95,6 +105,8 @@ Environment:
   AGENT_SESSIONS_WEB_PORT, AGENT_SESSIONS_ADMIN_PORT,
   AGENT_SESSIONS_DAEMON_TOKEN, AGENT_SESSIONS_DAEMON_STATE_DIR,
   AGENT_SESSIONS_RESTART_STATE_DIR, AGENT_SESSIONS_RESTART_LOG_DIR,
+  AGENT_SESSIONS_OPENCODE_HOST, AGENT_SESSIONS_OPENCODE_PORT,
+  AGENT_SESSIONS_OPENCODE_URL, OPENCODE_BIN,
   AGENT_SESSIONS_FLUTTER_MODE, AGENT_SESSIONS_FLUTTER_DEVICE,
   AGENT_SESSIONS_FLUTTER_TIMEOUT_MS, AGENT_SESSIONS_FLUTTER_RELAY_BASE,
   AGENT_SESSIONS_LOCAL_DEV_PAIRING, FLUTTER_BIN
@@ -296,6 +308,9 @@ component_matches() {
       ;;
     daemon)
       [[ "$command" == *"apps/daemon"* || "$command" == *"daemon run"* ]]
+      ;;
+    opencode)
+      [[ "$command" == *"opencode"* && "$command" == *"serve"* ]]
       ;;
     flutter)
       local target="$FLUTTER_TARGET"
@@ -693,6 +708,9 @@ doc=json.load(sys.stdin)
 target=os.environ["LOCAL_DEV_WORKSPACE_ID"]
 raise SystemExit(0 if any(isinstance(item, dict) and item.get("id")==target for item in doc.get("workspaces", [])) else 1)' 2>/dev/null; then
     echo "workspace: using cached local dev Workspace $LOCAL_DEV_WORKSPACE_ID"
+    if [[ "$WITH_DAEMON" == true ]]; then
+      confirm_local_dev_workspace || return 1
+    fi
     return 0
   fi
   branch=""
@@ -719,6 +737,15 @@ print(json.dumps(doc, separators=(",", ":")))' "$LOCAL_DEV_PROJECT_ID" "$termina
     return 1
   fi
   echo "workspace: registered local dev Workspace $LOCAL_DEV_WORKSPACE_ID${terminal_id:+ for Terminal $terminal_id}"
+  if [[ "$WITH_DAEMON" == true ]]; then
+    confirm_local_dev_workspace || return 1
+  fi
+}
+
+confirm_local_dev_workspace() {
+  require_command go || return 1
+  go run ./apps/daemon workspace-confirm --state-dir "$DAEMON_STATE_DIR" \
+    --workspace-id "$LOCAL_DEV_WORKSPACE_ID" --workspace-root "$ROOT_DIR"
 }
 
 
@@ -822,7 +849,6 @@ ensure_daemon_token() {
   if [[ "$DRY_RUN" == true ]]; then
     DAEMON_ACCESS_TOKEN=local-dev-dry-run-token
     DAEMON_TOKEN_SOURCE=local-dev-dry-run
-    FIXTURE_DAEMON=true
     return 0
   fi
   ensure_local_owner_bootstrap || return 1
@@ -841,7 +867,6 @@ ensure_daemon_token() {
       printf '%s\n' "$DAEMON_ACCESS_TOKEN" > "$(local_token_file local-daemon-token)"
       chmod 600 "$(local_token_file local-daemon-token)" "$daemon_approval_file"
       DAEMON_TOKEN_SOURCE=local-dev-cache
-      FIXTURE_DAEMON=true
       echo "daemon: refreshed cached local dev Terminal pairing"
       return 0
     fi
@@ -868,7 +893,6 @@ ensure_daemon_token() {
   printf '%s\n' "$DAEMON_ACCESS_TOKEN" > "$(local_token_file local-daemon-token)"
   chmod 600 "$(local_token_file local-daemon-token)" "$(local_token_file local-daemon-approval.json)"
   DAEMON_TOKEN_SOURCE=local-dev-pairing
-  FIXTURE_DAEMON=true
   echo "daemon: paired local dev Terminal via Relay"
 }
 
@@ -913,7 +937,7 @@ start_daemon() {
     echo "daemon: missing access token after pairing" >&2
     return 1
   fi
-  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" go run ./apps/daemon run --relay-base "http://$RELAY_ADDR" --state-dir "$DAEMON_STATE_DIR")
+  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_DSH_BIN="${AGENT_SESSIONS_DSH_BIN:-}" AGENT_SESSIONS_DSH_CONFIG="${AGENT_SESSIONS_DSH_CONFIG:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 go run ./apps/daemon run --relay-base "http://$RELAY_ADDR" --state-dir "$DAEMON_STATE_DIR")
   if [[ "$FIXTURE_DAEMON" == true ]]; then
     args+=(--fixture-adapter)
   fi
@@ -940,6 +964,31 @@ start_flutter() {
   STARTED_FLUTTER=true
   pid="$(read_pid "$file")"
   wait_for_flutter "$pid"
+}
+
+start_opencode() {
+  if [[ "$WITH_OPENCODE" != true ]]; then
+    return 0
+  fi
+  require_command "$OPENCODE_BIN" || return 1
+  if port_in_use "$OPENCODE_PORT"; then
+    local existing_pid
+    existing_pid="$(lsof -nP -t -iTCP:"$OPENCODE_PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+    if [[ -n "$existing_pid" ]] && component_matches opencode "$existing_pid"; then
+      echo "opencode: already running (pid $existing_pid)"
+      echo "$OPENCODE_URL" > "$STATE_DIR/opencode-url"
+      return 0
+    fi
+    echo "opencode: port $OPENCODE_PORT is already in use; refusing to stop an unrelated process" >&2
+    return 1
+  fi
+  start_process opencode "$(pid_file opencode)" "$(component_log opencode)" "$ROOT_DIR" \
+    "$OPENCODE_BIN" serve --hostname "$OPENCODE_HOST" --port "$OPENCODE_PORT" --print-logs
+  echo "$OPENCODE_URL" > "$STATE_DIR/opencode-url"
+  local pid
+  pid="$(read_pid "$(pid_file opencode)")"
+  wait_for_http opencode "$OPENCODE_URL/global/health" "$pid"
+  STARTED_OPENCODE=true
 }
 
 start_relay() {
@@ -992,6 +1041,7 @@ cleanup_start_failure() {
   echo "restart.sh: startup failed; cleaning processes started by this invocation" >&2
   [[ "$STARTED_FLUTTER" == true ]] && stop_process flutter || true
   [[ "$STARTED_DAEMON" == true ]] && stop_process daemon || true
+  [[ "$STARTED_OPENCODE" == true ]] && stop_process opencode || true
   [[ "$STARTED_ADMIN" == true ]] && stop_process admin || true
   [[ "$STARTED_WEB" == true ]] && stop_process web || true
   [[ "$STARTED_RELAY" == true ]] && stop_relay || true
@@ -1014,6 +1064,14 @@ start_action() {
       ensure_local_owner_bootstrap || return 1
     fi
     echo "  daemon: $WITH_DAEMON (fixture=$FIXTURE_DAEMON token_source=$DAEMON_TOKEN_SOURCE)"
+    echo "  opencode: $WITH_OPENCODE ($OPENCODE_URL)"
+    # dsh 采用 per-session 子进程拓扑（ADR-013 §3）：无长驻组件，仅透传桥路径/配置给
+    # Daemon；未配置或路径缺失时 Daemon 侧 Detect 会 fail-closed 为 unavailable，这里如实提示。
+    local dsh_bin="${AGENT_SESSIONS_DSH_BIN:-}"
+    if [[ -n "$dsh_bin" && ! -f "$dsh_bin" ]]; then
+      echo "  dsh: bridge=$dsh_bin (路径不存在；provider 将以 unavailable 呈现)" >&2
+    fi
+    echo "  dsh: bridge=${dsh_bin:-<unset>} (config=${AGENT_SESSIONS_DSH_CONFIG:-<unset>}; per-session spawn)"
     echo "  flutter: $WITH_FLUTTER (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE owner_bootstrap=${LOCAL_OWNER_BOOTSTRAP_B64:+true} workspace=$LOCAL_DEV_WORKSPACE_ID)"
     echo "  web: $WITH_WEB (127.0.0.1:$WEB_PORT)"
     echo "  admin: $WITH_ADMIN (127.0.0.1:$ADMIN_PORT)"
@@ -1024,6 +1082,7 @@ start_action() {
     return 1
   fi
   if [[ "$WITH_RELAY" == true ]] && ! start_relay; then cleanup_start_failure; return 1; fi
+  if [[ "$WITH_OPENCODE" == true ]] && ! start_opencode; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_DAEMON" == true ]] && ! ensure_daemon_token; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_FLUTTER" == true && "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
     if ! ensure_local_owner_bootstrap; then cleanup_start_failure; return 1; fi
@@ -1056,6 +1115,7 @@ stop_action() {
   local result=0
   if ! stop_process flutter; then result=1; fi
   if ! stop_process daemon; then result=1; fi
+  if ! stop_process opencode; then result=1; fi
   if ! stop_process admin; then result=1; fi
   if ! stop_process web; then result=1; fi
   if ! stop_relay; then result=1; fi
@@ -1082,6 +1142,8 @@ status_action() {
   status_relay
   echo "daemon selected: $WITH_DAEMON"
   status_process daemon
+  echo "opencode selected: $WITH_OPENCODE ($OPENCODE_URL)"
+  status_process opencode
   echo "flutter selected: $WITH_FLUTTER (mode=$FLUTTER_MODE target=${FLUTTER_DEVICE:-${FLUTTER_TARGET:-macos}})"
   status_process flutter
   echo "web selected: $WITH_WEB"
@@ -1114,6 +1176,18 @@ parse_args() {
       --with-admin) WITH_ADMIN=true; shift ;;
       --no-daemon) WITH_DAEMON=false; shift ;;
       --with-daemon|--daemon) WITH_DAEMON=true; shift ;;
+      --no-opencode) WITH_OPENCODE=false; shift ;;
+      --with-opencode) WITH_OPENCODE=true; shift ;;
+      --opencode-port)
+        [[ $# -ge 2 ]] || { echo "missing value for --opencode-port" >&2; return 2; }
+        OPENCODE_PORT="$2"
+        shift 2
+        ;;
+      --opencode-url)
+        [[ $# -ge 2 ]] || { echo "missing value for --opencode-url" >&2; return 2; }
+        OPENCODE_URL="$2"
+        shift 2
+        ;;
       --no-local-dev-pairing) LOCAL_DEV_PAIRING=false; shift ;;
       --local-dev-pairing) LOCAL_DEV_PAIRING=true; shift ;;
       --no-flutter) WITH_FLUTTER=false; shift ;;
@@ -1156,6 +1230,7 @@ parse_args() {
   validate_tcp_port "Relay port" "$(relay_port)" || return 2
   validate_tcp_port "Web port" "$WEB_PORT" || return 2
   validate_tcp_port "Admin port" "$ADMIN_PORT" || return 2
+  validate_tcp_port "OpenCode port" "$OPENCODE_PORT" || return 2
   if ! [[ "$FLUTTER_TIMEOUT_MS" =~ ^[0-9]+$ ]] || (( FLUTTER_TIMEOUT_MS < 100 )); then
     echo "restart.sh: Flutter timeout must be an integer >= 100: $FLUTTER_TIMEOUT_MS" >&2
     return 2

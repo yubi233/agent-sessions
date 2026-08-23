@@ -17,7 +17,14 @@ bash -n restart.sh tools/restart_test.sh tools/flutter_device.sh "$fake_flutter"
 if ./restart.sh start --no-relay --no-web --no-admin --no-daemon --no-flutter --web-port nope --dry-run >/dev/null 2>&1; then echo 'restart.sh accepted an invalid TCP port' >&2; exit 1; fi
 dry_run_output="$(FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --no-flutter --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run)"
 grep -F 'token_source=local-dev-dry-run' <<< "$dry_run_output" >/dev/null
-grep -F 'fixture=true' <<< "$dry_run_output" >/dev/null
+grep -F 'fixture=false' <<< "$dry_run_output" >/dev/null
+grep -F 'opencode: true' <<< "$dry_run_output" >/dev/null
+# v0.5.next P3：dsh 桥路径缺省未配置时 dry-run 摘要如实提示 per-session 拓扑。
+grep -F 'dsh: bridge=<unset>' <<< "$dry_run_output" >/dev/null
+# 显式给出不存在路径时必须出现 fail-closed 预告（stderr）。
+dsh_missing_notice="$(AGENT_SESSIONS_DSH_BIN=/nonexistent/dsh-acp-demo.js FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --no-flutter --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run 2>&1 >/dev/null || true)"
+grep -F '路径不存在' <<< "$dsh_missing_notice" >/dev/null
+grep -F 'bridge=/nonexistent/dsh-acp-demo.js' <<< "$dsh_missing_notice" >/dev/null
 dry_run_flutter_output="$(FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run)"
 grep -F 'owner_bootstrap=true' <<< "$dry_run_flutter_output" >/dev/null
 missing_token_output="$(./restart.sh start --no-relay --no-web --no-admin --no-flutter --no-local-dev-pairing --state-dir "$state_dir" --dry-run 2>&1 >/dev/null || true)"

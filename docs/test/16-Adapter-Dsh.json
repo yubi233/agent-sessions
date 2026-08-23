@@ -1,0 +1,285 @@
+{
+  "suite": "adpt-dsh",
+  "suite_version": "1.0.0",
+  "status": "partial",
+  "plan_id": "ADAPTER-DSH",
+  "description": "DeepSeek Harness 第五类 Provider 接入：ACP 桥 transport、能力矩阵、进程所有权与 Flutter 入口的分层回归。",
+  "id_registry": {
+    "prefix": "ADPT-DSH",
+    "start": 1,
+    "end": 12
+  },
+  "owner": "Agent Sessions Platform",
+  "environment": {
+    "daemon": "go run ./apps/daemon",
+    "dsh_bridge": "AGENT_SESSIONS_DSH_BIN 指向 dsh-acp-demo lib/bin.js",
+    "flutter_local": "macOS desktop, no physical device"
+  },
+  "verification_defaults": {
+    "fixture_data": true,
+    "local_test": true,
+    "real_model": false,
+    "real_upstream": false,
+    "headless": false
+  },
+  "cases": [
+    {
+      "id": "ADPT-DSH-01",
+      "title": "Detect 握手与版本门（协议版本 1；低版本全 unsupported）",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "本机存在 dsh-acp-demo bin 与 cordis.yml；或注入 BridgeTransport 假桥。",
+      "steps": [
+        "对真实桥/假桥分别执行 Detect",
+        "构造 protocolVersion=2 的假桥响应再执行 Detect",
+        "校验能力矩阵三态与中文原因、Version 字段"
+      ],
+      "expected": "握手成功时 start/abort/kill=native、resume=unsupported(实测-32601)、其余 unsupported 带原因且 Version=agentInfo.version；版本不符时全部 unsupported 且 Version 留空。",
+      "cleanup": [
+        "无外部资源，无需清理"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/fakebridge_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-02",
+      "title": "Start 创建桥会话并绑定 InstanceID",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "注入假桥，脚本化 session/new 应答。",
+      "steps": [
+        "调用 Start(WorkspaceRoot=临时目录)",
+        "断言发出的 initialize/session/new 帧字段",
+        "校验 handle.InstanceID() 返回 sessionId"
+      ],
+      "expected": "session/new 的 cwd 取自 StartRequest.WorkspaceRoot；InstanceIDHandle 返回桥会话 ID；req.Model 不上 wire（由桥配置承载）。",
+      "cleanup": [
+        "临时目录由测试清理"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/fakebridge_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-03",
+      "title": "Send→prompt 往返与文本载荷边界",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "注入假桥并捕获出站帧。",
+      "steps": [
+        "Send 单段文本后检查 session/prompt 帧",
+        "发送含换行/emoji 文本验证转义完整性"
+      ],
+      "expected": "prompt 数组为单个 {type:text,text} 块；JSON 转义无损；阻塞至 stopReason 返回。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/fakebridge_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-04",
+      "title": "Abort→cancel 幂等",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "注入假桥。",
+      "steps": [
+        "连续两次 Abort",
+        "统计出站 cancel 通知帧数"
+      ],
+      "expected": "每次 Abort 都发出 session/cancel 通知（通知无应答），重复调用不报错不 panic。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/fakebridge_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-05",
+      "title": "session/update 白名单映射与私有 payload 剥离",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "注入假桥推送各类 update 变体（含未知 variant 与带私有字段的帧）。",
+      "steps": [
+        "推送 agent_message_chunk 等已声明变体",
+        "推送未知 variant 与超长私有 payload",
+        "消费 Events() 通道核对"
+      ],
+      "expected": "仅白名单变体映射为 canonical 事件（agent_message_chunk→message_delta）；未知变体丢弃且计数；DSH 私有字段不出现在 canonical payload。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/fakebridge_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-06",
+      "title": "权限请求 fail-closed 决策往返",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "注入假桥发起 session/request_permission 请求。",
+      "steps": [
+        "桥发起权限请求",
+        "核对 adapter 回帧与 Events() 输出"
+      ],
+      "expected": "先产出 EventPermissionRequest/Decision 事件；回帧为取消决策 {outcome:{outcome:cancelled}}，绝不静默批准；fs/* 请求回 -32601。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/fakebridge_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-07",
+      "title": "ForceKill 终止整个进程组且幂等（SESS-05 风格）",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "本地 /bin/sh 可用（macOS/Linux）。",
+      "steps": [
+        "启动两层进程树（sh→sleep 孙进程）",
+        "ForceKill 后按 pid 探活",
+        "重复 ForceKill"
+      ],
+      "expected": "主进程与孙进程均终止；重复强杀幂等；Dispose 宽限升级路径有 200ms 级时序断言。",
+      "cleanup": [
+        "测试内 t.Cleanup 兜底防孤儿"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/process_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-08",
+      "title": "Resume 六态定级：恒 WakeUnsupported",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P1",
+      "test_layer": "integration",
+      "precondition": "适配器工厂可用。",
+      "steps": [
+        "对任意 ResumeRequest 调用 Resume",
+        "校验返回值集合与副作用"
+      ],
+      "expected": "恒返回 WakeUnsupported（桥未实现 session/load，实测 -32601）；不 spawn 子进程、InstanceID 恒空。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/process_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-09",
+      "title": "能力矩阵与 ADR-013 附表一致性快照",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "ADR-013 第 4 节映射表已冻结。",
+      "steps": [
+        "握手成功后读取 Capabilities()",
+        "逐项对照 ADR 附表取值"
+      ],
+      "expected": "矩阵每项三态与中文原因和 ADR-013 一致；不一致时测试失败提示同步 ADR。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/fakebridge_test.go",
+        "docs/adr/ADR-013-DeepSeek-Harness-Provider接入.md"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-10",
+      "title": "registry 五类聚合与 List 排序稳定",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "环境变量未配置 DSH bin（显式置空测 fail-closed）。",
+      "steps": [
+        "New().List(ctx)",
+        "校验 kind 集合与排序",
+        "校验缺配置时 dsh unavailable"
+      ],
+      "expected": "返回 claude/codex/dsh/opencode/openclaw 五类按序稳定输出；dsh 未配置时 unavailable 且能力全 unsupported。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapterreg/registry_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-11",
+      "title": "新建会话页 DeepSeek Harness 入口可见可选",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P1",
+      "test_layer": "widget",
+      "precondition": "Flutter 本地环境；fixture 仓库。",
+      "steps": [
+        "进入新建会话页打开 provider 下拉",
+        "选择 DeepSeek Harness 并创建会话"
+      ],
+      "expected": "下拉包含第五项；选择后创建流程与既有一致并进入详情页；autoStart 仅在真实仓库生效（fixture 保持手动状态机）。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_screens_test.dart"
+      ]
+    },
+    {
+      "id": "ADPT-DSH-12",
+      "title": "transport live gate（真实模型需授权）",
+      "status": "planned",
+      "phase": "v0.5.next",
+      "category": "DSH",
+      "priority": "P0",
+      "test_layer": "real",
+      "precondition": "用户授权消耗真实 token；本机 DSH checkout 含可用 LLM key（由 DSH 侧 .env 承载）。",
+      "steps": [
+        "执行 e2e-verify/real/dsh-transport.mjs",
+        "核验报告 LIVE_SUMMARY、usage、credential_source"
+      ],
+      "expected": "passed 需 exit 0 且存在 LIVE_SUMMARY，real_model=true 如实标注；缺 key/额度时 blocked（failure_class=credential_or_quota_blocker），不得伪造。",
+      "cleanup": [
+        "回收 Daemon spawn 的桥子进程；报告脱敏归档"
+      ],
+      "evidence": [
+        "e2e-verify/reports/ADAPTER-DSH/"
+      ]
+    }
+  ]
+}

@@ -622,6 +622,29 @@
       "status": "planned",
       "allow_real_upstream": false,
       "uniqueness_rule": "跨项目基础验收入口仅消费领域 suite 的稳定 ID，不能重新定义或更改根因测试归属。"
+    },
+    {
+      "plan_id": "ADAPTER-DSH",
+      "suite_path": "docs/test/16-Adapter-Dsh.json",
+      "owner": "Agent Sessions Platform",
+      "id_prefix": [
+        "ADPT-DSH"
+      ],
+      "owned_ids": [
+        "ADPT-DSH-01",
+        "ADPT-DSH-02",
+        "ADPT-DSH-03",
+        "ADPT-DSH-04",
+        "ADPT-DSH-05",
+        "ADPT-DSH-06",
+        "ADPT-DSH-07",
+        "ADPT-DSH-08",
+        "ADPT-DSH-09",
+        "ADPT-DSH-10",
+        "ADPT-DSH-11",
+        "ADPT-DSH-12"
+      ],
+      "consumed_ids": []
     }
   ]
 }
