@@ -1,4 +1,4 @@
-// Package adapterreg 提供四类 Provider 适配器的统一注册表与能力聚合。
+// Package adapterreg 提供五类 Provider 适配器的统一注册表与能力聚合。
 // 客户端按能力矩阵渲染入口，不根据 Agent 类型硬编码能力。
 package adapterreg
 
@@ -9,6 +9,7 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter"
 	"github.com/yubi233/agent-sessions/internal/adapter/claude"
 	"github.com/yubi233/agent-sessions/internal/adapter/codex"
+	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
 	"github.com/yubi233/agent-sessions/internal/adapter/openclaw"
 	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
 )
@@ -21,7 +22,7 @@ type Provider struct {
 	Capabilities []adapter.Capability `json:"capabilities"`
 }
 
-// Registry 聚合四类 Provider。
+// Registry 聚合五类 Provider。
 type Registry struct {
 	adapters map[string]adapter.Adapter
 }
@@ -32,6 +33,7 @@ func New() *Registry {
 		adapters: map[string]adapter.Adapter{
 			"claude":   claude.New(),
 			"codex":    codex.New(),
+			"dsh":      dsh.New(),
 			"opencode": opencode.New(),
 			"openclaw": openclaw.New(),
 		},
@@ -63,5 +65,5 @@ func (r *Registry) List(ctx context.Context) ([]Provider, error) {
 
 // KnownKinds 返回支持的 Provider 种类。
 func KnownKinds() []string {
-	return []string{"claude", "codex", "opencode", "openclaw"}
+	return []string{"claude", "codex", "opencode", "openclaw", "dsh"}
 }

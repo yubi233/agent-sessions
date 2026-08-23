@@ -9,18 +9,20 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
-// 四类 Provider 均能被枚举，且能力状态合法（native/emulated/unsupported）。
-func TestRegistryListsFourProviders(t *testing.T) {
+// 五类 Provider 均能被枚举，且能力状态合法（native/emulated/unsupported）。
+func TestRegistryListsProviders(t *testing.T) {
+	t.Setenv("AGENT_SESSIONS_DSH_BIN", "")
+	t.Setenv("AGENT_SESSIONS_DSH_CONFIG", "")
 	r := New()
 	providers, err := r.List(context.Background())
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(providers) != 4 {
-		t.Fatalf("want 4 providers, got %d", len(providers))
+	if len(providers) != 5 {
+		t.Fatalf("want 5 providers, got %d", len(providers))
 	}
 	for _, p := range providers {
-		if p.Kind != "claude" && p.Kind != "codex" && p.Kind != "opencode" && p.Kind != "openclaw" {
+		if p.Kind != "claude" && p.Kind != "codex" && p.Kind != "dsh" && p.Kind != "opencode" && p.Kind != "openclaw" {
 			t.Fatalf("unexpected provider kind %q", p.Kind)
 		}
 		// 能力清单与协议对齐。
@@ -51,12 +53,15 @@ func TestUnknownCapabilityIsUnsupported(t *testing.T) {
 }
 
 // 未配置 live 二进制/地址时，所有 Provider 不可用，且能力必须带原因地 fail-closed。
+// dsh 的空 env 同样视为未配置（其缺省路径在本文档环境存在，故显式置空以测 fail-closed）。
 func TestUnavailableWithoutConfiguration(t *testing.T) {
 	t.Setenv("AGENT_SESSIONS_CLAUDE_BIN", "")
 	t.Setenv("AGENT_SESSIONS_CODEX_BIN", "")
 	t.Setenv("AGENT_SESSIONS_OPENCODE_URL", "")
 	t.Setenv("OPENCODE_SERVER_PASSWORD", "")
 	t.Setenv("AGENT_SESSIONS_OPENCLAW_URL", "")
+	t.Setenv("AGENT_SESSIONS_DSH_BIN", "")
+	t.Setenv("AGENT_SESSIONS_DSH_CONFIG", "")
 
 	r := New()
 	providers, err := r.List(context.Background())
@@ -111,5 +116,47 @@ func TestStubProviderRegistrationStaysFailClosed(t *testing.T) {
 	}
 	if byKind["openclaw"].Available || byKind["openclaw"].Version != "" {
 		t.Fatalf("OpenClaw URL without handshake must not be available: %#v", byKind["openclaw"])
+	}
+}
+
+// dsh 加入后的五类聚合与 List 排序稳定（spec P1 追加用例；DSH env 置空避免真实握手）。
+func TestRegistryAggregatesFiveProvidersSorted(t *testing.T) {
+	t.Setenv("AGENT_SESSIONS_DSH_BIN", "")
+	t.Setenv("AGENT_SESSIONS_DSH_CONFIG", "")
+
+	want := []string{"claude", "codex", "dsh", "openclaw", "opencode"}
+	kinds := func(providers []Provider) []string {
+		out := make([]string, len(providers))
+		for i, p := range providers {
+			out[i] = p.Kind
+		}
+		return out
+	}
+
+	r := New()
+	first, err := r.List(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(first) != 5 {
+		t.Fatalf("want 5 providers, got %d", len(first))
+	}
+	firstKinds := kinds(first)
+	for i, k := range want {
+		if firstKinds[i] != k {
+			t.Fatalf("排序第 %d 位 = %q, want %q（全序 %v）", i, firstKinds[i], k, firstKinds)
+		}
+	}
+
+	// 稳定：再次 List 的种类与顺序一致。
+	second, err := r.List(context.Background())
+	if err != nil {
+		t.Fatalf("list(2): %v", err)
+	}
+	secondKinds := kinds(second)
+	for i := range want {
+		if secondKinds[i] != firstKinds[i] {
+			t.Fatalf("List 输出不稳定: %v vs %v", firstKinds, secondKinds)
+		}
 	}
 }
