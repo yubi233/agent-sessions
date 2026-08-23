@@ -33,8 +33,9 @@ const (
 	defaultConfig = "/Users/yubi/code/deepseek-harness/examples/acp-agent/cordis.yml"
 )
 
-// closeGrace 是受控关闭时等待桥退出的宽限期（spec §1：EOF 触发 dispose，exit 0）；
-// 超时后 SIGKILL 整个进程组。
+// closeGrace 是受控关闭时等待桥退出的缺省宽限期（spec §1：EOF 触发 dispose，exit 0）；
+// 超时后 SIGKILL 整个进程组。dshBinTransport.grace 可按实例覆盖（见该字段），
+// 未覆盖时沿用本缺省值，既有调用点语义不变。
 const closeGrace = 10 * time.Second
 
 // BridgeTransport 是 DSH ACP 桥的帧级传输接口（注入点）：
@@ -153,6 +154,12 @@ type dshBinTransport struct {
 	closeOnce sync.Once
 	closeErr  error
 
+	// grace 是受控关闭宽限期的可注入覆盖：Close 等待桥退出的时间上限，超时后 SIGKILL
+	// 整个进程组。<=0 时使用包级缺省 closeGrace（10s）。用途：进程所有权回归测试需要把
+	// "EOF→SIGKILL 升级时序"压缩到毫秒级可观测（如 200ms），而生产调用点 newBinTransport
+	// 不设置该字段，保持缺省 10s 与既有调用点行为完全一致。
+	grace time.Duration
+
 	exitMu   sync.Mutex
 	exitCode int // -1 表示被信号终止或未知
 	exited   bool
@@ -221,7 +228,7 @@ func (t *dshBinTransport) close(force bool) error {
 	if !force {
 		select {
 		case <-waitDone:
-		case <-time.After(closeGrace):
+		case <-time.After(t.effectiveGrace()):
 			t.killGroup()
 			<-waitDone
 			_ = os.RemoveAll(t.persistRoot)
@@ -235,6 +242,15 @@ func (t *dshBinTransport) close(force bool) error {
 	<-waitDone
 	_ = os.RemoveAll(t.persistRoot)
 	return nil
+}
+
+// effectiveGrace 返回本实例生效的宽限期：显式注入（grace>0）优先，否则回落到
+// 包级缺省 closeGrace（10s）。生产调用点不注入，故与既有语义完全一致。
+func (t *dshBinTransport) effectiveGrace() time.Duration {
+	if t.grace > 0 {
+		return t.grace
+	}
+	return closeGrace
 }
 
 // exitErr 返回进程退出诊断：正常退出（0 或信号终止）返回 nil；非 0 错误码返回
