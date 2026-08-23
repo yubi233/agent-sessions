@@ -237,3 +237,30 @@ func TestStoreUpgradesLegacyRelayCommandsWithWorkspaceID(t *testing.T) {
 		t.Fatal("new relay command was not preserved after legacy upgrade")
 	}
 }
+
+// 重新配对更换 Terminal 身份后，旧 delivery_seq 游标必须清零，
+// 否则 SSE 以过大的 after_delivery_seq 重放会静默跳过新身份的全部投递。
+func TestResetRelayDeliveryCursorClearsCursorForNewTerminal(t *testing.T) {
+	s, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	command := RelayCommand{
+		CommandID: "cmd-old", DeliverySeq: 6, SessionID: "sess-1", WorkspaceID: "ws-1",
+		Kind: "session.send", LeaseEpoch: 1, TargetTerminalID: "term-old",
+		PayloadJSON: `{"session_id":"sess-1"}`,
+	}
+	if _, err := s.RecordRelayCommand(command); err != nil {
+		t.Fatalf("record relay command: %v", err)
+	}
+	if cursor, err := s.RelayDeliveryCursor(); err != nil || cursor != 6 {
+		t.Fatalf("cursor before reset = %d err=%v, want 6", cursor, err)
+	}
+	if err := s.ResetRelayDeliveryCursor(); err != nil {
+		t.Fatalf("reset cursor: %v", err)
+	}
+	if cursor, err := s.RelayDeliveryCursor(); err != nil || cursor != 0 {
+		t.Fatalf("cursor after reset = %d err=%v, want 0", cursor, err)
+	}
+}

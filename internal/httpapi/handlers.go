@@ -48,7 +48,10 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.GET("/projects", a.handleListProjects)
 		auth.GET("/sessions", a.handleListSessions)
 		auth.GET("/audit", a.handleListAudit)
+		auth.GET("/sessions/:id/controls", a.handleSessionControls)
 		auth.GET("/sessions/:id/snapshot", a.handleSessionSnapshot)
+		auth.GET("/sessions/:id/feedback", a.handleListMessageFeedback)
+		auth.GET("/sessions/:id/feedback/:messageID", a.handleGetMessageFeedback)
 		// P2-F 只读观察使用独立投影，不把 Daemon 专用 SSE、命令 payload 或原始密文交给 Android。
 		auth.GET("/sessions/:id/commands", a.handleSessionDaemonObservation)
 		// Web 只读 transport 是受限的 request/response 通道，不使用 RequireWrite；领域层仍会
@@ -61,6 +64,9 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		// 创建 Workspace/Session 会改变账号元数据，和会话命令一样只允许 Android 控制端发起。
 		auth.POST("/sessions", a.RequireWrite(), a.handleCreateSession)
 		auth.POST("/sessions/:id/commands", a.RequireWrite(), a.handleSubmitCommand)
+		auth.POST("/sessions/:id/forks", a.RequireWrite(), a.handleForkSession)
+		auth.PUT("/sessions/:id/feedback/:messageID", a.RequireWrite(), a.handlePutMessageFeedback)
+		auth.DELETE("/sessions/:id/feedback/:messageID", a.RequireWrite(), a.handleDeleteMessageFeedback)
 		auth.POST("/sessions/:id/delegations", a.RequireWrite(), a.handleCreateDelegation)
 		auth.POST("/delegations/:id/decision", a.RequireWrite(), a.handleDelegationDecision)
 		auth.GET("/commands/:id", a.handleGetCommand)
@@ -147,7 +153,7 @@ func localAPICORS() gin.HandlerFunc {
 			c.Header("Vary", "Origin")
 			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, Last-Event-ID")
-			c.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		}
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
@@ -462,6 +468,113 @@ func (a *API) handleListProjects(c *gin.Context) {
 	writeOK(c, gin.H{"projects": views})
 }
 
+// handleSessionControls 返回会话 composer 可安全展示的白名单控制投影。
+// 真实 Plan/Goal/Skill 正文仍只能来自客户端已解密事件；这里不返回 prompt、回复或 Provider payload。
+func (a *API) handleSessionControls(c *gin.Context) {
+	projection, err := a.Usage.SessionProjection(c.Request.Context(), subject(c).AccountID, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if projection == nil {
+		writeOK(c, gin.H{})
+		return
+	}
+	view := gin.H{}
+	if projection.Model != "" {
+		view["model"] = projection.Model
+	}
+	if projection.HasUsage {
+		view["usage"] = newSessionUsageView(*projection)
+	}
+	writeOK(c, view)
+}
+
+func (a *API) handleListMessageFeedback(c *gin.Context) {
+	rows, err := a.MessageFeedback.List(c.Request.Context(), subject(c).AccountID, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	views := make([]messageFeedbackItemView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, newMessageFeedbackItemView(row))
+	}
+	writeOK(c, gin.H{"items": views})
+}
+
+func (a *API) handleGetMessageFeedback(c *gin.Context) {
+	item, err := a.MessageFeedback.Get(c.Request.Context(), subject(c).AccountID, c.Param("id"), c.Param("messageID"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if item == nil {
+		writeOK(c, gin.H{"item": nil})
+		return
+	}
+	writeOK(c, gin.H{"item": newMessageFeedbackItemView(*item)})
+}
+
+type messageFeedbackMutationRequest struct {
+	Rating  string `json:"rating"`
+	Note    string `json:"note"`
+	Version *int64 `json:"version"`
+}
+
+func (a *API) handlePutMessageFeedback(c *gin.Context) {
+	var req messageFeedbackMutationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed feedback request"))
+		return
+	}
+	subj := subject(c)
+	item, err := a.MessageFeedback.Put(c.Request.Context(), domain.MessageFeedbackInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		SessionID: c.Param("id"), MessageID: c.Param("messageID"),
+		Rating: req.Rating, Note: req.Note, ExpectedVersion: req.Version,
+	})
+	if err != nil {
+		var conflict domain.MessageFeedbackConflictError
+		if errors.As(err, &conflict) {
+			writeOK(c, messageFeedbackMutationView{
+				OK: false, ErrorCode: "version-conflict",
+				Current: optionalMessageFeedbackItemView(conflict.Current),
+			})
+			return
+		}
+		writeError(c, err)
+		return
+	}
+	writeOK(c, messageFeedbackMutationView{OK: true, Item: optionalMessageFeedbackItemView(&item)})
+}
+
+func (a *API) handleDeleteMessageFeedback(c *gin.Context) {
+	var req messageFeedbackMutationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed feedback request"))
+		return
+	}
+	subj := subject(c)
+	_, err := a.MessageFeedback.Delete(c.Request.Context(), domain.MessageFeedbackInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		SessionID: c.Param("id"), MessageID: c.Param("messageID"), ExpectedVersion: req.Version,
+	})
+	if err != nil {
+		var conflict domain.MessageFeedbackConflictError
+		if errors.As(err, &conflict) {
+			writeOK(c, messageFeedbackMutationView{
+				OK: false, ErrorCode: "version-conflict",
+				Current: optionalMessageFeedbackItemView(conflict.Current),
+			})
+			return
+		}
+		writeError(c, err)
+		return
+	}
+	writeOK(c, messageFeedbackMutationView{OK: true})
+}
+
 // handleSessionSnapshot 读取当前账号指定会话的增量密文事件，after_seq 不允许为负数。
 func (a *API) handleSessionSnapshot(c *gin.Context) {
 	afterSeq := int64(0)
@@ -633,6 +746,33 @@ func (a *API) handleCreateSession(c *gin.Context) {
 	}
 	a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, sess.ID, sess.LastSeq-1)
 	c.JSON(http.StatusCreated, newSessionView(sess))
+}
+
+type forkSessionRequest struct {
+	MessageID      string `json:"message_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	LeaseEpoch     int64  `json:"lease_epoch"`
+}
+
+func (a *API) handleForkSession(c *gin.Context) {
+	var req forkSessionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed fork request"))
+		return
+	}
+	subj := subject(c)
+	child, err := a.Sessions.ForkSession(c.Request.Context(), domain.SessionForkInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		ParentSessionID: c.Param("id"), MessageID: req.MessageID,
+		IdempotencyKey: req.IdempotencyKey, LeaseEpoch: req.LeaseEpoch,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	a.publishLatestSessionEvent(c.Request.Context(), subj.AccountID, c.Param("id"))
+	a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, child.ID, 0)
+	c.JSON(http.StatusCreated, newSessionView(child))
 }
 
 type submitCommandRequest struct {
@@ -1092,18 +1232,72 @@ func newWorkspaceView(workspace store.WorkspaceRow) workspaceView {
 }
 
 type sessionView struct {
-	ID          string `json:"id"`
-	WorkspaceID string `json:"workspace_id"`
-	Status      string `json:"status"`
-	Provider    string `json:"provider,omitempty"`
-	LastSeq     int64  `json:"last_seq"`
+	ID                  string `json:"id"`
+	WorkspaceID         string `json:"workspace_id"`
+	Status              string `json:"status"`
+	Provider            string `json:"provider,omitempty"`
+	Model               string `json:"model,omitempty"`
+	LastSeq             int64  `json:"last_seq"`
+	ParentSessionID     string `json:"parent_session_id,omitempty"`
+	ForkedFromMessageID string `json:"forked_from_message_id,omitempty"`
 }
 
 func newSessionView(session store.SessionRow) sessionView {
 	return sessionView{
 		ID: session.ID, WorkspaceID: session.WorkspaceID, Status: session.Status,
-		Provider: session.Provider, LastSeq: session.LastSeq,
+		Provider: session.Provider, Model: session.Model, LastSeq: session.LastSeq,
+		ParentSessionID: session.ParentSessionID, ForkedFromMessageID: session.ForkedFromMessageID,
 	}
+}
+
+type sessionUsageView struct {
+	InputTokens      int64    `json:"input_tokens"`
+	OutputTokens     int64    `json:"output_tokens"`
+	CacheReadTokens  int64    `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64    `json:"cache_write_tokens,omitempty"`
+	ContextTokens    int64    `json:"context_tokens,omitempty"`
+	TTFTMS           *int64   `json:"ttft_ms,omitempty"`
+	DecodeThroughput *float64 `json:"decode_throughput,omitempty"`
+}
+
+func newSessionUsageView(usage domain.SessionUsageProjection) sessionUsageView {
+	return sessionUsageView{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens,
+		ContextTokens: usage.InputTokens + usage.OutputTokens + usage.CacheReadTokens + usage.CacheWriteTokens,
+		TTFTMS:        usage.TTFTMS, DecodeThroughput: usage.DecodeThroughput,
+	}
+}
+
+type messageFeedbackItemView struct {
+	MessageID         string `json:"message_id"`
+	Rating            string `json:"rating"`
+	Note              string `json:"note,omitempty"`
+	Version           int64  `json:"version"`
+	UpdatedByDeviceID string `json:"updated_by_device_id,omitempty"`
+	UpdatedAtUnixMS   int64  `json:"updated_at_unix_ms"`
+}
+
+type messageFeedbackMutationView struct {
+	OK        bool                     `json:"ok"`
+	ErrorCode string                   `json:"error_code,omitempty"`
+	Item      *messageFeedbackItemView `json:"item,omitempty"`
+	Current   *messageFeedbackItemView `json:"current,omitempty"`
+}
+
+func newMessageFeedbackItemView(row store.MessageFeedbackRow) messageFeedbackItemView {
+	return messageFeedbackItemView{
+		MessageID: row.MessageID, Rating: row.Rating, Note: row.Note,
+		Version: row.Version, UpdatedByDeviceID: row.UpdatedByDeviceID, UpdatedAtUnixMS: row.UpdatedAtUnixMS,
+	}
+}
+
+func optionalMessageFeedbackItemView(row *store.MessageFeedbackRow) *messageFeedbackItemView {
+	if row == nil {
+		return nil
+	}
+	view := newMessageFeedbackItemView(*row)
+	return &view
 }
 
 type commandView struct {

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -61,6 +62,25 @@ CREATE TABLE IF NOT EXISTS relay_event_outbox (
 	status TEXT NOT NULL DEFAULT 'pending',
 	created_at INTEGER NOT NULL
 );
+-- Provider usage 的白名单投影单独出队上传到 Relay usage API；这里不保存 prompt、
+-- 回复正文、工具参数、路径、费用或 provider 私有 payload。
+CREATE TABLE IF NOT EXISTS relay_usage_outbox (
+	usage_key TEXT PRIMARY KEY,
+	session_id TEXT NOT NULL DEFAULT '',
+	provider TEXT NOT NULL,
+	model TEXT NOT NULL DEFAULT '',
+	utc_day TEXT NOT NULL,
+	input_tokens INTEGER NOT NULL,
+	output_tokens INTEGER NOT NULL,
+	cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+	ttft_ms INTEGER,
+	decode_throughput REAL,
+	status TEXT NOT NULL DEFAULT 'pending',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS relay_usage_outbox_pending_idx
+	ON relay_usage_outbox(status, created_at, usage_key);
 `
 
 // Store 是 Daemon 本地状态仓储（SQLite）。
@@ -286,6 +306,7 @@ func (s *Store) MarkDelivered(id int64) error {
 type Command struct {
 	ID          int64
 	RequestID   string
+	WorkspaceID string
 	Kind        string
 	PayloadJSON string
 	Status      string
@@ -322,12 +343,16 @@ type RelayEvent struct {
 // 来源事件生成，保证断线 outbox 重放幂等；绝不包含 prompt、回复、费用或精确时间。
 type RelayUsage struct {
 	UsageKey         string
+	SessionID        string
 	Provider         string
+	Model            string
 	UTCDay           string
 	InputTokens      int64
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	TTFTMS           *int64
+	DecodeThroughput *float64
 }
 
 // RecordRelayCommand 原子记录一个 SSE delivery。相同 command_id 即使因至少一次投递再次到达，
@@ -429,6 +454,21 @@ func (s *Store) RelayDeliveryCursor() (int64, error) {
 		return 0, err
 	}
 	return strconv.ParseInt(value, 10, 64)
+}
+
+// ResetRelayDeliveryCursor 把投递游标清零。仅在 Terminal 身份变更（重新配对）时调用：
+// delivery_seq 是 Terminal 局部序号，沿用旧身份的游标会让 SSE 以过大的 after_delivery_seq
+// 重放，从而静默跳过新身份的全部投递。
+func (s *Store) ResetRelayDeliveryCursor() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO local_state(key,value) VALUES('relay_delivery_seq','0')
+		 ON CONFLICT(key) DO UPDATE SET value='0'`)
+	if err != nil {
+		return fmt.Errorf("reset relay delivery cursor: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
@@ -548,6 +588,68 @@ func (s *Store) MarkRelayEventDelivered(eventID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(`UPDATE relay_event_outbox SET status='delivered' WHERE event_id=?`, eventID)
+	return err
+}
+
+func (s *Store) EnqueueRelayUsage(usage RelayUsage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if usage.UsageKey == "" || usage.Provider == "" || usage.UTCDay == "" ||
+		usage.InputTokens < 0 || usage.OutputTokens < 0 ||
+		usage.CacheReadTokens < 0 || usage.CacheWriteTokens < 0 {
+		return errors.New("invalid relay usage")
+	}
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO relay_usage_outbox(
+			usage_key,session_id,provider,model,utc_day,input_tokens,output_tokens,
+			cache_read_tokens,cache_write_tokens,ttft_ms,decode_throughput,status,created_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?)`,
+		usage.UsageKey, usage.SessionID, usage.Provider, usage.Model, usage.UTCDay,
+		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens,
+		usage.TTFTMS, usage.DecodeThroughput, time.Now().UnixMilli())
+	return err
+}
+
+func (s *Store) PendingRelayUsages() ([]RelayUsage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT usage_key,session_id,provider,model,utc_day,input_tokens,output_tokens,
+		        cache_read_tokens,cache_write_tokens,ttft_ms,decode_throughput
+		   FROM relay_usage_outbox WHERE status='pending' ORDER BY created_at,usage_key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var usages []RelayUsage
+	for rows.Next() {
+		var usage RelayUsage
+		var ttft sql.NullInt64
+		var throughput sql.NullFloat64
+		if err := rows.Scan(
+			&usage.UsageKey, &usage.SessionID, &usage.Provider, &usage.Model, &usage.UTCDay,
+			&usage.InputTokens, &usage.OutputTokens, &usage.CacheReadTokens, &usage.CacheWriteTokens,
+			&ttft, &throughput,
+		); err != nil {
+			return nil, err
+		}
+		if ttft.Valid {
+			value := ttft.Int64
+			usage.TTFTMS = &value
+		}
+		if throughput.Valid {
+			value := throughput.Float64
+			usage.DecodeThroughput = &value
+		}
+		usages = append(usages, usage)
+	}
+	return usages, rows.Err()
+}
+
+func (s *Store) MarkRelayUsageDelivered(usageKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`UPDATE relay_usage_outbox SET status='delivered' WHERE usage_key=?`, usageKey)
 	return err
 }
 

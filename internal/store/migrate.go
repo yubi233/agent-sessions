@@ -289,6 +289,37 @@ var migrations = []string{
 		ON account_event_log(session_id, cursor);`,
 	// P4-D Web 只读响应只保存浏览器临时公钥可解的 envelope；不能为调试便利新增明文缓存。
 	`ALTER TABLE commands ADD COLUMN readonly_response_envelope_json TEXT NOT NULL DEFAULT '';`,
+	// v0.5 feedback/fork/model/timing：所有字段均为白名单元数据。Relay 不保存消息正文、
+	// prompt、回复、工具参数或 Provider 私有 payload；fork 只创建控制面 child Session，
+	// Provider seed/执行仍需 Daemon/Adapter 后续授权。
+	`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE sessions ADD COLUMN forked_from_message_id TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE sessions ADD COLUMN fork_idempotency_key TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT '';`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS sessions_parent_fork_key_idx
+		ON sessions(parent_session_id, fork_idempotency_key)
+		WHERE parent_session_id <> '' AND fork_idempotency_key <> '';`,
+	`CREATE TABLE IF NOT EXISTS message_feedback (
+		account_id TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		message_id TEXT NOT NULL,
+		rating TEXT NOT NULL,
+		note TEXT,
+		version INTEGER NOT NULL,
+		updated_by_device_id TEXT NOT NULL,
+		updated_at_unix_ms INTEGER NOT NULL,
+		PRIMARY KEY(session_id, message_id),
+		FOREIGN KEY(session_id) REFERENCES sessions(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS message_feedback_account_session_idx
+		ON message_feedback(account_id, session_id, updated_at_unix_ms DESC);`,
+	`ALTER TABLE usage_events ADD COLUMN session_id TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE usage_events ADD COLUMN model TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE usage_events ADD COLUMN ttft_ms INTEGER;`,
+	`ALTER TABLE usage_events ADD COLUMN decode_throughput REAL;`,
+	`CREATE INDEX IF NOT EXISTS usage_events_session_idx
+		ON usage_events(account_id, session_id, created_at_unix_ms DESC)
+		WHERE session_id <> '';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

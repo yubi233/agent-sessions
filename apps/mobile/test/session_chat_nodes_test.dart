@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:agent_sessions_mobile/domain/session_projection_models.dart';
+import 'package:agent_sessions_mobile/state/session_message_feedback_controller.dart';
 import 'package:agent_sessions_mobile/ui/session/chat/session_chat_view.dart';
 
 void main() {
@@ -110,6 +111,7 @@ void main() {
 
     testWidgets('消息 actions 限制 copy/time/fork 并展示已发送引用', (tester) async {
       final clipboardValues = <String>[];
+      final openedPaths = <String>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, (call) async {
             if (call.method == 'Clipboard.setData') {
@@ -129,6 +131,7 @@ void main() {
               height: 520,
               child: SessionChatView(
                 running: false,
+                openFile: (path) async => openedPaths.add(path),
                 nodes: [
                   ConversationNode(
                     key: 'u-actions',
@@ -148,6 +151,11 @@ void main() {
                       ConversationReferenceChip(
                         label: '/goal',
                         kind: ConversationReferenceKind.command,
+                      ),
+                      ConversationReferenceChip(
+                        label: 'README.md',
+                        kind: ConversationReferenceKind.file,
+                        target: 'README.md',
                       ),
                     ],
                   ),
@@ -190,6 +198,10 @@ void main() {
         find.byKey(const Key('session-reference-chip-11-1')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const Key('session-reference-chip-11-2')),
+        findsOneWidget,
+      );
       expect(find.byKey(const Key('session-message-time-11')), findsOneWidget);
       expect(
         find.byKey(const Key('session-pending-steering-badge')),
@@ -213,6 +225,47 @@ void main() {
         find.byKey(const Key('session-message-action-feedback-12')),
         findsOneWidget,
       );
+
+      await tester.tap(find.byKey(const Key('session-reference-chip-11-2')));
+      await tester.pump();
+      expect(openedPaths, ['README.md']);
+    });
+
+    testWidgets('completed assistant fork action 调用上层分支 handler', (
+      tester,
+    ) async {
+      final forkedMessages = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 420,
+              child: SessionChatView(
+                running: false,
+                onFork: (messageId) async => forkedMessages.add(messageId),
+                nodes: const [
+                  ConversationNode(
+                    key: 'assistant-fork-node',
+                    kind: ConversationNodeKind.assistant,
+                    sequence: 14,
+                    label: 'Assistant',
+                    messageId: 'assistant-fork-message',
+                    text: '这一步可以分支。',
+                    canFork: true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      await tester.tap(find.byKey(const Key('session-message-fork-14')));
+      await tester.pump();
+
+      expect(forkedMessages, ['assistant-fork-message']);
     });
 
     testWidgets('文件打开旧请求迟到失败不会覆盖新路径错误面', (tester) async {
@@ -318,6 +371,20 @@ void main() {
                       input: '{"kind":"workspace.status","path":"."}',
                       output: 'fixture: workspace status ready',
                       inspectTarget: 'tool-31',
+                      subcalls: [
+                        ConversationToolSubcall(
+                          callId: 'sub-31-a',
+                          label: '读取子目录',
+                          status: 'ok',
+                          subcalls: [
+                            ConversationToolSubcall(
+                              callId: 'sub-31-a-1',
+                              label: '统计文件',
+                              status: 'running',
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -336,6 +403,8 @@ void main() {
       expect(find.byKey(const Key('session-tool-output-31')), findsOneWidget);
       expect(find.text('IN'), findsOneWidget);
       expect(find.text('OUT'), findsOneWidget);
+      expect(find.byKey(const ValueKey('sub-31-a')), findsOneWidget);
+      expect(find.byKey(const ValueKey('sub-31-a-1')), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('session-tool-inspect-31')));
       await tester.pump();
@@ -416,6 +485,193 @@ void main() {
       await tester.pump();
 
       expect(opened, ['reports/fixture-summary.md', '.']);
+    });
+
+    testWidgets(
+      'assistant feedback 支持 lazy ensure、toggle/retract、备注 popover 与焦点恢复',
+      (tester) async {
+        final writes = <String>[];
+        ConversationFeedbackItem? committed = const ConversationFeedbackItem(
+          rating: ConversationFeedbackRating.positive,
+          version: 1,
+        );
+        final feedback = SessionMessageFeedbackController(
+          reader: (_) async => committed,
+          writer:
+              ({
+                required messageId,
+                required rating,
+                required note,
+                required version,
+              }) async {
+                writes.add('$messageId:$rating:$note:$version');
+                if (rating == null) {
+                  committed = null;
+                  return const ConversationFeedbackResult.success();
+                }
+                committed = ConversationFeedbackItem(
+                  rating: rating,
+                  note: note,
+                  version: version == null ? 2 : 3,
+                );
+                return ConversationFeedbackResult.success(committed);
+              },
+        );
+        await feedback.ensure('assistant-feedback');
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                height: 520,
+                child: SessionChatView(
+                  running: false,
+                  feedbackController: feedback,
+                  nodes: const [
+                    ConversationNode(
+                      key: 'assistant-feedback-node',
+                      kind: ConversationNodeKind.assistant,
+                      sequence: 21,
+                      label: 'Assistant',
+                      messageId: 'assistant-feedback',
+                      text: '已完成',
+                      canCopy: true,
+                      feedbackAvailable: true,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 220));
+
+        expect(
+          find.byKey(const Key('session-message-like-21')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('session-message-dislike-21')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('session-message-note-21')),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('session-message-like-21')));
+        await tester.pump();
+        expect(writes.last, 'assistant-feedback:null:null:1');
+
+        await tester.tap(find.byKey(const Key('session-message-dislike-21')));
+        await tester.pump();
+        expect(
+          writes.last,
+          'assistant-feedback:ConversationFeedbackRating.negative:null:null',
+        );
+
+        await tester.tap(find.byKey(const Key('session-message-note-21')));
+        await tester.pump();
+        expect(
+          find.byKey(const Key('session-message-note-input-21')),
+          findsOneWidget,
+        );
+        await tester.enterText(
+          find.byKey(const Key('session-message-note-input-21')),
+          '需要保留这个结果',
+        );
+        await tester.tap(find.byKey(const Key('session-message-note-save-21')));
+        await tester.pump();
+        expect(
+          find.byKey(const Key('session-message-note-input-21')),
+          findsNothing,
+        );
+        expect(
+          writes.last,
+          'assistant-feedback:ConversationFeedbackRating.negative:需要保留这个结果:2',
+        );
+
+        await tester.tap(find.byKey(const Key('session-message-note-21')));
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(
+          find.byKey(const Key('session-message-note-input-21')),
+          findsNothing,
+        );
+        expect(tester.binding.focusManager.primaryFocus, isNotNull);
+      },
+    );
+
+    testWidgets('assistant feedback version-conflict 保留 note 草稿并显示 panel 错误', (
+      tester,
+    ) async {
+      final feedback = SessionMessageFeedbackController(
+        reader: (_) async => const ConversationFeedbackItem(
+          rating: ConversationFeedbackRating.positive,
+          version: 7,
+        ),
+        writer:
+            ({
+              required messageId,
+              required rating,
+              required note,
+              required version,
+            }) async =>
+                const ConversationFeedbackResult.failure('version-conflict'),
+      );
+      await feedback.ensure('assistant-conflict');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 520,
+              child: SessionChatView(
+                running: false,
+                feedbackController: feedback,
+                nodes: const [
+                  ConversationNode(
+                    key: 'assistant-conflict-node',
+                    kind: ConversationNodeKind.assistant,
+                    sequence: 22,
+                    label: 'Assistant',
+                    messageId: 'assistant-conflict',
+                    text: '已完成',
+                    feedbackAvailable: true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+      await tester.tap(find.byKey(const Key('session-message-note-22')));
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('session-message-note-input-22')),
+        '冲突时不能丢失',
+      );
+      await tester.tap(find.byKey(const Key('session-message-note-save-22')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('session-message-note-input-22')),
+        findsOneWidget,
+      );
+      expect(find.text('反馈已被其他设备修改，请重试。'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('session-message-note-input-22')),
+            )
+            .controller!
+            .text,
+        '冲突时不能丢失',
+      );
     });
   });
 }

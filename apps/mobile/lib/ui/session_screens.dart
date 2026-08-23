@@ -12,25 +12,33 @@ import '../domain/delegation_models.dart';
 import '../domain/session_input_grammar.dart';
 import '../domain/session_models.dart';
 import '../domain/session_projection_models.dart';
+import '../relay/fixture_relay_repository.dart';
 import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_composer_controller.dart';
 import '../state/session_controller.dart';
+import '../state/session_message_feedback_controller.dart';
 import '../state/session_projection_controller.dart';
 import '../state/session_view_controller.dart';
 import 'appearance_controls.dart';
 import 'app_theme.dart';
+import 'session/chat/session_chat_node_seat.dart';
 import 'session/chat/session_chat_view.dart';
+import 'session/trajectory/session_trajectory_view.dart';
 import 'session/composer/session_goal_dock.dart';
 import 'session/composer/session_queue_dock.dart';
 import 'session/composer/session_model_seat.dart';
 import 'session/composer/session_context_meter.dart';
 import 'session/composer/session_stats_line.dart';
 
+import 'session/composer/session_composer_chain.dart';
 import 'session/composer/session_todo_dock.dart';
 import 'session/session_conversation_root.dart';
+import 'session/session_agent_preset.dart';
 import 'session/session_header.dart';
+import 'session/session_subagent_chrome.dart';
+import 'session/session_workspace_picker.dart';
 
 /// Happy 风格会话首页：优先呈现会话工作流，同时将 owner 安全入口保留在轻量控制区。
 class SessionHomeScreen extends ConsumerWidget {
@@ -82,7 +90,13 @@ class SessionHomeScreen extends ConsumerWidget {
             constraints: const BoxConstraints(maxWidth: 480),
             child: RefreshIndicator(
               onRefresh: sessions.refreshSessions,
-              child: _SessionHomeBody(app: app, sessions: sessions),
+              child: _SessionHomeBody(
+                app: app,
+                sessions: sessions,
+                deviceId: app.currentDevice?.id,
+                fixtureMode:
+                    ref.read(relayRepositoryProvider) is FixtureRelayRepository,
+              ),
             ),
           ),
         ),
@@ -92,10 +106,17 @@ class SessionHomeScreen extends ConsumerWidget {
 }
 
 class _SessionHomeBody extends StatelessWidget {
-  const _SessionHomeBody({required this.app, required this.sessions});
+  const _SessionHomeBody({
+    required this.app,
+    required this.sessions,
+    required this.deviceId,
+    required this.fixtureMode,
+  });
 
   final AppController app;
   final SessionController sessions;
+  final String? deviceId;
+  final bool fixtureMode;
 
   @override
   Widget build(BuildContext context) {
@@ -139,7 +160,12 @@ class _SessionHomeBody extends StatelessWidget {
           const SizedBox(height: 12),
         ],
         if (sessions.isEmpty)
-          _SessionEmptyState(canWrite: app.canManageDevices)
+          _SessionEmptyState(
+            sessions: sessions,
+            canWrite: app.canManageDevices,
+            deviceId: deviceId,
+            fixtureMode: fixtureMode,
+          )
         else ...[
           const _SectionLabel('会话'),
           for (final group in groups.entries) ...[
@@ -189,6 +215,12 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
   final _formKey = GlobalKey<FormState>();
   final _workspaceController = TextEditingController(text: _defaultWorkspaceId);
   String _provider = 'codex';
+  String _agentPresetId = fixtureAgentPresetOptions.first.id;
+
+  @override
+  void initState() {
+    super.initState();
+  }
 
   @override
   void dispose() {
@@ -200,6 +232,8 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
   Widget build(BuildContext context) {
     final app = ref.watch(appControllerProvider);
     final sessions = ref.watch(sessionControllerProvider);
+    final fixtureMode =
+        ref.read(relayRepositoryProvider) is FixtureRelayRepository;
     return Scaffold(
       appBar: AppBar(
         title: const _SessionHeaderTitle(title: '新建会话'),
@@ -230,6 +264,22 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                   key: _formKey,
                   child: Column(
                     children: [
+                      SessionWorkspacePicker(
+                        controller: sessions,
+                        selectedId: _workspaceController.text,
+                        canWrite: app.canManageDevices,
+                        deviceId: app.currentDevice?.id,
+                        directoryFlow: fixtureMode
+                            ? showFixtureWorkspaceDirectoryFlow
+                            : null,
+                        onPick: (workspaceId) async {
+                          setState(
+                            () => _workspaceController.text = workspaceId,
+                          );
+                          return true;
+                        },
+                      ),
+                      const SizedBox(height: 12),
                       TextFormField(
                         key: const Key('new-session-workspace-input'),
                         controller: _workspaceController,
@@ -239,6 +289,16 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                             : '请输入工作区 ID。',
                       ),
                       const SizedBox(height: 12),
+                      SessionAgentPresetSeat(
+                        options: fixtureMode
+                            ? fixtureAgentPresetOptions
+                            : const [],
+                        selectedId: _agentPresetId,
+                        enabled: app.canManageDevices && !sessions.isBusy,
+                        onSelected: (value) =>
+                            setState(() => _agentPresetId = value),
+                      ),
+                      if (fixtureMode) const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
                         key: const Key('new-session-provider-select'),
                         initialValue: _provider,
@@ -257,6 +317,11 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                           DropdownMenuItem(
                             value: 'opencode',
                             child: Text('OpenCode'),
+                          ),
+                          // v0.5.next：第五类 Provider（DeepSeek Harness，ACP 桥 per-session 接入）。
+                          DropdownMenuItem(
+                            value: 'dsh',
+                            child: Text('DeepSeek Harness'),
                           ),
                         ],
                         onChanged: app.canManageDevices && !sessions.isBusy
@@ -300,6 +365,15 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
       provider: _provider,
       deviceId: app.currentDevice?.id,
       canWrite: app.canManageDevices,
+      agentPresetId: ref.read(relayRepositoryProvider) is FixtureRelayRepository
+          ? _agentPresetId
+          : null,
+      autoStart:
+          ref.read(relayRepositoryProvider) is! FixtureRelayRepository &&
+          // 真实链路下 opencode/dsh 都由 Daemon 在创建后自动 acquire lease 并
+          // session.start（dsh 为 per-session spawn ACP 桥，见 ADR-013 §3）；
+          // fixture 仓库保持手动状态机，不自动启动。
+          (_provider == 'opencode' || _provider == 'dsh'),
     );
     if (!mounted || session == null) return;
     context.go('/sessions/${session.id}');
@@ -315,6 +389,11 @@ class _SessionChatView extends StatelessWidget {
     required this.deviceId,
     required this.sessionId,
     required this.onInspectTarget,
+    this.feedbackController,
+    this.onFork,
+    this.directoryFlow,
+    this.initialScrollOffset = 0,
+    this.onScrollOffsetChanged,
   });
 
   final SessionController sessions;
@@ -324,6 +403,11 @@ class _SessionChatView extends StatelessWidget {
   final String? deviceId;
   final String sessionId;
   final void Function(String target) onInspectTarget;
+  final SessionMessageFeedbackController? feedbackController;
+  final SessionForkHandler? onFork;
+  final WorkspaceDirectoryFlow? directoryFlow;
+  final double initialScrollOffset;
+  final ValueChanged<double>? onScrollOffsetChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -342,10 +426,29 @@ class _SessionChatView extends StatelessWidget {
     return SessionChatView(
       nodes: projection.chatNodes,
       running: sessions.isStreaming,
+      leading: _SessionRecoveryStrip(
+        controller: recovery,
+        sessionId: sessionId,
+      ),
+      initialScrollOffset: initialScrollOffset,
+      onScrollOffsetChanged: onScrollOffsetChanged,
       onInspectTarget: onInspectTarget,
+      onFork: onFork,
+      feedbackController: feedbackController,
+      historyLoading: sessions.historyLoading,
+      historyError: sessions.historyErrorMessage,
+      canLoadOlder: sessions.canLoadOlder,
+      onLoadOlder: sessions.loadOlderHistory,
       emptyHero: hasConversationContent
           ? null
-          : _ConversationEmptyHero(session: sessions.selectedSession),
+          : _ConversationEmptyHero(
+              sessions: sessions,
+              canWrite: canWrite,
+              deviceId: deviceId,
+              directoryFlow: directoryFlow,
+              onWorkspaceOpened: (sessionId) =>
+                  context.go('/sessions/$sessionId'),
+            ),
       footer: [
         _DelegationPanel(
           controller: delegations,
@@ -373,7 +476,6 @@ class _SessionChatView extends StatelessWidget {
             context.go('/sessions/$childSessionId');
           },
         ),
-        _SessionRecoveryStrip(controller: recovery, sessionId: sessionId),
         if (sessions.errorMessage != null)
           _InlineError(
             key: const Key('session-detail-error-message'),
@@ -386,13 +488,24 @@ class _SessionChatView extends StatelessWidget {
 }
 
 class _ConversationEmptyHero extends StatelessWidget {
-  const _ConversationEmptyHero({required this.session});
+  const _ConversationEmptyHero({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+    required this.onWorkspaceOpened,
+    this.directoryFlow,
+  });
 
-  final MobileSession? session;
+  final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
+  final ValueChanged<String> onWorkspaceOpened;
+  final WorkspaceDirectoryFlow? directoryFlow;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final session = sessions.selectedSession;
     return Column(
       key: const Key('happy-session-empty-state'),
       children: [
@@ -424,6 +537,32 @@ class _ConversationEmptyHero extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
+        SessionWorkspacePicker(
+          controller: sessions,
+          selectedId: session?.workspaceId,
+          canWrite: canWrite,
+          deviceId: deviceId,
+          directoryFlow: directoryFlow,
+          markMissingAsDeleted: true,
+          onPick: (workspaceId) async {
+            final opened = await sessions.openWorkspace(
+              workspaceId: workspaceId,
+              provider: session?.provider ?? 'codex',
+              deviceId: deviceId,
+              canWrite: canWrite,
+              agentPresetId: session?.agentPresetId,
+              autoStart: directoryFlow == null,
+            );
+            if (opened == null) return false;
+            onWorkspaceOpened(opened.id);
+            return true;
+          },
+        ),
+        if (session?.agentPresetId != null) ...[
+          const SizedBox(height: 8),
+          SessionAgentPresetLabel(presetId: session?.agentPresetId),
+        ],
+        const SizedBox(height: 18),
         Text(
           'No messages yet',
           style: theme.textTheme.bodyMedium?.copyWith(
@@ -441,771 +580,6 @@ class _ConversationEmptyHero extends StatelessWidget {
 /// 不改变 Chat projection；提供 toolbar（搜索 / 折叠 turn / 折叠 assistant call /
 /// duration/equal-width 模式）与 record inspector 展示。真实 timeline 缩放/虚拟化
 /// 与选区重映射仍在 P6 后续阶段，本切片先固化「按投影渲染 + 搜索 + 折叠」契约。
-class SessionTrajectoryView extends StatefulWidget {
-  const SessionTrajectoryView({
-    required this.records,
-    required this.inspectTarget,
-    required this.onInspectConsumed,
-    super.key,
-  });
-
-  final List<TrajectoryRecord> records;
-  final String? inspectTarget;
-  final VoidCallback onInspectConsumed;
-
-  @override
-  State<SessionTrajectoryView> createState() => _SessionTrajectoryViewState();
-}
-
-class _SessionTrajectoryViewState extends State<SessionTrajectoryView> {
-  final _ledgerController = ScrollController();
-  String _query = '';
-  String _appliedQuery = '';
-  Timer? _searchDebounce;
-  bool _equalWidth = false;
-  bool _foldTurns = false;
-  bool _foldAssistantCalls = false;
-  int _visibleLimit = 10;
-  double _rangeStart = 0;
-  double _rangeEnd = 1;
-  bool _rangeActive = false;
-  String? _selectedKey;
-
-  @override
-  void dispose() {
-    _searchDebounce?.cancel();
-    _ledgerController.dispose();
-    super.dispose();
-  }
-
-  /// P6-A：搜索、折叠或 mode 变化后重置 ledger offset。
-  /// 该状态只属于 Trajectory view，不回写 Chat projection 或会话写入口。
-  void _resetLedgerOffset() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_ledgerController.hasClients) return;
-      _ledgerController.jumpTo(0);
-    });
-  }
-
-  /// P6-B：搜索索引节流。输入框立即反映用户文字，过滤索引延迟 250ms 更新，
-  /// 避免每次按键都重建整条 ledger；streaming partial 仍在 records 中参与搜索。
-  void _setQuery(String value) {
-    setState(() => _query = value);
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-      if (!mounted) return;
-      setState(() => _appliedQuery = value.trim());
-      _resetLedgerOffset();
-    });
-  }
-
-  void _setEqualWidth(bool value) {
-    setState(() {
-      _equalWidth = value;
-      // P6-B：切换 timeline mode 时清空旧 range selection，避免旧时间轴选区套到新布局。
-      _clearRangeSelection();
-    });
-    _resetLedgerOffset();
-  }
-
-  void _setFoldTurns(bool value) {
-    setState(() => _foldTurns = value);
-    _resetLedgerOffset();
-  }
-
-  void _setFoldAssistantCalls(bool value) {
-    setState(() => _foldAssistantCalls = value);
-    _resetLedgerOffset();
-  }
-
-  /// 按当前 toolbar / timeline 过滤后的全量 records；范围选择用 fraction 过滤。
-  List<TrajectoryRecord> get _filtered {
-    final q = _appliedQuery.trim().toLowerCase();
-    final records = widget.records.where((record) {
-      if (q.isNotEmpty) {
-        final haystack = [
-          record.label,
-          record.status ?? '',
-          record.summary ?? '',
-        ].join(' ').toLowerCase();
-        if (!haystack.contains(q)) return false;
-      }
-      // 折叠 turn：只保留 user/assistant 分组头，跳过 tool/reasoning 细粒度记录。
-      if (_foldTurns) {
-        const groupHead = {
-          ConversationNodeKind.user,
-          ConversationNodeKind.assistant,
-        };
-        if (!groupHead.contains(record.kind)) return false;
-      }
-      // 折叠 assistant call：隐藏 tool 记录。
-      if (_foldAssistantCalls && record.kind == ConversationNodeKind.tool) {
-        return false;
-      }
-      // Overview timeline 范围选择：只显示落在选区内的记录。
-      if (_rangeActive) {
-        final pos = _positionFor(record);
-        if (pos < _rangeStart || pos > _rangeEnd) return false;
-      }
-      return true;
-    }).toList(growable: false);
-    return records;
-  }
-
-  /// Ledger 当前渲染窗口：默认只显示最近 [_visibleLimit] 条，支持 load older 展开。
-  List<TrajectoryRecord> get _ledgerRecords {
-    final filtered = _filtered;
-    if (filtered.length <= _visibleLimit) return filtered;
-    return filtered.sublist(filtered.length - _visibleLimit);
-  }
-
-  bool get _hasOlder => _filtered.length > _visibleLimit;
-
-  /// 把当前渲染窗口展开为“turn 分组头 + record”的轻量条目序列。
-  /// 分组头只来自投影层给出的 [TrajectoryRecord.turnId]，不写回 Chat/Relay。
-  List<Object> get _ledgerItems {
-    final items = <Object>[];
-    String? lastTurn;
-    for (final record in _ledgerRecords) {
-      if (record.turnId != lastTurn) {
-        items.add(_TrajectoryTurnHeaderData(record.turnId));
-        lastTurn = record.turnId;
-      }
-      items.add(record);
-    }
-    return items;
-  }
-
-  void _loadOlder() {
-    setState(() => _visibleLimit += 10);
-    _resetLedgerOffset();
-  }
-
-  /// 计算记录在 Overview timeline 上的 0..1 位置。
-  /// 没有可靠时间时回退到等宽位置，不伪造真实时长。
-  double _positionFor(TrajectoryRecord record) {
-    final total = widget.records.length;
-    if (total <= 1) return 0.5;
-    final index = widget.records.indexWhere((item) => item.key == record.key);
-    final normalizedIndex = index / (total - 1);
-    if (_equalWidth || widget.records.every((item) => item.createdAt == null)) {
-      return normalizedIndex;
-    }
-    final times = widget.records
-        .map((item) => item.createdAt)
-        .whereType<DateTime>()
-        .toList();
-    if (times.isEmpty) return normalizedIndex;
-    final min = times.reduce(
-      (left, right) => left.isBefore(right) ? left : right,
-    );
-    final max = times.reduce(
-      (left, right) => left.isAfter(right) ? left : right,
-    );
-    final span = max.difference(min).inMicroseconds;
-    final current = record.createdAt;
-    if (current == null || span <= 0) return normalizedIndex;
-    return (current.difference(min).inMicroseconds / span).clamp(0.0, 1.0);
-  }
-
-  void _setRange(double start, double end) {
-    setState(() {
-      _rangeActive = true;
-      _rangeStart = start.clamp(0.0, 1.0);
-      _rangeEnd = end.clamp(0.0, 1.0);
-      if (_rangeStart > _rangeEnd) {
-        final tmp = _rangeStart;
-        _rangeStart = _rangeEnd;
-        _rangeEnd = tmp;
-      }
-    });
-    _resetLedgerOffset();
-  }
-
-  void _clearRangeSelection() {
-    _rangeActive = false;
-    _rangeStart = 0;
-    _rangeEnd = 1;
-  }
-
-  void _selectRecord(String key) {
-    setState(() => _selectedKey = key);
-    _resetLedgerOffset();
-  }
-
-  void _closeInspector() {
-    setState(() => _selectedKey = null);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final target = widget.inspectTarget;
-    if (target != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final match = widget.records
-            .where((record) => record.inspectTarget == target)
-            .firstOrNull;
-        if (match != null) _selectRecord(match.key);
-        widget.onInspectConsumed();
-      });
-    }
-    final visibleItems = _ledgerItems;
-    final selected = widget.records
-        .where((record) => record.key == _selectedKey)
-        .firstOrNull;
-    final headers = <Widget>[
-      if (target != null) _TrajectoryInspectBanner(target: target),
-      _TrajectoryToolbar(
-        query: _query,
-        equalWidth: _equalWidth,
-        foldTurns: _foldTurns,
-        foldAssistantCalls: _foldAssistantCalls,
-        onQueryChanged: _setQuery,
-        onEqualWidth: _setEqualWidth,
-        onFoldTurns: _setFoldTurns,
-        onFoldAssistantCalls: _setFoldAssistantCalls,
-      ),
-      _TrajectoryTimeline(
-        records: widget.records,
-        equalWidth: _equalWidth,
-        rangeStart: _rangeStart,
-        rangeEnd: _rangeEnd,
-        rangeActive: _rangeActive,
-        onRangeChanged: _setRange,
-        onClearRange: () {
-          setState(_clearRangeSelection);
-          _resetLedgerOffset();
-        },
-        onRecordTap: _selectRecord,
-      ),
-      if (selected != null)
-        _TrajectoryInspector(record: selected, onClose: _closeInspector),
-    ];
-    final itemCount = headers.length + (_hasOlder ? 1 : 0) + visibleItems.length;
-    return Container(
-      key: const Key('session-trajectory-view'),
-      child: ListView.builder(
-        key: const Key('session-trajectory-ledger'),
-        controller: _ledgerController,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-        itemCount: itemCount,
-        itemBuilder: (context, index) {
-          if (index < headers.length) return headers[index];
-          var ledgerIndex = index - headers.length;
-          if (_hasOlder && ledgerIndex == 0) {
-            return _TrajectoryLoadOlder(onTap: _loadOlder);
-          }
-          if (_hasOlder) ledgerIndex -= 1;
-          if (ledgerIndex < 0 || ledgerIndex >= visibleItems.length) {
-            return const SizedBox.shrink();
-          }
-          final item = visibleItems[ledgerIndex];
-          if (item is _TrajectoryTurnHeaderData) {
-            return _TrajectoryTurnHeader(turnId: item.turnId);
-          }
-          final record = item as TrajectoryRecord;
-          return _TrajectoryRow(
-            record: record,
-            equalWidth: _equalWidth,
-            selected: record.key == _selectedKey,
-            onTap: () => _selectRecord(record.key),
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// P6 Trajectory toolbar：搜索 + duration/equal-width + turn/call 折叠。
-class _TrajectoryToolbar extends StatelessWidget {
-  const _TrajectoryToolbar({
-    required this.query,
-    required this.equalWidth,
-    required this.foldTurns,
-    required this.foldAssistantCalls,
-    required this.onQueryChanged,
-    required this.onEqualWidth,
-    required this.onFoldTurns,
-    required this.onFoldAssistantCalls,
-  });
-
-  final String query;
-  final bool equalWidth;
-  final bool foldTurns;
-  final bool foldAssistantCalls;
-  final ValueChanged<String> onQueryChanged;
-  final ValueChanged<bool> onEqualWidth;
-  final ValueChanged<bool> onFoldTurns;
-  final ValueChanged<bool> onFoldAssistantCalls;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: Column(
-        children: [
-          TextField(
-            key: const Key('session-trajectory-search'),
-            decoration: const InputDecoration(
-              labelText: '搜索轨迹',
-              isDense: true,
-              prefixIcon: Icon(Icons.search, size: 18),
-            ),
-            onChanged: onQueryChanged,
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              FilterChip(
-                key: const Key('session-trajectory-mode-toggle'),
-                label: Text(equalWidth ? '等宽' : '时长'),
-                selected: equalWidth,
-                onSelected: onEqualWidth,
-              ),
-              const SizedBox(width: 6),
-              FilterChip(
-                key: const Key('session-trajectory-fold-turns'),
-                label: const Text('折叠轮次'),
-                selected: foldTurns,
-                onSelected: onFoldTurns,
-              ),
-              const SizedBox(width: 6),
-              FilterChip(
-                key: const Key('session-trajectory-fold-calls'),
-                label: const Text('折叠调用'),
-                selected: foldAssistantCalls,
-                onSelected: onFoldAssistantCalls,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// P6 Trajectory 单条记录行：序列 + 语义标签 + 状态 + 摘要。
-class _TrajectoryRow extends StatelessWidget {
-  const _TrajectoryRow({
-    required this.record,
-    required this.equalWidth,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final TrajectoryRecord record;
-  final bool equalWidth;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return InkWell(
-      key: Key('trajectory-row-${record.key}'),
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-        decoration: selected
-            ? BoxDecoration(
-                color: theme.colorScheme.primaryContainer.withValues(
-                  alpha: 0.35,
-                ),
-                borderRadius: BorderRadius.circular(8),
-              )
-            : null,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 28,
-              child: Text('${record.sequence}', style: theme.textTheme.labelSmall),
-            ),
-            // v0.5/P6：duration/equal-width 切换只改展示条，不触碰 Chat projection。
-            if (equalWidth)
-              const SizedBox(width: 2)
-            else
-              Padding(
-                padding: const EdgeInsets.only(right: 6, top: 2),
-                child: Container(
-                  width: 3,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    color: _kindColor(theme, record.kind),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(record.label, style: theme.textTheme.titleSmall),
-                      ),
-                      if (record.isStreaming) ...[
-                        const SizedBox(width: 6),
-                        Icon(Icons.sync, size: 12, color: theme.colorScheme.primary),
-                      ],
-                    ],
-                  ),
-                  if (record.status?.isNotEmpty == true) ...[
-                    const SizedBox(height: 2),
-                    Text(record.status!, style: theme.textTheme.bodySmall),
-                  ],
-                  if (record.summary?.trim().isNotEmpty == true) ...[
-                    const SizedBox(height: 4),
-                    Text(record.summary!),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Color _kindColor(ThemeData theme, ConversationNodeKind kind) {
-    return switch (kind) {
-      ConversationNodeKind.user => theme.colorScheme.primary,
-      ConversationNodeKind.assistant => theme.colorScheme.tertiary,
-      ConversationNodeKind.tool => theme.colorScheme.secondary,
-      _ => theme.colorScheme.outlineVariant,
-    };
-  }
-}
-
-/// 轻量 ledger 条目：turn 分组头的数据占位。
-class _TrajectoryTurnHeaderData {
-  const _TrajectoryTurnHeaderData(this.turnId);
-
-  final String? turnId;
-}
-
-/// Trajectory turn 分组头。
-class _TrajectoryTurnHeader extends StatelessWidget {
-  const _TrajectoryTurnHeader({required this.turnId});
-
-  final String? turnId;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    key: Key('trajectory-turn-header-${turnId ?? 'none'}'),
-    padding: const EdgeInsets.only(top: 8, bottom: 2),
-    child: Text(
-      turnId == null ? '未分组' : '轮次 ${turnId!.replaceFirst('turn-', '#')}',
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-        fontWeight: FontWeight.bold,
-      ),
-    ),
-  );
-}
-
-/// Trajectory load older 行：仅在有更早记录时出现。
-class _TrajectoryLoadOlder extends StatelessWidget {
-  const _TrajectoryLoadOlder({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) => Center(
-    child: TextButton(
-      key: const Key('session-trajectory-load-older'),
-      onPressed: onTap,
-      child: const Text('加载更早轨迹'),
-    ),
-  );
-}
-
-/// Trajectory Overview timeline：支持拖拽范围选择和点击选择最近记录。
-///
-/// 时间字段缺失时回退到等宽位置，不伪造真实时长；切换 mode 会由上层清空选区。
-class _TrajectoryTimeline extends StatefulWidget {
-  const _TrajectoryTimeline({
-    required this.records,
-    required this.equalWidth,
-    required this.rangeStart,
-    required this.rangeEnd,
-    required this.rangeActive,
-    required this.onRangeChanged,
-    required this.onClearRange,
-    required this.onRecordTap,
-  });
-
-  final List<TrajectoryRecord> records;
-  final bool equalWidth;
-  final double rangeStart;
-  final double rangeEnd;
-  final bool rangeActive;
-  final void Function(double start, double end) onRangeChanged;
-  final VoidCallback onClearRange;
-  final ValueChanged<String> onRecordTap;
-
-  @override
-  State<_TrajectoryTimeline> createState() => _TrajectoryTimelineState();
-}
-
-class _TrajectoryTimelineState extends State<_TrajectoryTimeline> {
-  double? _dragStart;
-
-  double _positionFor(TrajectoryRecord record) {
-    final total = widget.records.length;
-    if (total <= 1) return 0.5;
-    final index = widget.records.indexWhere((item) => item.key == record.key);
-    final normalizedIndex = index / (total - 1);
-    if (widget.equalWidth ||
-        widget.records.every((item) => item.createdAt == null)) {
-      return normalizedIndex;
-    }
-    final times = widget.records
-        .map((item) => item.createdAt)
-        .whereType<DateTime>()
-        .toList();
-    if (times.isEmpty) return normalizedIndex;
-    final min = times.reduce(
-      (left, right) => left.isBefore(right) ? left : right,
-    );
-    final max = times.reduce(
-      (left, right) => left.isAfter(right) ? left : right,
-    );
-    final span = max.difference(min).inMicroseconds;
-    final current = record.createdAt;
-    if (current == null || span <= 0) return normalizedIndex;
-    return (current.difference(min).inMicroseconds / span).clamp(0.0, 1.0);
-  }
-
-  TrajectoryRecord _nearest(double position) {
-    if (widget.records.isEmpty) {
-      throw StateError('timeline should not be empty');
-    }
-    var best = widget.records.first;
-    var bestDistance = double.infinity;
-    for (final record in widget.records) {
-      final distance = (_positionFor(record) - position).abs();
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = record;
-      }
-    }
-    return best;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Overview',
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              if (widget.rangeActive)
-                TextButton(
-                  key: const Key('session-trajectory-range-clear'),
-                  onPressed: widget.onClearRange,
-                  child: const Text('清除选区'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final width = constraints.maxWidth;
-              final start = widget.rangeStart * width;
-              final end = widget.rangeEnd * width;
-              return GestureDetector(
-                key: const Key('session-trajectory-overview'),
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragStart: (details) {
-                  final position = (details.localPosition.dx / width).clamp(
-                    0.0,
-                    1.0,
-                  );
-                  setState(() => _dragStart = position);
-                  widget.onRangeChanged(position, position);
-                  widget.onRecordTap(_nearest(position).key);
-                },
-                onHorizontalDragUpdate: (details) {
-                  final startPosition = _dragStart;
-                  if (startPosition == null) return;
-                  final position = (details.localPosition.dx / width).clamp(
-                    0.0,
-                    1.0,
-                  );
-                  widget.onRangeChanged(startPosition, position);
-                },
-                onHorizontalDragEnd: (_) => setState(() => _dragStart = null),
-                onHorizontalDragCancel: () => setState(() => _dragStart = null),
-                onTapUp: (details) {
-                  final position = (details.localPosition.dx / width).clamp(
-                    0.0,
-                    1.0,
-                  );
-                  widget.onRangeChanged(position, position);
-                  widget.onRecordTap(_nearest(position).key);
-                },
-                child: Container(
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest.withValues(
-                      alpha: 0.45,
-                    ),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: Stack(
-                      children: [
-                        if (widget.rangeActive)
-                          Positioned(
-                            left: start,
-                            width: (end - start).abs().clamp(0.0, width),
-                            top: 0,
-                            bottom: 0,
-                            child: ColoredBox(
-                              color: theme.colorScheme.primaryContainer,
-                            ),
-                          ),
-                        for (final record in widget.records)
-                          Positioned(
-                            left: (_positionFor(record) * width).clamp(
-                              0.0,
-                              width - 2,
-                            ),
-                            top: 4,
-                            bottom: 4,
-                            child: Container(
-                              width: 2,
-                              decoration: BoxDecoration(
-                                color: _kindColor(theme, record.kind),
-                                borderRadius: BorderRadius.circular(1),
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Color _kindColor(ThemeData theme, ConversationNodeKind kind) {
-    return switch (kind) {
-      ConversationNodeKind.user => theme.colorScheme.primary,
-      ConversationNodeKind.assistant => theme.colorScheme.tertiary,
-      ConversationNodeKind.tool => theme.colorScheme.secondary,
-      _ => theme.colorScheme.outlineVariant,
-    };
-  }
-}
-
-/// Trajectory record inspector：展示当前选中记录的 display-safe 字段。
-class _TrajectoryInspector extends StatelessWidget {
-  const _TrajectoryInspector({required this.record, required this.onClose});
-
-  final TrajectoryRecord record;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      key: const Key('session-trajectory-inspector'),
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHigh,
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '记录检查器',
-                  style: theme.textTheme.labelLarge,
-                ),
-              ),
-              IconButton(
-                key: const Key('session-trajectory-inspector-close'),
-                tooltip: '关闭记录检查器',
-                onPressed: onClose,
-                icon: const Icon(Icons.close, size: 18),
-              ),
-            ],
-          ),
-          Text('序列 ${record.sequence} · ${record.label}'),
-          if (record.status?.isNotEmpty == true) ...[
-            const SizedBox(height: 2),
-            Text('状态：${record.status}'),
-          ],
-          if (record.summary?.trim().isNotEmpty == true) ...[
-            const SizedBox(height: 2),
-            Text('摘要：${record.summary}'),
-          ],
-          if (record.turnId != null) ...[
-            const SizedBox(height: 2),
-            Text('轮次：${record.turnId}'),
-          ],
-          if (record.createdAt != null) ...[
-            const SizedBox(height: 2),
-            Text('时间：${record.createdAt!.toIso8601String()}'),
-          ],
-          if (record.inspectTarget != null) ...[
-            const SizedBox(height: 2),
-            Text('Inspect：${record.inspectTarget}'),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _TrajectoryInspectBanner extends StatelessWidget {
-  const _TrajectoryInspectBanner({required this.target});
-
-  final String target;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    key: const Key('session-trajectory-inspect-target'),
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.manage_search_outlined),
-        const SizedBox(width: 8),
-        Expanded(child: Text('Inspect target: $target')),
-      ],
-    ),
-  );
-}
-
 class SessionDetailScreen extends ConsumerStatefulWidget {
   const SessionDetailScreen({required this.sessionId, super.key});
 
@@ -1217,9 +591,12 @@ class SessionDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
+  late SessionMessageFeedbackController _feedbackController;
+
   @override
   void initState() {
     super.initState();
+    _feedbackController = _createFeedbackController(widget.sessionId);
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _selectCurrentSession(),
     );
@@ -1229,12 +606,52 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
   void didUpdateWidget(covariant SessionDetailScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sessionId != widget.sessionId) {
+      _feedbackController.dispose();
+      _feedbackController = _createFeedbackController(widget.sessionId);
       // go_router 更新同一详情 State 时仍处于 build；下一帧再通知 delegation provider，
       // 防止 child 切入触发 Riverpod 的 build 期状态修改断言。
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_selectCurrentSession());
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _feedbackController.dispose();
+    super.dispose();
+  }
+
+  SessionMessageFeedbackController _createFeedbackController(String sessionId) {
+    final relay = ref.read(relayRepositoryProvider);
+    return SessionMessageFeedbackController(
+      reader: (messageId) => relay.getMessageFeedback(sessionId, messageId),
+      writer:
+          ({
+            required messageId,
+            required rating,
+            required note,
+            required version,
+          }) {
+            if (rating == null) {
+              if (version == null) {
+                return Future.value(const ConversationFeedbackResult.success());
+              }
+              return relay.deleteMessageFeedback(
+                sessionId,
+                messageId: messageId,
+                version: version,
+              );
+            }
+            return relay.putMessageFeedback(
+              sessionId,
+              messageId: messageId,
+              rating: rating,
+              note: note,
+              version: version,
+            );
+          },
+    );
   }
 
   Future<void> _selectCurrentSession({bool force = false}) async {
@@ -1262,7 +679,12 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
       resizeToAvoidBottomInset: true,
       body: SessionConversationRoot(
         header: SessionHeader(
-          title: _HappySessionHeaderTitle(session: session),
+          title: _HappySessionHeaderTitle(
+            session: session,
+            onOpenParent: session?.parentSessionId == null
+                ? null
+                : () => context.go('/sessions/${session!.parentSessionId}'),
+          ),
           status: _SessionStatusStrip(
             session: session,
             hasLease: sessions.hasSelectedLease,
@@ -1283,14 +705,32 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                 .setMode(widget.sessionId, mode);
           },
           onBack: () => context.go('/home'),
-          actions: _SessionQuickMenu(
-            sessions: sessions,
-            canWrite: app.canManageDevices,
-            deviceId: app.currentDevice?.id,
-            sessionId: widget.sessionId,
-            onRefresh: sessions.isDetailLoading || delegations.isLoading
-                ? null
-                : () => unawaited(_selectCurrentSession(force: true)),
+          actions: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SessionAgentPresetLabel(presetId: session?.agentPresetId),
+              SessionSubagentCatalogAction(
+                controller: delegations,
+                parentSessionId: widget.sessionId,
+                available: sessions.selectedProviderCapabilities
+                    .capability('delegate_session')
+                    .isSupported,
+                onOpenChild: (childSessionId) async {
+                  await sessions.selectSession(childSessionId);
+                  if (!context.mounted) return;
+                  context.go('/sessions/$childSessionId');
+                },
+              ),
+              _SessionQuickMenu(
+                sessions: sessions,
+                canWrite: app.canManageDevices,
+                deviceId: app.currentDevice?.id,
+                sessionId: widget.sessionId,
+                onRefresh: sessions.isDetailLoading || delegations.isLoading
+                    ? null
+                    : () => unawaited(_selectCurrentSession(force: true)),
+              ),
+            ],
           ),
           utilities: _SessionControlPanel(
             sessions: sessions,
@@ -1306,13 +746,40 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                 canWrite: app.canManageDevices,
                 deviceId: app.currentDevice?.id,
                 sessionId: widget.sessionId,
+                directoryFlow:
+                    ref.read(relayRepositoryProvider) is FixtureRelayRepository
+                    ? showFixtureWorkspaceDirectoryFlow
+                    : null,
+                initialScrollOffset: viewController.chatScrollOffsetFor(
+                  widget.sessionId,
+                ),
+                onScrollOffsetChanged: (offset) => viewController
+                    .setChatScrollOffset(widget.sessionId, offset),
                 onInspectTarget: (target) {
-                  ref
-                      .read(sessionViewControllerProvider)
-                      .setInspectTarget(widget.sessionId, target);
+                  viewController.setInspectTarget(widget.sessionId, target);
                 },
+                feedbackController: _feedbackController,
+                onFork:
+                    sessions.selectedProviderCapabilities
+                        .capability('fork')
+                        .isSupported
+                    ? (messageId) async {
+                        final child = await sessions.forkFromMessage(
+                          messageId: messageId,
+                          deviceId: app.currentDevice?.id,
+                          canWrite: app.canManageDevices,
+                        );
+                        if (child == null || !context.mounted) return;
+                        context.go('/sessions/${child.id}');
+                      }
+                    : null,
               )
             : SessionTrajectoryView(
+                initialState: viewController.trajectoryStateFor(
+                  widget.sessionId,
+                ),
+                onStateChanged: (state) =>
+                    viewController.setTrajectoryState(widget.sessionId, state),
                 // v0.5/P6：Trajectory 消费 projection 的 display-safe records，不读 raw events。
                 records: const SessionProjectionController()
                     .buildSnapshot(
@@ -1328,31 +795,33 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                     widget.sessionId,
                   );
                   if (target == null) return;
-                  ref
-                      .read(sessionViewControllerProvider)
-                      .clearInspectTarget(widget.sessionId, target);
+                  viewController.clearInspectTarget(widget.sessionId, target);
                 },
               ),
-        composer: _SessionComposer(
-          sessions: sessions,
-          canWrite: app.canManageDevices,
-          deviceId: app.currentDevice?.id,
-          interactionEvents: sessions.timeline,
-          // v0.5/P5：busy Enter 偏好来自用户级设置（默认 Queue），与设置页同一事实来源。
-          enterBehavior: ref
-              .watch(composerPreferenceControllerProvider)
-              .enterBehavior,
-          fileCompletionCatalog: () async {
-            try {
-              final entries = await ref
-                  .read(workspaceFilesRepositoryProvider)
-                  .listDirectory('');
-              return entries.map((entry) => entry.name).toList();
-            } catch (_) {
-              return const [];
-            }
-          },
-        ),
+        composer: session?.subagentReadOnlyReason != null
+            ? SessionSubagentReadOnlyComposer(
+                reason: session!.subagentReadOnlyReason!,
+              )
+            : _SessionComposer(
+                sessions: sessions,
+                canWrite: app.canManageDevices,
+                deviceId: app.currentDevice?.id,
+                interactionEvents: sessions.timeline,
+                // v0.5/P5：busy Enter 偏好来自用户级设置（默认 Queue），与设置页同一事实来源。
+                enterBehavior: ref
+                    .watch(composerPreferenceControllerProvider)
+                    .enterBehavior,
+                fileCompletionCatalog: () async {
+                  try {
+                    final entries = await ref
+                        .read(workspaceFilesRepositoryProvider)
+                        .listDirectory('');
+                    return entries.map((entry) => entry.name).toList();
+                  } catch (_) {
+                    return const [];
+                  }
+                },
+              ),
       ),
     );
   }
@@ -2692,1068 +2161,6 @@ class _SkillConfirmationCard extends StatelessWidget {
   }
 }
 
-class _PermissionRequestItem extends StatelessWidget {
-  const _PermissionRequestItem({
-    required this.event,
-    required this.canWrite,
-    required this.hasLease,
-    required this.sessions,
-    required this.deviceId,
-  });
-
-  final SessionTimelineEvent event;
-  final bool canWrite;
-  final bool hasLease;
-  final SessionController sessions;
-  final String? deviceId;
-
-  @override
-  Widget build(BuildContext context) {
-    final permission = event.permission;
-    if (permission == null) return _SystemNotice(event: event);
-    final resolved =
-        permission.resolved == true ||
-        sessions.isRequestResolved('permission', permission.requestId);
-    final pending = sessions.isRequestPending(permission.requestId);
-    final enabled = canWrite && hasLease && !resolved && !pending;
-    return Container(
-      key: Key('permission-card-${permission.requestId}'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.tertiaryContainer,
-        border: Border.all(color: Theme.of(context).colorScheme.tertiary),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            key: Key('permission-waiting-strip-${permission.requestId}'),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.tertiary,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.circle,
-                  size: 8,
-                  color: Theme.of(context).colorScheme.onTertiary,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '等待确认',
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onTertiary,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (pending) ...[
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Theme.of(context).colorScheme.onTertiary,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(Icons.shield_outlined),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  permission.title,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // v0.5/P4-D：理由和命令可能是模型生成的长文本；滚动区只包住正文，
-          // 决策按钮留在外层，避免命令过长时 allow/reject 不可达。
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 140),
-            child: SingleChildScrollView(
-              key: Key('permission-command-scroll-${permission.requestId}'),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(permission.summary),
-                  if (permission.command != null) ...[
-                    const SizedBox(height: 8),
-                    Container(
-                      key: Key(
-                        'permission-command-text-${permission.requestId}',
-                      ),
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: Theme.of(context).dividerColor,
-                        ),
-                      ),
-                      child: Text(
-                        permission.command!,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              IconButton(
-                key: Key('permission-reject-${permission.requestId}'),
-                tooltip: '拒绝',
-                onPressed: enabled
-                    ? () => sessions.resolvePermission(
-                        requestId: permission.requestId,
-                        approved: false,
-                        deviceId: deviceId,
-                        canWrite: canWrite,
-                      )
-                    : null,
-                icon: const Icon(Icons.close),
-              ),
-              IconButton(
-                key: Key('permission-approve-${permission.requestId}'),
-                tooltip: '允许',
-                onPressed: enabled
-                    ? () => sessions.resolvePermission(
-                        requestId: permission.requestId,
-                        approved: true,
-                        deviceId: deviceId,
-                        canWrite: canWrite,
-                      )
-                    : null,
-                icon: const Icon(Icons.check),
-              ),
-            ],
-          ),
-          if (resolved)
-            Text(
-              '已处理',
-              key: Key('permission-resolved-${permission.requestId}'),
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _QuestionRequestItem extends StatefulWidget {
-  const _QuestionRequestItem({
-    required this.event,
-    required this.canWrite,
-    required this.hasLease,
-    required this.sessions,
-    required this.deviceId,
-  });
-
-  final SessionTimelineEvent event;
-  final bool canWrite;
-  final bool hasLease;
-  final SessionController sessions;
-  final String? deviceId;
-
-  @override
-  State<_QuestionRequestItem> createState() => _QuestionRequestItemState();
-}
-
-class _QuestionRequestItemState extends State<_QuestionRequestItem> {
-  final Map<String, TextEditingController> _customAnswerControllers = {};
-  final Map<String, Set<String>> _selectedAnswers = {};
-  final Set<String> _skippedStepIds = {};
-  String? _activeRequestId;
-  String? _validationError;
-  String? _submissionError;
-  bool _minimized = false;
-  bool _locallyCancelled = false;
-  int _questionIndex = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _activeRequestId = widget.event.question?.requestId;
-  }
-
-  @override
-  void didUpdateWidget(covariant _QuestionRequestItem oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final nextRequestId = widget.event.question?.requestId;
-    if (_activeRequestId == nextRequestId) return;
-    // v0.5/P4-B/P4-E：同一 request replay 保留每题草稿；新的 request/key 必须重置本地状态。
-    _activeRequestId = nextRequestId;
-    _resetDraftState();
-  }
-
-  @override
-  void dispose() {
-    for (final controller in _customAnswerControllers.values) {
-      controller.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final question = widget.event.question;
-    if (question == null) return _SystemNotice(event: widget.event);
-    final steps = _stepsFor(question);
-    final currentIndex = _questionIndex.clamp(0, steps.length - 1).toInt();
-    final currentStep = steps[currentIndex];
-    final stepKey = _stepKey(question, currentStep, currentIndex, steps.length);
-    final controller = _controllerFor(currentStep.id);
-    final selected = _selectedAnswers[currentStep.id] ?? const <String>{};
-    final resolved =
-        question.resolved == true ||
-        widget.sessions.isRequestResolved('question', question.requestId);
-    final pending = widget.sessions.isRequestPending(question.requestId);
-    final enabled = widget.canWrite && widget.hasLease && !resolved && !pending;
-    final answered = _answered(currentStep);
-    if (_locallyCancelled && !resolved) {
-      return Container(
-        key: Key('question-card-${question.requestId}'),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHigh,
-          border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          key: Key('question-local-cancelled-${question.requestId}'),
-          children: [
-            const Icon(Icons.close),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '已在本机关闭此问题，未向 Host 发送取消命令。',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ),
-            TextButton(
-              key: Key('question-cancel-restore-${question.requestId}'),
-              onPressed: () => setState(() => _locallyCancelled = false),
-              child: const Text('恢复'),
-            ),
-          ],
-        ),
-      );
-    }
-    if (_minimized) {
-      return Container(
-        key: Key('question-card-${question.requestId}'),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHigh,
-          border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          key: Key('question-minimized-${question.requestId}'),
-          children: [
-            const Icon(Icons.help_outline),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                currentStep.prompt,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            TextButton(
-              key: Key('question-restore-${question.requestId}'),
-              onPressed: () => setState(() => _minimized = false),
-              child: const Text('展开'),
-            ),
-          ],
-        ),
-      );
-    }
-    return Container(
-      key: Key('question-card-${question.requestId}'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.help_outline),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (steps.length > 1)
-                      Text(
-                        '${currentIndex + 1} / ${steps.length}',
-                        key: Key('question-progress-${question.requestId}'),
-                        style: Theme.of(context).textTheme.labelMedium,
-                      ),
-                    Text(
-                      currentStep.prompt,
-                      key: Key('question-prompt-$stepKey'),
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ],
-                ),
-              ),
-              IconButton(
-                key: Key('question-minimize-${question.requestId}'),
-                tooltip: '最小化问题',
-                onPressed: () => setState(() => _minimized = true),
-                icon: const Icon(Icons.expand_more),
-              ),
-              IconButton(
-                key: Key('question-cancel-${question.requestId}'),
-                tooltip: '本机关闭问题',
-                onPressed: pending
-                    ? null
-                    // v0.5/P4-C：本地关闭只退出当前可见面板，不伪造 Relay/Host cancel。
-                    : () => setState(() {
-                        _locallyCancelled = true;
-                        _validationError = null;
-                        _submissionError = null;
-                      }),
-                icon: const Icon(Icons.close),
-              ),
-            ],
-          ),
-          if (currentStep.detail != null) ...[
-            const SizedBox(height: 8),
-            Text(currentStep.detail!),
-          ],
-          if (currentStep.options.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            if (currentStep.multiSelect)
-              Column(
-                key: Key('question-options-$stepKey'),
-                children: [
-                  for (
-                    var index = 0;
-                    index < currentStep.options.length;
-                    index += 1
-                  )
-                    Material(
-                      type: MaterialType.transparency,
-                      child: CheckboxListTile(
-                        key: Key('question-option-$stepKey-$index'),
-                        value: selected.contains(
-                          currentStep.options[index].label,
-                        ),
-                        onChanged: enabled
-                            ? (checked) => setState(() {
-                                final next = {...selected};
-                                if (checked == true) {
-                                  next.add(currentStep.options[index].label);
-                                } else {
-                                  next.remove(currentStep.options[index].label);
-                                }
-                                _selectedAnswers[currentStep.id] = next;
-                                _skippedStepIds.remove(currentStep.id);
-                                _validationError = null;
-                                _submissionError = null;
-                              })
-                            : null,
-                        title: Text(
-                          _displayOptionLabel(currentStep.options[index].label),
-                        ),
-                        subtitle: currentStep.options[index].description == null
-                            ? null
-                            : Text(currentStep.options[index].description!),
-                        controlAffinity: ListTileControlAffinity.leading,
-                      ),
-                    ),
-                ],
-              )
-            else
-              DropdownButtonFormField<String>(
-                key: Key('question-options-$stepKey'),
-                initialValue: selected.isEmpty ? null : selected.first,
-                decoration: const InputDecoration(labelText: '选择回答'),
-                items: currentStep.options
-                    .map(
-                      (option) => DropdownMenuItem(
-                        value: option.label,
-                        child: Text(_displayOptionLabel(option.label)),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: enabled
-                    ? (value) => setState(() {
-                        _selectedAnswers[currentStep.id] = {?value};
-                        _controllerFor(currentStep.id).clear();
-                        _skippedStepIds.remove(currentStep.id);
-                        _validationError = null;
-                        _submissionError = null;
-                      })
-                    : null,
-              ),
-          ],
-          if (currentStep.allowsFreeform || currentStep.options.isEmpty) ...[
-            const SizedBox(height: 8),
-            TextField(
-              key: Key('question-freeform-$stepKey'),
-              controller: controller,
-              enabled: enabled,
-              maxLines: currentStep.options.isEmpty ? 3 : 2,
-              onChanged: (_) => setState(() {
-                // v0.5/P4-E：单选 custom 替换已选项；多选 custom 可与已选项并存。
-                if (!currentStep.multiSelect) {
-                  _selectedAnswers[currentStep.id] = <String>{};
-                }
-                _skippedStepIds.remove(currentStep.id);
-                _validationError = null;
-                _submissionError = null;
-              }),
-              decoration: InputDecoration(
-                labelText: currentStep.options.isEmpty ? '输入回答' : '或输入回答',
-              ),
-            ),
-          ],
-          if (_validationError != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              _validationError!,
-              key: Key('question-validation-${question.requestId}'),
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: Theme.of(context).colorScheme.error,
-              ),
-            ),
-          ],
-          if (_submissionError != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              _submissionError!,
-              key: Key('question-submit-error-${question.requestId}'),
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: Theme.of(context).colorScheme.error,
-              ),
-            ),
-          ],
-          const SizedBox(height: 4),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Wrap(
-              spacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (steps.length > 1)
-                  TextButton(
-                    key: Key('question-prev-${question.requestId}'),
-                    onPressed: enabled && currentIndex > 0
-                        ? () => setState(() {
-                            _questionIndex = currentIndex - 1;
-                            _validationError = null;
-                            _submissionError = null;
-                          })
-                        : null,
-                    child: const Text('上一题'),
-                  ),
-                TextButton(
-                  key: Key('question-skip-${question.requestId}'),
-                  onPressed: enabled
-                      ? () => _skipCurrentStep(question, steps, currentIndex)
-                      : null,
-                  child: const Text('跳过'),
-                ),
-                TextButton(
-                  key: Key('question-next-${question.requestId}'),
-                  onPressed: enabled
-                      ? () => _continueQuestion(
-                          question,
-                          steps,
-                          currentIndex,
-                          answered,
-                        )
-                      : null,
-                  child: Text(currentIndex == steps.length - 1 ? '提交' : '下一题'),
-                ),
-                IconButton(
-                  key: Key('question-submit-${question.requestId}'),
-                  tooltip: '提交回答',
-                  onPressed: enabled
-                      ? () => _submitQuestionBatch(question, steps)
-                      : null,
-                  icon: pending
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.send),
-                ),
-              ],
-            ),
-          ),
-          if (resolved)
-            Text(
-              '已回答',
-              key: Key('question-resolved-${question.requestId}'),
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _continueQuestion(
-    TimelineQuestionRequest question,
-    List<TimelineQuestionStep> steps,
-    int currentIndex,
-    bool answered,
-  ) async {
-    final currentStep = steps[currentIndex];
-    if (!answered && !_skippedStepIds.contains(currentStep.id)) {
-      setState(() => _validationError = '请选择、输入或跳过当前问题。');
-      return;
-    }
-    if (currentIndex < steps.length - 1) {
-      setState(() {
-        _questionIndex = currentIndex + 1;
-        _validationError = null;
-        _submissionError = null;
-      });
-      return;
-    }
-    await _submitQuestionBatch(question, steps);
-  }
-
-  Future<void> _skipCurrentStep(
-    TimelineQuestionRequest question,
-    List<TimelineQuestionStep> steps,
-    int currentIndex,
-  ) async {
-    final currentStep = steps[currentIndex];
-    setState(() {
-      _selectedAnswers[currentStep.id] = <String>{};
-      _controllerFor(currentStep.id).clear();
-      _skippedStepIds.add(currentStep.id);
-      _validationError = null;
-      _submissionError = null;
-    });
-    if (steps.length == 1) {
-      await _skipQuestion(question.requestId);
-      return;
-    }
-    if (currentIndex < steps.length - 1) {
-      setState(() => _questionIndex = currentIndex + 1);
-      return;
-    }
-    await _submitQuestionBatch(question, steps);
-  }
-
-  Future<void> _submitQuestionBatch(
-    TimelineQuestionRequest question,
-    List<TimelineQuestionStep> steps,
-  ) async {
-    final missingIndex = steps.indexWhere(
-      (step) => !_answered(step) && !_skippedStepIds.contains(step.id),
-    );
-    if (missingIndex >= 0) {
-      setState(() {
-        _questionIndex = missingIndex;
-        _validationError = '请选择、输入或跳过当前问题。';
-        _submissionError = null;
-      });
-      return;
-    }
-    setState(() {
-      _validationError = null;
-      _submissionError = null;
-    });
-    final accepted = await widget.sessions.answerQuestionBatch(
-      requestId: question.requestId,
-      answers: steps.map(_answerForStep).toList(growable: false),
-      deviceId: widget.deviceId,
-      canWrite: widget.canWrite,
-    );
-    if (!accepted && mounted && _activeRequestId == question.requestId) {
-      setState(() {
-        _submissionError = widget.sessions.errorMessage ?? '提交失败，请重试。';
-      });
-    }
-  }
-
-  Future<void> _skipQuestion(String requestId) async {
-    setState(() {
-      _validationError = null;
-      _submissionError = null;
-    });
-    final accepted = await widget.sessions.skipQuestion(
-      requestId: requestId,
-      deviceId: widget.deviceId,
-      canWrite: widget.canWrite,
-    );
-    if (!accepted && mounted && _activeRequestId == requestId) {
-      setState(() {
-        _submissionError = widget.sessions.errorMessage ?? '跳过失败，请重试。';
-      });
-    }
-  }
-
-  bool _answered(TimelineQuestionStep step) {
-    final selected = _selectedAnswers[step.id] ?? const <String>{};
-    return selected.isNotEmpty ||
-        _controllerFor(step.id).text.trim().isNotEmpty;
-  }
-
-  Map<String, dynamic> _answerForStep(TimelineQuestionStep step) {
-    final custom = _controllerFor(step.id).text.trim();
-    return {
-      'id': step.id,
-      'selected': _skippedStepIds.contains(step.id)
-          ? const <String>[]
-          : (_selectedAnswers[step.id] ?? const <String>{}).toList(
-              growable: false,
-            ),
-      if (custom.isNotEmpty && !_skippedStepIds.contains(step.id))
-        'custom': custom,
-    };
-  }
-
-  TextEditingController _controllerFor(String stepId) =>
-      _customAnswerControllers.putIfAbsent(stepId, TextEditingController.new);
-
-  List<TimelineQuestionStep> _stepsFor(TimelineQuestionRequest question) {
-    if (question.steps.isNotEmpty) return question.steps;
-    return [
-      TimelineQuestionStep(
-        id: question.requestId,
-        prompt: question.prompt,
-        options: question.options
-            .map((label) => TimelineQuestionOption(label: label))
-            .toList(growable: false),
-        allowsFreeform: question.allowsFreeform,
-      ),
-    ];
-  }
-
-  String _stepKey(
-    TimelineQuestionRequest question,
-    TimelineQuestionStep step,
-    int index,
-    int count,
-  ) => count == 1 ? question.requestId : '${question.requestId}-${step.id}';
-
-  String _displayOptionLabel(String label) => label
-      .replaceFirst(
-        RegExp(
-          r'\s*(\((recommended|推荐)\)|（(recommended|推荐)）)\s*$',
-          caseSensitive: false,
-        ),
-        '',
-      )
-      .trim();
-
-  void _resetDraftState() {
-    for (final controller in _customAnswerControllers.values) {
-      controller.dispose();
-    }
-    _customAnswerControllers.clear();
-    _selectedAnswers.clear();
-    _skippedStepIds.clear();
-    _validationError = null;
-    _submissionError = null;
-    _minimized = false;
-    _locallyCancelled = false;
-    _questionIndex = 0;
-  }
-}
-
-class _PlanReviewPanel extends StatefulWidget {
-  const _PlanReviewPanel({
-    required this.question,
-    required this.sessions,
-    required this.canWrite,
-    required this.deviceId,
-    required this.hasLease,
-  });
-
-  final TimelineQuestionRequest question;
-  final SessionController sessions;
-  final bool canWrite;
-  final String? deviceId;
-  final bool hasLease;
-
-  @override
-  State<_PlanReviewPanel> createState() => _PlanReviewPanelState();
-}
-
-/// v0.5/P4-F：PlanReview 专用接管面板，对照 DeepSeek Harness `PlanReviewPanel`。
-///
-/// 计划评审是"一个决策 + 一段 markdown plan"，不是被打分的选择题，因此采用
-/// 带色条的审批卡形态：等待条 + 可滚动 plan + 右对齐动作区。三个动作是完整决策面：
-/// approve / decline 用提问方给出的真实选项 label 回传；discuss 只本机关闭并恢复
-/// 输入上下文（不伪造 Host cancel）。approve/decline 是一次性动作，失败时 re-arm。
-class _PlanReviewPanelState extends State<_PlanReviewPanel> {
-  String? _submissionError;
-  bool _busy = false;
-  bool _locallyDismissed = false;
-
-  TimelineQuestionStep get _review {
-    final steps = widget.question.steps;
-    final first = steps.isNotEmpty ? steps.first : _fallbackStep();
-    // 单题 plan-review：steps 只存单个意图 step。
-    return first;
-  }
-
-  TimelineQuestionStep _fallbackStep() => TimelineQuestionStep(
-    id: widget.question.requestId,
-    prompt: widget.question.prompt,
-    detail: null,
-  );
-
-  TimelineQuestionOption? get _approve {
-    final label = _review.intentApproveLabel;
-    if (label == null) return null;
-    for (final option in _review.options) {
-      if (option.label == label) return option;
-    }
-    return null;
-  }
-
-  TimelineQuestionOption? get _decline {
-    final approveLabel = _review.intentApproveLabel;
-    if (approveLabel == null) return null;
-    for (final option in _review.options) {
-      if (option.label != approveLabel) return option;
-    }
-    return null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final question = widget.question;
-    final resolved =
-        question.resolved == true ||
-        widget.sessions.isRequestResolved('question', question.requestId);
-    final enabled = widget.canWrite && widget.hasLease && !resolved && !_busy;
-    final plan = _review.detail;
-    final approve = _approve;
-    if (_locallyDismissed && !resolved) {
-      return Container(
-        key: Key('plan-review-card-${question.requestId}'),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHigh,
-          border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          key: Key('plan-review-dismissed-${question.requestId}'),
-          children: [
-            const Icon(Icons.chat_bubble_outline),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '已在本地关闭计划评审，可继续输入讨论。',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ),
-            TextButton(
-              key: Key('plan-review-restore-${question.requestId}'),
-              onPressed: () => setState(() => _locallyDismissed = false),
-              child: const Text('恢复'),
-            ),
-          ],
-        ),
-      );
-    }
-    return Container(
-      key: Key('plan-review-card-${question.requestId}'),
-      margin: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 等待/意图条：对齐 DeepSeek Harness 审批卡的 tinted strip。
-          Container(
-            key: Key('plan-review-strip-${question.requestId}'),
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primaryContainer,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(8),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.rule,
-                  size: 16,
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '计划评审',
-                  key: Key('plan-review-header-${question.requestId}'),
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-            child: Text(
-              _review.prompt,
-              key: Key('plan-review-question-${question.requestId}'),
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ),
-          // plan markdown 在卡内独立滚动（cap 120），按钮始终常驻可达。
-          if (plan != null) ...[
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Container(
-                key: Key('plan-review-scroll-${question.requestId}'),
-                constraints: const BoxConstraints(maxHeight: 120),
-                // 内部纵向滚动：长 plan 在卡内独立滚动，按钮始终常驻可达。
-                child: SingleChildScrollView(
-                  child: Text(
-                    plan,
-                    key: Key('plan-review-body-${question.requestId}'),
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 8),
-          if (_submissionError != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Text(
-                _submissionError!,
-                key: Key('plan-review-error-${question.requestId}'),
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.error,
-                ),
-              ),
-            ),
-          // 动作区：discuss / decline(可选) / approve。按钮常驻可达。
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 10),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: Wrap(
-                spacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  TextButton(
-                    key: Key('plan-review-discuss-${question.requestId}'),
-                    onPressed: enabled
-                        ? () => setState(() {
-                            // 只本机关闭，不伪造 Host cancel；恢复后仍可继续输入。
-                            _locallyDismissed = true;
-                            _submissionError = null;
-                          })
-                        : null,
-                    child: const Text('讨论'),
-                  ),
-                  if (_decline != null) ...[
-                    const SizedBox(width: 4),
-                    Tooltip(
-                      message: _decline!.description ?? '',
-                      child: TextButton(
-                        key: Key('plan-review-decline-${question.requestId}'),
-                        onPressed: enabled
-                            ? () => _decide(_decline!.label)
-                            : null,
-                        child: Text('需要修改'),
-                      ),
-                    ),
-                  ],
-                  if (approve != null) ...[
-                    const SizedBox(width: 4),
-                    Tooltip(
-                      message: approve.description ?? '',
-                      child: FilledButton(
-                        key: Key('plan-review-approve-${question.requestId}'),
-                        onPressed: enabled
-                            ? () => _decide(approve.label)
-                            : null,
-                        child: _busy
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('批准执行'),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          if (resolved)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              child: Text(
-                '已评审',
-                key: Key('plan-review-resolved-${question.requestId}'),
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _decide(String label) async {
-    setState(() {
-      _busy = true;
-      _submissionError = null;
-    });
-    // approve/decline 都以提问方给出的真实选项 label 回传 answer，与 Harness 一致。
-    final accepted = await widget.sessions.answerQuestionBatch(
-      requestId: widget.question.requestId,
-      answers: [
-        {
-          'id': _review.id,
-          'selected': [label],
-        },
-      ],
-      deviceId: widget.deviceId,
-      canWrite: widget.canWrite,
-    );
-    if (!accepted && mounted) {
-      setState(() {
-        _busy = false;
-        _submissionError = widget.sessions.errorMessage ?? '提交失败，请重试。';
-      });
-    }
-  }
-}
-
-class _ComposerChain extends StatelessWidget {
-  const _ComposerChain({
-    required this.pendingQuestion,
-    required this.pendingPermission,
-    required this.canWrite,
-    required this.hasLease,
-    required this.sessions,
-    required this.deviceId,
-  });
-
-  final SessionTimelineEvent? pendingQuestion;
-  final SessionTimelineEvent? pendingPermission;
-  final bool canWrite;
-  final bool hasLease;
-  final SessionController sessions;
-  final String? deviceId;
-
-  @override
-  Widget build(BuildContext context) {
-    // v0.5/P4-A/P4-F：composer chain 是 pending interaction 的唯一 carrier。
-    // Question 优先于 approval；question 完成后，外层 projection 重算并 re-arm approval。
-    // 普通 question 走 _QuestionRequestItem；plan-review 走专用卡片形态，避免把
-    // "一个决策 + 一段 plan" 渲染成被打分的选择题（对照 Harness PlanReviewPanel）。
-    final question = pendingQuestion;
-    final permission = pendingPermission;
-    final planReview = _planReviewStep(question);
-    return Padding(
-      key: const Key('session-composer-chain'),
-      padding: const EdgeInsets.only(bottom: 8),
-      child: question != null
-          ? KeyedSubtree(
-              key: const Key('session-question-panel'),
-              child: planReview != null
-                  ? _PlanReviewPanel(
-                      question: question.question!,
-                      sessions: sessions,
-                      canWrite: canWrite,
-                      deviceId: deviceId,
-                      hasLease: hasLease,
-                    )
-                  : _QuestionRequestItem(
-                      event: question,
-                      canWrite: canWrite,
-                      hasLease: hasLease,
-                      sessions: sessions,
-                      deviceId: deviceId,
-                    ),
-            )
-          : KeyedSubtree(
-              key: const Key('session-approval-panel'),
-              child: _PermissionRequestItem(
-                event: permission!,
-                canWrite: canWrite,
-                hasLease: hasLease,
-                sessions: sessions,
-                deviceId: deviceId,
-              ),
-            ),
-    );
-  }
-
-  /// 从 pending question 事件提取 plan-review step；非 plan-review 返回 null。
-  /// 对齐 DeepSeek Harness `planReviewOf()`：单题、带 detail、非多选、最多两个选项、
-  /// 且必须存在意图指定 approve 选项，否则交给普通 question 流程。
-  TimelineQuestionStep? _planReviewStep(SessionTimelineEvent? event) {
-    final question = event?.question;
-    if (question == null) return null;
-    final steps = question.steps;
-    if (steps.length != 1) return null;
-    final step = steps.first;
-    return step.isPlanReview ? step : null;
-  }
-}
-
-class _SystemNotice extends StatelessWidget {
-  const _SystemNotice({required this.event});
-
-  final SessionTimelineEvent event;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    liveRegion: true,
-    child: Align(
-      key: Key('timeline-notice-${event.sequence}'),
-      alignment: Alignment.centerLeft,
-      child: Text(
-        event.text == null ? event.label : '${event.label} · ${event.text}',
-        style: Theme.of(context).textTheme.bodyMedium,
-      ),
-    ),
-  );
-}
-
 class _SessionComposer extends StatefulWidget {
   const _SessionComposer({
     required this.sessions,
@@ -3798,6 +2205,7 @@ class _CompletionSuggestion {
 class _SessionComposerState extends State<_SessionComposer> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
+  final _inputScrollController = ScrollController();
   String? _draftSessionId;
   SessionComposerInputMachine _inputMachine = SessionComposerInputMachine();
   int _queueSeq = 0;
@@ -3840,8 +2248,15 @@ class _SessionComposerState extends State<_SessionComposer> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sessions.selectedSessionId !=
         widget.sessions.selectedSessionId) {
-      // v0.5/P3-A：queue 是会话级 transient 输入状态；切会话时重建本地 machine，
-      // 但不在 streaming 结束时隐式 flush，所有 queue 提交都必须来自显式用户动作。
+      // Persist the complete session-scoped input before switching. In-flight
+      // attempts are intentionally discarded by the new machine instance.
+      final priorSessionId = _draftSessionId;
+      if (priorSessionId != null) {
+        widget.sessions.saveComposerState(
+          priorSessionId,
+          _inputMachine.sessionState,
+        );
+      }
       _inputMachine = SessionComposerInputMachine();
       _restoreDraft();
       _commandMenuOpen = false;
@@ -3852,14 +2267,18 @@ class _SessionComposerState extends State<_SessionComposer> {
     final sessionId = widget.sessions.selectedSessionId;
     if (sessionId == null) {
       _draftSessionId = null;
+      _inputMachine.restoreSessionState(
+        const SessionComposerSessionState.empty(),
+      );
+      _setControllerText('');
       return;
     }
     if (_draftSessionId == sessionId) return;
     _draftSessionId = sessionId;
-    final draft = widget.sessions.composerDraftFor(sessionId) ?? '';
-    _inputMachine.setDraft(draft);
-    if (draft != _controller.text) {
-      _setControllerText(draft);
+    final state = widget.sessions.composerStateFor(sessionId);
+    _inputMachine.restoreSessionState(state);
+    if (state.draft != _controller.text) {
+      _setControllerText(state.draft);
     }
   }
 
@@ -3874,12 +2293,13 @@ class _SessionComposerState extends State<_SessionComposer> {
   @override
   void dispose() {
     // 页面销毁前把当前输入保存为内存草稿，保证跨页返回后内容不丢失。
-    final sessionId = widget.sessions.selectedSessionId;
+    final sessionId = widget.sessions.selectedSessionId ?? _draftSessionId;
     if (sessionId != null) {
-      widget.sessions.saveComposerDraft(sessionId, _controller.text);
+      widget.sessions.saveComposerState(sessionId, _inputMachine.sessionState);
     }
     _controller.removeListener(_onControllerSelectionChanged);
     _focusNode.dispose();
+    _inputScrollController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -3888,6 +2308,50 @@ class _SessionComposerState extends State<_SessionComposer> {
     final enter =
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    final shortcut =
+        HardwareKeyboard.instance.isMetaPressed ||
+        HardwareKeyboard.instance.isControlPressed;
+
+    if (event is KeyDownEvent && shortcut) {
+      if (event.logicalKey == LogicalKeyboardKey.keyZ) {
+        final changed = HardwareKeyboard.instance.isShiftPressed
+            ? _inputMachine.redo()
+            : _inputMachine.undo();
+        if (changed) _syncControllerFromMachine();
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyC ||
+          event.logicalKey == LogicalKeyboardKey.keyX) {
+        final selection = _controller.selection;
+        if (!selection.isValid || selection.isCollapsed) {
+          return KeyEventResult.ignored;
+        }
+        unawaited(
+          _copyOrCutSelection(cut: event.logicalKey == LogicalKeyboardKey.keyX),
+        );
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyV) {
+        unawaited(_pasteClipboard());
+        return KeyEventResult.handled;
+      }
+    }
+
+    if (event is KeyDownEvent &&
+        !shortcut &&
+        (event.logicalKey == LogicalKeyboardKey.backspace ||
+            event.logicalKey == LogicalKeyboardKey.delete)) {
+      final selection = _controller.selection;
+      if (selection.isValid &&
+          selection.isCollapsed &&
+          _inputMachine.deleteReferenceNearCaret(
+            caret: selection.extentOffset,
+            backwards: event.logicalKey == LogicalKeyboardKey.backspace,
+          )) {
+        _syncControllerFromMachine(caret: selection.extentOffset);
+        return KeyEventResult.handled;
+      }
+    }
 
     // v0.5/P5：候选菜单键盘导航（up/down 移动、Escape 关闭、Enter 应用高亮项）。
     // 只在候选打开且 trigger 仍活跃时接管方向键/Escape/Enter；焦点保持在输入上下文。
@@ -3988,7 +2452,19 @@ class _SessionComposerState extends State<_SessionComposer> {
     final caret = selection.isValid ? selection.end : null;
     if (caret == null || caret == _lastCaret) return;
     _lastCaret = caret;
+    _revealCaret(caret);
     _updateSuggestions();
+  }
+
+  void _revealCaret(int caret) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_inputScrollController.hasClients) return;
+      if (caret >= _controller.text.length) {
+        _inputScrollController.jumpTo(
+          _inputScrollController.position.maxScrollExtent,
+        );
+      }
+    });
   }
 
   /// v0.5/P5：基于 caret（selection）+ draftRev 重新探测 Input Trigger。
@@ -4126,19 +2602,118 @@ class _SessionComposerState extends State<_SessionComposer> {
         replacement = replacement.substring(0, replacement.length - 1);
       }
     }
-    final next = text.replaceRange(hit.start, hit.end, replacement);
-    _inputMachine.setDraft(next);
-    // 光标定位到插入内容末尾。
-    _controller.text = next;
-    _controller.selection = TextSelection.collapsed(
-      offset: hit.start + replacement.length,
+    var caret = hit.start + replacement.length;
+    if (suggestion.kind == _CompletionKind.file) {
+      final label = replacement.trim().replaceFirst('@', '');
+      final inserted = _inputMachine.insertReference(
+        label: label,
+        clipboardText: '@file:$label',
+        start: hit.start,
+        end: hit.end,
+        draftRevision: _inputMachine.snapshot.draftRevision,
+      );
+      if (!inserted) return;
+      final reference = _inputMachine.snapshot.references
+          .where((item) => item.offset == hit.start)
+          .firstOrNull;
+      caret = reference?.end ?? caret;
+      final draft = _inputMachine.snapshot.draft;
+      if (caret < draft.length && draft[caret] == ' ') caret += 1;
+    } else {
+      final claimed = _inputMachine.beginCommand(
+        token: replacement,
+        start: hit.start,
+        end: hit.end,
+        draftRevision: _inputMachine.snapshot.draftRevision,
+      );
+      if (!claimed) {
+        _inputMachine.setDraft(
+          text.replaceRange(hit.start, hit.end, replacement),
+        );
+      }
+    }
+    final next = _inputMachine.snapshot.draft;
+    _controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: caret.clamp(0, next.length)),
     );
     setState(() {});
-    widget.sessions.saveComposerDraft(
-      widget.sessions.selectedSessionId ?? '',
-      next,
-    );
+    final sessionId = widget.sessions.selectedSessionId;
+    if (sessionId != null) {
+      widget.sessions.saveComposerState(sessionId, _inputMachine.sessionState);
+    }
     _updateSuggestions();
+  }
+
+  void _syncControllerFromMachine({int? caret}) {
+    final draft = _inputMachine.snapshot.draft;
+    final offset = (caret ?? draft.length).clamp(0, draft.length);
+    _controller.value = TextEditingValue(
+      text: draft,
+      selection: TextSelection.collapsed(offset: offset),
+    );
+    final sessionId = widget.sessions.selectedSessionId;
+    if (sessionId != null) {
+      widget.sessions.saveComposerState(sessionId, _inputMachine.sessionState);
+    }
+    _updateSuggestions();
+    setState(() {});
+  }
+
+  Future<void> _copyOrCutSelection({required bool cut}) async {
+    final selection = _controller.selection;
+    if (!selection.isValid || selection.isCollapsed) return;
+    final start = selection.start;
+    final end = selection.end;
+    final text = cut
+        ? _inputMachine.cutRange(start, end)
+        : _inputMachine.projectClipboard(start: start, end: end);
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted || !cut) return;
+    _syncControllerFromMachine(caret: start);
+  }
+
+  Future<void> _pasteClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final pasted = data?.text;
+    if (pasted == null || pasted.isEmpty) return;
+    final selection = _controller.selection;
+    final start = selection.isValid ? selection.start : _controller.text.length;
+    final end = selection.isValid ? selection.end : _controller.text.length;
+    var upgraded = false;
+    if (pasted.startsWith('@file:') && pasted.length > '@file:'.length) {
+      final target = pasted.substring('@file:'.length);
+      final label = target
+          .split('/')
+          .where((part) => part.isNotEmpty)
+          .lastOrNull;
+      if (label != null) {
+        upgraded = _inputMachine.pasteUpgradeReference(
+          label: label,
+          clipboardText: pasted,
+          start: start,
+          end: end,
+          draftRevision: _inputMachine.snapshot.draftRevision,
+        );
+      }
+    }
+    if (!upgraded) {
+      final current = _inputMachine.snapshot.draft;
+      _inputMachine.setDraft(
+        current.replaceRange(start, end, pasted),
+        start: start,
+        end: end,
+        insertedLength: pasted.length,
+      );
+    }
+    _syncControllerFromMachine(caret: start + pasted.length);
+  }
+
+  void _focusComposer() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _focusNode.canRequestFocus) _focusNode.requestFocus();
+    });
   }
 
   @override
@@ -4216,7 +2791,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                 deviceId: widget.deviceId,
               ),
             if (pendingQuestion != null || pendingPermission != null)
-              _ComposerChain(
+              SessionComposerChain(
                 pendingQuestion: pendingQuestion,
                 pendingPermission: pendingPermission,
                 canWrite: widget.canWrite,
@@ -4277,7 +2852,10 @@ class _SessionComposerState extends State<_SessionComposer> {
                   _commandMenuOpen = false;
                   final sessionId = widget.sessions.selectedSessionId;
                   if (sessionId != null) {
-                    widget.sessions.saveComposerDraft(sessionId, next);
+                    widget.sessions.saveComposerState(
+                      sessionId,
+                      _inputMachine.sessionState,
+                    );
                   }
                   _updateSuggestions();
                   setState(() {});
@@ -4343,8 +2921,10 @@ class _SessionComposerState extends State<_SessionComposer> {
                   IconButton(
                     key: const Key('session-command-launcher'),
                     tooltip: '命令',
-                    onPressed: () =>
-                        setState(() => _commandMenuOpen = !_commandMenuOpen),
+                    onPressed: () {
+                      setState(() => _commandMenuOpen = !_commandMenuOpen);
+                      _focusComposer();
+                    },
                     icon: const Icon(Icons.add),
                   ),
                   IconButton(
@@ -4362,10 +2942,13 @@ class _SessionComposerState extends State<_SessionComposer> {
                                 ) ==
                                 null &&
                             !widget.sessions.isBusy
-                        ? () => widget.sessions.pickAttachment(
-                            deviceId: widget.deviceId,
-                            canWrite: widget.canWrite,
-                          )
+                        ? () async {
+                            await widget.sessions.pickAttachment(
+                              deviceId: widget.deviceId,
+                              canWrite: widget.canWrite,
+                            );
+                            _focusComposer();
+                          }
                         : null,
                     icon: const Icon(Icons.attach_file),
                   ),
@@ -4374,18 +2957,33 @@ class _SessionComposerState extends State<_SessionComposer> {
                       key: const Key('session-composer-input'),
                       controller: _controller,
                       focusNode: _focusNode,
+                      scrollController: _inputScrollController,
                       enabled: blocked == null,
                       readOnly: machineBusy,
                       minLines: 1,
                       maxLines: 5,
                       textInputAction: TextInputAction.newline,
+                      scrollPadding: const EdgeInsets.only(bottom: 120),
+                      onTapOutside: (_) {
+                        if (_commandMenuOpen || _completionActive) {
+                          setState(() {
+                            _commandMenuOpen = false;
+                            _completionActive = false;
+                            _suggestions = const [];
+                          });
+                        }
+                        _focusNode.unfocus();
+                      },
                       onChanged: (value) {
                         _inputMachine.setDraft(value);
                         setState(() {});
                         // 每次输入都写内存草稿；发送成功后由 controller 清除。
                         final sessionId = widget.sessions.selectedSessionId;
                         if (sessionId != null) {
-                          widget.sessions.saveComposerDraft(sessionId, value);
+                          widget.sessions.saveComposerState(
+                            sessionId,
+                            _inputMachine.sessionState,
+                          );
                         }
                         _updateSuggestions();
                       },
@@ -4400,7 +2998,12 @@ class _SessionComposerState extends State<_SessionComposer> {
                   IconButton(
                     key: const Key('session-composer-primary-action'),
                     tooltip: primaryTooltip,
-                    onPressed: canSubmit ? _submitComposer : null,
+                    onPressed: canSubmit
+                        ? () async {
+                            await _submitComposer();
+                            _focusComposer();
+                          }
+                        : null,
                     style: IconButton.styleFrom(
                       backgroundColor: canSubmit
                           ? Theme.of(context).colorScheme.primary
@@ -4421,7 +3024,12 @@ class _SessionComposerState extends State<_SessionComposer> {
                     IconButton(
                       key: const Key('session-stop-button'),
                       tooltip: '停止生成',
-                      onPressed: canStop ? _stop : null,
+                      onPressed: canStop
+                          ? () async {
+                              await _stop();
+                              _focusComposer();
+                            }
+                          : null,
                       icon: const Icon(Icons.stop_circle_outlined),
                     ),
                 ],
@@ -4462,10 +3070,18 @@ class _SessionComposerState extends State<_SessionComposer> {
   ///
   /// 成功后 fixture 会先追加 `goal.command_input`，投影为 Chat command node；
   /// 再追加 `goal.created` 并更新 input.dock。失败时保留原草稿与 claim。
-  Future<void> _submitGoalCommand(String message, String? sessionId) async {
+  Future<void> _submitGoalCommand(
+    String message,
+    String? sessionId,
+    String attemptToken,
+  ) async {
     final objective = message.trimLeft().substring('/goal'.length).trim();
     if (objective.isEmpty) {
-      _inputMachine.settleSubmit(success: false, error: '请输入 /goal 后的目标文本。');
+      _inputMachine.settleSubmit(
+        success: false,
+        error: '请输入 /goal 后的目标文本。',
+        attemptToken: attemptToken,
+      );
       _setControllerText(message);
       setState(() {});
       return;
@@ -4478,16 +3094,33 @@ class _SessionComposerState extends State<_SessionComposer> {
     if (!mounted) return;
     final error = widget.sessions.errorMessage;
     if (error != null) {
-      _inputMachine.settleSubmit(success: false, error: error);
+      final settled = _inputMachine.settleSubmit(
+        success: false,
+        error: error,
+        attemptToken: attemptToken,
+      );
       if (sessionId != null) {
-        widget.sessions.saveComposerDraft(sessionId, message);
+        widget.sessions.saveComposerState(
+          sessionId,
+          _inputMachine.sessionState,
+        );
       }
-      _setControllerText(message);
+      _setControllerText(settled ? message : _inputMachine.snapshot.draft);
       setState(() {});
       return;
     }
-    _inputMachine.settleSubmit(success: true);
-    if (sessionId != null) widget.sessions.clearComposerDraft(sessionId);
+    final settled = _inputMachine.settleSubmit(
+      success: true,
+      attemptToken: attemptToken,
+    );
+    if (!settled) {
+      _setControllerText(_inputMachine.snapshot.draft);
+      setState(() {});
+      return;
+    }
+    if (sessionId != null) {
+      widget.sessions.saveComposerState(sessionId, _inputMachine.sessionState);
+    }
     _setControllerText('');
     _setSuggestions(const []);
     setState(() {});
@@ -4516,7 +3149,12 @@ class _SessionComposerState extends State<_SessionComposer> {
         _queueSeq += 1;
         _inputMachine.addQueuedMessage('queue-$_queueSeq', message);
         _inputMachine.settleSubmit(success: true);
-        if (sessionId != null) widget.sessions.clearComposerDraft(sessionId);
+        if (sessionId != null) {
+          widget.sessions.saveComposerState(
+            sessionId,
+            _inputMachine.sessionState,
+          );
+        }
         _setControllerText('');
         _setSuggestions(const []);
         setState(() {});
@@ -4532,10 +3170,14 @@ class _SessionComposerState extends State<_SessionComposer> {
           setState(() {});
           return;
         }
-        _inputMachine.enterSubmitting();
+        final attemptToken = _inputMachine.beginAdjudication();
+        if (attemptToken == null ||
+            !_inputMachine.enterSubmitting(attemptToken: attemptToken)) {
+          return;
+        }
         setState(() {});
         if (_isGoalCommand(message)) {
-          await _submitGoalCommand(message, sessionId);
+          await _submitGoalCommand(message, sessionId, attemptToken);
           return;
         }
         await widget.sessions.sendMessage(
@@ -4546,30 +3188,86 @@ class _SessionComposerState extends State<_SessionComposer> {
         if (!mounted) return;
         final error = widget.sessions.errorMessage;
         if (error != null) {
-          _inputMachine.settleSubmit(success: false, error: error);
+          final settled = _inputMachine.settleSubmit(
+            success: false,
+            error: error,
+            attemptToken: attemptToken,
+          );
           if (sessionId != null) {
-            widget.sessions.saveComposerDraft(sessionId, message);
+            widget.sessions.saveComposerState(
+              sessionId,
+              _inputMachine.sessionState,
+            );
           }
-          _setControllerText(message);
+          _setControllerText(settled ? message : _inputMachine.snapshot.draft);
           setState(() {});
           return;
         }
-        _inputMachine.settleSubmit(success: true);
+        final settled = _inputMachine.settleSubmit(
+          success: true,
+          attemptToken: attemptToken,
+        );
+        if (!settled) {
+          _setControllerText(_inputMachine.snapshot.draft);
+          setState(() {});
+          return;
+        }
         _setControllerText('');
         _setSuggestions(const []);
         setState(() {});
       case SessionSubmitMode.steer:
-        // v0.5/P3-A 暂不伪造 Host strict-steer；真实 placement/steer action
-        // 会在 QueueDock 阶段接入。当前只保留显式 queue 语义。
+        // Strict steer is an explicit placement into the active provider turn.
+        // The existing session.send relay path carries the opaque message and
+        // lets the adapter decide whether the provider accepts steering.
         if (message.isEmpty) return;
-        _queueSeq += 1;
-        _inputMachine.addQueuedMessage('queue-$_queueSeq', message);
-        _inputMachine.settleSubmit(success: true);
-        if (sessionId != null) widget.sessions.clearComposerDraft(sessionId);
+        final attemptToken = _inputMachine.beginAdjudication();
+        if (attemptToken == null ||
+            !_inputMachine.enterSubmitting(attemptToken: attemptToken)) {
+          return;
+        }
+        setState(() {});
+        await widget.sessions.sendMessage(
+          message: message,
+          deviceId: widget.deviceId,
+          canWrite: widget.canWrite,
+        );
+        if (!mounted) return;
+        final error = widget.sessions.errorMessage;
+        if (error != null) {
+          final settled = _inputMachine.settleSubmit(
+            success: false,
+            error: error,
+            attemptToken: attemptToken,
+          );
+          if (sessionId != null) {
+            widget.sessions.saveComposerState(
+              sessionId,
+              _inputMachine.sessionState,
+            );
+          }
+          _setControllerText(settled ? message : _inputMachine.snapshot.draft);
+          setState(() {});
+          return;
+        }
+        final settled = _inputMachine.settleSubmit(
+          success: true,
+          attemptToken: attemptToken,
+        );
+        if (!settled) {
+          _setControllerText(_inputMachine.snapshot.draft);
+          setState(() {});
+          return;
+        }
         _setControllerText('');
         _setSuggestions(const []);
         setState(() {});
     }
+  }
+
+  void _persistComposerState() {
+    final sessionId = widget.sessions.selectedSessionId ?? _draftSessionId;
+    if (sessionId == null) return;
+    widget.sessions.saveComposerState(sessionId, _inputMachine.sessionState);
   }
 
   Future<void> _stop() => widget.sessions.stopStreaming(
@@ -4592,7 +3290,10 @@ class _SessionComposerState extends State<_SessionComposer> {
       );
       if (!mounted) return;
       if (widget.sessions.errorMessage != null) break;
-      setState(() => _inputMachine.removeQueuedMessage(item.id));
+      setState(() {
+        _inputMachine.removeQueuedMessage(item.id);
+        _persistComposerState();
+      });
       if (widget.sessions.isStreaming) break;
     }
   }
@@ -4600,7 +3301,6 @@ class _SessionComposerState extends State<_SessionComposer> {
   /// v0.5/P5：逐条 strict steer——只把指定排队项作为显式动作发送，
   /// 其余队列保留；发送成功才移除该项，失败保留并在 composer notice 呈现。
   Future<void> _steerQueuedMessages(String id) async {
-    if (widget.sessions.isStreaming) return;
     final queued = List<QueuedComposerMessage>.from(
       _inputMachine.snapshot.queue,
     );
@@ -4623,7 +3323,10 @@ class _SessionComposerState extends State<_SessionComposer> {
       );
       return;
     }
-    setState(() => _inputMachine.removeQueuedMessage(item.id));
+    setState(() {
+      _inputMachine.removeQueuedMessage(item.id);
+      _persistComposerState();
+    });
   }
 }
 
@@ -4641,25 +3344,28 @@ class _CommandLauncherMenu extends StatelessWidget {
       ('permission', '选择权限 preset'),
       ('model', '切换模型'),
     ];
-    return Container(
-      key: const Key('session-command-launcher-menu'),
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        key: const Key('session-command-launcher-menu'),
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        children: [
-          for (final command in commands)
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.chevron_right, size: 18),
-              title: Text('/${command.$1}'),
-              subtitle: Text(command.$2),
-              onTap: () => onSelect(command.$1),
-            ),
-        ],
+        shape: RoundedRectangleBorder(
+          side: BorderSide(color: Theme.of(context).dividerColor),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            for (final command in commands)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.chevron_right, size: 18),
+                title: Text('/${command.$1}'),
+                subtitle: Text(command.$2),
+                onTap: () => onSelect(command.$1),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -5392,33 +4098,84 @@ class _SessionListItem extends StatelessWidget {
   }
 }
 
-class _SessionEmptyState extends StatelessWidget {
-  const _SessionEmptyState({required this.canWrite});
+class _SessionEmptyState extends StatefulWidget {
+  const _SessionEmptyState({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+    required this.fixtureMode,
+  });
 
+  final SessionController sessions;
   final bool canWrite;
+  final String? deviceId;
+  final bool fixtureMode;
 
   @override
-  Widget build(BuildContext context) => Container(
-    key: const Key('session-empty-state'),
-    padding: const EdgeInsets.symmetric(vertical: 44, horizontal: 28),
-    child: Column(
-      children: [
-        Icon(
-          Icons.forum_outlined,
-          size: 42,
-          color: Theme.of(context).colorScheme.secondary,
-        ),
-        const SizedBox(height: 16),
-        Text('还没有会话', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 6),
-        Text(
-          canWrite ? '通过右上角的新建图标开始一个会话。' : '恢复 Android owner 后可创建会话。',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-      ],
-    ),
-  );
+  State<_SessionEmptyState> createState() => _SessionEmptyStateState();
+}
+
+class _SessionEmptyStateState extends State<_SessionEmptyState> {
+  String _agentPresetId = fixtureAgentPresetOptions.first.id;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      key: const Key('session-empty-state'),
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+      child: Column(
+        children: [
+          Icon(
+            Icons.forum_outlined,
+            size: 42,
+            color: theme.colorScheme.secondary,
+          ),
+          const SizedBox(height: 12),
+          Text('还没有会话', style: theme.textTheme.titleLarge),
+          const SizedBox(height: 6),
+          Text(
+            widget.canWrite ? '选择工作区开始一个会话。' : '恢复 Android owner 后可创建会话。',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 18),
+          if (widget.fixtureMode)
+            SessionAgentPresetSeat(
+              options: fixtureAgentPresetOptions,
+              selectedId: _agentPresetId,
+              enabled: widget.canWrite,
+              onSelected: (value) => setState(() => _agentPresetId = value),
+            ),
+          if (widget.fixtureMode) const SizedBox(height: 10),
+          KeyedSubtree(
+            key: const Key('session-resident-workspace-seat'),
+            child: SessionWorkspacePicker(
+              controller: widget.sessions,
+              selectedId: null,
+              canWrite: widget.canWrite,
+              deviceId: widget.deviceId,
+              directoryFlow: widget.fixtureMode
+                  ? showFixtureWorkspaceDirectoryFlow
+                  : null,
+              label: '开始会话的工作区',
+              asComposerInput: true,
+              onPick: (workspaceId) async {
+                final opened = await widget.sessions.openWorkspace(
+                  workspaceId: workspaceId,
+                  provider: 'codex',
+                  deviceId: widget.deviceId,
+                  canWrite: widget.canWrite,
+                  agentPresetId: widget.fixtureMode ? _agentPresetId : null,
+                );
+                return opened != null;
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ReadOnlyBanner extends StatelessWidget {
@@ -5768,9 +4525,13 @@ class _SessionHeaderTitle extends StatelessWidget {
 
 /// Happy 的会话标题：标题和项目名分两行居中，避免把项目名挤进操作按钮。
 class _HappySessionHeaderTitle extends StatelessWidget {
-  const _HappySessionHeaderTitle({required this.session});
+  const _HappySessionHeaderTitle({
+    required this.session,
+    required this.onOpenParent,
+  });
 
   final MobileSession? session;
+  final VoidCallback? onOpenParent;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -5778,13 +4539,28 @@ class _HappySessionHeaderTitle extends StatelessWidget {
     mainAxisAlignment: MainAxisAlignment.center,
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
-      Text(
-        '新对话',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(
-          context,
-        ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (session?.parentSessionId != null && onOpenParent != null) ...[
+            SessionSubagentBreadcrumb(
+              parentSessionId: session?.parentSessionId,
+              onOpenParent: onOpenParent!,
+            ),
+            const SizedBox(width: 4),
+          ],
+          Flexible(
+            child: Text(
+              '新对话',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
       ),
       Text(
         session?.projectName?.trim().isNotEmpty == true
@@ -5812,6 +4588,8 @@ class _HappyProviderAvatar extends StatelessWidget {
       'codex' => Icons.auto_awesome,
       'claude' => Icons.psychology_outlined,
       'opencode' => Icons.terminal_outlined,
+      // DeepSeek Harness：ACP 桥接入，使用 hub 图形区分于终端形态的 OpenCode。
+      'dsh' => Icons.hub_outlined,
       _ => Icons.smart_toy_outlined,
     };
     return Container(

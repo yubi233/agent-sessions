@@ -40,16 +40,41 @@ class ConversationReferenceChip {
 /// 这里保存的是已经裁剪/脱敏后的展示文本；真实工具参数、文件正文或隐藏输出
 /// 不得从 Relay envelope 猜测生成。
 class ConversationToolDetails {
-  const ConversationToolDetails({this.input, this.output, this.inspectTarget});
+  const ConversationToolDetails({
+    this.input,
+    this.output,
+    this.inspectTarget,
+    this.subcalls = const [],
+  });
 
   final String? input;
   final String? output;
   final String? inspectTarget;
+  final List<ConversationToolSubcall> subcalls;
 
   bool get hasContent =>
       input?.trim().isNotEmpty == true ||
       output?.trim().isNotEmpty == true ||
-      inspectTarget?.trim().isNotEmpty == true;
+      inspectTarget?.trim().isNotEmpty == true ||
+      subcalls.isNotEmpty;
+}
+
+class ConversationToolSubcall {
+  const ConversationToolSubcall({
+    required this.callId,
+    required this.label,
+    this.status,
+    this.input,
+    this.output,
+    this.subcalls = const [],
+  });
+
+  final String callId;
+  final String label;
+  final String? status;
+  final String? input;
+  final String? output;
+  final List<ConversationToolSubcall> subcalls;
 }
 
 /// assistant turn-tail 的产物文件 chip。
@@ -61,6 +86,34 @@ class ConversationProducedFile {
 
   final String path;
   final String label;
+}
+
+/// Assistant feedback is a display capability, not a Relay event kind.
+/// Production adapters may leave it unavailable until the upstream contract
+/// exposes a durable feedback endpoint.
+enum ConversationFeedbackRating { positive, negative }
+
+class ConversationFeedbackItem {
+  const ConversationFeedbackItem({
+    required this.rating,
+    this.note,
+    this.version = 0,
+  });
+
+  final ConversationFeedbackRating rating;
+  final String? note;
+  final int version;
+}
+
+class ConversationFeedbackResult {
+  const ConversationFeedbackResult.success([this.item]) : errorCode = null;
+
+  const ConversationFeedbackResult.failure(this.errorCode) : item = null;
+
+  final ConversationFeedbackItem? item;
+  final String? errorCode;
+
+  bool get ok => errorCode == null;
 }
 
 /// 会话 Chat 视图的单个 display-safe 节点。
@@ -86,6 +139,8 @@ class ConversationNode {
     this.filePath,
     this.toolDetails,
     this.producedFiles = const [],
+    this.feedbackAvailable = false,
+    this.completedTurn = false,
   });
 
   /// 稳定 key 由投影层生成，后续 UI keyed renderer 只能依赖该 key。
@@ -124,6 +179,12 @@ class ConversationNode {
 
   final ConversationToolDetails? toolDetails;
   final List<ConversationProducedFile> producedFiles;
+
+  /// Only settled assistant messages with a provider/message identity may
+  /// expose feedback controls. The actual write handler is injected by the
+  /// host; a missing handler renders the controls unavailable.
+  final bool feedbackAvailable;
+  final bool completedTurn;
 }
 
 enum ComposerPendingKind { approval, question }
@@ -178,6 +239,8 @@ class SessionStatsLineProjection {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       cacheTokens: usage.cacheReadTokens + usage.cacheCreationTokens,
+      ttftMs: usage.ttftMs,
+      decodeThroughput: usage.decodeThroughput,
     );
   }
 

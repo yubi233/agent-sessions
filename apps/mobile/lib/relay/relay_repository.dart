@@ -3,6 +3,7 @@ import '../domain/daemon_observation_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import '../domain/session_projection_models.dart';
 import '../domain/terminal_models.dart';
 import '../domain/usage_models.dart';
 
@@ -49,8 +50,19 @@ abstract interface class RelayRepository {
   /// 会话列表只返回 Relay 白名单元数据；标题等展示字段只能来自已解密缓存或 deterministic fixture。
   Future<List<MobileSession>> listSessions();
 
+  /// Workspace list is metadata-only; canonical host roots are intentionally
+  /// absent from the response.
+  Future<List<MobileWorkspace>> listWorkspaces();
+
+  /// Register a directory selected by the composed host directory flow.
+  Future<MobileWorkspace> createWorkspace(CreateMobileWorkspaceInput input);
+
   /// 新建会话仍由认证设备身份授权，HTTP body 不允许客户端伪造 device_id。
   Future<MobileSession> createSession(CreateMobileSessionInput input);
+
+  /// 从已完成 assistant 消息创建 child session。Relay 只返回白名单 lineage 元数据，
+  /// 不复制正文、不启动 Provider。
+  Future<MobileSession> forkSession(String sessionId, SessionForkInput input);
 
   /// 快照保留 Relay 的原始加密 envelope，解密与展示映射由客户端安全边界负责。
   Future<SessionSnapshot> getSessionSnapshot(
@@ -100,6 +112,26 @@ abstract interface class RelayRepository {
 
   /// Plan/Goal/Skill 摘要只来自本地已解密事件或 deterministic fixture；Relay 不返回明文控制内容。
   Future<SessionControlState> getSessionControls(String sessionId);
+
+  /// Assistant message feedback 的真实 Relay 持久化协议。
+  Future<ConversationFeedbackItem?> getMessageFeedback(
+    String sessionId,
+    String messageId,
+  );
+
+  Future<ConversationFeedbackResult> putMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required ConversationFeedbackRating rating,
+    String? note,
+    int? version,
+  });
+
+  Future<ConversationFeedbackResult> deleteMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required int version,
+  });
 
   /// 仅上传客户端已经加密的附件块。显示名不会进入本层的公开契约。
   Future<AttachmentReceipt> uploadAttachmentChunk(

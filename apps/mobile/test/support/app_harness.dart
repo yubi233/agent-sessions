@@ -7,7 +7,7 @@ import 'package:agent_sessions_mobile/storage/encrypted_cache.dart';
 import 'package:agent_sessions_mobile/storage/secure_token_store.dart';
 import 'package:agent_sessions_mobile/storage/theme_preference_store.dart';
 import 'package:agent_sessions_mobile/ui/pairing_scanner.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'fixture_owner.dart';
@@ -63,7 +63,11 @@ class MobileAppHarness {
       if (scannerBuilder != null)
         pairingScannerBuilderProvider.overrideWithValue(scannerBuilder!),
     ],
-    // harness 复用真实路由与业务状态，但关闭 macOS 预览缩放，保证 integration 点击命中原始测试 surface。
-    child: const AgentSessionsApp(useMacBookPhoneCanvas: false),
+    // Widget tests do not need hover overlays. Disabling them in the shared
+    // harness also prevents RawTooltip pointer routes from leaking across tests.
+    child: const TooltipVisibility(
+      visible: false,
+      child: AgentSessionsApp(useMacBookPhoneCanvas: false),
+    ),
   );
 }

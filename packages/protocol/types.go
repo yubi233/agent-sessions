@@ -42,7 +42,7 @@ var CapabilityNames = []string{
 	"start", "resume", "abort", "permission", "question", "plan", "goal",
 	"skill_catalog", "invoke_skill", "model_select", "effort_select",
 	"attachments", "file_read", "git_read", "usage",
-	"delegate_session", "delegate_cross_provider",
+	"fork", "delegate_session", "delegate_cross_provider",
 }
 
 // DeviceRoleCanWrite 判断该角色是否允许提交会话写命令。

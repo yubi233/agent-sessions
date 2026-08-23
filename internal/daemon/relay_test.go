@@ -23,6 +23,103 @@ func (f relayRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response,
 	return f(request)
 }
 
+func TestRelayClientUploadUsageIncludesSessionModelAndTiming(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/daemon/usage/events" {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer fixture" {
+			t.Fatalf("authorization header = %q", request.Header.Get("Authorization"))
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer server.Close()
+
+	ttft := int64(640)
+	throughput := 42.5
+	client := &RelayClient{BaseURL: server.URL, AccessToken: "fixture"}
+	if err := client.UploadUsage(context.Background(), RelayUsage{
+		UsageKey: "usage-1", SessionID: "sess-1", Provider: "opencode", Model: "opencode/deepseek-v4",
+		UTCDay: "2026-08-22", InputTokens: 120, OutputTokens: 80, CacheReadTokens: 30, CacheWriteTokens: 10,
+		TTFTMS: &ttft, DecodeThroughput: &throughput,
+	}); err != nil {
+		t.Fatalf("upload usage: %v", err)
+	}
+
+	want := map[string]any{
+		"usage_key": "usage-1", "session_id": "sess-1", "provider": "opencode", "model": "opencode/deepseek-v4",
+		"utc_day": "2026-08-22", "input_tokens": float64(120), "output_tokens": float64(80),
+		"cache_read_tokens": float64(30), "cache_write_tokens": float64(10),
+		"ttft_ms": float64(640), "decode_throughput": 42.5,
+	}
+	for key, value := range want {
+		if body[key] != value {
+			t.Fatalf("body[%s]=%v want %v; body=%v", key, body[key], value, body)
+		}
+	}
+	if _, ok := body["prompt"]; ok {
+		t.Fatalf("usage body must not include prompt: %v", body)
+	}
+}
+
+func TestRelayLoopEnqueuesProviderUsageProjection(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var usageBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/daemon/events":
+			_, _ = io.WriteString(w, `{}`)
+		case "/v1/daemon/usage/events":
+			if err := json.NewDecoder(request.Body).Decode(&usageBody); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Fatalf("unexpected request path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	loop := NewRelayLoop(store, &RelayClient{BaseURL: server.URL, AccessToken: "fixture"}, nil, FixtureEventEncoder{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	loop.bindCommand("sess-usage", "cmd-usage")
+	loop.bindUsageContext(RelayCommand{
+		CommandID: "cmd-usage", SessionID: "sess-usage",
+		PayloadJSON: `{"session_id":"sess-usage","provider":"opencode","model":"opencode/deepseek-v4"}`,
+	})
+	loop.enqueueCanonicalEvent("sess-usage", adapter.Event{
+		Type: adapter.EventUsage,
+		Payload: map[string]any{
+			"input_tokens": int64(60), "output_tokens": int64(40),
+			"cache_read_tokens": int64(7), "cache_write_tokens": int64(3),
+			"timing": map[string]any{"stepStartTime": int64(1_000), "firstTokenTime": int64(1_640), "completedTime": int64(3_640)},
+		},
+	})
+	if err := loop.flushOutboxes(context.Background()); err != nil {
+		t.Fatalf("flush outboxes: %v", err)
+	}
+
+	if usageBody["session_id"] != "sess-usage" || usageBody["provider"] != "opencode" || usageBody["model"] != "opencode/deepseek-v4" {
+		t.Fatalf("usage attribution body=%v", usageBody)
+	}
+	if usageBody["input_tokens"] != float64(60) || usageBody["output_tokens"] != float64(40) {
+		t.Fatalf("usage token body=%v", usageBody)
+	}
+	if usageBody["ttft_ms"] != float64(640) || usageBody["decode_throughput"] != float64(20) {
+		t.Fatalf("usage timing body=%v", usageBody)
+	}
+}
+
 // SYNC-05：已 started 但 Daemon 重启前未写 result 的命令绝不能再次交给 Adapter。
 func TestRelayLoopFailsClosedForInterruptedStartedCommand(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
@@ -357,6 +454,96 @@ func (a *startGuardAdapter) Start(context.Context, adapter.StartRequest) (adapte
 	return nil, nil
 }
 
+// Relay 对事件内容的确定性 4xx 拒绝必须按毒丸丢弃，不能无限重试卡死 relay 循环；
+// 5xx 保持可安全重试。
+func TestFlushEventsDropsPoisonPillOn4xxAndRetriesOn5xx(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	event := RelayEvent{
+		EventID: "evt-poison", CommandID: "cmd-1", SessionID: "sess-1",
+		EventType: "message.completed", EnvelopeJSON: `{"fixture_payload":{}}`,
+	}
+	if err := store.EnqueueRelayEvent(event); err != nil {
+		t.Fatal(err)
+	}
+
+	var status int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, `{"code":"INVALID_REQUEST","message":"bad envelope"}`)
+	}))
+	defer server.Close()
+
+	loop := &RelayLoop{
+		Store:  store,
+		Client: &RelayClient{BaseURL: server.URL, AccessToken: "t"},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	status = http.StatusBadRequest
+	if err := loop.flushEvents(context.Background()); err != nil {
+		t.Fatalf("4xx must be dropped without failing the flush: %v", err)
+	}
+	pending, err := store.PendingRelayEvents()
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("poison event must leave outbox, pending=%d err=%v", len(pending), err)
+	}
+
+	if err := store.EnqueueRelayEvent(RelayEvent{
+		EventID: "evt-retry", CommandID: "cmd-1", SessionID: "sess-1",
+		EventType: "message.completed", EnvelopeJSON: `{"alg":"a","key_id":"k","nonce":"n","ciphertext":"c","aad_hash":"h","payload_version":1}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status = http.StatusInternalServerError
+	if err := loop.flushEvents(context.Background()); err == nil {
+		t.Fatal("5xx must keep the retryable error")
+	}
+	pending, err = store.PendingRelayEvents()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("5xx event must stay pending, pending=%d err=%v", len(pending), err)
+	}
+}
+
 func (a *startGuardAdapter) Resume(context.Context, adapter.ResumeRequest) (adapter.ResumeResult, error) {
 	return adapter.ResumeResult{Result: adapter.WakeUnsupported}, nil
+}
+
+// Terminal 身份变更（重新配对）必须清零投递游标；同身份重复 hello 不得动游标。
+func TestAdoptTerminalIdentityResetsCursorOnlyOnChange(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	command := RelayCommand{
+		CommandID: "cmd-1", DeliverySeq: 5, SessionID: "sess-1", WorkspaceID: "ws-1",
+		Kind: "session.send", LeaseEpoch: 1, TargetTerminalID: "term-old",
+		PayloadJSON: `{"session_id":"sess-1"}`,
+	}
+	if _, err := store.RecordRelayCommand(command); err != nil {
+		t.Fatalf("seed relay command: %v", err)
+	}
+	loop := &RelayLoop{Store: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	if err := loop.adoptTerminalIdentity("term-old"); err != nil {
+		t.Fatalf("adopt same terminal identity: %v", err)
+	}
+	if cursor, err := store.RelayDeliveryCursor(); err != nil || cursor != 5 {
+		t.Fatalf("cursor must survive same-terminal hello, got %d err=%v", cursor, err)
+	}
+
+	if err := loop.adoptTerminalIdentity("term-new"); err != nil {
+		t.Fatalf("adopt new terminal identity: %v", err)
+	}
+	if cursor, err := store.RelayDeliveryCursor(); err != nil || cursor != 0 {
+		t.Fatalf("cursor must reset on terminal change, got %d err=%v", cursor, err)
+	}
+	if terminalID, err := store.Get("terminal_id"); err != nil || terminalID != "term-new" {
+		t.Fatalf("terminal_id = %q err=%v, want term-new", terminalID, err)
+	}
 }

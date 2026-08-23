@@ -129,7 +129,7 @@
     {
       "id": "ADPT-OPENCODE-05",
       "title": "授权 OpenCode 本地服务 Adapter transport live",
-      "status": "passed",
+      "status": "blocked",
       "phase": "v0.2/P1",
       "category": "OpenCode",
       "priority": "P0",

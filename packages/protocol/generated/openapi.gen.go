@@ -1144,11 +1144,23 @@ type TokenPair struct {
 
 // UploadUsageEventRequest defines model for UploadUsageEventRequest.
 type UploadUsageEventRequest struct {
-	CacheReadTokens  *int   `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens *int   `json:"cache_write_tokens,omitempty"`
-	InputTokens      int    `json:"input_tokens"`
-	OutputTokens     int    `json:"output_tokens"`
-	Provider         string `json:"provider"`
+	CacheReadTokens  *int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
+
+	// DecodeThroughput 可选解码吞吐 tok/s，由 output tokens / decode seconds 派生或直接上报。
+	DecodeThroughput *float32 `json:"decode_throughput,omitempty"`
+	InputTokens      int      `json:"input_tokens"`
+
+	// Model 可选 Provider/model 标识；缺失时客户端必须显示 unavailable，不得推断。
+	Model        *string `json:"model,omitempty"`
+	OutputTokens int     `json:"output_tokens"`
+	Provider     string  `json:"provider"`
+
+	// SessionId 可选会话归属，用于单会话 controls 的白名单用量投影。
+	SessionId *string `json:"session_id,omitempty"`
+
+	// TtftMs 可选首 token 延迟（毫秒），由 Provider timing 的 stepStart→firstToken 派生或直接上报。
+	TtftMs *int `json:"ttft_ms,omitempty"`
 
 	// UsageKey Daemon 对来源事件生成的稳定去重键，Relay 只保存其哈希。
 	UsageKey string `json:"usage_key"`

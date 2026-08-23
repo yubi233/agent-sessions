@@ -18,6 +18,8 @@ export const MACOS_APP_BUNDLE_IDENTIFIER = "com.agentsessions.agentSessionsMobil
 export const MACOS_MOBILE_CONTENT_SIZE = Object.freeze({ height: 960, width: 480 });
 // Flutter macOS 的冷构建在受限本机环境中实测可超过 15 分钟；20 分钟是构建预算，不影响窗口采样超时。
 export const MACOS_BUILD_TIMEOUT_MS = 1_200_000;
+// 单场景要允许 300 帧 5fps 候选采集、render-boundary fallback 和受控退出；90s 在满场景 full gate 中偏紧。
+export const MACOS_PREBUILT_APP_TIMEOUT_MS = 180_000;
 const MACOS_DEBUG_APP_EXECUTABLE = join(
   "build",
   "macos",
@@ -28,6 +30,14 @@ const MACOS_DEBUG_APP_EXECUTABLE = join(
   "Contents",
   "MacOS",
   MACOS_APP_PROCESS,
+);
+const MACOS_DEBUG_APP_BUNDLE = join(
+  "build",
+  "macos",
+  "Build",
+  "Products",
+  "Debug",
+  "agent_sessions_mobile.app",
 );
 const MACOS_WINDOW_WIDTH_TOLERANCE = 4;
 const MACOS_SCALED_PREVIEW_MIN_WIDTH = 360;
@@ -140,6 +150,118 @@ export function flutterMacosBuildArgs() {
 // 构建产物路径由 Flutter macOS debug 约定和固定产品名组成，不接受外部传入的进程或 bundle 路径。
 export function macosDebugAppExecutable(mobileRoot) {
   return resolve(mobileRoot, MACOS_DEBUG_APP_EXECUTABLE);
+}
+
+export function macosDebugAppBundle(mobileRoot) {
+  return resolve(mobileRoot, MACOS_DEBUG_APP_BUNDLE);
+}
+
+export function macosAppExecutableForBundle(appPath) {
+  if (typeof appPath !== "string" || !/\.app\/?$/.test(appPath)) {
+    throw new Error("macOS App bundle 路径无效。 ");
+  }
+  return join(appPath.replace(/\/+$/, ""), "Contents", "MacOS", MACOS_APP_PROCESS);
+}
+
+export function terminateMacosAppProcessesForBundle({
+  appPath,
+  signal = "SIGTERM",
+  runProcessList = execFile,
+  terminateProcess = process.kill,
+} = {}) {
+  const executablePath = macosAppExecutableForBundle(appPath);
+  if (process.platform !== "darwin") {
+    return Promise.resolve({ terminatedProcessIds: [], skipped: "not-darwin" });
+  }
+  return new Promise((resolveCleanup) => {
+    runProcessList("/bin/ps", ["-axo", "pid=,args="], { timeout: 3_000 }, (error, stdout = "") => {
+      if (error != null) {
+        resolveCleanup({
+          terminatedProcessIds: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      const terminatedProcessIds = [];
+      for (const line of String(stdout).split(/\r?\n/)) {
+        const match = line.match(/^\s*(\d+)\s+(.*)$/);
+        if (match == null) continue;
+        const pid = Number.parseInt(match[1], 10);
+        const args = match[2] ?? "";
+        if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) continue;
+        if (!args.includes(executablePath)) continue;
+        try {
+          terminateProcess(pid, signal);
+          terminatedProcessIds.push(pid);
+        } catch {
+          // 已退出的本轮 debug App 不应把清理升级为 gate 失败。
+        }
+      }
+      resolveCleanup({ terminatedProcessIds });
+    });
+  });
+}
+
+export function terminalAppIdleWindowCleanupScript(processName = MACOS_APP_PROCESS) {
+  if (typeof processName !== "string" || !/^[A-Za-z0-9_.-]{1,120}$/.test(processName)) {
+    throw new Error("macOS Terminal 清理进程名无效。 ");
+  }
+  return `
+if application "Terminal" is running then
+  tell application "Terminal"
+    set closedWindowIds to {}
+    repeat with targetWindow in windows
+      set titleText to ""
+      set nameText to ""
+      try
+        set titleText to custom title of targetWindow as text
+      end try
+      try
+        set nameText to name of targetWindow as text
+      end try
+      if titleText contains "${processName}" or nameText contains "${processName}" then
+        set allTabsIdle to true
+        repeat with targetTab in tabs of targetWindow
+          if busy of targetTab is true then set allTabsIdle to false
+        end repeat
+        if allTabsIdle is true then
+          set end of closedWindowIds to id of targetWindow
+          close targetWindow saving no
+        end if
+      end if
+    end repeat
+    return closedWindowIds as text
+  end tell
+else
+  return ""
+end if
+`.trim();
+}
+
+export function closeIdleTerminalWindowsForMacosApp({
+  processName = MACOS_APP_PROCESS,
+  runAppleScript = execFile,
+} = {}) {
+  const script = terminalAppIdleWindowCleanupScript(processName);
+  if (process.platform !== "darwin") {
+    return Promise.resolve({ closedWindowIds: [], skipped: "not-darwin" });
+  }
+  return new Promise((resolveCleanup) => {
+    runAppleScript("/usr/bin/osascript", ["-e", script], { timeout: 3_000 }, (error, stdout = "") => {
+      if (error != null) {
+        resolveCleanup({
+          closedWindowIds: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      const closedWindowIds = String(stdout)
+        .split(/,\s*|\s+/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+      resolveCleanup({ closedWindowIds });
+    });
+  });
 }
 
 /// 沙箱 App 只允许写自己的 Data/tmp；runner 用固定 bundle id 读取再复制到交付目录。
@@ -349,6 +471,7 @@ export function runMacosFlutterProcess({
   stopAfterOutputPattern = null,
   stopAfterOutputMs = null,
   terminateObservedWindows = false,
+  cleanupAfterExit = null,
   terminateProcess = process.kill,
   env = process.env,
 }) {
@@ -401,16 +524,27 @@ export function runMacosFlutterProcess({
       if (parentSignalCleanupTimer) clearTimeout(parentSignalCleanupTimer);
       process.off("SIGINT", onParentSignal);
       process.off("SIGTERM", onParentSignal);
-      resolveResult({
-        stdout,
-        stderr,
-        timedOut,
-        window,
-        gracefulExitRequested,
-        outputExitRequested,
-        observedWindowExitRequested,
-        ...result,
-      });
+      void Promise.resolve()
+        .then(() => {
+          if (cleanupAfterExit == null) return null;
+          return cleanupAfterExit({ window, stdout, stderr, timedOut, result });
+        })
+        .catch((error) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }))
+        .then((cleanup) => {
+          resolveResult({
+            stdout,
+            stderr,
+            timedOut,
+            window,
+            gracefulExitRequested,
+            outputExitRequested,
+            observedWindowExitRequested,
+            cleanup,
+            ...result,
+          });
+        });
     };
 
     const requestGracefulExit = () => {
@@ -501,11 +635,13 @@ export function runMacosFlutterProcess({
         const observation = await observeWindow();
         window.observationAttempts += 1;
         if (observation.observerError) window.observerErrors += 1;
+        const observedWindows = observation.windows || [];
         window.maximumWindowCount = Math.max(
           window.maximumWindowCount,
           observation.count || 0,
+          observedWindows.length,
         );
-        for (const observedWindow of observation.windows || []) {
+        for (const observedWindow of observedWindows) {
           window.lastObservedWindow = observedWindow;
           if (Number.isInteger(observedWindow.pid) && observedWindow.pid > 1) {
             window.observedAppProcessIds.add(observedWindow.pid);
@@ -530,7 +666,9 @@ export function runMacosFlutterProcess({
             }
           }
         }
-        if (observation.count > 0) window.observed = true;
+        if ((observation.count || 0) > 0 || observedWindows.length > 0) {
+          window.observed = true;
+        }
         // 初始 XIB 窗口会在下一次主循环切换为 480x960；不能因短暂的非竖屏窗口提前结束本轮场景。
         if (window.portraitMobileWindowObserved) {
           if (stopAfterWindowMs != null && !stopTimer) {
@@ -696,7 +834,7 @@ export function runMacosFlutterBuild({
 export function runMacosPrebuiltApp({
   appPath,
   cwd,
-  timeoutMs = 90_000,
+  timeoutMs = MACOS_PREBUILT_APP_TIMEOUT_MS,
   observeWindow = unavailableWindowObserver,
   onWindowObserved = null,
   localVisualScenario = null,
@@ -707,6 +845,9 @@ export function runMacosPrebuiltApp({
   env = process.env,
   runProcess = runMacosFlutterProcess,
 }) {
+  if (typeof appPath !== "string" || !/\.app\/?$/.test(appPath)) {
+    throw new Error("macOS 预构建 App 必须使用 .app bundle 路径，不能传入 Contents/MacOS 可执行文件。 ");
+  }
   const hasFrameRecorder = localVisualFrameDirectoryName != null;
   if (
     hasFrameRecorder &&
@@ -751,6 +892,12 @@ export function runMacosPrebuiltApp({
     stopAfterWindowMs,
     // 只有 CoreGraphics 在本轮启动后观测到的 PID 会被终止，避免结束用户已有的 App 实例。
     terminateObservedWindows: true,
+    // 历史上误把 Mach-O 可执行文件交给 open(1) 时会留下 Terminal.app 外壳窗口；
+    // 即使本轮改为打开 .app bundle，也保留只匹配空闲测试窗口的兜底回收。
+    cleanupAfterExit: async () => ({
+      terminal: await closeIdleTerminalWindowsForMacosApp(),
+      appProcesses: await terminateMacosAppProcessesForBundle({ appPath }),
+    }),
     env: fixtureEnv,
   });
 }

@@ -39,7 +39,7 @@ func (m *MockAdapter) Detect(ctx context.Context) (Capabilities, error) {
 		"goal": CapabilityNative, "skill_catalog": CapabilityNative, "invoke_skill": CapabilityNative,
 		"model_select": CapabilityNative, "effort_select": CapabilityNative,
 		"attachments": CapabilityNative, "file_read": CapabilityNative, "git_read": CapabilityNative,
-		"usage": CapabilityNative, "delegate_session": CapabilityNative,
+		"usage": CapabilityNative, "fork": CapabilityNative, "delegate_session": CapabilityNative,
 		"delegate_cross_provider": CapabilityEmulated,
 	}
 	caps := make([]Capability, 0, len(CapabilityNames))

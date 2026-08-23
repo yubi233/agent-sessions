@@ -1,14 +1,14 @@
 {
   "suite": "adapter-codex",
   "suite_version": 1,
-  "status": "in_progress",
+  "status": "passed",
   "plan_id": "ADAPTER-CODEX",
   "description": "Codex app-server JSON-RPC fixture 与授权 live smoke。",
   "id_registry": "docs/test/测试套件索引.json",
   "owner": "Codex Adapter",
   "environment": {
-    "codex": "not-installed",
-    "live_authorized": false
+    "codex": "codex-cli 0.142.5",
+    "live_authorized": true
   },
   "verification_defaults": {
     "report_kind": "not_run",
@@ -43,7 +43,7 @@
     {
       "id": "ADPT-CODEX-02",
       "title": "thread 映射",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "P3",
       "category": "Codex",
       "priority": "P0",
@@ -55,13 +55,14 @@
       "expected": "handle 仅本机加密持久化。",
       "cleanup": [],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADAPTER-CODEX/02.json"
+        "internal/adapter/codex/testdata/golden_trace.json",
+        "internal/adapter/codex/golden_trace_test.go"
       ]
     },
     {
       "id": "ADPT-CODEX-03",
       "title": "审批与 skills 能力",
-      "status": "in_progress",
+      "status": "passed",
       "phase": "P3",
       "category": "Codex",
       "priority": "P1",
@@ -75,13 +76,14 @@
       "expected": "未证明能力为 unsupported。",
       "cleanup": [],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADAPTER-CODEX/03.json"
+        "docs/zh/实施记录/12-Adapter-Codex-W2W3能力矩阵.md",
+        "internal/adapter/codex/testdata/golden_trace.json"
       ]
     },
     {
       "id": "ADPT-CODEX-04",
       "title": "授权 live smoke",
-      "status": "blocked",
+      "status": "passed",
       "phase": "P3",
       "category": "Codex",
       "priority": "P1",
@@ -96,7 +98,7 @@
         "结束子进程"
       ],
       "evidence": [
-        "e2e-verify/reports/<ts>/ADAPTER-CODEX/04.json"
+        "e2e-verify/reports/20260823T044109Z/ADAPTER-CODEX/04.json"
       ]
     }
   ]

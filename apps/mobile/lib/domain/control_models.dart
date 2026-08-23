@@ -279,7 +279,32 @@ class SessionUsageSummary {
     this.cacheReadTokens = 0,
     this.cacheCreationTokens = 0,
     this.contextWindowTokens = 0,
+    this.ttftMs,
+    this.decodeThroughput,
   });
+
+  factory SessionUsageSummary.fromRelayJson(Map<String, dynamic> json) {
+    final input = _intFromControlJson(json['input_tokens']) ?? 0;
+    final output = _intFromControlJson(json['output_tokens']) ?? 0;
+    final cacheRead = _intFromControlJson(json['cache_read_tokens']) ?? 0;
+    final cacheWrite =
+        _intFromControlJson(json['cache_write_tokens']) ??
+        _intFromControlJson(json['cache_creation_tokens']) ??
+        0;
+    return SessionUsageSummary(
+      inputTokens: input,
+      outputTokens: output,
+      contextTokens:
+          _intFromControlJson(json['context_tokens']) ??
+          input + output + cacheRead + cacheWrite,
+      cacheReadTokens: cacheRead,
+      cacheCreationTokens: cacheWrite,
+      contextWindowTokens:
+          _intFromControlJson(json['context_window_tokens']) ?? 0,
+      ttftMs: _intFromControlJson(json['ttft_ms']),
+      decodeThroughput: _doubleFromControlJson(json['decode_throughput']),
+    );
+  }
 
   final int inputTokens;
   final int outputTokens;
@@ -287,6 +312,8 @@ class SessionUsageSummary {
   final int cacheReadTokens;
   final int cacheCreationTokens;
   final int contextWindowTokens;
+  final int? ttftMs;
+  final double? decodeThroughput;
 
   /// 上下文占用比例；无窗口信息时返回 null（不触发警告）。
   double? get contextRatio {
@@ -415,6 +442,25 @@ class SessionControlState {
       usage = null,
       permissionMode = null,
       availablePermissionModes = const [];
+
+  factory SessionControlState.fromRelayJson(Map<String, dynamic> json) {
+    final rawUsage = json['usage'];
+    return SessionControlState(
+      model: _nullableControlString(json['model']),
+      effort: _nullableControlString(json['effort']),
+      models: _stringListFromControlJson(json['models']),
+      efforts: _stringListFromControlJson(json['efforts']),
+      usage: rawUsage is Map
+          ? SessionUsageSummary.fromRelayJson(
+              Map<String, dynamic>.from(rawUsage),
+            )
+          : null,
+      permissionMode: _nullableControlString(json['permission_mode']),
+      availablePermissionModes: _stringListFromControlJson(
+        json['available_permission_modes'],
+      ),
+    );
+  }
 
   final String? model;
   final String? effort;
@@ -693,3 +739,25 @@ String _requiredControlString(Map<String, dynamic> json, String field) {
   }
   return value;
 }
+
+String? _nullableControlString(Object? value) =>
+    value is String && value.trim().isNotEmpty ? value.trim() : null;
+
+int? _intFromControlJson(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return null;
+}
+
+double? _doubleFromControlJson(Object? value) {
+  if (value is num) return value.toDouble();
+  return null;
+}
+
+List<String> _stringListFromControlJson(Object? value) => value is List
+    ? value
+          .whereType<String>()
+          .where((item) => item.trim().isNotEmpty)
+          .map((item) => item.trim())
+          .toList(growable: false)
+    : const [];

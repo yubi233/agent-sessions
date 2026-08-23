@@ -844,6 +844,10 @@ export interface components {
             /** @description Daemon 对来源事件生成的稳定去重键，Relay 只保存其哈希。 */
             usage_key: string;
             provider: string;
+            /** @description 可选会话归属，用于单会话 controls 的白名单用量投影。 */
+            session_id?: string;
+            /** @description 可选 Provider/model 标识；缺失时客户端必须显示 unavailable，不得推断。 */
+            model?: string;
             /** @description UTC 日桶，格式 YYYY-MM-DD。 */
             utc_day: string;
             input_tokens: number;
@@ -852,6 +856,10 @@ export interface components {
             cache_read_tokens: number;
             /** @default 0 */
             cache_write_tokens: number;
+            /** @description 可选首 token 延迟（毫秒），由 Provider timing 的 stepStart→firstToken 派生或直接上报。 */
+            ttft_ms?: number;
+            /** @description 可选解码吞吐 tok/s，由 output tokens / decode seconds 派生或直接上报。 */
+            decode_throughput?: number;
         };
         UsageEventReceipt: {
             /** @description usage_key 的不可逆 SHA-256 十六进制摘要，用于幂等回执。 */

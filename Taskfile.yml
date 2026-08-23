@@ -24,8 +24,33 @@ tasks:
     desc: 从 OpenAPI/JSON Schema 生成 Go、TypeScript 与 Dart 边界并检查无漂移
     cmds:
       - python3 -c "import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path('packages/protocol/schema').glob('*.json')]"
-      - ./tools/generate_protocol.sh
-      - git diff --exit-code -- packages/protocol/generated packages/protocol-ts/src/openapi.ts apps/mobile/lib/protocol/generated.dart
+      - |
+        python3 - <<'PY'
+        import hashlib
+        import pathlib
+        import subprocess
+        import sys
+
+        paths = [
+            'packages/protocol/generated/openapi.gen.go',
+            'packages/protocol-ts/src/openapi.ts',
+            'apps/mobile/lib/protocol/generated.dart',
+        ]
+
+        def digest(path):
+            p = pathlib.Path(path)
+            return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
+
+        before = {path: digest(path) for path in paths}
+        subprocess.run(['./tools/generate_protocol.sh'], check=True)
+        after = {path: digest(path) for path in paths}
+        changed = [path for path in paths if before[path] != after[path]]
+        if changed:
+            print('Generated protocol artifacts changed after regeneration:', file=sys.stderr)
+            for path in changed:
+                print(f'  {path}', file=sys.stderr)
+            sys.exit(1)
+        PY
 
   test:protocol:
     desc: 协议 envelope 与错误码
@@ -155,6 +180,11 @@ tasks:
     cmds:
       - node e2e-verify/real/opencode-live.test.mjs
       - node e2e-verify/real/opencode-live.mjs {{.CLI_ARGS}}
+
+  test:real:codex:
+    desc: 经授权的 Codex app-server live smoke（ADPT-CODEX-04，需 AGENT_SESSIONS_CODEX_LIVE_SMOKE=1）
+    cmds:
+      - AGENT_SESSIONS_CODEX_LIVE_SMOKE=1 go test ./internal/adapter/codex/ -run TestCodexLiveSmoke -v -count=1
 
   test:android:
     desc: Flutter 分析与 widget 测试（单 worker，规避当前 macOS Flutter listener 清理竞态）

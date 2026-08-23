@@ -3,7 +3,10 @@ package domain
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/store"
@@ -24,18 +27,36 @@ const (
 	UsageMaxTokenValue = 1_000_000_000_000
 	// UsageSchemaVersion 当前 usage 事件 schema 版本；未来加字段必须递增并向后兼容。
 	UsageSchemaVersion = 1
+	usageMaxTTFTMS     = 24 * 60 * 60 * 1000
+	usageMaxThroughput = 1_000_000.0
 )
 
 // UsageEventInput 是 Daemon 上传的 usage 事件输入。usageKey 由 Daemon 对来源事件
 // 生成（如 session id + event seq + provider），保证断线重试幂等。
 type UsageEventInput struct {
 	UsageKey         string
+	SessionID        string
 	Provider         string
+	Model            string
 	UTCDay           string // "2006-01-02"（UTC）
 	InputTokens      int64
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	TTFTMS           *int64
+	DecodeThroughput *float64
+}
+
+// SessionUsageProjection 是单会话 StatsLine/Model seat 能安全展示的 usage 投影。
+type SessionUsageProjection struct {
+	Model            string   `json:"model,omitempty"`
+	InputTokens      int64    `json:"input_tokens"`
+	OutputTokens     int64    `json:"output_tokens"`
+	CacheReadTokens  int64    `json:"cache_read_tokens"`
+	CacheWriteTokens int64    `json:"cache_write_tokens"`
+	TTFTMS           *int64   `json:"ttft_ms,omitempty"`
+	DecodeThroughput *float64 `json:"decode_throughput,omitempty"`
+	HasUsage         bool     `json:"-"`
 }
 
 // UsageDayAggregate 是单账号单 Provider 单 UTC 日桶的聚合投影。
@@ -82,24 +103,95 @@ func (s *UsageService) UploadUsageEvent(ctx context.Context, accountID, terminal
 	if err := validateTokens(input.InputTokens, input.OutputTokens, input.CacheReadTokens, input.CacheWriteTokens); err != nil {
 		return false, err
 	}
+	if err := validateUsageTiming(input.TTFTMS, input.DecodeThroughput); err != nil {
+		return false, err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	model := strings.TrimSpace(input.Model)
+	if sessionID != "" {
+		session, err := s.repo.SessionByID(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, ErrSessionNotFound
+			}
+			return false, err
+		}
+		if session.AccountID != accountID {
+			return false, ErrScopeDenied
+		}
+		workspace, err := s.repo.WorkspaceByID(ctx, session.WorkspaceID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, ErrWorkspaceNotFound
+			}
+			return false, err
+		}
+		if workspace.TerminalID != "" && workspace.TerminalID != terminalID {
+			return false, ErrScopeDenied
+		}
+	}
 	keyHash := usageKeyHash(input.UsageKey)
 	inserted, err = s.repo.UpsertUsageEvent(ctx, store.UsageEventRow{
 		UsageKeyHash:     keyHash,
 		AccountID:        accountID,
 		TerminalID:       terminalID,
+		SessionID:        sessionID,
 		Provider:         input.Provider,
+		Model:            model,
 		UTCDay:           input.UTCDay,
 		InputTokens:      input.InputTokens,
 		OutputTokens:     input.OutputTokens,
 		CacheReadTokens:  input.CacheReadTokens,
 		CacheWriteTokens: input.CacheWriteTokens,
+		TTFTMS:           input.TTFTMS,
+		DecodeThroughput: input.DecodeThroughput,
 		SchemaVersion:    UsageSchemaVersion,
 		CreatedAtUnixMS:  time.Now().UnixMilli(),
 	})
 	if err != nil {
 		return false, err
 	}
+	if inserted && sessionID != "" && model != "" {
+		if err := s.repo.SetSessionModel(ctx, sessionID, model); err != nil {
+			return false, err
+		}
+	}
 	return inserted, nil
+}
+
+// SessionProjection 返回一个会话的白名单 usage/model/timing 投影。没有 session-scoped
+// usage 时返回 nil；调用方必须展示 unavailable，不能填 0。
+func (s *UsageService) SessionProjection(ctx context.Context, accountID, sessionID string) (*SessionUsageProjection, error) {
+	session, err := s.repo.SessionByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, err
+	}
+	if session.AccountID != accountID {
+		return nil, ErrScopeDenied
+	}
+	row, err := s.repo.SessionUsageSummary(ctx, accountID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if !row.HasData && row.Model == "" && row.TTFTMS == nil && row.DecodeThroughput == nil {
+		if session.Model == "" {
+			return nil, nil
+		}
+		row.Model = session.Model
+	}
+	return &SessionUsageProjection{
+		Model:            firstNonEmpty(row.Model, session.Model),
+		InputTokens:      row.InputTokens,
+		OutputTokens:     row.OutputTokens,
+		CacheReadTokens:  row.CacheReadTokens,
+		CacheWriteTokens: row.CacheWriteTokens,
+		TTFTMS:           row.TTFTMS,
+		DecodeThroughput: row.DecodeThroughput,
+		HasUsage:         row.HasData || row.TTFTMS != nil || row.DecodeThroughput != nil,
+	}, nil
 }
 
 // Summary 返回账号在最近 days 天（含今天）UTC 日桶内的聚合。
@@ -160,4 +252,23 @@ func validateTokens(values ...int64) error {
 		}
 	}
 	return nil
+}
+
+func validateUsageTiming(ttft *int64, throughput *float64) error {
+	if ttft != nil && (*ttft < 0 || *ttft > usageMaxTTFTMS) {
+		return protocol.NewError(protocol.ErrInvalidRequest, "ttft_ms out of range")
+	}
+	if throughput != nil && (*throughput <= 0 || *throughput > usageMaxThroughput) {
+		return protocol.NewError(protocol.ErrInvalidRequest, "decode_throughput out of range")
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

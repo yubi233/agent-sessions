@@ -5,6 +5,7 @@ import '../domain/daemon_observation_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import '../domain/session_projection_models.dart';
 import '../domain/terminal_models.dart';
 import '../domain/usage_models.dart';
 import 'relay_repository.dart';
@@ -19,8 +20,11 @@ class FixtureRelayRepository implements RelayRepository {
   final List<TerminalSummary> _terminals = [];
   final Map<String, PairingRequest> _pairings = {};
   final Map<String, _FixtureSessionState> _sessions = {};
+  final Map<String, MobileWorkspace> _workspaces = {};
   final Map<String, _FixtureAttachmentState> _attachments = {};
   final Map<String, _FixtureDelegationState> _delegations = {};
+  final Map<String, Map<String, ConversationFeedbackItem>> _feedback = {};
+  final Map<String, String> _forkIdsByParentKey = {};
   var _pairingSequence = 0;
   var _sessionSequence = 0;
   var _commandSequence = 0;
@@ -334,6 +338,34 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<List<MobileWorkspace>> listWorkspaces() async {
+    _requireFixtureNetwork();
+    return List<MobileWorkspace>.unmodifiable(_workspaces.values);
+  }
+
+  @override
+  Future<MobileWorkspace> createWorkspace(
+    CreateMobileWorkspaceInput input,
+  ) async {
+    input.validate();
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final id = 'ws_${input.projectId.trim()}';
+    if (_workspaces.containsKey(id)) {
+      throw const RelayFailure(RelayFailureKind.validation, '该目录已经登记为工作区。');
+    }
+    final workspace = MobileWorkspace(
+      id: id,
+      projectId: input.projectId.trim(),
+      terminalId: input.terminalId.trim(),
+      branch: input.branch.trim().isEmpty ? null : input.branch.trim(),
+      status: 'active',
+    );
+    _workspaces[id] = workspace;
+    return workspace;
+  }
+
+  @override
   Future<MobileSession> createSession(CreateMobileSessionInput input) async {
     input.validate();
     _requireFixtureNetwork();
@@ -350,6 +382,16 @@ class FixtureRelayRepository implements RelayRepository {
       projectName: 'Fixture Project',
       workspaceName: input.workspaceId.trim(),
       updatedAt: _clock(),
+      agentPresetId: input.agentPresetId?.trim(),
+    );
+    _workspaces.putIfAbsent(
+      session.workspaceId,
+      () => MobileWorkspace(
+        id: session.workspaceId,
+        projectId: session.workspaceId,
+        terminalId: '',
+        status: 'active',
+      ),
     );
     final state = _FixtureSessionState(
       session: session,
@@ -366,6 +408,68 @@ class FixtureRelayRepository implements RelayRepository {
     );
     _sessions[id] = state;
     return state.session;
+  }
+
+  @override
+  Future<MobileSession> forkSession(
+    String sessionId,
+    SessionForkInput input,
+  ) async {
+    input.validate();
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final parent = _sessionState(sessionId);
+    _ensureFixtureLease(parent, input.leaseEpoch);
+    final forkKey = '$sessionId:${input.idempotencyKey}';
+    final existingID = _forkIdsByParentKey[forkKey];
+    if (existingID != null) return _sessionState(existingID).session;
+
+    _sessionSequence += 1;
+    final id = 'session-fixture-${_sessionSequence.toString().padLeft(3, '0')}';
+    final child = MobileSession(
+      id: id,
+      workspaceId: parent.session.workspaceId,
+      status: MobileSessionStatus.idle,
+      provider: parent.session.provider,
+      model: parent.session.model,
+      lastSequence: 1,
+      displayName: '分支会话 $_sessionSequence',
+      projectName: parent.session.projectName,
+      workspaceName: parent.session.workspaceName,
+      updatedAt: _clock(),
+      parentSessionId: parent.session.id,
+      forkedFromMessageId: input.messageId,
+      agentPresetId: parent.session.agentPresetId,
+    );
+    final childState = _FixtureSessionState(
+      session: child,
+      controls: parent.controls,
+    );
+    childState.append(
+      eventType: 'session.created',
+      payload: {
+        'kind': 'system_notice',
+        'label': '已创建分支会话',
+        'text': 'fixture 只创建 child session 元数据，不复制 parent 正文。',
+        'parent_session_id': parent.session.id,
+        'forked_from_message_id': input.messageId,
+      },
+      now: _clock(),
+    );
+    parent.append(
+      eventType: 'session.forked',
+      payload: {
+        'kind': 'system_notice',
+        'label': '已创建分支',
+        'text': '分支会话 ${child.id} 已创建。',
+        'child_session_id': child.id,
+        'forked_from_message_id': input.messageId,
+      },
+      now: _clock(),
+    );
+    _sessions[id] = childState;
+    _forkIdsByParentKey[forkKey] = id;
+    return childState.session;
   }
 
   @override
@@ -634,6 +738,11 @@ class FixtureRelayRepository implements RelayRepository {
             deviceId: input.deviceId,
           ),
         );
+        final childState = _sessionState(child.id);
+        childState.session = childState.session.copyWith(
+          parentSessionId: parent.session.id,
+          subagentReadOnlyReason: 'one-shot',
+        );
         await acquireSessionLease(child.id);
         _sessionState(
           child.id,
@@ -708,6 +817,7 @@ class FixtureRelayRepository implements RelayRepository {
             'effort_select',
             'attachments',
             'permission_mode',
+            'fork',
             'delegate_session',
           },
           emulated: const {'delegate_cross_provider'},
@@ -727,6 +837,69 @@ class FixtureRelayRepository implements RelayRepository {
   Future<SessionControlState> getSessionControls(String sessionId) async {
     _requireFixtureNetwork();
     return _sessionState(sessionId).controls;
+  }
+
+  @override
+  Future<ConversationFeedbackItem?> getMessageFeedback(
+    String sessionId,
+    String messageId,
+  ) async {
+    _requireFixtureNetwork();
+    _sessionState(sessionId);
+    return _feedback[sessionId]?[messageId];
+  }
+
+  @override
+  Future<ConversationFeedbackResult> putMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required ConversationFeedbackRating rating,
+    String? note,
+    int? version,
+  }) async {
+    _requireFixtureNetwork();
+    _sessionState(sessionId);
+    final bucket = _feedback.putIfAbsent(sessionId, () => {});
+    final current = bucket[messageId];
+    if (current == null) {
+      if (version != null) {
+        return const ConversationFeedbackResult.failure('version-conflict');
+      }
+      final created = ConversationFeedbackItem(
+        rating: rating,
+        note: note?.trim().isEmpty == true ? null : note?.trim(),
+        version: 1,
+      );
+      bucket[messageId] = created;
+      return ConversationFeedbackResult.success(created);
+    }
+    if (version == null || current.version != version) {
+      return const ConversationFeedbackResult.failure('version-conflict');
+    }
+    final updated = ConversationFeedbackItem(
+      rating: rating,
+      note: note?.trim().isEmpty == true ? null : note?.trim(),
+      version: current.version + 1,
+    );
+    bucket[messageId] = updated;
+    return ConversationFeedbackResult.success(updated);
+  }
+
+  @override
+  Future<ConversationFeedbackResult> deleteMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required int version,
+  }) async {
+    _requireFixtureNetwork();
+    _sessionState(sessionId);
+    final bucket = _feedback[sessionId];
+    final current = bucket?[messageId];
+    if (current == null || current.version != version) {
+      return const ConversationFeedbackResult.failure('version-conflict');
+    }
+    bucket!.remove(messageId);
+    return const ConversationFeedbackResult.success();
   }
 
   @override
@@ -1385,6 +1558,7 @@ List<String> _fixtureCapabilityNames() => const [
   'attachments',
   'file_read',
   'git_read',
+  'fork',
   'delegate_session',
   'delegate_cross_provider',
 ];
@@ -1412,6 +1586,7 @@ ProviderCapabilityProfile _fixtureProvider(
     'attachments',
     'file_read',
     'git_read',
+    'fork',
     'delegate_session',
     'delegate_cross_provider',
   ];

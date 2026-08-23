@@ -7,6 +7,7 @@ import '../domain/daemon_observation_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import '../domain/session_projection_models.dart';
 import '../domain/terminal_models.dart';
 import '../domain/usage_models.dart';
 import 'relay_repository.dart';
@@ -249,6 +250,35 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<List<MobileWorkspace>> listWorkspaces() async {
+    final response = await _authenticatedSend('GET', '/v1/workspaces');
+    return _asList(
+      response.data,
+      wrappedKey: 'workspaces',
+    ).map(MobileWorkspace.fromRelayJson).toList(growable: false);
+  }
+
+  @override
+  Future<MobileWorkspace> createWorkspace(
+    CreateMobileWorkspaceInput input,
+  ) async {
+    input.validate();
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/workspaces',
+      data: {
+        'project_id': input.projectId.trim(),
+        'canonical_root': input.canonicalRoot.trim(),
+        if (input.terminalId.trim().isNotEmpty)
+          'terminal_id': input.terminalId.trim(),
+        if (input.branch.trim().isNotEmpty) 'branch': input.branch.trim(),
+        'status': 'active',
+      },
+    );
+    return MobileWorkspace.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
   Future<MobileSession> createSession(CreateMobileSessionInput input) async {
     input.validate();
     final response = await _authenticatedSend(
@@ -261,6 +291,32 @@ class HttpRelayRepository implements RelayRepository {
       },
     );
     return MobileSession.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<MobileSession> forkSession(
+    String sessionId,
+    SessionForkInput input,
+  ) async {
+    input.validate();
+    if (sessionId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '会话标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/sessions/$sessionId/forks',
+      // device_id 不进入 wire body；Relay 必须从 bearer 绑定的 Android 写设备推导。
+      data: {
+        'message_id': input.messageId.trim(),
+        'idempotency_key': input.idempotencyKey,
+        'lease_epoch': input.leaseEpoch,
+      },
+    );
+    final child = MobileSession.fromRelayJson(_asMap(response.data));
+    if (child.parentSessionId != sessionId) {
+      throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了另一父会话的分支。');
+    }
+    return child;
   }
 
   @override
@@ -316,6 +372,23 @@ class HttpRelayRepository implements RelayRepository {
     return lease;
   }
 
+  /// Daemon 命令 payload 契约（internal/daemon/runner.go commandEnvelope）：
+  /// 顶层必须携带 session_id，业务负载整体位于 ciphertext.fixture_payload。
+  /// 控制器侧只组装 fixture 负载（如 {"fixture_payload": {"message": ...}}），
+  /// 这里统一补齐顶层 session_id 并把负载移入 ciphertext.fixture_payload，
+  /// 否则 Daemon 会以「缺少 session_id」fail-closed 拒绝执行。
+  Map<String, dynamic> _daemonCommandPayload(
+    String sessionId,
+    Map<String, dynamic>? ciphertext,
+  ) {
+    final inner = (ciphertext?['fixture_payload'] as Map<String, dynamic>?) ??
+        const <String, dynamic>{};
+    return <String, dynamic>{
+      'session_id': sessionId,
+      'ciphertext': {'fixture_payload': inner},
+    };
+  }
+
   @override
   Future<SessionCommandReceipt> submitSessionCommand(
     String sessionId,
@@ -332,7 +405,7 @@ class HttpRelayRepository implements RelayRepository {
         'lease_epoch': input.leaseEpoch,
         if (input.targetInstanceId?.isNotEmpty == true)
           'target_instance_id': input.targetInstanceId,
-        if (input.ciphertext != null) 'ciphertext': input.ciphertext,
+        'ciphertext': _daemonCommandPayload(sessionId, input.ciphertext),
       },
     );
     return SessionCommandReceipt.fromRelayJson(_asMap(response.data));
@@ -433,9 +506,79 @@ class HttpRelayRepository implements RelayRepository {
     if (sessionId.trim().isEmpty) {
       throw const RelayFailure.validation('会话标识无效。');
     }
-    // Plan/Goal/Skill 的正文在端到端加密事件中。当前 HTTP snapshot 保持 opaque envelope，
-    // 没有可安全解密的本地事件时只能返回空态，绝不能从 Relay 元数据伪造内容。
-    return const SessionControlState.empty();
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/sessions/$sessionId/controls',
+    );
+    // Plan/Goal/Skill 的正文仍在端到端加密事件中；这里只消费 Relay 白名单
+    // model/usage/timing 字段，缺失时保持空态，不补假数字。
+    return SessionControlState.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<ConversationFeedbackItem?> getMessageFeedback(
+    String sessionId,
+    String messageId,
+  ) async {
+    if (sessionId.trim().isEmpty || messageId.trim().isEmpty) {
+      throw const RelayFailure.validation('反馈会话或消息标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/sessions/$sessionId/feedback/$messageId',
+    );
+    final item = _asMap(response.data)['item'];
+    if (item == null) return null;
+    if (item is! Map) {
+      throw const RelayFailure(
+        RelayFailureKind.protocol,
+        'Relay feedback 响应格式错误。',
+      );
+    }
+    return _feedbackItemFromRelay(Map<String, dynamic>.from(item));
+  }
+
+  @override
+  Future<ConversationFeedbackResult> putMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required ConversationFeedbackRating rating,
+    String? note,
+    int? version,
+  }) async {
+    if (sessionId.trim().isEmpty || messageId.trim().isEmpty) {
+      throw const RelayFailure.validation('反馈会话或消息标识无效。');
+    }
+    final body = <String, dynamic>{'rating': _feedbackRatingWire(rating)};
+    if (note != null) {
+      body['note'] = note;
+    }
+    if (version != null) {
+      body['version'] = version;
+    }
+    final response = await _authenticatedSend(
+      'PUT',
+      '/v1/sessions/$sessionId/feedback/$messageId',
+      data: body,
+    );
+    return _feedbackResultFromRelay(_asMap(response.data));
+  }
+
+  @override
+  Future<ConversationFeedbackResult> deleteMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required int version,
+  }) async {
+    if (sessionId.trim().isEmpty || messageId.trim().isEmpty || version <= 0) {
+      throw const RelayFailure.validation('反馈会话、消息或版本无效。');
+    }
+    final response = await _authenticatedSend(
+      'DELETE',
+      '/v1/sessions/$sessionId/feedback/$messageId',
+      data: {'version': version},
+    );
+    return _feedbackResultFromRelay(_asMap(response.data));
   }
 
   @override
@@ -579,3 +722,50 @@ List<Map<String, dynamic>> _asList(
       .map((item) => Map<String, dynamic>.from(item as Map))
       .toList(growable: false);
 }
+
+ConversationFeedbackItem _feedbackItemFromRelay(Map<String, dynamic> json) {
+  final rating = switch (json['rating']) {
+    'positive' => ConversationFeedbackRating.positive,
+    'negative' => ConversationFeedbackRating.negative,
+    _ => throw const RelayFailure(
+      RelayFailureKind.protocol,
+      'Relay feedback rating 无效。',
+    ),
+  };
+  final version = json['version'];
+  return ConversationFeedbackItem(
+    rating: rating,
+    note: json['note'] is String && (json['note'] as String).trim().isNotEmpty
+        ? (json['note'] as String).trim()
+        : null,
+    version: version is num ? version.toInt() : 0,
+  );
+}
+
+ConversationFeedbackResult _feedbackResultFromRelay(Map<String, dynamic> json) {
+  if (json['ok'] != true) {
+    final code = json['error_code'];
+    return ConversationFeedbackResult.failure(
+      code is String && code.trim().isNotEmpty
+          ? code.trim()
+          : 'mutation-failed',
+    );
+  }
+  final item = json['item'];
+  if (item == null) return const ConversationFeedbackResult.success();
+  if (item is! Map) {
+    throw const RelayFailure(
+      RelayFailureKind.protocol,
+      'Relay feedback 响应格式错误。',
+    );
+  }
+  return ConversationFeedbackResult.success(
+    _feedbackItemFromRelay(Map<String, dynamic>.from(item)),
+  );
+}
+
+String _feedbackRatingWire(ConversationFeedbackRating rating) =>
+    switch (rating) {
+      ConversationFeedbackRating.positive => 'positive',
+      ConversationFeedbackRating.negative => 'negative',
+    };

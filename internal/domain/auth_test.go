@@ -190,3 +190,14 @@ func TestRestoreOwnerRollsBackWhenTokenPersistenceFails(t *testing.T) {
 		t.Fatalf("healthy restore did not revoke old owner: status=%q err=%v", oldOwner.Status, err)
 	}
 }
+
+// authz 不反向依赖 domain；该测试钉住角色字面量与 TTL 映射的一致性，
+// 防止两处字符串漂移导致 Terminal 拿不到长寿命令牌。
+func TestTerminalRoleLiteralMatchesAuthzTTLSelection(t *testing.T) {
+	if RoleTerminal != "terminal" {
+		t.Fatalf("RoleTerminal = %q, want %q", RoleTerminal, "terminal")
+	}
+	if authz.AccessTTLOf(RoleTerminal) != authz.TerminalAccessTTL {
+		t.Fatalf("AccessTTLOf(%q) must return TerminalAccessTTL", RoleTerminal)
+	}
+}

@@ -44,7 +44,21 @@ func HashToken(token string) string {
 }
 
 // AccessTTL 与 RefreshTTL 是默认令牌寿命。
+// TerminalAccessTTL 用于无头 Terminal（Daemon）：RequireAuth 逐请求查库校验令牌与
+// 设备状态，撤销即时生效，TTL 只影响陈旧行清理；放长该角色的寿命是为了避免运行中
+// 的 Daemon 在访问令牌过期后收到 401 而按不可恢复错误退出。终态是设备密钥挑战签名
+// 认证（ADR-002 的演进方向），届时本常量与刷新交接逻辑一并移除。
 const (
-	AccessTTL  = 15 * time.Minute
-	RefreshTTL = 30 * 24 * time.Hour
+	AccessTTL         = 15 * time.Minute
+	TerminalAccessTTL = 24 * time.Hour
+	RefreshTTL        = 30 * 24 * time.Hour
 )
+
+// AccessTTLOf 按角色返回访问令牌寿命；terminal 是唯一的长寿命角色。
+// role 字符串与 domain.RoleTerminal 一致；authz 不反向依赖 domain，测试负责钉住。
+func AccessTTLOf(role string) time.Duration {
+	if role == "terminal" {
+		return TerminalAccessTTL
+	}
+	return AccessTTL
+}

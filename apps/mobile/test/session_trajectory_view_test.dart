@@ -1,5 +1,5 @@
 import 'package:agent_sessions_mobile/domain/session_projection_models.dart';
-import 'package:agent_sessions_mobile/ui/session_screens.dart';
+import 'package:agent_sessions_mobile/ui/session/trajectory/session_trajectory_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

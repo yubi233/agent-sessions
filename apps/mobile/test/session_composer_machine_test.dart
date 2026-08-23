@@ -100,5 +100,55 @@ void main() {
       expect(machine.snapshot.references, isEmpty);
       expect(machine.snapshot.notice, isNull);
     });
+
+    test('attempt token 隔离迟到 settle，abort 与 release 分层', () {
+      final machine = SessionComposerInputMachine()..setDraft('/goal ship');
+      expect(
+        machine.beginCommand(
+          token: '/goal ',
+          start: 0,
+          end: 5,
+          draftRevision: machine.snapshot.draftRevision,
+        ),
+        isTrue,
+      );
+      final attempt = machine.beginAdjudication();
+      expect(attempt, isNotNull);
+      expect(machine.snapshot.phase, SessionInputPhase.adjudicating);
+      expect(machine.beginAdjudication(), isNull);
+      expect(machine.enterSubmitting(attemptToken: 'stale-attempt'), isFalse);
+      expect(machine.enterSubmitting(attemptToken: attempt), isTrue);
+      expect(
+        machine.settleSubmit(success: true, attemptToken: 'stale-attempt'),
+        isFalse,
+      );
+      expect(machine.snapshot.draft, isNotEmpty);
+      expect(machine.abortAttempt(attempt!), isTrue);
+      expect(machine.snapshot.phase, SessionInputPhase.claimed);
+      expect(machine.snapshot.claimToken, '/goal ');
+
+      machine.release();
+      expect(machine.snapshot.phase, SessionInputPhase.plain);
+      expect(machine.snapshot.claimToken, isNull);
+      expect(machine.snapshot.attemptToken, isNull);
+      expect(machine.snapshot.draft, isNotEmpty);
+    });
+
+    test('attempt 期间的新草稿不会被旧成功回执清空', () {
+      final machine = SessionComposerInputMachine()..setDraft('旧请求');
+      final attempt = machine.beginAdjudication();
+      expect(machine.enterSubmitting(attemptToken: attempt), isTrue);
+
+      machine.setDraft('这是用户继续编辑的新草稿');
+
+      expect(
+        machine.settleSubmit(success: true, attemptToken: attempt),
+        isFalse,
+      );
+      expect(machine.snapshot.draft, '这是用户继续编辑的新草稿');
+      expect(machine.snapshot.phase, SessionInputPhase.plain);
+      expect(machine.snapshot.attemptToken, isNull);
+      expect(machine.snapshot.notice, contains('旧提交结果已忽略'));
+    });
   });
 }

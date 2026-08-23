@@ -20,12 +20,13 @@ import {
   createMacosWindowObserver,
   hasFlutterTestSuccessOutput,
   isSuccessfulFlutterResult,
-  macosDebugAppExecutable,
+  macosDebugAppBundle,
   macosSandboxVisualFrameDirectory,
   resolveMacosWidgetTests,
   runMacosFlutterBuild,
   runMacosFlutterWidgetTests,
   runMacosPrebuiltApp,
+  terminateMacosAppProcessesForBundle,
 } from "./macos.mjs";
 import {
   captureMacosWindowFrameSeries,
@@ -51,6 +52,7 @@ const SCREENSHOT_SCENARIO_SETTLE_MS = 800;
 const FLUTTER_RENDER_FRAME_TIMEOUT_MS = 75_000;
 const WINDOW_RELEASE_TIMEOUT_MS = 15_000;
 const WINDOW_RELEASE_POLL_MS = 200;
+const VISUAL_SCENARIO_MAX_ATTEMPTS = 2;
 const MACOS_GATE_LOCK_PATH = join(tmpdir(), "agent-sessions-flutter-macos-gate.lock");
 
 // 报告可归档，但不应带出执行主机的绝对目录；证据只用仓库内相对引用。
@@ -232,6 +234,24 @@ function wait(milliseconds) {
   return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 }
 
+function visualScenarioSandboxDirectoryName({ screenshotDirectory, scenario }) {
+  return [
+    "agent-sessions-visual",
+    basename(dirname(screenshotDirectory)),
+    scenario.directory,
+  ].join("-");
+}
+
+function clearVisualScenarioAttemptArtifacts({ screenshotDirectory, scenario }) {
+  rmSync(join(screenshotDirectory, scenario.directory), { force: true, recursive: true });
+  rmSync(
+    macosSandboxVisualFrameDirectory(
+      visualScenarioSandboxDirectoryName({ screenshotDirectory, scenario }),
+    ),
+    { force: true, recursive: true },
+  );
+}
+
 function isProcessAlive(processId) {
   if (!Number.isInteger(processId) || processId <= 1) return false;
   try {
@@ -322,11 +342,10 @@ export async function recordMacosVisualScenario({
 }) {
   const outputDirectory = join(screenshotDirectory, scenario.directory);
   const candidateDirectory = join(outputDirectory, ".candidates");
-  const sandboxDirectoryName = [
-    "agent-sessions-visual",
-    basename(dirname(screenshotDirectory)),
-    scenario.directory,
-  ].join("-");
+  const sandboxDirectoryName = visualScenarioSandboxDirectoryName({
+    screenshotDirectory,
+    scenario,
+  });
   const sandboxFrameDirectory = macosSandboxVisualFrameDirectory(
     sandboxDirectoryName,
   );
@@ -358,25 +377,31 @@ export async function recordMacosVisualScenario({
           frames: selected,
           outputDirectory,
         });
-      } catch {
+      } catch (windowCaptureError) {
         // 当前 macOS 已观察到真实窗口，但 Screen Recording 可能被系统拒绝；此时只等同一 app 的 render tree 帧。
-        const candidates = await waitForFlutterRenderFrames({
-          outputDirectory: candidateDirectory,
-          sourceDirectory: sandboxFrameDirectory,
-          scenarioId: scenario.id,
-          frameCount: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
-          fps: SCREENSHOT_FRAME_RATE_FPS,
-          copyFrames: false,
-          timeoutMs: FLUTTER_RENDER_FRAME_TIMEOUT_MS,
-        });
-        const selected = selectStrictWindowEvidenceFrames({
-          frames: candidates,
-          selectedFrameCount: SCREENSHOT_SELECTED_FRAME_COUNT,
-        });
-        return materializeStrictWindowEvidenceFrames({
-          frames: selected,
-          outputDirectory,
-        });
+        console.warn(`[macos-e2e] 窗口抓帧失败（${scenario.id}）:`, windowCaptureError?.message ?? windowCaptureError);
+        try {
+          const candidates = await waitForFlutterRenderFrames({
+            outputDirectory: candidateDirectory,
+            sourceDirectory: sandboxFrameDirectory,
+            scenarioId: scenario.id,
+            frameCount: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
+            fps: SCREENSHOT_FRAME_RATE_FPS,
+            copyFrames: false,
+            timeoutMs: FLUTTER_RENDER_FRAME_TIMEOUT_MS,
+          });
+          const selected = selectStrictWindowEvidenceFrames({
+            frames: candidates,
+            selectedFrameCount: SCREENSHOT_SELECTED_FRAME_COUNT,
+          });
+          return materializeStrictWindowEvidenceFrames({
+            frames: selected,
+            outputDirectory,
+          });
+        } catch (fallbackError) {
+          console.warn(`[macos-e2e] render-tree 兜底失败（${scenario.id}）:`, fallbackError?.message ?? fallbackError);
+          throw fallbackError;
+        }
       }
     },
   });
@@ -597,9 +622,9 @@ async function main() {
         failureClass: classifyFlutterFailure(prebuiltBuild),
       });
     }
-    prebuiltAppPath = macosDebugAppExecutable(MOBILE_ROOT);
+    prebuiltAppPath = macosDebugAppBundle(MOBILE_ROOT);
     if (!existsSync(prebuiltAppPath)) {
-      throw new GateError("Flutter macOS debug App 构建后未找到可执行文件。", {
+      throw new GateError("Flutter macOS debug App 构建后未找到 .app bundle。", {
         failureClass: "environment_or_startup_failure",
       });
     }
@@ -645,14 +670,51 @@ async function main() {
       process.stdout.write("[macos-e2e] 启动预构建 App，持续采集 5fps 候选帧并筛选连续视觉证据\n");
       screenshotDirectory = join(ROOT, "e2e-verify", "screenshots", timestamp, "MOBILE");
       for (const scenario of visualScenarios) {
-        process.stdout.write(`[macos-e2e] 采集并筛选 5fps 视觉场景：${scenario.id}\n`);
-        const visualRun = await recordMacosVisualScenario({
+        let visualRun = null;
+        const attemptFailures = [];
+        for (let attempt = 1; attempt <= VISUAL_SCENARIO_MAX_ATTEMPTS; attempt += 1) {
+          process.stdout.write(
+            `[macos-e2e] 采集并筛选 5fps 视觉场景：${scenario.id}（attempt ${attempt}/${VISUAL_SCENARIO_MAX_ATTEMPTS}）\n`,
+          );
+          if (attempt > 1) {
+            clearVisualScenarioAttemptArtifacts({ screenshotDirectory, scenario });
+          }
+          try {
+            visualRun = await recordMacosVisualScenario({
+              scenario,
+              screenshotDirectory,
+              appPath: prebuiltAppPath,
+              observeWindow: () => windowObserver.observe(),
+            });
+            break;
+          } catch (error) {
+            const attemptFailureClass = error instanceof GateError
+              ? error.failureClass
+              : "test_harness_defect";
+            attemptFailures.push({
+              attempt,
+              failure_class: attemptFailureClass,
+              summary: safeError(error),
+            });
+            await terminateMacosAppProcessesForBundle({ appPath: prebuiltAppPath });
+            await waitForNoMacosWindows({ observeWindow: () => windowObserver.observe() });
+            if (
+              attempt >= VISUAL_SCENARIO_MAX_ATTEMPTS
+              || attemptFailureClass !== "environment_or_startup_failure"
+            ) {
+              throw error;
+            }
+            process.stdout.write(
+              `[macos-e2e] ${scenario.id} 环境类采样失败，清理后重试：${safeError(error)}\n`,
+            );
+          }
+        }
+        visualScenarioRuns.push({
           scenario,
-          screenshotDirectory,
-          appPath: prebuiltAppPath,
-          observeWindow: () => windowObserver.observe(),
+          ...visualRun,
+          attempt_count: attemptFailures.length + 1,
+          retry_failures: attemptFailures,
         });
-        visualScenarioRuns.push({ scenario, ...visualRun });
         screenshotEntries.push(...visualRun.frames);
         smoke ??= visualRun.smoke;
         if (args.diagnostic) {
@@ -766,7 +828,7 @@ async function main() {
         prebuilt_debug_build: prebuiltBuild && {
           exit_code: prebuiltBuild.code,
           timed_out: prebuiltBuild.timedOut,
-          app_executable_name: basename(prebuiltAppPath),
+          app_executable_name: prebuiltAppPath == null ? null : basename(prebuiltAppPath),
         },
         visible_app_launcher: "prebuilt-macos-debug-app",
         target_mobile_content_size: MACOS_MOBILE_CONTENT_SIZE,
@@ -794,7 +856,7 @@ async function main() {
           window_observer_errors: smoke.window.observerErrors,
           controlled_exit_requested: smoke.gracefulExitRequested,
         },
-        visual_scenario_runs: visualScenarioRuns.map(({ scenario, smoke: scenarioSmoke, frames }) => ({
+        visual_scenario_runs: visualScenarioRuns.map(({ scenario, smoke: scenarioSmoke, frames, attempt_count, retry_failures }) => ({
           id: scenario.id,
           frame_count: frames.length,
           candidate_frame_count: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
@@ -804,6 +866,8 @@ async function main() {
           frame_rate_fps: SCREENSHOT_FRAME_RATE_FPS,
           frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
           strict_frame_rate: true,
+          attempt_count,
+          retry_failures,
           capture_modes: [...new Set(frames.map((frame) => frame.captureMode))],
           exit_code: scenarioSmoke.code,
           signal: scenarioSmoke.signal,

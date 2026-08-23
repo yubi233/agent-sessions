@@ -13,3 +13,4 @@ ADR 用来记录一旦改变就会影响协议、数据迁移、安全或多端�
 - [ADR-009：Daemon-Relay 命令流与版本协商](ADR-009-Daemon-Relay命令流与版本协商.md)
 - [ADR-010：用量聚合与隐私边界](ADR-010-用量聚合与隐私边界.md)
 - [ADR-011：增强能力决策门](ADR-011-增强能力决策门.md)
+- [ADR-012：Terminal 认证的 TTL 桥接与设备密钥签名终态](ADR-012-Terminal认证的TTL桥接与设备密钥签名终态.md)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -55,6 +56,16 @@ type CommandInput struct {
 	TargetInstanceID string
 	TargetTerminalID string
 	CiphertextJSON   string
+}
+
+type SessionForkInput struct {
+	AccountID       string
+	DeviceID        string
+	Role            string
+	ParentSessionID string
+	MessageID       string
+	IdempotencyKey  string
+	LeaseEpoch      int64
 }
 
 // DaemonCommandObservation 是 Android 只读观察面的最小命令投影。
@@ -116,6 +127,118 @@ func (s *SessionService) CreateSession(ctx context.Context, accountID, workspace
 	}
 	sess.LastSeq = initialSeq
 	return sess, nil
+}
+
+// ForkSession 创建一个真实持久化 child Session，并在 parent/child 流中记录白名单 fork 事件。
+// Relay 不能解密或复制 parent 正文，因此这里不启动 Provider、不制造 seeded transcript；Provider
+// seed 仍由后续 Daemon/Adapter 在拥有本机状态和用户授权时完成。
+func (s *SessionService) ForkSession(ctx context.Context, in SessionForkInput) (store.SessionRow, error) {
+	if !protocol.DeviceRoleCanWrite(in.Role) {
+		return store.SessionRow{}, ErrReadOnlyDevice
+	}
+	if in.ParentSessionID == "" || in.IdempotencyKey == "" || in.LeaseEpoch <= 0 {
+		return store.SessionRow{}, protocol.NewError(protocol.ErrInvalidRequest, "fork request is incomplete")
+	}
+	if err := validateFeedbackMessageID(in.MessageID); err != nil {
+		return store.SessionRow{}, err
+	}
+	var out store.SessionRow
+	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		if existing, lookupErr := tx.SessionByParentForkKey(ctx, in.ParentSessionID, in.IdempotencyKey); lookupErr == nil {
+			out = existing
+			return nil
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		}
+		if existingCommand, lookupErr := tx.CommandByScopeKey(ctx, hashScope(in.AccountID, in.ParentSessionID), in.IdempotencyKey); lookupErr == nil {
+			_ = existingCommand
+			return ErrIdempotencyUsed
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		}
+		parent, err := tx.SessionByID(ctx, in.ParentSessionID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		if parent.AccountID != in.AccountID {
+			return ErrScopeDenied
+		}
+		if err := checkLeaseWithRepo(ctx, tx, parent.ID, in.DeviceID, in.LeaseEpoch); err != nil {
+			return err
+		}
+		child := store.SessionRow{
+			ID: id.New("sess"), WorkspaceID: parent.WorkspaceID, AccountID: parent.AccountID,
+			Status: SessionIdle, Provider: parent.Provider, Model: parent.Model,
+			ParentSessionID: parent.ID, ForkedFromMessageID: in.MessageID,
+			ForkIdempotencyKey: in.IdempotencyKey,
+		}
+		if err := tx.CreateSession(ctx, child); err != nil {
+			return err
+		}
+		childEvent, err := json.Marshal(map[string]any{
+			"session_id":             child.ID,
+			"parent_session_id":      parent.ID,
+			"forked_from_message_id": in.MessageID,
+			"provider":               child.Provider,
+			"model":                  child.Model,
+		})
+		if err != nil {
+			return err
+		}
+		childSeq, err := tx.AppendEvent(ctx, store.SessionEventRow{
+			SessionID: child.ID, EventType: "session.created", EnvelopeJSON: string(childEvent),
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.SetSessionLastSeq(ctx, child.ID, childSeq); err != nil {
+			return err
+		}
+		parentEvent, err := json.Marshal(map[string]any{
+			"parent_session_id":      parent.ID,
+			"child_session_id":       child.ID,
+			"forked_from_message_id": in.MessageID,
+			"provider":               child.Provider,
+			"model":                  child.Model,
+		})
+		if err != nil {
+			return err
+		}
+		parentSeq, err := tx.AppendEvent(ctx, store.SessionEventRow{
+			SessionID: parent.ID, EventType: "session.forked", EnvelopeJSON: string(parentEvent),
+		})
+		if err != nil {
+			return err
+		}
+		if err := tx.SetSessionLastSeq(ctx, parent.ID, parentSeq); err != nil {
+			return err
+		}
+		command := store.CommandRow{
+			ID: id.New("cmd"), AccountID: in.AccountID, SessionID: parent.ID, Kind: "session.fork",
+			Status: CommandAccepted, ScopeHash: hashScope(in.AccountID, parent.ID),
+			IdempotencyKey: in.IdempotencyKey, LeaseEpoch: in.LeaseEpoch,
+			CiphertextJSON: `{"child_session_id":"` + child.ID + `"}`,
+		}
+		if err := tx.CreateCommand(ctx, command); err != nil {
+			return err
+		}
+		if err := tx.AppendAudit(ctx, in.AccountID, "session.forked", `{"parent_session_id":"`+parent.ID+`","child_session_id":"`+child.ID+`"}`); err != nil {
+			return err
+		}
+		out = child
+		out.LastSeq = childSeq
+		return nil
+	})
+	if err != nil {
+		if existing, lookupErr := s.repo.SessionByParentForkKey(ctx, in.ParentSessionID, in.IdempotencyKey); lookupErr == nil {
+			return existing, nil
+		}
+		return store.SessionRow{}, err
+	}
+	return out, nil
 }
 
 // GetSession 读取会话；不存在返回 ErrSessionNotFound。

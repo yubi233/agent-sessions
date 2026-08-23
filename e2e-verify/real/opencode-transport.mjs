@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { baseReport, writeReport } from "../lib/report.mjs";
+import { classifyTransportResult } from "./opencode-transport-result.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -23,24 +24,33 @@ async function runGoLiveGate({ cwd, keep }) {
     suite: "adapter-opencode",
     status: "in_progress",
     real_browser: false,
-    real_model: true,
-    real_upstream: true,
+    real_model: false,
+    real_upstream: false,
     fixture_data: false,
     local_test: true,
     headless: false,
-    command: "go test ./internal/adapter/opencode -run TestLiveTransport -count=1",
+    command:
+      "go test ./internal/adapter/opencode -run TestLiveTransport -count=1",
     model: "opencode-go/deepseek-v4-flash",
     provider: "opencode",
     credential_source: "env:OPENCODE_SERVER_PASSWORD",
   });
-  const args = ["test", "./internal/adapter/opencode", "-run", "TestLiveTransport", "-count=1", "-v"];
+  const args = [
+    "test",
+    "./internal/adapter/opencode",
+    "-run",
+    "TestLiveTransport",
+    "-count=1",
+    "-v",
+  ];
   return new Promise((resolve) => {
     const child = spawn("go", args, {
       cwd,
       env: {
         ...process.env,
         AGENT_SESSIONS_LIVE_OPENCODE: "1",
-        OPENCODE_SERVER_USERNAME: process.env.OPENCODE_SERVER_USERNAME || "opencode",
+        OPENCODE_SERVER_USERNAME:
+          process.env.OPENCODE_SERVER_USERNAME || "opencode",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -59,35 +69,22 @@ async function runGoLiveGate({ cwd, keep }) {
       resolve({ report, output: stdout });
     });
     child.once("close", (code) => {
-      if (code === 0) {
-        report.status = "passed";
-        report.remaining_risk = "真实 serve 单实例验证通过；断线/重连与多会话并发仍由 fixture 契约覆盖。";
-      } else if (code === 1 || code === 2) {
-        // Go 测试退出码 1：断言失败（含 t.Skip 时实际为 0，此处为真失败）。
-        report.status = "failed";
-        report.failure_class = "product_defect";
-        report.remaining_risk = "live gate 断言失败，见 go test 输出。";
+      const outcome = classifyTransportResult({ code, stdout });
+      report.status = outcome.status;
+      report.failure_class = outcome.failureClass;
+      report.real_model = outcome.realModel;
+      report.real_upstream = outcome.realUpstream;
+      report.remaining_risk = outcome.remainingRisk;
+      const summary = outcome.summary;
+      if (Array.isArray(summary?.observed_event_types)) {
+        report.observed_event_types = summary.observed_event_types;
       }
-      // 从 go test 输出解析脱敏摘要（LIVE_SUMMARY <json>），只取计数字段。
-      const summaryLine = stdout
-        .split("\n")
-        .find((line) => line.startsWith("LIVE_SUMMARY"));
-      if (summaryLine) {
-        try {
-          const summary = JSON.parse(summaryLine.slice("LIVE_SUMMARY".length).trim());
-          if (Array.isArray(summary.observed_event_types)) {
-            report.observed_event_types = summary.observed_event_types;
-          }
-          if (summary.usage && typeof summary.usage === "object") {
-            report.usage = {
-              input_tokens: Number(summary.usage.input_tokens) || 0,
-              output_tokens: Number(summary.usage.output_tokens) || 0,
-              total_tokens: Number(summary.usage.total_tokens) || 0,
-            };
-          }
-        } catch {
-          // 摘要格式异常时保留基础报告，不阻断结果。
-        }
+      if (summary?.usage && typeof summary.usage === "object") {
+        report.usage = {
+          input_tokens: Number(summary.usage.input_tokens) || 0,
+          output_tokens: Number(summary.usage.output_tokens) || 0,
+          total_tokens: Number(summary.usage.total_tokens) || 0,
+        };
       }
       resolve({ report, output: stdout });
     });
@@ -111,7 +108,11 @@ async function main() {
   }
   // 输出只保留最后几行 go 测试摘要（脱敏由 Go 侧负责）。
   const tail = output.trim().split("\n").slice(-12).join("\n");
-  const file = writeReport({ planId: "ADAPTER-OPENCODE", name: "05-transport-live", report });
+  const file = writeReport({
+    planId: "ADAPTER-OPENCODE",
+    name: "05-transport-live",
+    report,
+  });
   console.log(tail);
   console.log(`\nreport: ${file}`);
   process.exit(report.status === "passed" ? 0 : 1);

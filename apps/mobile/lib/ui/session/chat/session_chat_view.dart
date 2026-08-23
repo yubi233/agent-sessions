@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../domain/session_projection_models.dart';
+import '../../../state/session_message_feedback_controller.dart';
 import 'session_chat_node_seat.dart';
 
 typedef SessionFileOpener = Future<void> Function(String path);
@@ -19,6 +22,14 @@ class SessionChatView extends StatefulWidget {
     this.footer = const [],
     this.openFile,
     this.onInspectTarget,
+    this.onFork,
+    this.initialScrollOffset = 0,
+    this.onScrollOffsetChanged,
+    this.historyLoading = false,
+    this.historyError,
+    this.canLoadOlder = false,
+    this.onLoadOlder,
+    this.feedbackController,
     super.key,
   });
 
@@ -32,23 +43,48 @@ class SessionChatView extends StatefulWidget {
   final List<Widget> footer;
   final SessionFileOpener? openFile;
   final SessionInspectTargetHandler? onInspectTarget;
+  final SessionForkHandler? onFork;
+  final double initialScrollOffset;
+  final ValueChanged<double>? onScrollOffsetChanged;
+  final bool historyLoading;
+  final String? historyError;
+  final bool canLoadOlder;
+  final Future<void> Function()? onLoadOlder;
+  final SessionMessageFeedbackController? feedbackController;
 
   @override
   State<SessionChatView> createState() => _SessionChatViewState();
 }
 
 class _SessionChatViewState extends State<SessionChatView> {
-  final _controller = ScrollController();
+  late final ScrollController _controller;
   bool _readerPinnedToBottom = true;
   int _fileOpenEpoch = 0;
   _FileOpenError? _fileOpenError;
   String? _fileOpenBusyPath;
+  final Map<String, GlobalKey> _nodeAnchorKeys = {};
 
   @override
   void initState() {
     super.initState();
+    _controller = ScrollController(
+      initialScrollOffset: widget.initialScrollOffset,
+    );
     _controller.addListener(_captureReaderPosition);
-    _scrollToBottom();
+    widget.feedbackController?.addListener(_feedbackChanged);
+    if (widget.initialScrollOffset > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_controller.hasClients) return;
+        _controller.jumpTo(
+          widget.initialScrollOffset.clamp(
+            0,
+            _controller.position.maxScrollExtent,
+          ),
+        );
+      });
+    } else {
+      _scrollToBottom();
+    }
   }
 
   @override
@@ -56,6 +92,25 @@ class _SessionChatViewState extends State<SessionChatView> {
     super.didUpdateWidget(oldWidget);
     final oldLast = oldWidget.nodes.isEmpty ? null : oldWidget.nodes.last;
     final nextLast = widget.nodes.isEmpty ? null : widget.nodes.last;
+    final oldFirstKey = oldWidget.nodes.firstOrNull?.key;
+    final prependCount = oldFirstKey == null
+        ? 0
+        : widget.nodes.indexWhere((node) => node.key == oldFirstKey);
+    if (prependCount > 0 && _controller.hasClients) {
+      final beforePixels = _controller.position.pixels;
+      final anchor = _firstVisibleNodeAnchor(oldWidget.nodes);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_controller.hasClients || anchor == null) return;
+        final anchorContext = _nodeAnchorKeys[anchor.key]?.currentContext;
+        final box = anchorContext?.findRenderObject() as RenderBox?;
+        if (box == null || !box.attached) return;
+        final delta = box.localToGlobal(Offset.zero).dy - anchor.globalY;
+        _controller.jumpTo(
+          (beforePixels + delta).clamp(0, _controller.position.maxScrollExtent),
+        );
+      });
+      return;
+    }
     final appended =
         oldLast?.key != nextLast?.key ||
         oldWidget.nodes.length != widget.nodes.length ||
@@ -68,18 +123,45 @@ class _SessionChatViewState extends State<SessionChatView> {
     }
   }
 
+  ({String key, double globalY})? _firstVisibleNodeAnchor(
+    List<ConversationNode> nodes,
+  ) {
+    final viewportHeight = MediaQuery.sizeOf(context).height;
+    for (final node in nodes) {
+      final anchorContext = _nodeAnchorKeys[node.key]?.currentContext;
+      final box = anchorContext?.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached) continue;
+      final top = box.localToGlobal(Offset.zero).dy;
+      final bottom = top + box.size.height;
+      if (bottom >= 0 && top <= viewportHeight) {
+        return (key: node.key, globalY: top);
+      }
+    }
+    return null;
+  }
+
   @override
   void dispose() {
+    widget.feedbackController?.removeListener(_feedbackChanged);
+    if (_controller.hasClients) {
+      widget.onScrollOffsetChanged?.call(_controller.position.pixels);
+    }
     _controller.removeListener(_captureReaderPosition);
     _controller.dispose();
     super.dispose();
   }
 
+  void _feedbackChanged() {
+    if (mounted) setState(() {});
+  }
+
   void _captureReaderPosition() {
     if (!_controller.hasClients) return;
     final position = _controller.position;
-    _readerPinnedToBottom = position.maxScrollExtent - position.pixels <= 24;
-    setState(() {});
+    final pinned = position.maxScrollExtent - position.pixels <= 24;
+    widget.onScrollOffsetChanged?.call(position.pixels);
+    if (pinned == _readerPinnedToBottom) return;
+    setState(() => _readerPinnedToBottom = pinned);
   }
 
   void _scrollToBottom() {
@@ -131,12 +213,27 @@ class _SessionChatViewState extends State<SessionChatView> {
   @override
   Widget build(BuildContext context) {
     final children = <Widget>[
+      if (widget.leading != null) widget.leading!,
+      if (widget.historyLoading)
+        const _HistoryLoadingRow()
+      else if (widget.historyError != null)
+        _HistoryErrorRow(
+          message: widget.historyError!,
+          onRetry: widget.onLoadOlder,
+        )
+      else if (widget.canLoadOlder)
+        _HistoryLoadOlderRow(onLoadOlder: widget.onLoadOlder),
       if (widget.emptyHero != null) widget.emptyHero!,
       for (final node in widget.nodes)
-        SessionChatNodeSeat(
-          node: node,
-          onOpenFile: _requestOpenFile,
-          onInspect: widget.onInspectTarget,
+        KeyedSubtree(
+          key: _nodeAnchorKeys.putIfAbsent(node.key, GlobalKey.new),
+          child: SessionChatNodeSeat(
+            node: node,
+            onOpenFile: _requestOpenFile,
+            onInspect: widget.onInspectTarget,
+            onFork: widget.onFork,
+            feedbackController: widget.feedbackController,
+          ),
         ),
       ...widget.footer,
     ];
@@ -154,12 +251,7 @@ class _SessionChatViewState extends State<SessionChatView> {
         // 这样即使滚动到底部时 footer（如子会话面板）较高，streaming indicator 也始终在树中，
         // 不会因为 ListView 未 build 视口外的行而被测试或用户跳过。
         if (widget.running)
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 12,
-            child: _TurnStatusRow(),
-          ),
+          Positioned(left: 16, right: 16, bottom: 12, child: _TurnStatusRow()),
         if (!_readerPinnedToBottom)
           Positioned(
             right: 18,
@@ -188,6 +280,54 @@ class _SessionChatViewState extends State<SessionChatView> {
       ],
     );
   }
+}
+
+class _HistoryLoadingRow extends StatelessWidget {
+  const _HistoryLoadingRow();
+
+  @override
+  Widget build(BuildContext context) => const Center(
+    key: Key('session-chat-history-loading'),
+    child: Padding(
+      padding: EdgeInsets.all(12),
+      child: CircularProgressIndicator(strokeWidth: 2),
+    ),
+  );
+}
+
+class _HistoryErrorRow extends StatelessWidget {
+  const _HistoryErrorRow({required this.message, required this.onRetry});
+
+  final String message;
+  final Future<void> Function()? onRetry;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+    key: const Key('session-chat-history-error'),
+    leading: const Icon(Icons.error_outline),
+    title: Text(message),
+    trailing: TextButton(
+      key: const Key('session-chat-history-retry'),
+      onPressed: onRetry == null ? null : () => unawaited(onRetry!()),
+      child: const Text('重试'),
+    ),
+  );
+}
+
+class _HistoryLoadOlderRow extends StatelessWidget {
+  const _HistoryLoadOlderRow({required this.onLoadOlder});
+
+  final Future<void> Function()? onLoadOlder;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: TextButton.icon(
+      key: const Key('session-chat-load-older'),
+      onPressed: onLoadOlder == null ? null : () => unawaited(onLoadOlder!()),
+      icon: const Icon(Icons.history),
+      label: const Text('加载更早消息'),
+    ),
+  );
 }
 
 class _FileOpenError {

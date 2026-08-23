@@ -12,13 +12,17 @@ import (
 // usageUploadRequest 是 Daemon 上传 usage 事件的请求体。字段全部为白名单
 // 整数或归属标识；prompt、回复、费用与精确事件时间不允许出现在该 DTO。
 type usageUploadRequest struct {
-	UsageKey         string `json:"usage_key"`
-	Provider         string `json:"provider"`
-	UTCDay           string `json:"utc_day"`
-	InputTokens      int64  `json:"input_tokens"`
-	OutputTokens     int64  `json:"output_tokens"`
-	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
+	UsageKey         string   `json:"usage_key"`
+	SessionID        string   `json:"session_id,omitempty"`
+	Provider         string   `json:"provider"`
+	Model            string   `json:"model,omitempty"`
+	UTCDay           string   `json:"utc_day"`
+	InputTokens      int64    `json:"input_tokens"`
+	OutputTokens     int64    `json:"output_tokens"`
+	CacheReadTokens  int64    `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64    `json:"cache_write_tokens,omitempty"`
+	TTFTMS           *int64   `json:"ttft_ms,omitempty"`
+	DecodeThroughput *float64 `json:"decode_throughput,omitempty"`
 }
 
 // handleUsageUpload 只允许已配对 Terminal 上传 usage；按 usage_key_hash 去重，
@@ -39,12 +43,16 @@ func (a *API) handleUsageUpload(c *gin.Context) {
 	}
 	inserted, err := a.Usage.UploadUsageEvent(c.Request.Context(), subj.AccountID, terminal.ID, domain.UsageEventInput{
 		UsageKey:         req.UsageKey,
+		SessionID:        req.SessionID,
 		Provider:         req.Provider,
+		Model:            req.Model,
 		UTCDay:           req.UTCDay,
 		InputTokens:      req.InputTokens,
 		OutputTokens:     req.OutputTokens,
 		CacheReadTokens:  req.CacheReadTokens,
 		CacheWriteTokens: req.CacheWriteTokens,
+		TTFTMS:           req.TTFTMS,
+		DecodeThroughput: req.DecodeThroughput,
 	})
 	if err != nil {
 		writeError(c, err)

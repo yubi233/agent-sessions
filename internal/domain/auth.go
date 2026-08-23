@@ -351,9 +351,10 @@ func (s *AuthService) persistAccessWithRepo(ctx context.Context, repo store.Repo
 	}
 	access := authz.RandomToken()
 	now := s.now()
+	accessTTL := authz.AccessTTLOf(role)
 	if err := repo.PutAccessToken(ctx, store.AccessTokenRow{
 		Token: access, AccountID: accountID, DeviceID: deviceID,
-		Role: role, ExpiresAt: now.Add(authz.AccessTTL),
+		Role: role, ExpiresAt: now.Add(accessTTL),
 	}); err != nil {
 		return TokenPair{}, err
 	}
@@ -362,8 +363,8 @@ func (s *AuthService) persistAccessWithRepo(ctx context.Context, repo store.Repo
 		DeviceID:     deviceID,
 		AccessToken:  access,
 		RefreshToken: refresh,
-		ExpiresIn:    int64(authz.AccessTTL.Seconds()),
-		AccessTTL:    authz.AccessTTL,
+		ExpiresIn:    int64(accessTTL.Seconds()),
+		AccessTTL:    accessTTL,
 		RefreshTTL:   authz.RefreshTTL,
 	}, nil
 }

@@ -9,8 +9,10 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
-// ADPT-CODEX-01：探测到 CLI 不能替代尚未实现的 app-server JSON-RPC transport 证据。
-func TestDetectInstalledCLIStaysFailClosed(t *testing.T) {
+// W2 更新：探测到 CLI 且 start/resume/abort 已有 ADPT-CODEX-02 golden trace 契约后，
+// 这三项升级 native；其余能力（审批/skills/model/effort 等）在 W3 证明前必须保持 unsupported。
+// 同时 Start/Resume 在没有真实 app-server 协议对端时仍必须失败（fixture CLI 不回 JSON-RPC）。
+func TestDetectInstalledCLINativeForContractedCapabilities(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "codex-fixture")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'codex-cli 9.9.9'\n"), 0o700); err != nil {
 		t.Fatalf("write fixture CLI: %v", err)
@@ -25,10 +27,10 @@ func TestDetectInstalledCLIStaysFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
-	assertAllUnsupported(t, caps, "codex", "codex-cli 9.9.9")
+	assertCapabilityMatrix(t, caps, "codex", "codex-cli 9.9.9")
 
 	if _, err := a.Start(context.Background(), adapter.StartRequest{WorkspaceRoot: t.TempDir()}); err == nil {
-		t.Fatal("Start must fail while app-server JSON-RPC transport is unavailable")
+		t.Fatal("Start must fail without a real app-server JSON-RPC peer")
 	}
 	resumed, err := a.Resume(context.Background(), adapter.ResumeRequest{InstanceID: "codex-fixture"})
 	if err != nil {
@@ -39,21 +41,43 @@ func TestDetectInstalledCLIStaysFailClosed(t *testing.T) {
 	}
 }
 
-// assertAllUnsupported 校验能力清单完整，且每一项都明确给出禁用原因。
-func assertAllUnsupported(t *testing.T, caps adapter.Capabilities, provider, version string) {
+// assertCapabilityMatrix 校验能力清单完整、契约已证明项为 native、其余 unsupported 且给出原因。
+func assertCapabilityMatrix(t *testing.T, caps adapter.Capabilities, provider, version string) {
 	t.Helper()
 	if caps.Provider != provider || caps.Version != version {
 		t.Fatalf("provider/version = %q/%q, want %q/%q", caps.Provider, caps.Version, provider, version)
 	}
-	if len(caps.Capabilities) != len(adapter.CapabilityNames) {
-		t.Fatalf("capabilities len = %d, want %d", len(caps.Capabilities), len(adapter.CapabilityNames))
-	}
+	native := map[string]bool{"start": true, "resume": true, "abort": true, "permission": true, "plan": true, "goal": true, "skill_catalog": true, "model_select": true, "effort_select": true}
 	for _, capability := range caps.Capabilities {
+		if native[capability.Name] {
+			if capability.Status != adapter.CapabilityNative {
+				t.Fatalf("%s status = %q, want native（ADPT-CODEX-02 契约已覆盖）", capability.Name, capability.Status)
+			}
+			continue
+		}
 		if capability.Status != adapter.CapabilityUnsupported {
 			t.Fatalf("%s status = %q, want unsupported", capability.Name, capability.Status)
 		}
 		if capability.Reason == "" {
-			t.Fatalf("%s must explain why transport is unavailable", capability.Name)
+			t.Fatalf("%s must explain why it is disabled", capability.Name)
 		}
+	}
+}
+
+// Feature flag（AGENT_SESSIONS_CODEX_ENABLE）缺省必须关闭；显式非空才开启。
+func TestEnabledFromEnvDefaultsOff(t *testing.T) {
+	if EnabledFromEnv(nil) {
+		t.Fatal("nil getenv must be disabled")
+	}
+	if EnabledFromEnv(func(string) string { return "" }) {
+		t.Fatal("unset flag must default off")
+	}
+	if !EnabledFromEnv(func(key string) string {
+		if key == EnvEnabled {
+			return "1"
+		}
+		return ""
+	}) {
+		t.Fatal("explicit flag must enable")
 	}
 }

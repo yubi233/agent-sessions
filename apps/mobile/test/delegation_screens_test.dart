@@ -1,5 +1,6 @@
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/app_harness.dart';
@@ -59,9 +60,9 @@ void main() {
       find.byKey(const Key('session-composer-blocked-reason')),
       findsOneWidget,
     );
-    // v0.5/P5-E5：GoalDock / ModelSeat 与 composer 各自 fail-closed 展示同一阻断原因，
-    // 因此这里不再假设全局只出现一次。
-    expect(find.text('等待获取会话控制权'), findsWidgets);
+    expect(find.byKey(const Key('session-subagent-readonly')), findsOneWidget);
+    expect(find.text('一次性子会话'), findsOneWidget);
+    expect(find.byKey(const Key('session-model-seat')), findsNothing);
   });
 
   testWidgets('DELEG-04/06：拒绝无 child，unsupported target 显示禁用原因', (
@@ -167,6 +168,69 @@ void main() {
     expect(nodes.single.status, DelegationStatus.proposed);
     expect(nodes.single.summaryEnvelope.containsKey('plaintext'), isFalse);
     expect(nodes.single.summaryEnvelope.containsKey('text'), isFalse);
+  });
+
+  testWidgets('MOBILE-V05-20：subagent catalog 展开子树、Escape 关闭并恢复焦点', (
+    tester,
+  ) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _registerOwner(tester, 'delegation-catalog-owner@fixture.test');
+    await _createAndAcquireParent(tester);
+    final parentId = (await harness.relay.listSessions()).single.id;
+    final proposal = await harness.relay.seedDelegationProposal(
+      parentSessionId: parentId,
+    );
+    await _refreshSession(tester);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-acquire-lease-button')).first,
+    );
+    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _tapVisible(
+      tester,
+      find.byKey(Key('delegation-approve-${proposal.id}')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('delegation-open-child-${proposal.id}')),
+    );
+
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-subagent-catalog')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-subagent-catalog-sheet')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('session-subagent-entry-${proposal.id}')),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(Key('session-subagent-toggle-${proposal.id}')),
+    );
+    final child = (await harness.relay.listSessionDelegations(
+      parentId,
+    )).single.childSessionId!;
+    await _waitForVisible(
+      tester,
+      find.byKey(Key('session-subagent-branch-empty-$child')),
+    );
+    expect(find.textContaining('token/时长不可用'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('session-subagent-catalog-sheet')),
+      findsNothing,
+    );
+    final trigger = tester.widget<IconButton>(
+      find.byKey(const Key('session-subagent-catalog')),
+    );
+    expect(trigger.focusNode?.hasFocus, isTrue);
   });
 
   testWidgets('MOBILE-07：无 parent lease 时派发入口给出中文原因且不创建节点', (tester) async {

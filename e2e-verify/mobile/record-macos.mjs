@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { baseReport, writeReport } from "../lib/report.mjs";
 import {
   createMacosWindowObserver,
-  macosDebugAppExecutable,
+  macosDebugAppBundle,
   runMacosFlutterBuild,
 } from "./macos.mjs";
 import {
@@ -341,9 +341,9 @@ async function main() {
         failureClass: "environment_or_startup_failure",
       });
     }
-    const appPath = macosDebugAppExecutable(MOBILE_ROOT);
+    const appPath = macosDebugAppBundle(MOBILE_ROOT);
     if (!existsSync(appPath)) {
-      throw new RecordingError("构建后找不到 Flutter macOS debug App。", {
+      throw new RecordingError("构建后找不到 Flutter macOS debug App .app bundle。", {
         failureClass: "environment_or_startup_failure",
       });
     }

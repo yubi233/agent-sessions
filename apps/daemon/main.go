@@ -11,10 +11,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
+	"github.com/yubi233/agent-sessions/internal/adapter/codex"
 	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
 	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
@@ -127,6 +129,14 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 	if useFixtureAdapter {
 		adapters = map[string]adapter.Adapter{"mock": adapter.NewMockAdapter()}
 	}
+	// Codex 执行侧灰度接入：feature flag（AGENT_SESSIONS_CODEX_ENABLE）显式开启才注册，
+	// 关闭/未配置时完全不影响既有链路；回滚即 unset。
+	if !useFixtureAdapter && codex.EnabledFromEnv(os.Getenv) {
+		a := codex.New()
+		adapters["codex"] = a
+		defer func() { _ = a.Close() }()
+		logger.Info("codex adapter enabled", "bin_configured", os.Getenv(codex.EnvBin) != "")
+	}
 	runner := daemon.NewSessionRunner(st, adapters, logger)
 	defer func() { _ = runner.Close(context.Background()) }()
 	loop := daemon.NewRelayLoop(st, &daemon.RelayClient{BaseURL: relayBase, AccessToken: accessToken}, runner, encoder, logger)
@@ -156,14 +166,24 @@ func eventEncoderForRun(useFixtureAdapter bool, getenv func(string) string) (dae
 	if useFixtureAdapter {
 		return daemon.FixtureEventEncoder{}, func() {}, nil
 	}
+	localDevPlaintext := strings.TrimSpace(getenv(daemon.LocalDevPlaintextEnv)) != ""
 	encoder, err := daemon.LoadE2EEEventEncoderFromEnv(getenv)
 	if err != nil {
 		return nil, nil, err
 	}
-	if encoder == nil {
-		return nil, func() {}, nil
+	// 生产 E2EE 与本地开发明文互斥：同时配置说明操作者意图不明确，必须拒绝启动，
+	// 不能悄悄选择其中一条路径。
+	if encoder != nil && localDevPlaintext {
+		return nil, nil, fmt.Errorf("%s 与生产事件密钥（%s/%s）互斥",
+			daemon.LocalDevPlaintextEnv, daemon.EventDEKEnvironment, daemon.EventKeyIDEnvironment)
 	}
-	return encoder, encoder.Destroy, nil
+	if encoder != nil {
+		return encoder, encoder.Destroy, nil
+	}
+	if localDevPlaintext {
+		return daemon.NewLocalDevEventEncoder(), func() {}, nil
+	}
+	return nil, func() {}, nil
 }
 
 // cmdRunner 把 outbox 中 pending 的 Relay 命令兑现到 OpenCode Adapter（ADPT-OPENCODE-06）。
@@ -180,6 +200,12 @@ func cmdRunner(st *daemon.Store) error {
 	runner := daemon.NewSessionRunner(st, map[string]adapter.Adapter{
 		"opencode": opencode.New(),
 	}, logger)
+	if codex.EnabledFromEnv(os.Getenv) {
+		a := codex.New()
+		// 诊断入口同样按 feature flag 注册；进程生命周期随 cmdRunner 返回结束。
+		defer func() { _ = a.Close() }()
+		runner.RegisterAdapter("codex", a)
+	}
 	defer func() { _ = runner.Close(context.Background()) }()
 
 	pending, err := st.PendingCommands()

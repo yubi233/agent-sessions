@@ -143,11 +143,24 @@ func (c *RelayClient) UploadEvent(ctx context.Context, event RelayEvent) error {
 // UploadUsage 只上传白名单整数计数与 UTC 日桶（ADR-010）。usage key 由 Daemon
 // 对来源事件生成，重复上传返回同一 canonical receipt，不重复累加。
 func (c *RelayClient) UploadUsage(ctx context.Context, usage RelayUsage) error {
-	return c.postJSON(ctx, "/v1/daemon/usage/events", map[string]any{
+	body := map[string]any{
 		"usage_key": usage.UsageKey, "provider": usage.Provider, "utc_day": usage.UTCDay,
 		"input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens,
 		"cache_read_tokens": usage.CacheReadTokens, "cache_write_tokens": usage.CacheWriteTokens,
-	}, &struct{}{})
+	}
+	if strings.TrimSpace(usage.SessionID) != "" {
+		body["session_id"] = strings.TrimSpace(usage.SessionID)
+	}
+	if strings.TrimSpace(usage.Model) != "" {
+		body["model"] = strings.TrimSpace(usage.Model)
+	}
+	if usage.TTFTMS != nil {
+		body["ttft_ms"] = *usage.TTFTMS
+	}
+	if usage.DecodeThroughput != nil {
+		body["decode_throughput"] = *usage.DecodeThroughput
+	}
+	return c.postJSON(ctx, "/v1/daemon/usage/events", body, &struct{}{})
 }
 
 // Stream 从终端自己的 delivery_seq 重放，再持续接收推送。SSE 数据由 Relay 生成且只包含目标
@@ -301,6 +314,11 @@ func (FixtureEventEncoder) Encode(sessionID string, event adapter.Event) (string
 	return `{"alg":"fixture-aead","key_id":"fixture","nonce":"fixture-nonce","ciphertext":"` + hex.EncodeToString(sum[:]) + `","aad_hash":"fixture-aad","payload_version":1}`, nil
 }
 
+type usageContext struct {
+	Provider string
+	Model    string
+}
+
 // RelayLoop 把持久化接收、ack、Adapter 执行、终态和事件 outbox 串成最小可靠循环。
 // 它刻意不读取/输出 Provider 正文，且任何网络失败都会留下可安全重试的本机记录。
 type RelayLoop struct {
@@ -318,9 +336,10 @@ type RelayLoop struct {
 	Capabilities  []string
 	Logger        *slog.Logger
 
-	mu               sync.RWMutex
-	commandBySession map[string]string
-	eventWake        chan struct{}
+	mu                    sync.RWMutex
+	commandBySession      map[string]string
+	usageContextBySession map[string]usageContext
+	eventWake             chan struct{}
 }
 
 func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, encoder EventEncoder, logger *slog.Logger) *RelayLoop {
@@ -329,7 +348,8 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 	}
 	loop := &RelayLoop{
 		Store: store, Client: client, Runner: runner, Encoder: encoder, Logger: logger,
-		ReadOnly: NewReadOnlyDispatcher(store, ""), commandBySession: make(map[string]string), eventWake: make(chan struct{}, 1),
+		ReadOnly: NewReadOnlyDispatcher(store, ""), commandBySession: make(map[string]string),
+		usageContextBySession: make(map[string]usageContext), eventWake: make(chan struct{}, 1),
 	}
 	if runner != nil {
 		runner.SetEventSink(loop.enqueueCanonicalEvent)
@@ -362,6 +382,22 @@ func (l *RelayLoop) RunWithRetry(ctx context.Context) error {
 	}
 }
 
+// adoptTerminalIdentity 登记本次 hello 协商的 Terminal 身份。delivery_seq 是 Terminal
+// 局部序号：重新配对会更换 Terminal 身份，沿用旧身份的游标会让 SSE 以过大的
+// after_delivery_seq 重放并静默跳过新身份的全部投递，因此换身份时必须先清零游标。
+func (l *RelayLoop) adoptTerminalIdentity(helloTerminalID string) error {
+	previousTerminalID, prevErr := l.Store.Get("terminal_id")
+	if prevErr == nil && strings.TrimSpace(previousTerminalID) != "" &&
+		previousTerminalID != helloTerminalID {
+		if err := l.Store.ResetRelayDeliveryCursor(); err != nil {
+			return err
+		}
+		l.Logger.Warn("relay terminal identity changed; delivery cursor reset",
+			"previous_terminal_id", previousTerminalID)
+	}
+	return l.Store.Set("terminal_id", helloTerminalID)
+}
+
 func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if l.Store == nil || l.Client == nil || l.Runner == nil {
 		return errors.New("relay loop dependencies missing")
@@ -370,7 +406,7 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := l.Store.Set("terminal_id", hello.TerminalID); err != nil {
+	if err := l.adoptTerminalIdentity(hello.TerminalID); err != nil {
 		return err
 	}
 	if err := l.Client.Heartbeat(ctx); err != nil {
@@ -381,7 +417,7 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if err := l.processPending(ctx); err != nil {
 		return err
 	}
-	if err := l.flushEvents(ctx); err != nil {
+	if err := l.flushOutboxes(ctx); err != nil {
 		return err
 	}
 	cursor, err := l.Store.RelayDeliveryCursor()
@@ -410,11 +446,11 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 			if err := l.Client.Heartbeat(ctx); err != nil {
 				return err
 			}
-			if err := l.flushEvents(ctx); err != nil {
+			if err := l.flushOutboxes(ctx); err != nil {
 				return err
 			}
 		case <-l.eventWake:
-			if err := l.flushEvents(ctx); err != nil {
+			if err := l.flushOutboxes(ctx); err != nil {
 				return err
 			}
 		case <-ctx.Done():
@@ -600,8 +636,10 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			}
 		} else {
 			l.bindCommand(command.SessionID, command.CommandID)
+			l.bindUsageContext(command)
 			err = l.Runner.ConsumeCommand(ctx, Command{
 				RequestID: command.CommandID, Kind: command.Kind, PayloadJSON: command.PayloadJSON,
+				WorkspaceID: command.WorkspaceID,
 			})
 		}
 		status, errorCode := "succeeded", ""
@@ -609,14 +647,14 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			status, errorCode = "failed", CommandErrorCode(err)
 			l.Logger.Warn("daemon command execution failed", "command", command.CommandID, "kind", command.Kind, "error", err)
 		}
-		if err := l.flushEvents(ctx); err != nil {
+		if err := l.flushOutboxes(ctx); err != nil {
 			return err
 		}
 		if err := l.resolveAndPersist(ctx, command, status, errorCode); err != nil {
 			return err
 		}
 	}
-	return l.flushEvents(ctx)
+	return l.flushOutboxes(ctx)
 }
 
 // resolveAndPersist 以 Relay receipt 为本机最终状态。若 Relay 已提交 result、但 HTTP 响应在
@@ -676,14 +714,49 @@ func (l *RelayLoop) bindCommand(sessionID, commandID string) {
 	l.commandBySession[sessionID] = commandID
 }
 
+func (l *RelayLoop) bindUsageContext(command RelayCommand) {
+	env, err := parseEnvelope(command.PayloadJSON)
+	if err != nil {
+		return
+	}
+	provider := strings.TrimSpace(env.provider())
+	model := strings.TrimSpace(env.model())
+	if provider == "" && model == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	current := l.usageContextBySession[command.SessionID]
+	if provider != "" {
+		current.Provider = provider
+	}
+	if model != "" {
+		current.Model = model
+	}
+	l.usageContextBySession[command.SessionID] = current
+}
+
 func (l *RelayLoop) enqueueCanonicalEvent(sessionID string, event adapter.Event) {
+	l.mu.RLock()
+	commandID := l.commandBySession[sessionID]
+	usageCtx := l.usageContextBySession[sessionID]
+	l.mu.RUnlock()
+	if event.Type == adapter.EventUsage {
+		if usage, ok := relayUsageFromAdapterEvent(sessionID, commandID, usageCtx, event); ok {
+			if err := l.Store.EnqueueRelayUsage(usage); err != nil {
+				l.Logger.Warn("daemon usage outbox enqueue failed", "error", err)
+			} else {
+				select {
+				case l.eventWake <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
 	if l.Encoder == nil {
 		l.Logger.Warn("daemon event withheld: encryption encoder unavailable", "event_type", event.Type)
 		return
 	}
-	l.mu.RLock()
-	commandID := l.commandBySession[sessionID]
-	l.mu.RUnlock()
 	if commandID == "" {
 		l.Logger.Warn("daemon event withheld: no command correlation", "event_type", event.Type)
 		return
@@ -691,6 +764,11 @@ func (l *RelayLoop) enqueueCanonicalEvent(sessionID string, event adapter.Event)
 	envelope, err := l.Encoder.Encode(sessionID, event)
 	if err != nil {
 		l.Logger.Warn("daemon event withheld: encryption failed", "event_type", event.Type, "error", err)
+		return
+	}
+	// 编码器契约：空 envelope 且无错误表示该事件类型不进入账号时间线
+	//（本地开发编码器据此过滤 delta/usage 等噪音）。
+	if strings.TrimSpace(envelope) == "" {
 		return
 	}
 	if err := l.Store.EnqueueRelayEvent(RelayEvent{
@@ -706,6 +784,13 @@ func (l *RelayLoop) enqueueCanonicalEvent(sessionID string, event adapter.Event)
 	}
 }
 
+func (l *RelayLoop) flushOutboxes(ctx context.Context) error {
+	if err := l.flushEvents(ctx); err != nil {
+		return err
+	}
+	return l.flushUsages(ctx)
+}
+
 func (l *RelayLoop) flushEvents(ctx context.Context) error {
 	events, err := l.Store.PendingRelayEvents()
 	if err != nil {
@@ -713,6 +798,19 @@ func (l *RelayLoop) flushEvents(ctx context.Context) error {
 	}
 	for _, event := range events {
 		if err := l.Client.UploadEvent(ctx, event); err != nil {
+			// 4xx（除 429）是 Relay 对该事件内容的确定性拒绝：重试永远不会成功，
+			// 只会把整个 relay 循环卡死在 reconnect backoff 里。按毒丸处理：
+			// 记录告警后丢弃，其余错误保持可安全重试。
+			var httpErr *RelayHTTPError
+			if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 && httpErr.Status != http.StatusTooManyRequests {
+				l.Logger.Warn("daemon event dropped: relay permanently rejected payload",
+					"event_id", event.EventID, "session_id", event.SessionID,
+					"event_type", event.EventType, "status", httpErr.Status)
+				if dropErr := l.Store.MarkRelayEventDelivered(event.EventID); dropErr != nil {
+					return dropErr
+				}
+				continue
+			}
 			return err
 		}
 		if err := l.Store.MarkRelayEventDelivered(event.EventID); err != nil {
@@ -720,6 +818,164 @@ func (l *RelayLoop) flushEvents(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (l *RelayLoop) flushUsages(ctx context.Context) error {
+	usages, err := l.Store.PendingRelayUsages()
+	if err != nil {
+		return err
+	}
+	for _, usage := range usages {
+		if err := l.Client.UploadUsage(ctx, usage); err != nil {
+			// 与 flushEvents 相同的毒丸语义：确定性 4xx 重试无意义，丢弃并告警。
+			var httpErr *RelayHTTPError
+			if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 && httpErr.Status != http.StatusTooManyRequests {
+				l.Logger.Warn("daemon usage dropped: relay permanently rejected payload",
+					"usage_key", usage.UsageKey, "status", httpErr.Status)
+				if dropErr := l.Store.MarkRelayUsageDelivered(usage.UsageKey); dropErr != nil {
+					return dropErr
+				}
+				continue
+			}
+			return err
+		}
+		if err := l.Store.MarkRelayUsageDelivered(usage.UsageKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func relayUsageFromAdapterEvent(sessionID, commandID string, ctx usageContext, event adapter.Event) (RelayUsage, bool) {
+	input, inputOK := int64FromPayload(event.Payload, "input_tokens", "inputTokens")
+	output, outputOK := int64FromPayload(event.Payload, "output_tokens", "outputTokens")
+	cacheRead, _ := int64FromPayload(event.Payload, "cache_read_tokens", "cacheReadTokens")
+	cacheWrite, _ := int64FromPayload(event.Payload, "cache_write_tokens", "cacheWriteTokens", "cache_creation_tokens", "cacheCreationTokens")
+	if !inputOK && !outputOK && cacheRead == 0 && cacheWrite == 0 {
+		return RelayUsage{}, false
+	}
+	if input < 0 || output < 0 || cacheRead < 0 || cacheWrite < 0 {
+		return RelayUsage{}, false
+	}
+	provider := strings.TrimSpace(stringFromPayload(event.Payload, "provider"))
+	if provider == "" {
+		provider = strings.TrimSpace(ctx.Provider)
+	}
+	if provider == "" {
+		return RelayUsage{}, false
+	}
+	model := strings.TrimSpace(stringFromPayload(event.Payload, "model"))
+	if model == "" {
+		model = strings.TrimSpace(ctx.Model)
+	}
+	ttft := ttftFromPayload(event.Payload)
+	throughput := throughputFromPayload(event.Payload, output)
+	keySuffix := id.New("usage")
+	if strings.TrimSpace(commandID) != "" {
+		keySuffix = commandID + ":" + keySuffix
+	}
+	return RelayUsage{
+		UsageKey:         "daemon:" + sessionID + ":" + keySuffix,
+		SessionID:        sessionID,
+		Provider:         provider,
+		Model:            model,
+		UTCDay:           time.Now().UTC().Format("2006-01-02"),
+		InputTokens:      input,
+		OutputTokens:     output,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		TTFTMS:           ttft,
+		DecodeThroughput: throughput,
+	}, true
+}
+
+func int64FromPayload(payload map[string]any, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		switch value := payload[key].(type) {
+		case int:
+			return int64(value), true
+		case int64:
+			return value, true
+		case int32:
+			return int64(value), true
+		case float64:
+			if value == float64(int64(value)) {
+				return int64(value), true
+			}
+		case json.Number:
+			if parsed, err := value.Int64(); err == nil {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func float64FromPayload(payload map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		switch value := payload[key].(type) {
+		case float64:
+			return value, true
+		case float32:
+			return float64(value), true
+		case int:
+			return float64(value), true
+		case int64:
+			return float64(value), true
+		case json.Number:
+			if parsed, err := value.Float64(); err == nil {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func stringFromPayload(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return value
+}
+
+func timingPayload(payload map[string]any) map[string]any {
+	if timing, ok := payload["timing"].(map[string]any); ok {
+		return timing
+	}
+	return payload
+}
+
+func ttftFromPayload(payload map[string]any) *int64 {
+	if direct, ok := int64FromPayload(payload, "ttft_ms", "ttftMs"); ok && direct >= 0 {
+		return &direct
+	}
+	timing := timingPayload(payload)
+	stepStart, hasStart := int64FromPayload(timing, "step_start_time", "stepStartTime")
+	firstToken, hasFirst := int64FromPayload(timing, "first_token_time", "firstTokenTime")
+	if !hasStart || !hasFirst {
+		return nil
+	}
+	value := firstToken - stepStart
+	if value < 0 {
+		value = 0
+	}
+	return &value
+}
+
+func throughputFromPayload(payload map[string]any, outputTokens int64) *float64 {
+	if direct, ok := float64FromPayload(payload, "decode_throughput", "decodeThroughput", "tokens_per_second", "tokensPerSecond"); ok && direct > 0 {
+		return &direct
+	}
+	timing := timingPayload(payload)
+	firstToken, hasFirst := int64FromPayload(timing, "first_token_time", "firstTokenTime")
+	completed, hasCompleted := int64FromPayload(timing, "completed_time", "completedTime")
+	if !hasFirst || !hasCompleted || outputTokens <= 0 {
+		return nil
+	}
+	decodeMS := completed - firstToken
+	if decodeMS <= 0 {
+		return nil
+	}
+	value := float64(outputTokens) / (float64(decodeMS) / 1000)
+	return &value
 }
 
 func relayEventType(value adapter.EventType) string {

@@ -85,6 +85,8 @@ type Repository interface {
 	SetSessionStatus(ctx context.Context, id, status string) error
 	SetSessionLastSeq(ctx context.Context, id string, lastSeq int64) error
 	SetSessionInstance(ctx context.Context, id, instanceID string) error
+	SetSessionModel(ctx context.Context, id, model string) error
+	SessionByParentForkKey(ctx context.Context, parentSessionID, idempotencyKey string) (SessionRow, error)
 	CreateInstance(ctx context.Context, i InstanceRow) error
 	InstanceByID(ctx context.Context, id string) (InstanceRow, error)
 
@@ -121,6 +123,13 @@ type Repository interface {
 	ListDelegationsByParent(ctx context.Context, parentSessionID string) ([]DelegationRow, error)
 	UpdateDelegation(ctx context.Context, id, status, childSessionID string, updatedAtUnixMS int64) error
 
+	// Message feedback：Relay 只保存消息级白名单反馈，不保存消息正文或 Provider payload。
+	ListMessageFeedback(ctx context.Context, sessionID string) ([]MessageFeedbackRow, error)
+	MessageFeedbackByMessage(ctx context.Context, sessionID, messageID string) (MessageFeedbackRow, error)
+	CreateMessageFeedback(ctx context.Context, row MessageFeedbackRow) error
+	UpdateMessageFeedback(ctx context.Context, row MessageFeedbackRow, expectedVersion int64) (bool, error)
+	DeleteMessageFeedback(ctx context.Context, sessionID, messageID string, expectedVersion int64) (bool, error)
+
 	// ControlLease（fencing epoch 由应用层在事务内比较）
 	AcquireLease(ctx context.Context, l LeaseRow) error
 	LeaseBySession(ctx context.Context, sessionID string) (LeaseRow, error)
@@ -147,6 +156,8 @@ type Repository interface {
 	UpsertUsageEvent(ctx context.Context, u UsageEventRow) (bool, error)
 	// AggregateUsage 返回账号在 [startDay, endDay]（含两端）UTC 日桶内按 Provider 的聚合。
 	AggregateUsage(ctx context.Context, accountID, startDay, endDay string) ([]UsageDayAggregateRow, error)
+	// SessionUsageSummary 返回单会话白名单用量和最新模型/计时投影。
+	SessionUsageSummary(ctx context.Context, accountID, sessionID string) (SessionUsageSummaryRow, error)
 
 	// 事务：domain 层需要原子提交时使用
 	WithTx(ctx context.Context, fn func(ctx context.Context, tx Repository) error) error
@@ -158,12 +169,16 @@ type UsageEventRow struct {
 	UsageKeyHash     string
 	AccountID        string
 	TerminalID       string
+	SessionID        string
 	Provider         string
+	Model            string
 	UTCDay           string
 	InputTokens      int64
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	TTFTMS           *int64
+	DecodeThroughput *float64
 	SchemaVersion    int64
 	CreatedAtUnixMS  int64
 }
@@ -176,6 +191,18 @@ type UsageDayAggregateRow struct {
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+}
+
+// SessionUsageSummaryRow 是单会话 composer stats 的白名单聚合投影。
+type SessionUsageSummaryRow struct {
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	Model            string
+	TTFTMS           *int64
+	DecodeThroughput *float64
+	HasData          bool
 }
 
 // AuditRow 是 audit_events 表的脱敏投影。metadata_json 只允许白名单字段。
@@ -292,13 +319,17 @@ type WorkspaceRow struct {
 
 // SessionRow 是 sessions 表的行投影。
 type SessionRow struct {
-	ID                string
-	WorkspaceID       string
-	AccountID         string
-	Status            string
-	Provider          string
-	LastSeq           int64
-	CurrentInstanceID string
+	ID                  string
+	WorkspaceID         string
+	AccountID           string
+	Status              string
+	Provider            string
+	Model               string
+	LastSeq             int64
+	CurrentInstanceID   string
+	ParentSessionID     string
+	ForkedFromMessageID string
+	ForkIdempotencyKey  string
 }
 
 // InstanceRow 是 session_instances 表的行投影。
@@ -378,6 +409,19 @@ type DelegationRow struct {
 	CreatedByDeviceID     string
 	CreatedAtUnixMS       int64
 	UpdatedAtUnixMS       int64
+}
+
+// MessageFeedbackRow 是会话消息级反馈 sidecar。message_id 是 Host/Provider 投影出的稳定
+// 消息标识；Relay 不校验或保存消息正文。
+type MessageFeedbackRow struct {
+	AccountID         string
+	SessionID         string
+	MessageID         string
+	Rating            string
+	Note              string
+	Version           int64
+	UpdatedByDeviceID string
+	UpdatedAtUnixMS   int64
 }
 
 // LeaseRow 是 control_leases 表的行投影。

@@ -6,9 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// v0.5/P7：StatsLine / ContextMeter 只读投影回归。
 void main() {
-  testWidgets('MOBILE-V05-12/P7：StatsLine 显示可用字段，缺字段显示不可用', (
-    tester,
-  ) async {
+  testWidgets('MOBILE-V05-12/P7：StatsLine 显示可用字段，缺字段显示不可用', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -82,15 +80,54 @@ void main() {
       find.byKey(const Key('session-context-meter-dialog-close')),
     );
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-context-meter-dialog')), findsNothing);
     expect(
-      find.byKey(const Key('session-context-meter-dialog')),
-      findsNothing,
+      tester
+          .widget<InkWell>(find.byKey(const Key('session-context-meter-open')))
+          .focusNode
+          ?.hasFocus,
+      isTrue,
     );
   });
 
-  testWidgets('MOBILE-V05-12/P7：ContextMeter 缺窗口时显示不可用且不画伪占用', (
+  testWidgets('MOBILE-V05-12/P7：Context capacity 消失时关闭 breakdown 且不自动重开', (
     tester,
   ) async {
+    final meter = ValueNotifier(
+      const SessionContextMeterProjection(usedTokens: 200, windowTokens: 1000),
+    );
+    addTearDown(meter.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ValueListenableBuilder<SessionContextMeterProjection>(
+            valueListenable: meter,
+            builder: (context, value, _) => SessionContextMeter(meter: value),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('session-context-meter-open')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('session-context-meter-dialog')),
+      findsOneWidget,
+    );
+
+    meter.value = const SessionContextMeterProjection(usedTokens: 200);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-context-meter-dialog')), findsNothing);
+    expect(find.text('上下文不可用'), findsOneWidget);
+
+    meter.value = const SessionContextMeterProjection(
+      usedTokens: 200,
+      windowTokens: 1000,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-context-meter-dialog')), findsNothing);
+  });
+
+  testWidgets('MOBILE-V05-12/P7：ContextMeter 缺窗口时显示不可用且不画伪占用', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(

@@ -98,6 +98,7 @@ func mapRawEvent(raw RawEvent) (canonicalEvent, bool) {
 			Type: adapter.EventMessageDelta,
 			Payload: map[string]any{
 				"instance_id": props.SessionID,
+				"message_id":  props.MessageID,
 				"text":        props.Delta,
 			},
 		}, Origin: raw.Type}, true
@@ -114,6 +115,7 @@ func mapRawEvent(raw RawEvent) (canonicalEvent, bool) {
 				Type: adapter.EventMessageCompleted,
 				Payload: map[string]any{
 					"instance_id": props.SessionID,
+					"message_id":  props.Part.MessageID,
 					"text":        props.Part.Text,
 				},
 			}, Origin: raw.Type}, true
@@ -230,6 +232,9 @@ func truncateText(s string, max int) string {
 type subscription struct {
 	raw chan RawEvent
 	ev  chan adapter.Event
+	// roles 记录 message.updated 观察到的 messageID → role。part.updated 只带
+	// messageID 不带角色；没有这张表就无法把用户输入从助手事件流中剔除。
+	roles map[string]string
 }
 
 // streamReader 是 /event SSE 的消费者。它以 goroutine 读取流并解析事件；
@@ -333,8 +338,9 @@ func rawSessionID(raw RawEvent) string {
 // subscribe 注册会话订阅，返回该会话的规范化事件通道（顺序与 SSE 一致）。
 func (s *streamReader) subscribe(sessionID string) (*subscription, bool) {
 	sub := &subscription{
-		raw: make(chan RawEvent, 128),
-		ev:  make(chan adapter.Event, 128),
+		raw:   make(chan RawEvent, 128),
+		ev:    make(chan adapter.Event, 128),
+		roles: map[string]string{},
 	}
 	s.subs[sessionID] = append(s.subs[sessionID], sub)
 	go s.forward(sub, sessionID)
@@ -345,8 +351,12 @@ func (s *streamReader) subscribe(sessionID string) (*subscription, bool) {
 func (s *streamReader) forward(sub *subscription, sessionID string) {
 	defer close(sub.ev)
 	for raw := range sub.raw {
+		trackMessageRole(sub, raw)
 		mapped, ok := mapRawEvent(raw)
 		if !ok {
+			continue
+		}
+		if skipUserMessageEcho(sub, mapped.Event) {
 			continue
 		}
 		select {
@@ -355,6 +365,37 @@ func (s *streamReader) forward(sub *subscription, sessionID string) {
 			return
 		}
 	}
+}
+
+// messageUpdatedProps 是 message.updated 的 properties（只取角色判定所需字段）。
+type messageUpdatedProps struct {
+	Info struct {
+		ID   string `json:"id"`
+		Role string `json:"role"`
+	} `json:"info"`
+}
+
+// trackMessageRole 从 message.updated 记录消息角色。OpenCode 的 part 事件只携带
+// messageID；没有这张映射就无法区分用户输入与助手输出。
+func trackMessageRole(sub *subscription, raw RawEvent) {
+	if raw.Type != "message.updated" || sub == nil || sub.roles == nil {
+		return
+	}
+	props, err := parseProperties[messageUpdatedProps](raw.Properties)
+	if err != nil || props.Info.ID == "" || props.Info.Role == "" {
+		return
+	}
+	sub.roles[props.Info.ID] = props.Info.Role
+}
+
+// skipUserMessageEcho 丢弃角色为 user 的文本 delta/completed：用户输入已经由命令链路
+// 进入时间线，不能作为助手事件二次广播。
+func skipUserMessageEcho(sub *subscription, event adapter.Event) bool {
+	if event.Type != adapter.EventMessageDelta && event.Type != adapter.EventMessageCompleted {
+		return false
+	}
+	messageID, _ := event.Payload["message_id"].(string)
+	return messageID != "" && sub != nil && sub.roles[messageID] == "user"
 }
 
 // unsubscribe 注销会话订阅。

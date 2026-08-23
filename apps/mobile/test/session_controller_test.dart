@@ -8,6 +8,32 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/fixture_owner.dart';
 
 void main() {
+  test('MOBILE-V06-REAL-SESSION：autoStart 在创建后自动获取 lease 并提交 start', () async {
+    final relay = FixtureRelayRepository(clock: () => _now);
+    await _prepareOwner(relay);
+    final controller = SessionController(
+      relay: relay,
+      clock: () => _now,
+      random: _DeterministicRandom(),
+    );
+    await controller.initialize();
+
+    final created = await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+
+    expect(created, isNotNull);
+    expect(controller.hasSelectedLease, isTrue);
+    expect(
+      controller.timeline.any((event) => event.label == '会话已启动'),
+      isTrue,
+    );
+  });
+
   group('MOBILE-02 SESS-01..02 CTRL-01..02 会话控制状态机', () {
     test('空列表、新会话、流式时间线、权限问题和停止共享同一 lease 链路', () async {
       final relay = FixtureRelayRepository(clock: () => _now);
@@ -194,6 +220,56 @@ void main() {
 
       expect(controller.errorMessage, '会话控制权已更新，请重新获取。');
       expect(controller.timeline.length, 1);
+    });
+
+    test('forkFromMessage 使用当前 lease 创建 child，并刷新 parent lineage 事件', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      await _prepareOwner(relay);
+      final controller = SessionController(
+        relay: relay,
+        clock: () => _now,
+        random: _DeterministicRandom(),
+      );
+      final parent = await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'codex',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      await controller.acquireSelectedLease(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      final child = await controller.forkFromMessage(
+        messageId: 'assistant-message-1',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      final retried = await controller.forkFromMessage(
+        messageId: 'assistant-message-1',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(child, isNotNull);
+      expect(retried?.id, child!.id);
+      expect(child.parentSessionId, parent!.id);
+      expect(child.forkedFromMessageId, 'assistant-message-1');
+      expect(
+        controller.sessions.where((session) => session.id == child.id),
+        hasLength(1),
+      );
+      expect(
+        controller.sessions.any((session) => session.id == parent.id),
+        isTrue,
+      );
+      expect(controller.selectedSession?.id, parent.id);
+      expect(
+        controller.timeline.any((event) => event.label == '已创建分支'),
+        isTrue,
+      );
+      expect(controller.errorMessage, isNull);
     });
   });
 }

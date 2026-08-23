@@ -38,10 +38,15 @@ class MobileSession {
     required this.status,
     required this.provider,
     required this.lastSequence,
+    this.model,
     this.displayName,
     this.projectName,
     this.workspaceName,
     this.updatedAt,
+    this.parentSessionId,
+    this.forkedFromMessageId,
+    this.agentPresetId,
+    this.subagentReadOnlyReason,
   });
 
   factory MobileSession.fromRelayJson(Map<String, dynamic> json) =>
@@ -53,10 +58,17 @@ class MobileSession {
         ),
         provider: (json['provider'] as String?) ?? 'unknown',
         lastSequence: (json['last_seq'] as num?)?.toInt() ?? 0,
+        model: _nullableString(json['model']),
         displayName: _nullableString(json['display_name']),
         projectName: _nullableString(json['project_name']),
         workspaceName: _nullableString(json['workspace_name']),
         updatedAt: _nullableDateTime(json['updated_at']),
+        parentSessionId: _nullableString(json['parent_session_id']),
+        forkedFromMessageId: _nullableString(json['forked_from_message_id']),
+        agentPresetId: _nullableString(json['agent_preset_id']),
+        subagentReadOnlyReason: _nullableString(
+          json['subagent_read_only_reason'],
+        ),
       );
 
   final String id;
@@ -64,10 +76,18 @@ class MobileSession {
   final MobileSessionStatus status;
   final String provider;
   final int lastSequence;
+  final String? model;
   final String? displayName;
   final String? projectName;
   final String? workspaceName;
   final DateTime? updatedAt;
+
+  /// Optional display projections. Production Relay may omit them; the UI must
+  /// then keep the related header/composer seats unavailable.
+  final String? parentSessionId;
+  final String? forkedFromMessageId;
+  final String? agentPresetId;
+  final String? subagentReadOnlyReason;
 
   String get title => displayName?.trim().isNotEmpty == true
       ? displayName!.trim()
@@ -80,21 +100,85 @@ class MobileSession {
   MobileSession copyWith({
     MobileSessionStatus? status,
     int? lastSequence,
+    String? model,
     String? displayName,
     String? projectName,
     String? workspaceName,
     DateTime? updatedAt,
+    String? parentSessionId,
+    String? forkedFromMessageId,
+    String? agentPresetId,
+    String? subagentReadOnlyReason,
   }) => MobileSession(
     id: id,
     workspaceId: workspaceId,
     status: status ?? this.status,
     provider: provider,
     lastSequence: lastSequence ?? this.lastSequence,
+    model: model ?? this.model,
     displayName: displayName ?? this.displayName,
     projectName: projectName ?? this.projectName,
     workspaceName: workspaceName ?? this.workspaceName,
     updatedAt: updatedAt ?? this.updatedAt,
+    parentSessionId: parentSessionId ?? this.parentSessionId,
+    forkedFromMessageId: forkedFromMessageId ?? this.forkedFromMessageId,
+    agentPresetId: agentPresetId ?? this.agentPresetId,
+    subagentReadOnlyReason:
+        subagentReadOnlyReason ?? this.subagentReadOnlyReason,
   );
+}
+
+/// Relay workspace whitelist projection. Canonical roots never come back from
+/// the list endpoint, so the mobile client cannot expose a host path.
+class MobileWorkspace {
+  const MobileWorkspace({
+    required this.id,
+    required this.projectId,
+    required this.terminalId,
+    this.branch,
+    this.status,
+  });
+
+  factory MobileWorkspace.fromRelayJson(Map<String, dynamic> json) =>
+      MobileWorkspace(
+        id: _requiredSessionString(json, 'id'),
+        projectId: _requiredSessionString(json, 'project_id'),
+        terminalId: _nullableString(json['terminal_id']) ?? '',
+        branch: _nullableString(json['branch']),
+        status: _nullableString(json['status']),
+      );
+
+  final String id;
+  final String projectId;
+  final String terminalId;
+  final String? branch;
+  final String? status;
+
+  String get label => projectId.trim().isNotEmpty ? projectId.trim() : id;
+}
+
+class CreateMobileWorkspaceInput {
+  const CreateMobileWorkspaceInput({
+    required this.projectId,
+    required this.canonicalRoot,
+    required this.deviceId,
+    this.terminalId = '',
+    this.branch = '',
+  });
+
+  final String projectId;
+  final String canonicalRoot;
+  final String deviceId;
+  final String terminalId;
+  final String branch;
+
+  void validate() {
+    if (projectId.trim().isEmpty ||
+        canonicalRoot.trim().isEmpty ||
+        deviceId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '工作区目录或控制端身份无效。');
+    }
+  }
 }
 
 /// Relay snapshot 中的原始事件。客户端尚未获得会话解密材料时只能保留 envelope，不能猜测正文。
@@ -191,6 +275,7 @@ class CreateMobileSessionInput {
     required this.workspaceId,
     required this.provider,
     required this.deviceId,
+    this.agentPresetId,
   });
 
   final String workspaceId;
@@ -198,10 +283,34 @@ class CreateMobileSessionInput {
 
   /// device_id 是客户端意图边界；HTTP 层必须由 bearer token 推导，不能由请求体伪造。
   final String deviceId;
+  final String? agentPresetId;
 
   void validate() {
     if (workspaceId.trim().isEmpty || deviceId.trim().isEmpty) {
       throw const RelayFailure(RelayFailureKind.validation, '工作区或控制端身份无效。');
+    }
+  }
+}
+
+class SessionForkInput {
+  const SessionForkInput({
+    required this.messageId,
+    required this.idempotencyKey,
+    required this.leaseEpoch,
+    required this.deviceId,
+  });
+
+  final String messageId;
+  final String idempotencyKey;
+  final int leaseEpoch;
+  final String deviceId;
+
+  void validate() {
+    if (messageId.trim().isEmpty || idempotencyKey.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '分支消息或幂等标识无效。');
+    }
+    if (leaseEpoch <= 0 || deviceId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '会话控制权已失效，请重新获取。');
     }
   }
 }
@@ -379,6 +488,47 @@ class TimelineQuestionOption {
   final String? description;
 }
 
+/// Host-projected recursive tool child. It is intentionally limited to
+/// display-safe labels/status/input/output and never carries raw envelopes.
+class SessionToolSubcall {
+  const SessionToolSubcall({
+    required this.callId,
+    required this.label,
+    this.status,
+    this.input,
+    this.output,
+    this.subcalls = const [],
+  });
+
+  factory SessionToolSubcall.fromFixture(Object? value) {
+    if (value is! Map) {
+      return const SessionToolSubcall(callId: '', label: '未知子调用');
+    }
+    final data = Map<String, dynamic>.from(value);
+    return SessionToolSubcall(
+      callId:
+          _nullableString(data['call_id']) ??
+          _nullableString(data['id']) ??
+          'subcall-unknown',
+      label:
+          _nullableString(data['label']) ??
+          _nullableString(data['name']) ??
+          '工具子调用',
+      status: _nullableString(data['status']),
+      input: _nullableString(data['input']),
+      output: _nullableString(data['output']),
+      subcalls: _toolSubcallsFromFixture(data['subcalls']),
+    );
+  }
+
+  final String callId;
+  final String label;
+  final String? status;
+  final String? input;
+  final String? output;
+  final List<SessionToolSubcall> subcalls;
+}
+
 /// 可显示的时间线由本地已解密事件或 deterministic fixture 构建。
 /// 未识别的真实 envelope 仅显示脱敏占位，避免把密文或猜测的正文写入 UI、日志或测试报告。
 class SessionTimelineEvent {
@@ -403,6 +553,7 @@ class SessionTimelineEvent {
     this.toolOutput,
     this.inspectTarget,
     this.producedFilePaths = const [],
+    this.toolSubcalls = const [],
   });
 
   factory SessionTimelineEvent.fromRelayEvent(RelaySessionEvent event) {
@@ -439,6 +590,7 @@ class SessionTimelineEvent {
       toolOutput: _nullableString(payload['tool_output']),
       inspectTarget: _nullableString(payload['inspect_target']),
       producedFilePaths: _stringList(payload['produced_files']),
+      toolSubcalls: _toolSubcallsFromFixture(payload['subcalls']),
     );
   }
 
@@ -465,6 +617,7 @@ class SessionTimelineEvent {
   final String? toolOutput;
   final String? inspectTarget;
   final List<String> producedFilePaths;
+  final List<SessionToolSubcall> toolSubcalls;
 }
 
 SessionTimelineKind _timelineKindFromFixture(String? kind) => switch (kind) {
@@ -581,5 +734,13 @@ List<String> _stringList(Object? value) => value is List
     ? value
           .whereType<String>()
           .where((item) => item.trim().isNotEmpty)
+          .toList(growable: false)
+    : const [];
+
+List<SessionToolSubcall> _toolSubcallsFromFixture(Object? value) =>
+    value is List
+    ? value
+          .map(SessionToolSubcall.fromFixture)
+          .where((item) => item.callId.trim().isNotEmpty)
           .toList(growable: false)
     : const [];

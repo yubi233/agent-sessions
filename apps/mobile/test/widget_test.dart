@@ -81,7 +81,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('pairing-request-id')),
@@ -97,7 +97,7 @@ void main() {
 
     await tester.tap(find.byKey(const Key('back-home-button')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('devices-page-link')));
+    await _tapVisible(tester, find.byKey(const Key('devices-page-link')));
     await tester.pumpAndSettle();
     final deviceId = 'device-${request.id}';
     expect(find.byKey(Key('device-$deviceId')), findsOneWidget);
@@ -125,7 +125,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
     await tester.pumpAndSettle();
@@ -152,7 +152,7 @@ void main() {
     await tester.pumpWidget(harness.build());
     await tester.pumpAndSettle();
     await _registerOwner(tester, 'invalid-scan@fixture.test');
-    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
     await tester.pumpAndSettle();
@@ -190,7 +190,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.byKey(const Key('pairing-page-link')));
+    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
     await tester.pumpAndSettle();
@@ -232,6 +232,12 @@ void main() {
 
     expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
   });
+}
+
+Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
 }
 
 Future<void> _registerOwner(WidgetTester tester, String email) async {

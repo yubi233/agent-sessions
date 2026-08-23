@@ -57,6 +57,11 @@ class SessionProjectionController {
         continue;
       }
 
+      if (nodeKind == ConversationNodeKind.assistant &&
+          event.text?.trim().isNotEmpty != true &&
+          !event.isStreaming) {
+        continue;
+      }
       nodes.add(
         ConversationNode(
           key: 'node:${event.sequence}:${nodeKind.name}',
@@ -78,6 +83,8 @@ class SessionProjectionController {
           references: _referenceChipsFor(event),
           filePath: event.filePath,
           toolDetails: _toolDetailsFor(event),
+          feedbackAvailable: _feedbackAvailable(event, nodeKind),
+          completedTurn: event.completedTurn,
         ),
       );
       final producedFiles = _producedFilesFor(event);
@@ -178,9 +185,20 @@ class SessionProjectionController {
       input: event.toolInput,
       output: event.toolOutput,
       inspectTarget: event.inspectTarget,
+      subcalls: event.toolSubcalls.map(_subcallFor).toList(growable: false),
     );
     return details.hasContent ? details : null;
   }
+
+  ConversationToolSubcall _subcallFor(SessionToolSubcall call) =>
+      ConversationToolSubcall(
+        callId: call.callId,
+        label: call.label,
+        status: call.status,
+        input: call.input,
+        output: call.output,
+        subcalls: call.subcalls.map(_subcallFor).toList(growable: false),
+      );
 
   List<ConversationProducedFile> _producedFilesFor(
     SessionTimelineEvent event,
@@ -242,6 +260,14 @@ class SessionProjectionController {
       nodeKind == ConversationNodeKind.assistant &&
       event.completedTurn &&
       !event.forkAvailable;
+
+  bool _feedbackAvailable(
+    SessionTimelineEvent event,
+    ConversationNodeKind nodeKind,
+  ) =>
+      nodeKind == ConversationNodeKind.assistant &&
+      event.completedTurn &&
+      event.messageId?.trim().isNotEmpty == true;
 
   List<ConversationReferenceChip> _referenceChipsFor(
     SessionTimelineEvent event,

@@ -102,6 +102,14 @@ func NewSessionRunner(store *Store, adapters map[string]adapter.Adapter, logger 
 
 // SetEventSink 设置 canonical event 的本机出口。连接层必须先把正文编码为密文 envelope，
 // 再进入 Relay outbox；runner 不持有账户密钥，也不直接发 HTTP。
+// RegisterAdapter 运行期补注册 provider adapter（feature flag 灰度接入用）。
+// 同名 provider 覆盖旧注册；调用须在 ConsumeCommand 之前。
+func (r *SessionRunner) RegisterAdapter(provider string, ad adapter.Adapter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.adapters[provider] = ad
+}
+
 func (r *SessionRunner) SetEventSink(sink func(sessionID string, event adapter.Event)) {
 	r.eventSinkMu.Lock()
 	defer r.eventSinkMu.Unlock()
@@ -170,6 +178,14 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	if !ok {
 		return fmt.Errorf("provider %q 未注册 adapter，保持 fail-closed", provider)
 	}
+	workspaceRoot := strings.TrimSpace(env.WorkspaceRoot)
+	if workspaceRoot == "" {
+		workspace, err := r.store.ConfirmedWorkspaceByID(cmd.WorkspaceID)
+		if err != nil {
+			return fmt.Errorf("resolve workspace %q: %w", cmd.WorkspaceID, err)
+		}
+		workspaceRoot = workspace.Root
+	}
 
 	// 重复 start 先回收旧句柄，避免泄漏与事件串流。
 	r.mu.Lock()
@@ -180,7 +196,7 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	r.mu.Unlock()
 
 	handle, err := ad.Start(ctx, adapter.StartRequest{
-		WorkspaceRoot: env.WorkspaceRoot,
+		WorkspaceRoot: workspaceRoot,
 		Provider:      provider,
 		Model:         env.model(),
 		Effort:        env.effort(),
@@ -196,26 +212,34 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	r.handles[sessionID] = &runningSession{handle: handle, cancel: cancel}
 	r.mu.Unlock()
 
-	first, err := r.awaitFirstEvent(ctx, handle)
-	if err != nil {
-		cancel()
-		_ = handle.Dispose(context.Background())
-		r.removeHandle(sessionID)
-		return err
-	}
-	instanceID, err := instanceIDFromEvent(first)
-	if err != nil {
-		cancel()
-		_ = handle.Dispose(context.Background())
-		r.removeHandle(sessionID)
-		return err
+	var first adapter.Event
+	var instanceID string
+	if identified, ok := handle.(adapter.InstanceIDHandle); ok && strings.TrimSpace(identified.InstanceID()) != "" {
+		// OpenCode 已在 POST /session 响应中返回 canonical ID；空会话不会产生
+		// turn_started，因此不等待模型事件，也不消耗真实 Provider token。
+		instanceID = strings.TrimSpace(identified.InstanceID())
+	} else {
+		first, err = r.awaitFirstEvent(ctx, handle)
+		if err != nil {
+			cancel()
+			_ = handle.Dispose(context.Background())
+			r.removeHandle(sessionID)
+			return err
+		}
+		instanceID, err = instanceIDFromEvent(first)
+		if err != nil {
+			cancel()
+			_ = handle.Dispose(context.Background())
+			r.removeHandle(sessionID)
+			return err
+		}
 	}
 
 	// 持久化 instance 映射：只存 provider 与 OpenCode session id，不存正文/密文。
 	mapping, err := json.Marshal(providerThread{
 		Provider:      provider,
 		InstanceID:    instanceID,
-		WorkspaceRoot: env.WorkspaceRoot,
+		WorkspaceRoot: workspaceRoot,
 	})
 	if err != nil {
 		cancel()
@@ -231,7 +255,11 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	}
 
 	// 事件转发 goroutine：canonical 事件写回本地 store；fwdCtx 取消时退出。
-	go r.forwardEvents(sessionID, handle, fwdCtx, first)
+	if first.Type != "" {
+		go r.forwardEvents(sessionID, handle, fwdCtx, first)
+	} else {
+		go r.forwardEvents(sessionID, handle, fwdCtx)
+	}
 	return nil
 }
 
@@ -381,9 +409,12 @@ func (r *SessionRunner) removeHandle(sessionID string) {
 // forwardEvents 把 handle 的 canonical 事件写回本地 store（简单记最后一条）。
 // 退出路径：fwdCtx 取消（Close/会话回收）或 handle 事件流关闭。
 // handle.Dispose 由调用方（startSession 失败路径或 Close）负责，这里只负责停止转发。
-func (r *SessionRunner) forwardEvents(sessionID string, h adapter.Handle, fwdCtx context.Context, first adapter.Event) {
-	count := 1
-	r.writeEvent(sessionID, count, first)
+func (r *SessionRunner) forwardEvents(sessionID string, h adapter.Handle, fwdCtx context.Context, initial ...adapter.Event) {
+	count := 0
+	if len(initial) > 0 && initial[0].Type != "" {
+		count = 1
+		r.writeEvent(sessionID, count, initial[0])
+	}
 	for {
 		select {
 		case ev, ok := <-h.Events():

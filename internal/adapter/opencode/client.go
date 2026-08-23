@@ -51,12 +51,15 @@ type Session struct {
 // 空字段必须省略（omitempty）：opencode 1.17 服务端校验 part.id 必须是 prt 开头，
 // 传空字符串会被拒绝；缺省字段则按服务端默认处理。
 type Part struct {
-	ID    string `json:"id,omitempty"`
-	Type  string `json:"type,omitempty"`
-	Text  string `json:"text,omitempty"`
-	State string `json:"state,omitempty"`
-	Tool  string `json:"tool,omitempty"`
-	Input any    `json:"input,omitempty"`
+	ID string `json:"id,omitempty"`
+	// MessageID 把 part 关联到所属消息；配合 message.updated 的 info.role 可区分
+	// user/assistant，避免把用户输入回显成助手事件。
+	MessageID string `json:"messageID,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Text      string `json:"text,omitempty"`
+	State     string `json:"state,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	Input     any    `json:"input,omitempty"`
 	// Output 只对已完成工具生效；不完整工具调用不携带正文。
 	Output string `json:"output,omitempty"`
 	Reason string `json:"reason,omitempty"`

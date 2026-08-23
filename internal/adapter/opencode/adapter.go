@@ -305,6 +305,9 @@ type handle struct {
 	model string
 }
 
+// InstanceID 返回 OpenCode /session 创建响应中的真实 session ID。
+func (h *handle) InstanceID() string { return h.sessionID }
+
 // ID 返回会话 ID（仅 daemon 本地使用；不进 Relay/Flutter 卡片）。
 func (h *handle) ID() string { return h.sessionID }
 

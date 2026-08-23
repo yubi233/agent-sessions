@@ -6,6 +6,7 @@ import 'package:agent_sessions_mobile/domain/daemon_observation_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
+import 'package:agent_sessions_mobile/domain/session_projection_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/domain/usage_models.dart';
 import 'package:agent_sessions_mobile/relay/http_relay_repository.dart';
@@ -221,6 +222,92 @@ void main() {
       );
     });
 
+    test('workspace 列表与目录登记映射白名单字段，不发送 device_id', () async {
+      var call = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        call += 1;
+        if (call == 1) {
+          expect(options.path, '/v1/workspaces');
+          expect(options.method, 'GET');
+          return _jsonResponse({
+            'workspaces': [
+              {
+                'id': 'workspace_1',
+                'project_id': 'project_1',
+                'terminal_id': 'terminal_1',
+                'branch': 'main',
+                'status': 'active',
+              },
+            ],
+          });
+        }
+        expect(options.path, '/v1/workspaces');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'project_id': 'project_2',
+          'canonical_root': '/host/project-2',
+          'terminal_id': 'terminal_2',
+          'branch': 'feature/v05',
+          'status': 'active',
+        });
+        expect((options.data as Map).containsKey('device_id'), isFalse);
+        return _jsonResponse({
+          'id': 'workspace_2',
+          'project_id': 'project_2',
+          'terminal_id': 'terminal_2',
+          'branch': 'feature/v05',
+          'status': 'active',
+        }, statusCode: 201);
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      final listed = await repository.listWorkspaces();
+      final created = await repository.createWorkspace(
+        const CreateMobileWorkspaceInput(
+          projectId: 'project_2',
+          canonicalRoot: '/host/project-2',
+          deviceId: 'android-owner-local-boundary',
+          terminalId: 'terminal_2',
+          branch: 'feature/v05',
+        ),
+      );
+
+      expect(listed.single.id, 'workspace_1');
+      expect(listed.single.projectId, 'project_1');
+      expect(created.id, 'workspace_2');
+      expect(call, 2);
+    });
+
+    test('真实 Relay 未定义 agent preset 时会话创建保持协议白名单', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/sessions');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'workspace_id': 'workspace_1',
+          'provider': 'codex',
+        });
+        return _jsonResponse({
+          'id': 'session_1',
+          'workspace_id': 'workspace_1',
+          'status': 'idle',
+          'provider': 'codex',
+          'last_seq': 0,
+        }, statusCode: 201);
+      });
+
+      final session = await _authenticatedRepository(adapter).createSession(
+        const CreateMobileSessionInput(
+          workspaceId: 'workspace_1',
+          provider: 'codex',
+          deviceId: 'android-owner-local-boundary',
+          agentPresetId: 'fixture-must-not-cross-production-wire',
+        ),
+      );
+
+      expect(session.id, 'session_1');
+      expect(session.agentPresetId, isNull);
+    });
+
     test('会话写命令映射正 lease 与幂等键，但不把 device_id 放进 HTTP body', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/sessions/session_1/commands');
@@ -229,8 +316,12 @@ void main() {
           'kind': 'session.send',
           'idempotency_key': 'idem-session-1',
           'lease_epoch': 7,
+          // Daemon 契约：顶层 session_id + ciphertext.fixture_payload 业务负载。
           'ciphertext': {
-            'fixture_payload': {'message': 'safe fixture'},
+            'session_id': 'session_1',
+            'ciphertext': {
+              'fixture_payload': {'message': 'safe fixture'},
+            },
           },
         });
         expect((options.data as Map).containsKey('device_id'), isFalse);
@@ -304,6 +395,38 @@ void main() {
       expect(call, 2);
     });
 
+    test('命令 payload 统一补齐 Daemon 顶层 session_id，无负载命令也不例外', () async {
+      Map<String, dynamic>? capturedBody;
+      final adapter = _FixtureHttpAdapter((options) {
+        capturedBody = Map<String, dynamic>.from(options.data as Map);
+        return _jsonResponse({
+          'id': 'command-abort',
+          'kind': 'session.abort',
+          'status': 'accepted',
+          'idempotency_key': 'idem-abort',
+          'lease_epoch': 7,
+        }, statusCode: 202);
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      await repository.submitSessionCommand(
+        'session_1',
+        const SessionCommandInput(
+          kind: SessionCommandKind.abort,
+          idempotencyKey: 'idem-abort',
+          leaseEpoch: 7,
+          deviceId: 'android-owner-local-boundary',
+        ),
+      );
+
+      // internal/daemon/runner.go parseEnvelope 只读顶层 session_id；
+      // 缺失时 session.abort 会以「缺少 session_id」fail-closed。
+      expect(capturedBody?['ciphertext'], {
+        'session_id': 'session_1',
+        'ciphertext': {'fixture_payload': <String, dynamic>{}},
+      });
+    });
+
     test('会话快照保留 opaque envelope 并发送 after_seq 查询参数', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/sessions/session_1/snapshot');
@@ -332,6 +455,166 @@ void main() {
 
       expect(snapshot.session.lastSequence, 5);
       expect(snapshot.events.single.envelope, {'alg': 'opaque-ciphertext'});
+    });
+
+    test('fork 会话只提交 message、幂等键和 lease，解析 parent lineage', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/sessions/session_parent/forks');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'message_id': 'msg-assistant-1',
+          'idempotency_key': 'fork-msg-assistant-1',
+          'lease_epoch': 11,
+        });
+        final body = options.data as Map;
+        expect(body.containsKey('device_id'), isFalse);
+        expect(body.containsKey('ciphertext'), isFalse);
+        return _jsonResponse({
+          'id': 'session_child',
+          'workspace_id': 'workspace_1',
+          'status': 'idle',
+          'provider': 'codex',
+          'model': 'fixture-model-a',
+          'last_seq': 1,
+          'parent_session_id': 'session_parent',
+          'forked_from_message_id': 'msg-assistant-1',
+        }, statusCode: 201);
+      });
+
+      final child = await _authenticatedRepository(adapter).forkSession(
+        'session_parent',
+        const SessionForkInput(
+          messageId: 'msg-assistant-1',
+          idempotencyKey: 'fork-msg-assistant-1',
+          leaseEpoch: 11,
+          deviceId: 'android-owner-local-boundary',
+        ),
+      );
+
+      expect(child.id, 'session_child');
+      expect(child.parentSessionId, 'session_parent');
+      expect(child.forkedFromMessageId, 'msg-assistant-1');
+      expect(child.model, 'fixture-model-a');
+    });
+
+    test('controls 只解析白名单 model、usage 与 TTFT/throughput 投影', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/sessions/session_1/controls');
+        expect(options.method, 'GET');
+        expect(options.data, isNull);
+        return _jsonResponse({
+          'model': 'fixture-model-a',
+          'usage': {
+            'input_tokens': 120,
+            'output_tokens': 80,
+            'cache_read_tokens': 30,
+            'cache_write_tokens': 10,
+            'context_tokens': 240,
+            'ttft_ms': 640,
+            'decode_throughput': 42.5,
+          },
+        });
+      });
+
+      final controls = await _authenticatedRepository(
+        adapter,
+      ).getSessionControls('session_1');
+
+      expect(controls.model, 'fixture-model-a');
+      expect(controls.usage?.inputTokens, 120);
+      expect(controls.usage?.outputTokens, 80);
+      expect(controls.usage?.cacheReadTokens, 30);
+      expect(controls.usage?.cacheCreationTokens, 10);
+      expect(controls.usage?.contextTokens, 240);
+      expect(controls.usage?.ttftMs, 640);
+      expect(controls.usage?.decodeThroughput, 42.5);
+      expect(controls.plan, isNull);
+      expect(controls.goal, isNull);
+    });
+
+    test('message feedback 支持 lazy read、CAS put、conflict 和 delete', () async {
+      var call = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        switch (call++) {
+          case 0:
+            expect(options.path, '/v1/sessions/session_1/feedback/msg-1');
+            expect(options.method, 'GET');
+            return _jsonResponse({
+              'item': {'rating': 'positive', 'note': 'helpful', 'version': 2},
+            });
+          case 1:
+            expect(options.path, '/v1/sessions/session_1/feedback/msg-1');
+            expect(options.method, 'PUT');
+            expect(options.data, {
+              'rating': 'negative',
+              'note': 'needs source',
+              'version': 2,
+            });
+            return _jsonResponse({
+              'ok': true,
+              'item': {
+                'rating': 'negative',
+                'note': 'needs source',
+                'version': 3,
+              },
+            });
+          case 2:
+            expect(options.path, '/v1/sessions/session_1/feedback/msg-1');
+            expect(options.method, 'PUT');
+            expect(options.data, {'rating': 'positive', 'version': 2});
+            return _jsonResponse({
+              'ok': false,
+              'error_code': 'version-conflict',
+              'current': {
+                'rating': 'negative',
+                'note': 'needs source',
+                'version': 3,
+              },
+            });
+          case 3:
+            expect(options.path, '/v1/sessions/session_1/feedback/msg-1');
+            expect(options.method, 'DELETE');
+            expect(options.data, {'version': 3});
+            return _jsonResponse({'ok': true});
+          default:
+            fail('unexpected HTTP call $call');
+        }
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      final initial = await repository.getMessageFeedback('session_1', 'msg-1');
+      expect(initial?.rating, ConversationFeedbackRating.positive);
+      expect(initial?.note, 'helpful');
+      expect(initial?.version, 2);
+
+      final updated = await repository.putMessageFeedback(
+        'session_1',
+        messageId: 'msg-1',
+        rating: ConversationFeedbackRating.negative,
+        note: 'needs source',
+        version: 2,
+      );
+      expect(updated.ok, isTrue);
+      expect(updated.item?.rating, ConversationFeedbackRating.negative);
+      expect(updated.item?.version, 3);
+
+      final conflict = await repository.putMessageFeedback(
+        'session_1',
+        messageId: 'msg-1',
+        rating: ConversationFeedbackRating.positive,
+        version: 2,
+      );
+      expect(conflict.ok, isFalse);
+      expect(conflict.errorCode, 'version-conflict');
+
+      final deleted = await repository.deleteMessageFeedback(
+        'session_1',
+        messageId: 'msg-1',
+        version: 3,
+      );
+      expect(deleted.ok, isTrue);
+      expect(deleted.item, isNull);
+      expect(call, 4);
     });
 
     test('P2-F 只读取 Daemon 安全观察投影，不请求 Terminal SSE 或原始密文', () async {

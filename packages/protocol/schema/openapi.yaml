@@ -1409,6 +1409,12 @@ components:
           description: Daemon 对来源事件生成的稳定去重键，Relay 只保存其哈希。
         provider:
           type: string
+        session_id:
+          type: string
+          description: 可选会话归属，用于单会话 controls 的白名单用量投影。
+        model:
+          type: string
+          description: 可选 Provider/model 标识；缺失时客户端必须显示 unavailable，不得推断。
         utc_day:
           type: string
           description: UTC 日桶，格式 YYYY-MM-DD。
@@ -1426,6 +1432,14 @@ components:
           type: integer
           minimum: 0
           default: 0
+        ttft_ms:
+          type: integer
+          minimum: 0
+          description: 可选首 token 延迟（毫秒），由 Provider timing 的 stepStart→firstToken 派生或直接上报。
+        decode_throughput:
+          type: number
+          exclusiveMinimum: 0
+          description: 可选解码吞吐 tok/s，由 output tokens / decode seconds 派生或直接上报。
     UsageEventReceipt:
       type: object
       required: [usage_key_hash, inserted]

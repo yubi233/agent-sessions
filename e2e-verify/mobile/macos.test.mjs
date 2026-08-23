@@ -10,6 +10,7 @@ import {
   MACOS_APP_BUNDLE_IDENTIFIER,
   MACOS_BUILD_TIMEOUT_MS,
   MACOS_MOBILE_CONTENT_SIZE,
+  MACOS_PREBUILT_APP_TIMEOUT_MS,
   flutterMacosBuildArgs,
   flutterMacosArgs,
   flutterMacosSmokeArgs,
@@ -18,6 +19,9 @@ import {
   isSuccessfulFlutterResult,
   isMacosPortraitMobileWindow,
   listMacosIntegrationTests,
+  closeIdleTerminalWindowsForMacosApp,
+  macosAppExecutableForBundle,
+  macosDebugAppBundle,
   macosDebugAppExecutable,
   macosSandboxVisualFrameDirectory,
   macosWindowObserverArgs,
@@ -30,6 +34,8 @@ import {
   runMacosFlutterTest,
   runMacosFlutterWidgetTests,
   runMacosPrebuiltApp,
+  terminalAppIdleWindowCleanupScript,
+  terminateMacosAppProcessesForBundle,
 } from "./macos.mjs";
 import {
   acquireMacosGateLock,
@@ -96,6 +102,10 @@ test("macOS Flutter 命令固定设备、禁止隐式 pub 解析", () => {
     ["run", "-d", "macos", "--no-pub", "--dart-define=LOCAL_FIXTURE_MODE=true"],
   );
   assert.deepEqual(flutterMacosBuildArgs(), ["build", "macos", "--debug", "--no-pub"]);
+  assert.equal(
+    macosDebugAppBundle("/fixture/mobile"),
+    "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app",
+  );
   assert.equal(
     macosDebugAppExecutable("/fixture/mobile"),
     "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile",
@@ -267,8 +277,8 @@ test("macOS 本地 gate 的 widget 回归不绑定 device attach", () => {
   assert.equal(options.stopAfterOutputPattern, undefined);
 });
 
-test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受控退出", () => {
-  const appPath = "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile";
+test("macOS 可见截图从预构建 App bundle 启动，并只给本轮观测窗口受控退出", () => {
+  const appPath = "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app";
   const build = runMacosFlutterBuild({
     cwd: "/fixture/mobile",
     runProcess: (received) => received,
@@ -302,7 +312,9 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
   assert.equal(prebuilt.flutter, "/usr/bin/open");
   assert.equal(prebuilt.env.LOCAL_FIXTURE_MODE, "true");
   assert.equal(prebuilt.env.LOCAL_VISUAL_SCENARIO, "owner-ready");
+  assert.equal(prebuilt.timeoutMs, MACOS_PREBUILT_APP_TIMEOUT_MS);
   assert.equal(prebuilt.terminateObservedWindows, true);
+  assert.equal(typeof prebuilt.cleanupAfterExit, "function");
 
   const login = runMacosPrebuiltApp({
     appPath,
@@ -346,6 +358,67 @@ test("macOS 可见截图从预构建 App 启动，并只给本轮观测窗口受
     }),
     /未设置截图目录/,
   );
+  assert.throws(
+    () => runMacosPrebuiltApp({
+      appPath: `${appPath}/Contents/MacOS/agent_sessions_mobile`,
+      cwd: "/fixture/mobile",
+      runProcess: (received) => received,
+    }),
+    /\.app bundle/,
+  );
+});
+
+test("macOS 预构建 App cleanup 只按本轮 bundle 可执行路径回收残留进程", async () => {
+  const appPath = "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app";
+  const executablePath = macosAppExecutableForBundle(appPath);
+  assert.equal(
+    executablePath,
+    "/fixture/mobile/build/macos/Build/Products/Debug/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile",
+  );
+  const terminated = [];
+  const cleanup = await terminateMacosAppProcessesForBundle({
+    appPath,
+    runProcessList: (binary, args, options, callback) => {
+      assert.equal(binary, "/bin/ps");
+      assert.deepEqual(args, ["-axo", "pid=,args="]);
+      assert.equal(options.timeout, 3000);
+      callback(
+        null,
+        [
+          ` 101 ${executablePath}`,
+          " 202 /Applications/Terminal.app/Contents/MacOS/Terminal",
+          " 303 /fixture/other/agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile",
+        ].join("\n"),
+      );
+    },
+    terminateProcess: (pid, signal) => {
+      terminated.push([pid, signal]);
+    },
+  });
+  assert.deepEqual(cleanup, { terminatedProcessIds: [101] });
+  assert.deepEqual(terminated, [[101, "SIGTERM"]]);
+  assert.throws(() => macosAppExecutableForBundle(`${appPath}/Contents/MacOS/agent_sessions_mobile`), /无效/);
+});
+
+test("macOS Terminal 外壳清理只匹配空闲的本轮测试窗口", async () => {
+  const script = terminalAppIdleWindowCleanupScript();
+  assert.match(script, /application "Terminal" is running/);
+  assert.match(script, /custom title of targetWindow/);
+  assert.match(script, /name of targetWindow/);
+  assert.match(script, /busy of targetTab is true/);
+  assert.match(script, /close targetWindow saving no/);
+  assert.match(script, new RegExp(MACOS_APP_PROCESS));
+  assert.throws(() => terminalAppIdleWindowCleanupScript("../bad"), /无效/);
+
+  const cleanup = await closeIdleTerminalWindowsForMacosApp({
+    runAppleScript: (binary, args, options, callback) => {
+      assert.equal(binary, "/usr/bin/osascript");
+      assert.deepEqual(args, ["-e", script]);
+      assert.equal(options.timeout, 3000);
+      callback(null, "12, 19\n");
+    },
+  });
+  assert.deepEqual(cleanup, { closedWindowIds: ["12", "19"] });
 });
 
 test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter 渲染帧", async () => {

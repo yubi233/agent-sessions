@@ -552,17 +552,23 @@ func (r *sqliteRepo) ListWorkspaces(ctx context.Context, accountID string) ([]Wo
 
 func (r *sqliteRepo) CreateSession(ctx context.Context, s SessionRow) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO sessions(id,workspace_id,account_id,status,provider,last_seq,current_instance_id)
-		 VALUES(?,?,?,?,?,?,?)`,
-		s.ID, s.WorkspaceID, s.AccountID, s.Status, s.Provider, s.LastSeq, s.CurrentInstanceID)
+		`INSERT INTO sessions(
+			id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
+			parent_session_id,forked_from_message_id,fork_idempotency_key
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		s.ID, s.WorkspaceID, s.AccountID, s.Status, s.Provider, s.Model, s.LastSeq, s.CurrentInstanceID,
+		s.ParentSessionID, s.ForkedFromMessageID, s.ForkIdempotencyKey)
 	return err
 }
 
 func (r *sqliteRepo) SessionByID(ctx context.Context, id string) (SessionRow, error) {
 	var s SessionRow
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT id,workspace_id,account_id,status,provider,last_seq,current_instance_id FROM sessions WHERE id=?`, id).
-		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.LastSeq, &s.CurrentInstanceID); err != nil {
+		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
+		        parent_session_id,forked_from_message_id,fork_idempotency_key
+		   FROM sessions WHERE id=?`, id).
+		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
+			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil
@@ -570,7 +576,8 @@ func (r *sqliteRepo) SessionByID(ctx context.Context, id string) (SessionRow, er
 
 func (r *sqliteRepo) ListSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id,workspace_id,account_id,status,provider,last_seq,current_instance_id
+		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
+		        parent_session_id,forked_from_message_id,fork_idempotency_key
 		 FROM sessions WHERE account_id=? ORDER BY last_seq DESC`, accountID)
 	if err != nil {
 		return nil, err
@@ -579,7 +586,8 @@ func (r *sqliteRepo) ListSessions(ctx context.Context, accountID string) ([]Sess
 	var out []SessionRow
 	for rows.Next() {
 		var s SessionRow
-		if err := rows.Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.LastSeq, &s.CurrentInstanceID); err != nil {
+		if err := rows.Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
+			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -600,6 +608,25 @@ func (r *sqliteRepo) SetSessionLastSeq(ctx context.Context, id string, lastSeq i
 func (r *sqliteRepo) SetSessionInstance(ctx context.Context, id, instanceID string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET current_instance_id=? WHERE id=?`, instanceID, id)
 	return err
+}
+
+func (r *sqliteRepo) SetSessionModel(ctx context.Context, id, model string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET model=? WHERE id=?`, model, id)
+	return err
+}
+
+func (r *sqliteRepo) SessionByParentForkKey(ctx context.Context, parentSessionID, idempotencyKey string) (SessionRow, error) {
+	var s SessionRow
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
+		        parent_session_id,forked_from_message_id,fork_idempotency_key
+		   FROM sessions WHERE parent_session_id=? AND fork_idempotency_key=?`,
+		parentSessionID, idempotencyKey).
+		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
+			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey); err != nil {
+		return SessionRow{}, err
+	}
+	return s, nil
 }
 
 func (r *sqliteRepo) CreateInstance(ctx context.Context, i InstanceRow) error {
@@ -937,6 +964,89 @@ func (r *sqliteRepo) UpdateDelegation(ctx context.Context, id, status, childSess
 	return err
 }
 
+const messageFeedbackColumns = `account_id,session_id,message_id,rating,note,version,updated_by_device_id,updated_at_unix_ms`
+
+func scanMessageFeedback(row *sql.Row) (MessageFeedbackRow, error) {
+	var item MessageFeedbackRow
+	var note sql.NullString
+	if err := row.Scan(
+		&item.AccountID, &item.SessionID, &item.MessageID, &item.Rating, &note,
+		&item.Version, &item.UpdatedByDeviceID, &item.UpdatedAtUnixMS,
+	); err != nil {
+		return MessageFeedbackRow{}, err
+	}
+	item.Note = note.String
+	return item, nil
+}
+
+func (r *sqliteRepo) ListMessageFeedback(ctx context.Context, sessionID string) ([]MessageFeedbackRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+messageFeedbackColumns+`
+		   FROM message_feedback
+		  WHERE session_id=?
+		  ORDER BY updated_at_unix_ms ASC, message_id ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MessageFeedbackRow
+	for rows.Next() {
+		var item MessageFeedbackRow
+		var note sql.NullString
+		if err := rows.Scan(
+			&item.AccountID, &item.SessionID, &item.MessageID, &item.Rating, &note,
+			&item.Version, &item.UpdatedByDeviceID, &item.UpdatedAtUnixMS,
+		); err != nil {
+			return nil, err
+		}
+		item.Note = note.String
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (r *sqliteRepo) MessageFeedbackByMessage(ctx context.Context, sessionID, messageID string) (MessageFeedbackRow, error) {
+	return scanMessageFeedback(r.db.QueryRowContext(ctx,
+		`SELECT `+messageFeedbackColumns+`
+		   FROM message_feedback
+		  WHERE session_id=? AND message_id=?`, sessionID, messageID))
+}
+
+func (r *sqliteRepo) CreateMessageFeedback(ctx context.Context, row MessageFeedbackRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO message_feedback(
+			account_id,session_id,message_id,rating,note,version,updated_by_device_id,updated_at_unix_ms
+		) VALUES(?,?,?,?,?,?,?,?)`,
+		row.AccountID, row.SessionID, row.MessageID, row.Rating, nullableString(row.Note),
+		row.Version, row.UpdatedByDeviceID, row.UpdatedAtUnixMS)
+	return err
+}
+
+func (r *sqliteRepo) UpdateMessageFeedback(ctx context.Context, row MessageFeedbackRow, expectedVersion int64) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE message_feedback
+		    SET rating=?, note=?, version=?, updated_by_device_id=?, updated_at_unix_ms=?
+		  WHERE session_id=? AND message_id=? AND version=?`,
+		row.Rating, nullableString(row.Note), row.Version, row.UpdatedByDeviceID, row.UpdatedAtUnixMS,
+		row.SessionID, row.MessageID, expectedVersion)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func (r *sqliteRepo) DeleteMessageFeedback(ctx context.Context, sessionID, messageID string, expectedVersion int64) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`DELETE FROM message_feedback WHERE session_id=? AND message_id=? AND version=?`,
+		sessionID, messageID, expectedVersion)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
 func (r *sqliteRepo) AcquireLease(ctx context.Context, l LeaseRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO control_leases(session_id,device_id,epoch,instance_id) VALUES(?,?,?,?)
@@ -1090,12 +1200,13 @@ func (r *sqliteRepo) ListPendingOutbox(ctx context.Context, limit int) ([]Outbox
 func (r *sqliteRepo) UpsertUsageEvent(ctx context.Context, u UsageEventRow) (bool, error) {
 	result, err := r.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO usage_events
-			(usage_key_hash, account_id, terminal_id, provider, utc_day,
+			(usage_key_hash, account_id, terminal_id, session_id, provider, model, utc_day,
 			 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			 schema_version, created_at_unix_ms)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		u.UsageKeyHash, u.AccountID, u.TerminalID, u.Provider, u.UTCDay,
+			 ttft_ms, decode_throughput, schema_version, created_at_unix_ms)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		u.UsageKeyHash, u.AccountID, u.TerminalID, u.SessionID, u.Provider, u.Model, u.UTCDay,
 		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens,
+		u.TTFTMS, u.DecodeThroughput,
 		u.SchemaVersion, u.CreatedAtUnixMS)
 	if err != nil {
 		return false, err
@@ -1133,4 +1244,60 @@ func (r *sqliteRepo) AggregateUsage(ctx context.Context, accountID, startDay, en
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// SessionUsageSummary 汇总单会话白名单 usage，并返回最近一次 Provider 回填的模型和计时字段。
+func (r *sqliteRepo) SessionUsageSummary(ctx context.Context, accountID, sessionID string) (SessionUsageSummaryRow, error) {
+	var out SessionUsageSummaryRow
+	var input, output, cacheRead, cacheWrite sql.NullInt64
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens), SUM(cache_write_tokens)
+		   FROM usage_events
+		  WHERE account_id=? AND session_id=?`, accountID, sessionID).
+		Scan(&input, &output, &cacheRead, &cacheWrite); err != nil {
+		return SessionUsageSummaryRow{}, err
+	}
+	if input.Valid {
+		out.InputTokens = input.Int64
+		out.HasData = true
+	}
+	if output.Valid {
+		out.OutputTokens = output.Int64
+		out.HasData = true
+	}
+	if cacheRead.Valid {
+		out.CacheReadTokens = cacheRead.Int64
+		out.HasData = true
+	}
+	if cacheWrite.Valid {
+		out.CacheWriteTokens = cacheWrite.Int64
+		out.HasData = true
+	}
+
+	var model sql.NullString
+	var ttft sql.NullInt64
+	var throughput sql.NullFloat64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT model, ttft_ms, decode_throughput
+		   FROM usage_events
+		  WHERE account_id=? AND session_id=?
+		    AND (model <> '' OR ttft_ms IS NOT NULL OR decode_throughput IS NOT NULL)
+		  ORDER BY created_at_unix_ms DESC, usage_key_hash DESC
+		  LIMIT 1`, accountID, sessionID).
+		Scan(&model, &ttft, &throughput)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return SessionUsageSummaryRow{}, err
+	}
+	if model.Valid {
+		out.Model = model.String
+	}
+	if ttft.Valid {
+		value := ttft.Int64
+		out.TTFTMS = &value
+	}
+	if throughput.Valid {
+		value := throughput.Float64
+		out.DecodeThroughput = &value
+	}
+	return out, nil
 }

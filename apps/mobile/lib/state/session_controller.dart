@@ -8,8 +8,11 @@ import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
+import 'session_composer_controller.dart';
 
 enum SessionListPhase { loading, ready, error }
+
+enum WorkspaceListPhase { loading, ready, error }
 
 /// 会话状态与认证状态分离：认证控制器只负责设备身份，本文控制器只负责用户可见的会话旅程。
 class SessionController extends ChangeNotifier {
@@ -37,8 +40,16 @@ class SessionController extends ChangeNotifier {
 
   SessionListPhase _phase = SessionListPhase.loading;
   List<MobileSession> _sessions = const [];
+  WorkspaceListPhase _workspacePhase = WorkspaceListPhase.loading;
+  List<MobileWorkspace> _workspaces = const [];
+  String? _workspaceErrorMessage;
+  String? _pendingWorkspaceId;
+  bool _workspaceSettling = false;
   String? _selectedSessionId;
   List<SessionTimelineEvent> _timeline = const [];
+  final Map<String, List<SessionTimelineEvent>> _timelineWindows = {};
+  bool _historyLoading = false;
+  String? _historyErrorMessage;
   SessionLease? _selectedLease;
   CapabilityMatrix _capabilities = CapabilityMatrix.empty;
   SessionControlState _controls = const SessionControlState.empty();
@@ -54,6 +65,10 @@ class SessionController extends ChangeNotifier {
   final Map<String, int> _sessionCursors = {};
   // v0.2/P2：composer 草稿只保存在内存（不落明文盘）；按会话隔离，切换页面/会话后仍可恢复。
   final Map<String, String> _composerDrafts = {};
+  // v0.5：reference occurrences 与 transient queue 也按 session 隔离，不能随 widget 重建丢失。
+  final Map<String, SessionComposerSessionState> _composerStates = {};
+  // 附件句柄只在内存保存；切换会话时暂存，发送时才绑定目标 session。
+  final Map<String, List<AttachmentTransfer>> _attachmentsBySession = {};
   // v0.2/P3：会话内容密钥（DEK）可用性；false 时附件选文件入口 fail-closed。
   bool _contentKeyAvailable = false;
   String? _errorMessage;
@@ -65,8 +80,22 @@ class SessionController extends ChangeNotifier {
   SessionListPhase get phase => _phase;
   List<MobileSession> get sessions =>
       List<MobileSession>.unmodifiable(_sessions);
+  WorkspaceListPhase get workspacePhase => _workspacePhase;
+  List<MobileWorkspace> get workspaces =>
+      List<MobileWorkspace>.unmodifiable(_workspaces);
+  String? get workspaceErrorMessage => _workspaceErrorMessage;
+  String? get pendingWorkspaceId => _pendingWorkspaceId;
+  bool get workspaceSettling => _workspaceSettling;
   List<SessionTimelineEvent> get timeline =>
       List<SessionTimelineEvent>.unmodifiable(_timeline);
+  bool get historyLoading => _historyLoading;
+  String? get historyErrorMessage => _historyErrorMessage;
+  bool get canLoadOlder {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return false;
+    return (_timelineWindows[sessionId]?.length ?? 0) > _timeline.length;
+  }
+
   String? get selectedSessionId => _selectedSessionId;
   MobileSession? get selectedSession => _sessionById(_selectedSessionId);
   SessionLease? get selectedLease => _selectedLease;
@@ -98,7 +127,11 @@ class SessionController extends ChangeNotifier {
     if (_initializing || _phase == SessionListPhase.ready) return;
     _initializing = true;
     try {
-      await Future.wait([refreshSessions(), refreshCapabilities()]);
+      await Future.wait([
+        refreshSessions(),
+        refreshWorkspaces(),
+        refreshCapabilities(),
+      ]);
     } finally {
       _initializing = false;
     }
@@ -143,12 +176,156 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshWorkspaces() async {
+    _workspaceErrorMessage = null;
+    _workspacePhase = WorkspaceListPhase.loading;
+    notifyListeners();
+    try {
+      _workspaces = await _relay.listWorkspaces();
+      _workspacePhase = WorkspaceListPhase.ready;
+    } on RelayFailure catch (failure) {
+      _workspacePhase = WorkspaceListPhase.error;
+      _workspaceErrorMessage = failure.message;
+    } catch (_) {
+      _workspacePhase = WorkspaceListPhase.error;
+      _workspaceErrorMessage = '工作区列表暂时不可用，请稍后重试。';
+    }
+    notifyListeners();
+  }
+
+  bool get selectedWorkspaceDeleted {
+    final workspaceId = selectedSession?.workspaceId;
+    if (workspaceId == null || _workspacePhase != WorkspaceListPhase.ready) {
+      return false;
+    }
+    return !_workspaces.any((workspace) => workspace.id == workspaceId);
+  }
+
+  Future<MobileWorkspace?> createWorkspaceFromDirectory({
+    required String canonicalRoot,
+    required String? deviceId,
+    required bool canWrite,
+    String terminalId = '',
+  }) async {
+    if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
+      return null;
+    }
+    final root = canonicalRoot.trim();
+    if (root.isEmpty) {
+      _workspaceErrorMessage = '没有选择工作区目录。';
+      notifyListeners();
+      return null;
+    }
+    final projectId = _projectIdForRoot(root);
+    final created = await _runAction<MobileWorkspace?>(
+      'workspace-create:$projectId',
+      () => _relay.createWorkspace(
+        CreateMobileWorkspaceInput(
+          projectId: projectId,
+          canonicalRoot: root,
+          terminalId: terminalId,
+          deviceId: deviceId!,
+        ),
+      ),
+    );
+    if (created != null) {
+      _workspaces = [
+        created,
+        ..._workspaces.where((workspace) => workspace.id != created.id),
+      ];
+      _workspacePhase = WorkspaceListPhase.ready;
+      _workspaceErrorMessage = null;
+      notifyListeners();
+    } else {
+      _workspaceErrorMessage = _errorMessage ?? '工作区创建失败，请重新选择目录。';
+      notifyListeners();
+    }
+    return created;
+  }
+
+  /// Reuse an empty session for the workspace or create one. Session-scoped
+  /// input and opaque attachment handles move only after the destination has
+  /// opened; any failure leaves the source untouched.
+  Future<MobileSession?> openWorkspace({
+    required String workspaceId,
+    required String provider,
+    required String? deviceId,
+    required bool canWrite,
+    String? agentPresetId,
+    bool autoStart = false,
+  }) async {
+    final normalized = workspaceId.trim();
+    if (normalized.isEmpty) return null;
+    final sourceSessionId = _selectedSessionId;
+    final sourceState = sourceSessionId == null
+        ? const SessionComposerSessionState.empty()
+        : composerStateFor(sourceSessionId);
+    final sourceAttachments = List<AttachmentTransfer>.of(_attachments);
+    _pendingWorkspaceId = normalized;
+    _workspaceSettling = true;
+    _workspaceErrorMessage = null;
+    notifyListeners();
+    try {
+      MobileSession? target;
+      for (final session in _sessions) {
+        if (session.workspaceId == normalized &&
+            session.status == MobileSessionStatus.idle &&
+            session.lastSequence <= 1) {
+          target = session;
+          break;
+        }
+      }
+      if (target != null) {
+        await _loadSelectedSession(target.id);
+        if (_selectedSessionId != target.id || _isDetailLoading) return null;
+      } else {
+        target = await createSession(
+          workspaceId: normalized,
+          provider: provider,
+          deviceId: deviceId,
+          canWrite: canWrite,
+          agentPresetId: agentPresetId,
+          autoStart: autoStart,
+        );
+      }
+      if (target == null || _selectedSessionId != target.id) return null;
+      if (sourceSessionId != null && sourceSessionId != target.id) {
+        if (sourceAttachments.any((item) => item.draft.isImage) &&
+            _controls.imageLimits == null) {
+          _workspaceErrorMessage = '目标会话未声明图片接收能力，源草稿和图片已保留。';
+          await _loadSelectedSession(sourceSessionId);
+          return null;
+        }
+        if (sourceState.draft.isNotEmpty ||
+            sourceState.references.isNotEmpty ||
+            sourceState.queue.isNotEmpty) {
+          saveComposerState(target.id, sourceState);
+        }
+        if (sourceAttachments.isNotEmpty) {
+          _attachments = List.unmodifiable(sourceAttachments);
+          _rememberSelectedAttachments();
+        }
+        _composerStates.remove(sourceSessionId);
+        _composerDrafts.remove(sourceSessionId);
+        _attachmentsBySession.remove(sourceSessionId);
+        notifyListeners();
+      }
+      return target;
+    } finally {
+      _pendingWorkspaceId = null;
+      _workspaceSettling = false;
+      notifyListeners();
+    }
+  }
+
   /// 新会话尚未有可 fencing 的 session id，因此这里只校验 owner 身份；后续控制命令再要求 lease。
   Future<MobileSession?> createSession({
     required String workspaceId,
     required String provider,
     required String? deviceId,
     required bool canWrite,
+    String? agentPresetId,
+    bool autoStart = false,
   }) async {
     if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
       return null;
@@ -160,6 +337,7 @@ class SessionController extends ChangeNotifier {
           workspaceId: workspaceId,
           provider: provider,
           deviceId: deviceId!,
+          agentPresetId: agentPresetId,
         ),
       );
       _sessions = [
@@ -167,13 +345,57 @@ class SessionController extends ChangeNotifier {
         ..._sessions.where((item) => item.id != created.id),
       ];
       _phase = SessionListPhase.ready;
+      if (!_workspaces.any(
+        (workspace) => workspace.id == created.workspaceId,
+      )) {
+        await refreshWorkspaces();
+      }
       await _loadSelectedSession(created.id);
+      if (autoStart) {
+        await acquireSelectedLease(deviceId: deviceId, canWrite: canWrite);
+        final started = await startSelectedSession(
+          deviceId: deviceId,
+          canWrite: canWrite,
+        );
+        if (!started) return null;
+      }
       return created;
     });
   }
 
+  String _projectIdForRoot(String root) {
+    var hash = 0x811c9dc5;
+    for (final unit in root.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return 'mobile-${hash.toRadixString(16).padLeft(8, '0')}';
+  }
+
   Future<void> selectSession(String sessionId) =>
       _loadSelectedSession(sessionId);
+
+  Future<void> loadOlderHistory() async {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null || _historyLoading) return;
+    final window = _timelineWindows[sessionId] ?? const [];
+    final hidden = window.length - _timeline.length;
+    if (hidden <= 0) return;
+    _historyLoading = true;
+    _historyErrorMessage = null;
+    notifyListeners();
+    try {
+      final take = hidden > 25 ? 25 : hidden;
+      final start = hidden - take;
+      final older = window.sublist(start, hidden);
+      _timeline = List.unmodifiable([...older, ..._timeline]);
+    } catch (_) {
+      _historyErrorMessage = '更早的会话记录暂时不可用，请重试。';
+    } finally {
+      _historyLoading = false;
+      notifyListeners();
+    }
+  }
 
   /// 获取 lease 是显式操作，UI 可以准确呈现“只读”与“等待控制权”而不伪造可发送状态。
   Future<void> acquireSelectedLease({
@@ -200,7 +422,7 @@ class SessionController extends ChangeNotifier {
     });
   }
 
-  Future<void> startSelectedSession({
+  Future<bool> startSelectedSession({
     required String? deviceId,
     required bool canWrite,
   }) async {
@@ -208,9 +430,9 @@ class SessionController extends ChangeNotifier {
     final blocked = controlBlockedReason('start', canWrite: canWrite);
     if (sessionId == null || blocked != null) {
       if (blocked != null) _setError(blocked);
-      return;
+      return false;
     }
-    await _submitCommand(
+    return _submitCommand(
       sessionId: sessionId,
       operation: 'start:$sessionId:${selectedSession?.lastSequence ?? 0}',
       kind: SessionCommandKind.start,
@@ -219,6 +441,7 @@ class SessionController extends ChangeNotifier {
         'fixture_payload': {
           'session_id': sessionId,
           'provider': selectedSession?.provider ?? 'unknown',
+          'model': selectedSession?.model ?? '',
         },
       },
     );
@@ -344,6 +567,54 @@ class SessionController extends ChangeNotifier {
       kind: SessionCommandKind.abort,
       deviceId: deviceId!,
     );
+  }
+
+  Future<MobileSession?> forkFromMessage({
+    required String messageId,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final trimmed = messageId.trim();
+    final sessionId = _selectedSessionId;
+    if (trimmed.isEmpty) {
+      _setError('分支消息标识无效。');
+      return null;
+    }
+    if (sessionId == null ||
+        !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
+        !_ensureSelectedLease(sessionId)) {
+      return null;
+    }
+    final operation = 'fork:$sessionId:$trimmed';
+    return _runAction<MobileSession?>(operation, () async {
+      final lease = _selectedLease;
+      if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
+        throw const RelayFailure(
+          RelayFailureKind.validation,
+          '会话控制权已失效，请重新获取。',
+        );
+      }
+      final child = await _relay.forkSession(
+        sessionId,
+        SessionForkInput(
+          messageId: trimmed,
+          idempotencyKey: _idempotencyKeyFor(operation),
+          leaseEpoch: lease.epoch,
+          deviceId: deviceId!,
+        ),
+      );
+      _sessions = [child, ..._sessions.where((item) => item.id != child.id)];
+      if (_selectedSessionId == sessionId) {
+        final snapshot = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: _cursorFor(sessionId),
+        );
+        if (_selectedSessionId == sessionId) {
+          _mergeSnapshot(snapshot, appendTimeline: true);
+        }
+      }
+      return child;
+    });
   }
 
   /// v0.2/P2：断线/离线后显式恢复 Provider 会话。
@@ -739,6 +1010,7 @@ class SessionController extends ChangeNotifier {
       for (final draft in incoming)
         AttachmentTransfer(draft: draft, phase: AttachmentTransferPhase.queued),
     ];
+    _rememberSelectedAttachments();
     notifyListeners();
     return true;
   }
@@ -747,6 +1019,7 @@ class SessionController extends ChangeNotifier {
     _attachments = _attachments
         .where((item) => item.draft.id != attachmentId)
         .toList(growable: false);
+    _rememberSelectedAttachments();
     notifyListeners();
   }
 
@@ -1098,9 +1371,23 @@ class SessionController extends ChangeNotifier {
   /// 读取指定会话的草稿（仅内存；真实写入仍只在用户显式发送时发生）。
   String? composerDraftFor(String sessionId) => _composerDrafts[sessionId];
 
-  /// 保存 composer 草稿。空文本与超过 8 KiB 的超长内容直接清除，防止内存被垃圾内容占用。
-  void saveComposerDraft(String sessionId, String text) {
-    final normalized = text.length > 8192 ? text.substring(0, 8192) : text;
+  SessionComposerSessionState composerStateFor(String sessionId) {
+    return _composerStates[sessionId] ??
+        SessionComposerSessionState(
+          draft: _composerDrafts[sessionId] ?? '',
+          references: const [],
+          queue: const [],
+        );
+  }
+
+  /// 保存完整 session-scoped input；attempt/claim 不进入 controller，避免跨路由复活。
+  void saveComposerState(String sessionId, SessionComposerSessionState state) {
+    if (sessionId.trim().isEmpty) return;
+    final normalized = state.draft.length > 8192
+        ? state.draft.substring(0, 8192)
+        : state.draft;
+    final next = state.copyWith(draft: normalized);
+    _composerStates[sessionId] = next;
     if (normalized.isEmpty) {
       _composerDrafts.remove(sessionId);
     } else {
@@ -1108,9 +1395,26 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// 保存 composer 草稿。空文本与超过 8 KiB 的超长内容直接清除，防止内存被垃圾内容占用。
+  void saveComposerDraft(String sessionId, String text) {
+    if (sessionId.trim().isEmpty) return;
+    final normalized = text.length > 8192 ? text.substring(0, 8192) : text;
+    final prior = composerStateFor(sessionId);
+    saveComposerState(sessionId, prior.copyWith(draft: normalized));
+  }
+
   /// 发送成功后清除该会话草稿；草稿绝不落明文盘。
   void clearComposerDraft(String sessionId) {
-    if (_composerDrafts.remove(sessionId) != null) {
+    final prior = composerStateFor(sessionId);
+    final hadDraft =
+        _composerDrafts.remove(sessionId) != null ||
+        prior.draft.isNotEmpty ||
+        prior.references.isNotEmpty;
+    if (hadDraft) {
+      _composerStates[sessionId] = prior.copyWith(
+        draft: '',
+        references: const [],
+      );
       notifyListeners();
     }
   }
@@ -1120,8 +1424,16 @@ class SessionController extends ChangeNotifier {
       _setError('找不到所选会话。');
       return;
     }
+    final previousSessionId = _selectedSessionId;
+    if (previousSessionId != null && previousSessionId != sessionId) {
+      _attachmentsBySession[previousSessionId] = List.unmodifiable(
+        _attachments,
+      );
+    }
     final selectionGeneration = ++_selectionGeneration;
     _errorMessage = null;
+    _historyErrorMessage = null;
+    _historyLoading = false;
     _selectedSessionId = sessionId;
     _selectedLease = null;
     _contentKeyAvailable = false;
@@ -1130,7 +1442,9 @@ class SessionController extends ChangeNotifier {
     _timeline = const [];
     _resolvedRequestKeys.clear();
     _skillConfirmation = null;
-    _attachments = const [];
+    _attachments = List.unmodifiable(
+      _attachmentsBySession[sessionId] ?? const <AttachmentTransfer>[],
+    );
     _attachmentRejections = const [];
     _controls = const SessionControlState.empty();
     _isDetailLoading = true;
@@ -1153,11 +1467,13 @@ class SessionController extends ChangeNotifier {
       if (_selectedSessionId == sessionId &&
           _selectionGeneration == selectionGeneration) {
         _errorMessage = failure.message;
+        _historyErrorMessage = failure.message;
       }
     } catch (_) {
       if (_selectedSessionId == sessionId &&
           _selectionGeneration == selectionGeneration) {
         _errorMessage = '会话内容暂时不可用，请稍后重试。';
+        _historyErrorMessage = _errorMessage;
       }
     } finally {
       if (_selectedSessionId == sessionId &&
@@ -1215,11 +1531,23 @@ class SessionController extends ChangeNotifier {
       (highest, event) => event.sequence > highest ? event.sequence : highest,
     );
     _sessionCursors[snapshot.session.id] = highestIncoming;
-    if (_selectedSessionId != snapshot.session.id) return;
     if (!appendTimeline) {
-      _timeline = incoming;
+      _timelineWindows[snapshot.session.id] = List.unmodifiable(incoming);
+      if (_selectedSessionId == snapshot.session.id) {
+        final start = incoming.length > 50 ? incoming.length - 50 : 0;
+        _timeline = List.unmodifiable(incoming.sublist(start));
+      }
       return;
     }
+    final priorWindow = _timelineWindows[snapshot.session.id] ?? const [];
+    final mergedWindow =
+        <int, SessionTimelineEvent>{
+            for (final event in priorWindow) event.sequence: event,
+            for (final event in incoming) event.sequence: event,
+          }.values.toList()
+          ..sort((left, right) => left.sequence.compareTo(right.sequence));
+    _timelineWindows[snapshot.session.id] = List.unmodifiable(mergedWindow);
+    if (_selectedSessionId != snapshot.session.id) return;
     // Relay 的 after_seq 语义应当排除已确认事件；客户端仍按 sequence 去重并排序，
     // 防止网络重连、代理重试或重复投递把同一时间线节点展示两次。
     final merged =
@@ -1274,6 +1602,13 @@ class SessionController extends ChangeNotifier {
     _attachments = _attachments
         .map((item) => item.draft.id == attachmentId ? next : item)
         .toList(growable: false);
+    _rememberSelectedAttachments();
+  }
+
+  void _rememberSelectedAttachments() {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return;
+    _attachmentsBySession[sessionId] = List.unmodifiable(_attachments);
   }
 
   MobileSession? _sessionById(String? sessionId) {

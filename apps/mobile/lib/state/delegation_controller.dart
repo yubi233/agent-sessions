@@ -28,6 +28,9 @@ class DelegationController extends ChangeNotifier {
   DelegationPhase _phase = DelegationPhase.idle;
   String? _parentSessionId;
   List<SessionDelegation> _delegations = const [];
+  final Map<String, List<SessionDelegation>> _catalogs = {};
+  final Map<String, DelegationPhase> _catalogPhases = {};
+  final Map<String, String> _catalogMessages = {};
   final Set<String> _pendingActionKeys = {};
   final Map<String, String> _idempotencyKeys = {};
   String? _message;
@@ -40,6 +43,14 @@ class DelegationController extends ChangeNotifier {
       List<SessionDelegation>.unmodifiable(_delegations);
   String? get message => _message;
   bool get isLoading => _phase == DelegationPhase.loading;
+  List<SessionDelegation> catalogFor(String parentSessionId) =>
+      List<SessionDelegation>.unmodifiable(
+        _catalogs[parentSessionId] ?? const [],
+      );
+  DelegationPhase catalogPhaseFor(String parentSessionId) =>
+      _catalogPhases[parentSessionId] ?? DelegationPhase.idle;
+  String? catalogMessageFor(String parentSessionId) =>
+      _catalogMessages[parentSessionId];
 
   bool isDecisionPending(String delegationId) =>
       _pendingActionKeys.any((key) => key.endsWith(':$delegationId'));
@@ -68,20 +79,52 @@ class DelegationController extends ChangeNotifier {
     _delegations = const [];
     _message = null;
     _phase = DelegationPhase.loading;
+    _catalogPhases[normalized] = DelegationPhase.loading;
+    _catalogMessages.remove(normalized);
     notifyListeners();
     try {
       final next = await relay.listSessionDelegations(normalized);
       if (serial != _requestSerial || _parentSessionId != normalized) return;
       _delegations = next;
+      _catalogs[normalized] = next;
+      _catalogPhases[normalized] = DelegationPhase.ready;
+      _catalogMessages.remove(normalized);
       _phase = DelegationPhase.ready;
     } on RelayFailure catch (failure) {
       if (serial != _requestSerial || _parentSessionId != normalized) return;
       _phase = DelegationPhase.error;
       _message = failure.message;
+      _catalogPhases[normalized] = DelegationPhase.error;
+      _catalogMessages[normalized] = failure.message;
     } catch (_) {
       if (serial != _requestSerial || _parentSessionId != normalized) return;
       _phase = DelegationPhase.error;
       _message = '子会话图暂时不可用，请稍后刷新。';
+      _catalogPhases[normalized] = DelegationPhase.error;
+      _catalogMessages[normalized] = _message!;
+    }
+    notifyListeners();
+  }
+
+  Future<void> loadCatalog(String parentSessionId, {bool force = false}) async {
+    final normalized = parentSessionId.trim();
+    if (normalized.isEmpty) return;
+    if (!force && _catalogPhases[normalized] == DelegationPhase.ready) {
+      return;
+    }
+    _catalogPhases[normalized] = DelegationPhase.loading;
+    _catalogMessages.remove(normalized);
+    notifyListeners();
+    try {
+      final next = await relay.listSessionDelegations(normalized);
+      _catalogs[normalized] = next;
+      _catalogPhases[normalized] = DelegationPhase.ready;
+    } on RelayFailure catch (failure) {
+      _catalogPhases[normalized] = DelegationPhase.error;
+      _catalogMessages[normalized] = failure.message;
+    } catch (_) {
+      _catalogPhases[normalized] = DelegationPhase.error;
+      _catalogMessages[normalized] = '子会话图暂时不可用，请稍后刷新。';
     }
     notifyListeners();
   }
@@ -169,6 +212,7 @@ class DelegationController extends ChangeNotifier {
       _delegations = _delegations
           .map((item) => item.id == result.id ? result : item)
           .toList(growable: false);
+      _catalogs[delegation.parentSessionId] = _delegations;
       return result;
     } on RelayFailure catch (failure) {
       _message = failure.message;

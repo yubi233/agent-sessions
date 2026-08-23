@@ -26,6 +26,7 @@ type API struct {
 	Events           *domain.PresenceHub
 	Capabilities     *adapterreg.Registry
 	Usage            *domain.UsageService
+	MessageFeedback  *domain.MessageFeedbackService
 	Repo             store.Repository
 }
 
@@ -35,7 +36,7 @@ func New(auth *domain.AuthService, pairing *domain.PairingService, sessions *dom
 		Auth: auth, Pairing: pairing, Sessions: sessions, Delegations: delegations,
 		Attachments: domain.NewAttachmentService(repo), Daemons: domain.NewDaemonService(repo),
 		DaemonDeliveries: domain.NewDaemonDeliveryHub(), Capabilities: adapterreg.New(),
-		Usage: domain.NewUsageService(repo), Repo: repo,
+		Usage: domain.NewUsageService(repo), MessageFeedback: domain.NewMessageFeedbackService(repo), Repo: repo,
 	}
 }
 

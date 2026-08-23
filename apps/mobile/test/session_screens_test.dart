@@ -2401,6 +2401,42 @@ void main() {
     );
     expect(clipboardValues, [sessionId, 'codex']);
   });
+  testWidgets('ADPT-DSH-11/P3：新建会话页展示 DeepSeek Harness 且 fixture 下可创建 dsh 会话', (tester) async {
+    final harness = MobileAppHarness();
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
+    await _registerOwner(tester, 'dsh-entry-owner@fixture.test');
+
+    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+    );
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('new-session-workspace-input')),
+      'fixture-workspace',
+    );
+    // 第五类 Provider 入口必须在下拉中可见且可选（v0.5.next P3 验收）。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-provider-select')),
+    );
+    await _waitForVisible(tester, find.text('DeepSeek Harness').last);
+    await tester.tap(find.text('DeepSeek Harness').last);
+    // fixture 仓库下创建 dsh 会话与既有流程一致：进入详情页即视为入口可用。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('new-session-create-button')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-detail-screen')),
+    );
+  });
 }
 
 bool _snapshotContainsText(SessionSnapshot snapshot, String text) {

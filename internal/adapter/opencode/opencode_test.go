@@ -755,3 +755,74 @@ data: {"id":"3","type":"server.heartbeat","properties":{}}
 		t.Fatalf("unexpected events: %+v", got)
 	}
 }
+
+// 用户输入不能作为助手事件回显：message.updated 声明角色后，同 messageID 的文本
+// delta/completed 必须被过滤；助手消息正常通过并携带 message_id。
+func TestUserMessagePartsAreNotEchoedAsAssistantEvents(t *testing.T) {
+	f := newFixtureServer(t, true)
+	c := newFixtureClient(t, f)
+	a := NewWithClient(c)
+
+	h, err := a.Start(context.Background(), adapter.StartRequest{
+		WorkspaceRoot: "/tmp/ws", Provider: "opencode",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer h.Dispose(context.Background())
+	sid := handleSessionID(t, h)
+
+	f.emitEvent(t, sid, "message.updated", map[string]any{
+		"sessionID": sid,
+		"info":      map[string]any{"id": "msg_user", "role": "user", "sessionID": sid},
+	})
+	f.emitEvent(t, sid, "message.updated", map[string]any{
+		"sessionID": sid,
+		"info":      map[string]any{"id": "msg_asst", "role": "assistant", "sessionID": sid},
+	})
+	// 用户输入的 delta 与 completed 都必须被丢弃。
+	f.emitEvent(t, sid, "message.part.delta", map[string]any{
+		"sessionID": sid, "messageID": "msg_user", "partID": "prt_u1", "field": "text", "delta": "用户输入",
+	})
+	f.emitEvent(t, sid, "message.part.updated", map[string]any{
+		"sessionID": sid,
+		"part":      map[string]any{"id": "prt_u2", "messageID": "msg_user", "sessionID": sid, "type": "text", "text": "用户输入"},
+	})
+	// 助手消息正常映射。
+	f.emitEvent(t, sid, "message.part.delta", map[string]any{
+		"sessionID": sid, "messageID": "msg_asst", "partID": "prt_a1", "field": "text", "delta": "回",
+	})
+	f.emitEvent(t, sid, "message.part.updated", map[string]any{
+		"sessionID": sid,
+		"part":      map[string]any{"id": "prt_a2", "messageID": "msg_asst", "sessionID": sid, "type": "text", "text": "回复内容"},
+	})
+
+	timeout := 5 * time.Second
+	first := mustEvent(t, h, timeout)
+	if first.Type != adapter.EventMessageDelta || first.Payload["text"] != "回" {
+		t.Fatalf("first event = %+v, want assistant delta 回", first)
+	}
+	if first.Payload["message_id"] != "msg_asst" {
+		t.Fatalf("delta message_id = %v, want msg_asst", first.Payload["message_id"])
+	}
+	second := mustEvent(t, h, timeout)
+	if second.Type != adapter.EventMessageCompleted || second.Payload["text"] != "回复内容" {
+		t.Fatalf("second event = %+v, want assistant completed 回复内容", second)
+	}
+	// 两条 user 文本事件被过滤后不应再有事件到达。
+	select {
+	case ev := <-h.Events():
+		t.Fatalf("unexpected extra event: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// handleSessionID 从已启动 handle 提取 opencode session id（测试辅助）。
+func handleSessionID(t *testing.T, h adapter.Handle) string {
+	t.Helper()
+	identified, ok := h.(adapter.InstanceIDHandle)
+	if !ok {
+		t.Fatal("handle does not expose instance id")
+	}
+	return identified.InstanceID()
+}

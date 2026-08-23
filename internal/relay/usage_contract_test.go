@@ -24,16 +24,19 @@ func TestUsageUploadAndSummaryHTTP(t *testing.T) {
 		}, terminal.AccessToken)
 		return response.Code
 	}
-	if code := upload("usage-1", "2026-08-16", 100, 50); code != http.StatusOK {
+	// utc_day 必须落在 summary 的动态窗口内：用「昨天」而不是硬编码日期，
+	// 否则测试在硬编码日期离开 7 天窗口后必然失败（时间炸弹）。
+	yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	if code := upload("usage-1", yesterday, 100, 50); code != http.StatusOK {
 		t.Fatalf("upload usage status=%d", code)
 	}
-	if code := upload("usage-2", "2026-08-16", 200, 60); code != http.StatusOK {
+	if code := upload("usage-2", yesterday, 200, 60); code != http.StatusOK {
 		t.Fatalf("upload usage status=%d", code)
 	}
 
 	// 重复上传同一 usage key：返回 200 且 inserted=false，不重复累加。
 	dup := env.do(t, http.MethodPost, "/v1/daemon/usage/events", map[string]any{
-		"usage_key": "usage-1", "provider": "codex", "utc_day": "2026-08-16",
+		"usage_key": "usage-1", "provider": "codex", "utc_day": yesterday,
 		"input_tokens": 100, "output_tokens": 50,
 	}, terminal.AccessToken)
 	if dup.Code != http.StatusOK {

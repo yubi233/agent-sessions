@@ -60,6 +60,7 @@ class SessionInputSnapshot {
     required this.queue,
     this.claimToken,
     this.notice,
+    this.attemptToken,
   });
 
   final String draft;
@@ -69,6 +70,36 @@ class SessionInputSnapshot {
   final List<SessionDraftReference> references;
   final List<QueuedComposerMessage> queue;
   final String? notice;
+  final String? attemptToken;
+}
+
+/// Session-scoped input state. It intentionally excludes in-flight attempts:
+/// route/session changes restore durable local input but abort the old attempt.
+class SessionComposerSessionState {
+  const SessionComposerSessionState({
+    required this.draft,
+    required this.references,
+    required this.queue,
+  });
+
+  const SessionComposerSessionState.empty()
+    : draft = '',
+      references = const [],
+      queue = const [];
+
+  final String draft;
+  final List<SessionDraftReference> references;
+  final List<QueuedComposerMessage> queue;
+
+  SessionComposerSessionState copyWith({
+    String? draft,
+    List<SessionDraftReference>? references,
+    List<QueuedComposerMessage>? queue,
+  }) => SessionComposerSessionState(
+    draft: draft ?? this.draft,
+    references: references ?? this.references,
+    queue: queue ?? this.queue,
+  );
 }
 
 class _DraftTransaction {
@@ -98,6 +129,9 @@ class SessionComposerInputMachine {
   SessionInputPhase _phase = SessionInputPhase.plain;
   String? _claimToken;
   String? _notice;
+  String? _attemptToken;
+  int? _attemptDraftRevision;
+  int _attemptSequence = 0;
   List<SessionDraftReference> _references = const [];
   List<QueuedComposerMessage> _queue = const [];
   final List<_DraftTransaction> _undo = [];
@@ -111,7 +145,34 @@ class SessionComposerInputMachine {
     queue: List.unmodifiable(_queue),
     claimToken: _claimToken,
     notice: _notice,
+    attemptToken: _attemptToken,
   );
+
+  SessionComposerSessionState get sessionState => SessionComposerSessionState(
+    draft: _draft,
+    references: List.unmodifiable(_references),
+    queue: List.unmodifiable(_queue),
+  );
+
+  /// Restore only session-scoped local input. In-flight attempts and claims are
+  /// deliberately dropped so a late result from another route cannot mutate it.
+  void restoreSessionState(SessionComposerSessionState state) {
+    _draft = state.draft;
+    _references = List.of(state.references);
+    _queue = List.of(state.queue);
+    _referenceSeq = _references.fold<int>(
+      0,
+      (maxId, reference) => reference.id > maxId ? reference.id : maxId,
+    );
+    _draftRevision += 1;
+    _phase = SessionInputPhase.plain;
+    _claimToken = null;
+    _notice = null;
+    _attemptToken = null;
+    _attemptDraftRevision = null;
+    _undo.clear();
+    _redo.clear();
+  }
 
   /// 普通草稿编辑是一个事务：文本、引用区间和 claim 释放同时完成。
   void setDraft(String draft, {int? start, int? end, int? insertedLength}) {
@@ -256,9 +317,18 @@ class SessionComposerInputMachine {
   }
 
   void editQueuedMessage(String id, String text) {
+    final normalized = text.trim();
+    if (normalized.isEmpty) return;
     _queue = [
       for (final item in _queue)
-        item.id == id ? QueuedComposerMessage(id: id, text: text) : item,
+        item.id == id
+            ? QueuedComposerMessage(
+                id: id,
+                text: normalized,
+                editable: item.editable,
+                steerable: item.steerable,
+              )
+            : item,
     ];
   }
 
@@ -291,11 +361,49 @@ class SessionComposerInputMachine {
     return SessionSubmitMode.send;
   }
 
-  void enterSubmitting() {
-    _phase = SessionInputPhase.submitting;
+  /// 建立一次可 CAS 的 adjudication attempt；重复 begin 不会覆盖在途 attempt。
+  String? beginAdjudication() {
+    if (_phase == SessionInputPhase.adjudicating ||
+        _phase == SessionInputPhase.submitting) {
+      return null;
+    }
+    _attemptSequence += 1;
+    _attemptToken = 'attempt-$_attemptSequence-$_draftRevision';
+    _attemptDraftRevision = _draftRevision;
+    _phase = SessionInputPhase.adjudicating;
+    _notice = null;
+    return _attemptToken;
   }
 
-  void settleSubmit({required bool success, String? error}) {
+  bool enterSubmitting({String? attemptToken}) {
+    if (attemptToken != null && attemptToken != _attemptToken) return false;
+    if (_attemptToken == null) {
+      _attemptSequence += 1;
+      _attemptToken = 'attempt-$_attemptSequence-$_draftRevision';
+      _attemptDraftRevision = _draftRevision;
+    }
+    _phase = SessionInputPhase.submitting;
+    return true;
+  }
+
+  bool settleSubmit({
+    required bool success,
+    String? error,
+    String? attemptToken,
+  }) {
+    if (attemptToken != null && attemptToken != _attemptToken) return false;
+    if (_attemptDraftRevision != null &&
+        _attemptDraftRevision != _draftRevision) {
+      _attemptToken = null;
+      _attemptDraftRevision = null;
+      _phase = _claimToken == null
+          ? SessionInputPhase.plain
+          : SessionInputPhase.claimed;
+      _notice = '旧提交结果已忽略，当前草稿未被改写。';
+      return false;
+    }
+    _attemptToken = null;
+    _attemptDraftRevision = null;
     if (success) {
       _pushUndo();
       _draft = '';
@@ -304,10 +412,23 @@ class SessionComposerInputMachine {
       _phase = SessionInputPhase.plain;
       _draftRevision += 1;
       _notice = null;
-      return;
+      return true;
     }
     _phase = SessionInputPhase.plain;
     _notice = error ?? '提交失败，草稿已保留。';
+    return true;
+  }
+
+  /// Abort 只撤销当前 attempt，保留 draft/reference/claim；release 再显式释放 claim。
+  bool abortAttempt(String attemptToken) {
+    if (_attemptToken != attemptToken) return false;
+    _attemptToken = null;
+    _attemptDraftRevision = null;
+    _phase = _claimToken == null
+        ? SessionInputPhase.plain
+        : SessionInputPhase.claimed;
+    _notice = null;
+    return true;
   }
 
   bool undo() {
@@ -331,6 +452,8 @@ class SessionComposerInputMachine {
   void release() {
     _phase = SessionInputPhase.plain;
     _claimToken = null;
+    _attemptToken = null;
+    _attemptDraftRevision = null;
     _notice = null;
   }
 

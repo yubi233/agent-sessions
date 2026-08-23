@@ -83,7 +83,9 @@ func TestUnavailableWithoutConfiguration(t *testing.T) {
 	}
 }
 
-// 已探测到 stub CLI 或配置 Gateway URL 时，Registry 也不能把未实现能力升级为 native。
+// 已探测到 stub CLI 或配置 Gateway URL 时，Registry 不能把未证明能力升级为 native。
+// W2 更新：codex 的 start/resume/abort 已有 ADPT-CODEX-02 golden trace 契约，允许 native；
+// 其余能力在 W3 证明前必须保持 unsupported。
 func TestStubProviderRegistrationStaysFailClosed(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "provider-fixture")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'provider 9.9.9'\n"), 0o700); err != nil {
@@ -103,9 +105,16 @@ func TestStubProviderRegistrationStaysFailClosed(t *testing.T) {
 	for _, provider := range providers {
 		byKind[provider.Kind] = provider
 	}
+	codexNative := map[string]bool{"start": true, "resume": true, "abort": true, "permission": true, "plan": true, "goal": true, "skill_catalog": true, "model_select": true, "effort_select": true}
 	for _, kind := range []string{"claude", "codex", "openclaw"} {
 		provider := byKind[kind]
 		for _, capability := range provider.Capabilities {
+			if kind == "codex" && codexNative[capability.Name] {
+				if capability.Status != adapter.CapabilityNative {
+					t.Fatalf("codex.%s status = %q, want native（ADPT-CODEX-02 契约已覆盖）", capability.Name, capability.Status)
+				}
+				continue
+			}
 			if capability.Status != adapter.CapabilityUnsupported {
 				t.Fatalf("%s.%s status = %q, want unsupported", kind, capability.Name, capability.Status)
 			}

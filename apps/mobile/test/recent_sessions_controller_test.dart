@@ -3,6 +3,7 @@ import 'package:agent_sessions_mobile/domain/daemon_observation_models.dart';
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
+import 'package:agent_sessions_mobile/domain/session_projection_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/domain/usage_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
@@ -240,6 +241,13 @@ class _ListOverridingRelay implements RelayRepository {
   }
 
   @override
+  Future<List<MobileWorkspace>> listWorkspaces() => _delegate.listWorkspaces();
+
+  @override
+  Future<MobileWorkspace> createWorkspace(CreateMobileWorkspaceInput input) =>
+      _delegate.createWorkspace(input);
+
+  @override
   Future<AuthTokens> register(LoginCredentials credentials) =>
       _delegate.register(credentials);
 
@@ -300,6 +308,10 @@ class _ListOverridingRelay implements RelayRepository {
       _delegate.createSession(input);
 
   @override
+  Future<MobileSession> forkSession(String sessionId, SessionForkInput input) =>
+      _delegate.forkSession(sessionId, input);
+
+  @override
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
@@ -351,6 +363,38 @@ class _ListOverridingRelay implements RelayRepository {
   @override
   Future<SessionControlState> getSessionControls(String sessionId) =>
       _delegate.getSessionControls(sessionId);
+
+  @override
+  Future<ConversationFeedbackItem?> getMessageFeedback(
+    String sessionId,
+    String messageId,
+  ) => _delegate.getMessageFeedback(sessionId, messageId);
+
+  @override
+  Future<ConversationFeedbackResult> putMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required ConversationFeedbackRating rating,
+    String? note,
+    int? version,
+  }) => _delegate.putMessageFeedback(
+    sessionId,
+    messageId: messageId,
+    rating: rating,
+    note: note,
+    version: version,
+  );
+
+  @override
+  Future<ConversationFeedbackResult> deleteMessageFeedback(
+    String sessionId, {
+    required String messageId,
+    required int version,
+  }) => _delegate.deleteMessageFeedback(
+    sessionId,
+    messageId: messageId,
+    version: version,
+  );
 
   @override
   Future<AttachmentReceipt> uploadAttachmentChunk(

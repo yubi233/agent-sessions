@@ -1,0 +1,425 @@
+{
+  "fixture_version": 1,
+  "codex_version": "0.142.5",
+  "protocol_revision": "codex-app-server@v2",
+  "description": "ADPT-CODEX-02 golden trace：thread/session 映射的确定性 stdio JSON-RPC 脚本与期望 canonical 事件。expect_request.params_contains 为子集匹配；expected_events.payload 为子集匹配。",
+  "scenarios": [
+    {
+      "name": "start_with_prompt_streams_reply",
+      "actions": [
+        {
+          "op": "start",
+          "workspace": "/ws/demo",
+          "model": "gpt-5.6-luna",
+          "prompt": "你好"
+        }
+      ],
+      "steps": [
+        {
+          "expect_request": {
+            "method": "thread/start",
+            "params_contains": { "cwd": "/ws/demo", "model": "gpt-5.6-luna" }
+          },
+          "respond": {
+            "result": {
+              "thread": { "id": "thr_1", "status": { "type": "idle" } },
+              "model": "gpt-5.6-luna",
+              "modelProvider": "openai"
+            }
+          },
+          "then_notify": [
+            {
+              "method": "thread/started",
+              "params": { "thread": { "id": "thr_1", "status": { "type": "idle" } } }
+            }
+          ]
+        },
+        {
+          "expect_request": {
+            "method": "turn/start",
+            "params_contains": {
+              "threadId": "thr_1",
+              "input": [{ "type": "text", "text": "你好" }]
+            }
+          },
+          "respond": { "result": { "turn": { "id": "turn_1", "status": "inProgress" } } },
+          "then_notify": [
+            {
+              "method": "turn/started",
+              "params": { "threadId": "thr_1", "turn": { "id": "turn_1", "status": "inProgress" } }
+            },
+            {
+              "method": "item/started",
+              "params": {
+                "threadId": "thr_1",
+                "turnId": "turn_1",
+                "startedAtMs": 1755900000000,
+                "item": { "id": "item_1", "type": "agentMessage", "text": "" }
+              }
+            },
+            {
+              "method": "item/agentMessage/delta",
+              "params": { "threadId": "thr_1", "turnId": "turn_1", "itemId": "item_1", "delta": "你好" }
+            },
+            {
+              "method": "item/agentMessage/delta",
+              "params": { "threadId": "thr_1", "turnId": "turn_1", "itemId": "item_1", "delta": "，世界。" }
+            },
+            {
+              "method": "item/completed",
+              "params": {
+                "threadId": "thr_1",
+                "turnId": "turn_1",
+                "completedAtMs": 1755900001000,
+                "item": { "id": "item_1", "type": "agentMessage", "text": "你好，世界。", "phase": "final_answer" }
+              }
+            },
+            {
+              "method": "turn/completed",
+              "params": { "threadId": "thr_1", "turn": { "id": "turn_1", "status": "completed" } }
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        { "type": "turn_started", "payload": { "thread_id": "thr_1", "turn_id": "turn_1" } },
+        { "type": "message_delta", "payload": { "item_id": "item_1", "delta": "你好" } },
+        { "type": "message_delta", "payload": { "item_id": "item_1", "delta": "，世界。" } },
+        { "type": "message_completed", "payload": { "item_id": "item_1", "text": "你好，世界。" } }
+      ]
+    },
+    {
+      "name": "send_second_turn_and_tool_call",
+      "actions": [
+        {
+          "op": "start",
+          "workspace": "/ws/demo",
+          "model": "",
+          "prompt": ""
+        },
+        { "op": "send", "text": "列出文件" }
+      ],
+      "steps": [
+        {
+          "expect_request": { "method": "thread/start" },
+          "respond": { "result": { "thread": { "id": "thr_2" }, "model": "gpt-5.6-luna", "modelProvider": "openai" } }
+        },
+        {
+          "expect_request": {
+            "method": "turn/start",
+            "params_contains": {
+              "threadId": "thr_2",
+              "input": [{ "type": "text", "text": "列出文件" }]
+            }
+          },
+          "respond": { "result": { "turn": { "id": "turn_2a", "status": "inProgress" } } },
+          "then_notify": [
+            {
+              "method": "item/started",
+              "params": {
+                "threadId": "thr_2",
+                "turnId": "turn_2a",
+                "item": { "id": "cmd_1", "type": "commandExecution", "command": "ls", "status": "inProgress" }
+              }
+            },
+            {
+              "method": "item/completed",
+              "params": {
+                "threadId": "thr_2",
+                "turnId": "turn_2a",
+                "item": {
+                  "id": "cmd_1",
+                  "type": "commandExecution",
+                  "command": "ls",
+                  "status": "completed",
+                  "exitCode": 0,
+                  "aggregatedOutput": "a.txt\nb.txt"
+                }
+              }
+            },
+            {
+              "method": "item/completed",
+              "params": {
+                "threadId": "thr_2",
+                "turnId": "turn_2a",
+                "item": { "id": "item_2", "type": "agentMessage", "text": "共两个文件。" }
+              }
+            },
+            {
+              "method": "turn/completed",
+              "params": { "threadId": "thr_2", "turn": { "id": "turn_2a", "status": "completed" } }
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        { "type": "tool_call", "payload": { "tool": "commandExecution", "item_id": "cmd_1", "command": "ls" } },
+        { "type": "tool_result", "payload": { "item_id": "cmd_1", "exit_code": 0, "output": "a.txt\nb.txt" } },
+        { "type": "message_completed", "payload": { "item_id": "item_2", "text": "共两个文件。" } }
+      ]
+    },
+    {
+      "name": "abort_interrupts_active_turn",
+      "actions": [
+        { "op": "start", "workspace": "/ws/demo", "model": "", "prompt": "长任务" },
+        { "op": "abort" }
+      ],
+      "steps": [
+        {
+          "expect_request": { "method": "thread/start" },
+          "respond": { "result": { "thread": { "id": "thr_3" }, "model": "m", "modelProvider": "p" } }
+        },
+        {
+          "expect_request": {
+            "method": "turn/start",
+            "params_contains": { "threadId": "thr_3", "input": [{ "type": "text", "text": "长任务" }] }
+          },
+          "respond": { "result": { "turn": { "id": "turn_3", "status": "inProgress" } } }
+        },
+        {
+          "expect_request": {
+            "method": "turn/interrupt",
+            "params_contains": { "threadId": "thr_3", "turnId": "turn_3" }
+          },
+          "respond": { "result": {} },
+          "then_notify": [
+            {
+              "method": "turn/completed",
+              "params": { "threadId": "thr_3", "turn": { "id": "turn_3", "status": "interrupted" } }
+            }
+          ]
+        }
+      ],
+      "expected_events": []
+    },
+    {
+      "name": "resume_existing_thread",
+      "actions": [
+        { "op": "resume", "thread_id": "thr_prev" },
+        { "op": "send", "text": "继续" }
+      ],
+      "steps": [
+        {
+          "expect_request": {
+            "method": "thread/resume",
+            "params_contains": { "threadId": "thr_prev" }
+          },
+          "respond": {
+            "result": {
+              "thread": {
+                "id": "thr_prev",
+                "turns": [{ "id": "t_old", "items": [], "status": "completed" }]
+              },
+              "model": "gpt-5.6-luna",
+              "modelProvider": "openai"
+            }
+          }
+        },
+        {
+          "expect_request": {
+            "method": "turn/start",
+            "params_contains": { "threadId": "thr_prev", "input": [{ "type": "text", "text": "继续" }] }
+          },
+          "respond": { "result": { "turn": { "id": "turn_r1", "status": "inProgress" } } },
+          "then_notify": [
+            {
+              "method": "item/agentMessage/delta",
+              "params": { "threadId": "thr_prev", "turnId": "turn_r1", "itemId": "item_r", "delta": "继续中" }
+            },
+            {
+              "method": "turn/completed",
+              "params": { "threadId": "thr_prev", "turn": { "id": "turn_r1", "status": "completed" } }
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        { "type": "message_delta", "payload": { "item_id": "item_r", "delta": "继续中" } }
+      ]
+    },
+    {
+      "name": "resume_missing_thread_is_unsupported",
+      "actions": [{ "op": "resume_expect_unsupported", "thread_id": "thr_missing" }],
+      "steps": [
+        {
+          "expect_request": { "method": "thread/resume" },
+          "respond": { "error": { "code": -32000, "message": "thread not found: thr_missing" } }
+        }
+      ],
+      "expected_events": []
+    },
+    {
+      "name": "w3_approval_round_trip",
+      "actions": [
+        { "op": "start", "workspace": "/ws/demo", "model": "", "prompt": "跑命令" },
+        { "op": "decide", "item_id": "cmd_appr_1", "decision": "accept" }
+      ],
+      "steps": [
+        {
+          "expect_request": { "method": "thread/start" },
+          "respond": { "result": { "thread": { "id": "thr_appr" }, "model": "m", "modelProvider": "p" } }
+        },
+        {
+          "expect_request": {
+            "method": "turn/start",
+            "params_contains": { "threadId": "thr_appr", "input": [{ "type": "text", "text": "跑命令" }] }
+          },
+          "respond": { "result": { "turn": { "id": "turn_appr", "status": "inProgress" } } },
+          "then_notify": [
+            {
+              "jsonrpc": "2.0",
+              "id": 900,
+              "method": "item/commandExecution/requestApproval",
+              "params": {
+                "threadId": "thr_appr",
+                "turnId": "turn_appr",
+                "itemId": "cmd_appr_1",
+                "command": "rm -rf /tmp/x"
+              }
+            }
+          ]
+        },
+        {
+          "expect_client_response": {
+            "id": 900,
+            "result_contains": { "decision": "accept" }
+          }
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "permission_request",
+          "payload": { "item_id": "cmd_appr_1", "command": "rm -rf /tmp/x", "tool": "commandExecution" }
+        },
+        {
+          "type": "permission_decision",
+          "payload": { "item_id": "cmd_appr_1", "decision": "accept" }
+        }
+      ]
+    },
+    {
+      "name": "w3_skills_list_catalog",
+      "actions": [{ "op": "skills", "cwds": ["/ws/demo"] }],
+      "steps": [
+        {
+          "expect_request": {
+            "method": "skills/list",
+            "params_contains": { "cwds": ["/ws/demo"] }
+          },
+          "respond": {
+            "result": {
+              "data": [
+                {
+                  "cwd": "/ws/demo",
+                  "errors": [],
+                  "skills": [
+                    {
+                      "name": "demo-skill",
+                      "description": "演示技能",
+                      "enabled": true,
+                      "path": "/ws/demo/.codex/skills/demo-skill",
+                      "scope": "project"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expected_skills": [
+        { "name": "demo-skill", "description": "演示技能", "enabled": true, "scope": "project" }
+      ],
+      "expected_events": []
+    },
+    {
+      "name": "w3_plan_and_goal_updates",
+      "actions": [
+        { "op": "start", "workspace": "/ws/demo", "model": "", "prompt": "" },
+        { "op": "send", "text": "做计划" }
+      ],
+      "steps": [
+        {
+          "expect_request": { "method": "thread/start" },
+          "respond": { "result": { "thread": { "id": "thr_pg" }, "model": "m", "modelProvider": "p" } }
+        },
+        {
+          "expect_request": {
+            "method": "turn/start",
+            "params_contains": { "threadId": "thr_pg", "input": [{ "type": "text", "text": "做计划" }] }
+          },
+          "respond": { "result": { "turn": { "id": "turn_pg", "status": "inProgress" } } },
+          "then_notify": [
+            {
+              "method": "turn/plan/updated",
+              "params": {
+                "threadId": "thr_pg",
+                "turnId": "turn_pg",
+                "plan": [
+                  { "step": "扫描目录", "status": "completed" },
+                  { "step": "汇总结果", "status": "inProgress" }
+                ]
+              }
+            },
+            {
+              "method": "thread/goal/updated",
+              "params": {
+                "threadId": "thr_pg",
+                "goal": {
+                  "threadId": "thr_pg",
+                  "objective": "完成目录整理",
+                  "status": "active",
+                  "createdAt": 1755900000,
+                  "updatedAt": 1755900060,
+                  "timeUsedSeconds": 60,
+                  "tokensUsed": 128
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "expected_events": [
+        {
+          "type": "plan_changed",
+          "payload": { "steps": ["扫描目录", "汇总结果"], "statuses": ["completed", "inProgress"] }
+        },
+        {
+          "type": "goal_changed",
+          "payload": { "objective": "完成目录整理", "status": "active" }
+        }
+      ]
+    },
+    {
+      "name": "w3_model_and_effort_override",
+      "actions": [
+        { "op": "start", "workspace": "/ws/demo", "model": "gpt-5.6-luna", "prompt": "" },
+        { "op": "select_model", "value": "gpt-5.7-titan" },
+        { "op": "select_effort", "value": "high" },
+        { "op": "send", "text": "换档执行" }
+      ],
+      "steps": [
+        {
+          "expect_request": {
+            "method": "thread/start",
+            "params_contains": { "model": "gpt-5.6-luna" }
+          },
+          "respond": { "result": { "thread": { "id": "thr_me" }, "model": "gpt-5.6-luna", "modelProvider": "p" } }
+        },
+        {
+          "expect_request": {
+            "method": "turn/start",
+            "params_contains": {
+              "threadId": "thr_me",
+              "input": [{ "type": "text", "text": "换档执行" }],
+              "model": "gpt-5.7-titan",
+              "effort": "high"
+            }
+          },
+          "respond": { "result": { "turn": { "id": "turn_me", "status": "inProgress" } } }
+        }
+      ],
+      "expected_events": []
+    }
+  ]
+}

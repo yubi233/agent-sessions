@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../domain/session_projection_models.dart';
+import '../../../state/session_message_feedback_controller.dart';
+
+typedef SessionForkHandler = Future<void> Function(String messageId);
 
 /// v0.5 Chat node 的 keyed renderer。
 ///
@@ -12,12 +17,16 @@ class SessionChatNodeSeat extends StatelessWidget {
     required this.node,
     this.onOpenFile,
     this.onInspect,
+    this.onFork,
+    this.feedbackController,
     super.key,
   });
 
   final ConversationNode node;
   final Future<void> Function(String path)? onOpenFile;
   final void Function(String target)? onInspect;
+  final SessionForkHandler? onFork;
+  final SessionMessageFeedbackController? feedbackController;
 
   @override
   Widget build(BuildContext context) {
@@ -27,10 +36,17 @@ class SessionChatNodeSeat extends StatelessWidget {
         container: true,
         label: '会话节点 ${node.label}',
         child: switch (node.kind) {
-          ConversationNodeKind.user => _ChatBubble(node: node, user: true),
+          ConversationNodeKind.user => _ChatBubble(
+            node: node,
+            user: true,
+            onOpenFile: onOpenFile,
+          ),
           ConversationNodeKind.assistant => _ChatBubble(
             node: node,
             user: false,
+            onOpenFile: onOpenFile,
+            onFork: onFork,
+            feedbackController: feedbackController,
           ),
           ConversationNodeKind.reasoning => _ReasoningRow(node: node),
           ConversationNodeKind.tool => _ToolStepRow(
@@ -81,10 +97,19 @@ class SessionChatNodeSeat extends StatelessWidget {
 }
 
 class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({required this.node, required this.user});
+  const _ChatBubble({
+    required this.node,
+    required this.user,
+    this.onOpenFile,
+    this.onFork,
+    this.feedbackController,
+  });
 
   final ConversationNode node;
   final bool user;
+  final Future<void> Function(String path)? onOpenFile;
+  final SessionForkHandler? onFork;
+  final SessionMessageFeedbackController? feedbackController;
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +156,12 @@ class _ChatBubble extends StatelessWidget {
                   ),
                   if (node.text?.trim().isNotEmpty == true) ...[
                     const SizedBox(height: 6),
-                    Text(node.text!, style: TextStyle(color: foreground)),
+                    user
+                        ? Text(node.text!, style: TextStyle(color: foreground))
+                        : _DisplaySafeMarkdown(
+                            text: node.text!,
+                            color: foreground,
+                          ),
                   ],
                   if (node.references.isNotEmpty) ...[
                     const SizedBox(height: 8),
@@ -139,17 +169,203 @@ class _ChatBubble extends StatelessWidget {
                       sequence: node.sequence,
                       references: node.references,
                       foreground: foreground,
+                      onOpenFile: onOpenFile,
                     ),
                   ],
                 ],
               ),
             ),
-            _MessageActionsRow(node: node),
+            if (!user) _AssistantTailStatus(node: node),
+            _MessageActionsRow(
+              node: node,
+              onFork: onFork,
+              feedbackController: feedbackController,
+            ),
           ],
         ),
       ),
     );
   }
+}
+
+class _AssistantTailStatus extends StatelessWidget {
+  const _AssistantTailStatus({required this.node});
+
+  final ConversationNode node;
+
+  @override
+  Widget build(BuildContext context) {
+    final stopped = const {
+      'stopped',
+      'interrupted',
+      'aborted',
+    }.contains(node.toolStatus?.toLowerCase());
+    final label = node.isStreaming
+        ? '运行中'
+        : stopped
+        ? '已停止'
+        : node.completedTurn
+        ? '已完成'
+        : null;
+    if (label == null) return const SizedBox.shrink();
+    return Padding(
+      key: Key('session-assistant-tail-status-${node.sequence}'),
+      padding: const EdgeInsets.only(top: 3),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            node.isStreaming
+                ? Icons.more_horiz
+                : stopped
+                ? Icons.stop_circle_outlined
+                : Icons.check_circle_outline,
+            size: 14,
+          ),
+          const SizedBox(width: 4),
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _DisplaySafeMarkdown extends StatelessWidget {
+  const _DisplaySafeMarkdown({required this.text, required this.color});
+
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final base = Theme.of(context).textTheme.bodyMedium?.copyWith(color: color);
+    final children = <Widget>[];
+    var fenced = false;
+    final code = <String>[];
+    for (final line in text.split('\n')) {
+      if (line.trimLeft().startsWith('```')) {
+        if (fenced) {
+          children.add(_MarkdownCodeBlock(text: code.join('\n')));
+          code.clear();
+        }
+        fenced = !fenced;
+        continue;
+      }
+      if (fenced) {
+        code.add(line);
+        continue;
+      }
+      if (line.startsWith('# ')) {
+        children.add(
+          Text(
+            line.substring(2),
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        );
+      } else if (line.startsWith('## ')) {
+        children.add(
+          Text(
+            line.substring(3),
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        );
+      } else if (line.startsWith('- ') || line.startsWith('* ')) {
+        children.add(
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('• ', style: base),
+              Expanded(
+                child: _InlineMarkdown(text: line.substring(2), style: base),
+              ),
+            ],
+          ),
+        );
+      } else if (line.isEmpty) {
+        children.add(const SizedBox(height: 6));
+      } else {
+        children.add(_InlineMarkdown(text: line, style: base));
+      }
+    }
+    if (code.isNotEmpty) {
+      children.add(_MarkdownCodeBlock(text: code.join('\n')));
+    }
+    return Column(
+      key: const Key('session-assistant-markdown'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+}
+
+class _InlineMarkdown extends StatelessWidget {
+  const _InlineMarkdown({required this.text, required this.style});
+
+  final String text;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final spans = <InlineSpan>[];
+    final expression = RegExp(r'(`[^`]+`|\*\*[^*]+\*\*)');
+    var cursor = 0;
+    for (final match in expression.allMatches(text)) {
+      if (match.start > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, match.start)));
+      }
+      final token = match.group(0)!;
+      if (token.startsWith('`')) {
+        spans.add(
+          TextSpan(
+            text: token.substring(1, token.length - 1),
+            style: style?.copyWith(
+              fontFamily: 'monospace',
+              backgroundColor: Theme.of(
+                context,
+              ).colorScheme.surfaceContainerHighest,
+            ),
+          ),
+        );
+      } else {
+        spans.add(
+          TextSpan(
+            text: token.substring(2, token.length - 2),
+            style: style?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        );
+      }
+      cursor = match.end;
+    }
+    if (cursor < text.length) spans.add(TextSpan(text: text.substring(cursor)));
+    return Text.rich(TextSpan(style: style, children: spans));
+  }
+}
+
+class _MarkdownCodeBlock extends StatelessWidget {
+  const _MarkdownCodeBlock({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    constraints: const BoxConstraints(maxHeight: 180),
+    margin: const EdgeInsets.symmetric(vertical: 4),
+    padding: const EdgeInsets.all(10),
+    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+    child: SingleChildScrollView(
+      child: SelectableText(
+        text,
+        style: const TextStyle(fontFamily: 'monospace'),
+      ),
+    ),
+  );
 }
 
 class _PendingSteeringBadge extends StatelessWidget {
@@ -181,11 +397,13 @@ class _ReferenceChips extends StatelessWidget {
     required this.sequence,
     required this.references,
     required this.foreground,
+    this.onOpenFile,
   });
 
   final int sequence;
   final List<ConversationReferenceChip> references;
   final Color foreground;
+  final Future<void> Function(String path)? onOpenFile;
 
   @override
   Widget build(BuildContext context) => Wrap(
@@ -197,6 +415,7 @@ class _ReferenceChips extends StatelessWidget {
           key: Key('session-reference-chip-$sequence-$index'),
           reference: references[index],
           foreground: foreground,
+          onOpenFile: onOpenFile,
         ),
     ],
   );
@@ -206,11 +425,13 @@ class _ReferenceChip extends StatelessWidget {
   const _ReferenceChip({
     required this.reference,
     required this.foreground,
+    this.onOpenFile,
     super.key,
   });
 
   final ConversationReferenceChip reference;
   final Color foreground;
+  final Future<void> Function(String path)? onOpenFile;
 
   @override
   Widget build(BuildContext context) {
@@ -220,6 +441,17 @@ class _ReferenceChip extends StatelessWidget {
       ConversationReferenceKind.file => Icons.insert_drive_file_outlined,
       ConversationReferenceKind.folder => Icons.folder_outlined,
     };
+    final canOpen =
+        reference.kind == ConversationReferenceKind.file &&
+        reference.target?.trim().isNotEmpty == true &&
+        onOpenFile != null;
+    if (canOpen) {
+      return ActionChip(
+        avatar: Icon(icon, size: 14, color: foreground.withValues(alpha: 0.74)),
+        label: Text(reference.label),
+        onPressed: () => unawaited(onOpenFile!(reference.target!)),
+      );
+    }
     return DecoratedBox(
       decoration: BoxDecoration(
         color: foreground.withValues(alpha: 0.08),
@@ -246,9 +478,15 @@ class _ReferenceChip extends StatelessWidget {
 }
 
 class _MessageActionsRow extends StatefulWidget {
-  const _MessageActionsRow({required this.node});
+  const _MessageActionsRow({
+    required this.node,
+    this.onFork,
+    this.feedbackController,
+  });
 
   final ConversationNode node;
+  final SessionForkHandler? onFork;
+  final SessionMessageFeedbackController? feedbackController;
 
   @override
   State<_MessageActionsRow> createState() => _MessageActionsRowState();
@@ -256,15 +494,54 @@ class _MessageActionsRow extends StatefulWidget {
 
 class _MessageActionsRowState extends State<_MessageActionsRow> {
   String? _feedback;
+  final LayerLink _noteLink = LayerLink();
+  OverlayEntry? _noteOverlay;
+  final FocusNode _noteFocus = FocusNode();
+  final FocusNode _noteTriggerFocus = FocusNode();
+  final TextEditingController _noteController = TextEditingController();
+  bool _noteOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _noteFocus.onKeyEvent = (_, event) {
+      if (event is KeyDownEvent &&
+          event.logicalKey == LogicalKeyboardKey.escape) {
+        _closeNote();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    };
+  }
+
+  @override
+  void dispose() {
+    _closeNote(restoreFocus: false);
+    _noteFocus.dispose();
+    _noteTriggerFocus.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final node = widget.node;
+    final feedback = widget.feedbackController;
+    final messageId = node.messageId;
+    final item = messageId == null ? null : feedback?.itemFor(messageId);
+    final feedbackError = messageId == null
+        ? null
+        : feedback?.errorFor(messageId);
+    final feedbackBusy =
+        messageId != null &&
+        (feedback?.isLoading(messageId) == true ||
+            feedback?.isMutating(messageId) == true);
     final hasActions =
         node.canCopy ||
         node.showTimestamp ||
         node.canFork ||
-        node.forkUnavailable;
+        node.forkUnavailable ||
+        node.feedbackAvailable;
     if (!hasActions) return const SizedBox.shrink();
 
     return Padding(
@@ -296,27 +573,103 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
           if (node.canFork || node.forkUnavailable)
             IconButton(
               key: Key(
-                node.canFork
+                node.canFork && widget.onFork != null
                     ? 'session-message-fork-${node.sequence}'
                     : 'session-message-fork-unavailable-${node.sequence}',
               ),
-              tooltip: node.canFork ? '从这里分支' : '仅可从可分支的完成轮次尾部创建分支',
               iconSize: 18,
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               padding: EdgeInsets.zero,
-              onPressed: node.canFork ? () => _markForkRequested(node) : null,
+              tooltip: node.canFork && widget.onFork != null
+                  ? '从这里分支'
+                  : '当前 Relay 未提供分支写入能力',
+              onPressed: node.canFork && widget.onFork != null
+                  ? () => unawaited(widget.onFork!(node.messageId!))
+                  : null,
               icon: const Icon(Icons.call_split_outlined),
             ),
+          if (node.feedbackAvailable && messageId != null) ...[
+            _FeedbackButton(
+              key: Key(_sequenceKey('session-message-like-', node.sequence)),
+              label: '喜欢',
+              icon: Icons.thumb_up_outlined,
+              active: item?.rating == ConversationFeedbackRating.positive,
+              enabled: feedback != null && !feedbackBusy,
+              onEnsure: () async => feedback?.ensure(messageId),
+              onPressed: () => unawaited(
+                feedback!.toggle(
+                  messageId,
+                  ConversationFeedbackRating.positive,
+                ),
+              ),
+            ),
+            _FeedbackButton(
+              key: Key(_sequenceKey('session-message-dislike-', node.sequence)),
+              label: '不喜欢',
+              icon: Icons.thumb_down_outlined,
+              active: item?.rating == ConversationFeedbackRating.negative,
+              enabled: feedback != null && !feedbackBusy,
+              onEnsure: () async => feedback?.ensure(messageId),
+              onPressed: () => unawaited(
+                feedback!.toggle(
+                  messageId,
+                  ConversationFeedbackRating.negative,
+                ),
+              ),
+            ),
+            if (item != null)
+              CompositedTransformTarget(
+                link: _noteLink,
+                child: IconButton(
+                  key: Key(
+                    _sequenceKey('session-message-note-', node.sequence),
+                  ),
+                  focusNode: _noteTriggerFocus,
+                  tooltip: item.note?.isNotEmpty == true ? '编辑反馈备注' : '添加反馈备注',
+                  iconSize: 18,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 32,
+                  ),
+                  padding: EdgeInsets.zero,
+                  onPressed: feedbackBusy ? null : _toggleNote,
+                  icon: Icon(
+                    item.note?.isNotEmpty == true
+                        ? Icons.sticky_note_2
+                        : Icons.note_add_outlined,
+                  ),
+                ),
+              ),
+          ],
           if (_feedback != null)
             Text(
               _feedback!,
               key: Key('session-message-action-feedback-${node.sequence}'),
               style: Theme.of(context).textTheme.labelSmall,
             ),
+          if (feedbackError != null)
+            Text(
+              _feedbackErrorText(feedbackError),
+              key: Key(
+                _sequenceKey('session-message-feedback-error-', node.sequence),
+              ),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
         ],
       ),
     );
   }
+
+  String _feedbackErrorText(String code) => switch (code) {
+    'version-conflict' => '反馈已被其他设备修改，请重试。',
+    'unsupported' => '当前 Relay 未声明消息反馈能力。',
+    'load-failed' => '反馈读取失败，重新聚焦可重试。',
+    'busy' => '反馈操作进行中。',
+    'validation' => '反馈备注需要先选择喜欢或不喜欢。',
+    _ => '反馈保存失败，请重试。',
+  };
 
   Future<void> _copy(ConversationNode node) async {
     final text = node.copyText ?? node.text ?? '';
@@ -330,9 +683,116 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
     }
   }
 
-  void _markForkRequested(ConversationNode node) {
-    // P2-B 只建立 action chrome；真实 fork 写入口仍要等 Relay/Provider capability 接入。
-    setState(() => _feedback = '分支入口待接入');
+  void _toggleNote() {
+    final messageId = widget.node.messageId;
+    final item = messageId == null
+        ? null
+        : widget.feedbackController?.itemFor(messageId);
+    if (messageId == null || item == null) return;
+    if (_noteOpen) {
+      _closeNote();
+      return;
+    }
+    _noteController.text = item.note ?? '';
+    _noteOpen = true;
+    _noteOverlay = OverlayEntry(
+      builder: (context) => Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _closeNote,
+              child: const SizedBox.expand(),
+            ),
+          ),
+          CompositedTransformFollower(
+            link: _noteLink,
+            showWhenUnlinked: false,
+            offset: const Offset(0, 36),
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                width: 260,
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        key: Key(
+                          _sequenceKey(
+                            'session-message-note-input-',
+                            widget.node.sequence,
+                          ),
+                        ),
+                        controller: _noteController,
+                        focusNode: _noteFocus,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: '反馈备注',
+                          isDense: true,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            key: Key(
+                              _sequenceKey(
+                                'session-message-note-cancel-',
+                                widget.node.sequence,
+                              ),
+                            ),
+                            onPressed: _closeNote,
+                            child: const Text('取消'),
+                          ),
+                          FilledButton(
+                            key: Key(
+                              _sequenceKey(
+                                'session-message-note-save-',
+                                widget.node.sequence,
+                              ),
+                            ),
+                            onPressed: () => unawaited(_saveNote(messageId)),
+                            child: const Text('保存'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    Overlay.of(context).insert(_noteOverlay!);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_noteOpen) _noteFocus.requestFocus();
+    });
+  }
+
+  Future<void> _saveNote(String messageId) async {
+    final controller = widget.feedbackController;
+    if (controller == null) return;
+    final result = await controller.saveNote(messageId, _noteController.text);
+    if (mounted && result.ok) _closeNote();
+  }
+
+  void _closeNote({bool restoreFocus = true}) {
+    if (!_noteOpen && _noteOverlay == null) return;
+    _noteOpen = false;
+    _noteOverlay?.remove();
+    _noteOverlay = null;
+    if (restoreFocus && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _noteTriggerFocus.requestFocus();
+      });
+    }
   }
 
   String _formatTime(DateTime value) {
@@ -340,6 +800,51 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
     final minute = value.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
+
+  String _sequenceKey(String prefix, int sequence) => '$prefix$sequence';
+}
+
+class _FeedbackButton extends StatelessWidget {
+  const _FeedbackButton({
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.enabled,
+    required this.onEnsure,
+    required this.onPressed,
+    super.key,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool active;
+  final bool enabled;
+  final Future<void> Function() onEnsure;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Focus(
+    onFocusChange: (focused) {
+      if (focused) unawaited(onEnsure());
+    },
+    child: Semantics(
+      button: true,
+      toggled: active,
+      label: active ? '$label（已选择）' : label,
+      child: MouseRegion(
+        onEnter: (_) => unawaited(onEnsure()),
+        child: IconButton(
+          tooltip: label,
+          iconSize: 18,
+          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+          padding: EdgeInsets.zero,
+          color: active ? Theme.of(context).colorScheme.primary : null,
+          onPressed: enabled ? onPressed : null,
+          icon: Icon(icon),
+        ),
+      ),
+    ),
+  );
 }
 
 class _ReasoningRow extends StatelessWidget {
@@ -456,6 +961,12 @@ class _ToolStepRow extends StatelessWidget {
               label: 'OUT',
               text: details!.output!,
             ),
+          if (details?.subcalls.isNotEmpty == true)
+            _ToolSubcallTree(
+              key: const ValueKey('session-tool-subcalls'),
+              subcalls: details!.subcalls,
+              onOpenFile: onOpenFile,
+            ),
           if (details?.inspectTarget?.trim().isNotEmpty == true)
             Align(
               alignment: Alignment.centerLeft,
@@ -470,6 +981,63 @@ class _ToolStepRow extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ToolSubcallTree extends StatelessWidget {
+  const _ToolSubcallTree({
+    required this.subcalls,
+    required this.onOpenFile,
+    super.key,
+  });
+
+  final List<ConversationToolSubcall> subcalls;
+  final Future<void> Function(String path)? onOpenFile;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(left: 12, top: 4),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final call in subcalls)
+          Container(
+            key: ValueKey(call.callId),
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.only(left: 10),
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  call.label,
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                if (call.status?.trim().isNotEmpty == true)
+                  Text(
+                    call.status!,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                if (call.input?.trim().isNotEmpty == true)
+                  _ToolDetailBlock(label: 'IN', text: call.input!),
+                if (call.output?.trim().isNotEmpty == true)
+                  _ToolDetailBlock(label: 'OUT', text: call.output!),
+                if (call.subcalls.isNotEmpty)
+                  _ToolSubcallTree(
+                    subcalls: call.subcalls,
+                    onOpenFile: onOpenFile,
+                  ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 class _ToolRowSubtitle extends StatelessWidget {

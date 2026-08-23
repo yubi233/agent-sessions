@@ -1,5 +1,5 @@
 // Package adapter 定义 Daemon 内统一 Provider Adapter SPI 与能力矩阵。
-// 它是四个真实 Provider（Claude/Codex/OpenCode/OpenClaw）的共同底座；
+// 它是五个真实 Provider（Claude/Codex/OpenCode/OpenClaw/DeepSeek Harness）的共同底座；
 // Provider 私有 payload 不得泄漏到客户端公共协议，未知能力默认 unsupported。
 package adapter
 
@@ -17,7 +17,7 @@ var CapabilityNames = []string{
 	"start", "resume", "abort", "kill", "permission", "permission_mode", "question", "plan", "goal",
 	"skill_catalog", "invoke_skill", "model_select", "effort_select",
 	"attachments", "file_read", "git_read", "usage",
-	"delegate_session", "delegate_cross_provider",
+	"fork", "delegate_session", "delegate_cross_provider",
 }
 
 // Capability 描述单项能力状态与原因。
@@ -118,6 +118,14 @@ type Handle interface {
 	Events() <-chan Event
 	// Dispose 释放资源并清理进程树。
 	Dispose(ctx context.Context) error
+}
+
+// InstanceIDHandle 由已经拿到 Provider canonical session ID 的 adapter 提供。
+// 创建空会话时没有 turn_started 事件，Daemon 仍可安全持久化真实 Provider 会话绑定；
+// 这不是事件伪造，也不会触发模型请求。
+type InstanceIDHandle interface {
+	Handle
+	InstanceID() string
 }
 
 // ForceKillHandle 只由明确拥有本机 Provider 进程树的 Handle 实现。它和 Abort 的语义不同：
