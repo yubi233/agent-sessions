@@ -79,4 +79,7 @@ func TestLiveBridgeLifecycle(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("事件通道未在 Dispose 后关闭")
 	}
+	// LIVE_SUMMARY 是 transport runner 判定 passed 的唯一凭据（对齐 opencode 惯例）：
+	// 只有真实桥全链路走通才输出，缺它一律不得记 passed。
+	t.Logf("LIVE_SUMMARY provider=dsh protocol=1 lifecycle=handshake,new,abort,dispose")
 }
