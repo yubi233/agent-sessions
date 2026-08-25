@@ -84,9 +84,26 @@ tasks:
       - go test ./internal/adapter/... -count=1
 
   test:e2e:relay:
-    desc: P2 本地 Relay-Daemon fixture 闭环（命令、SSE、只读 Workspace 与密文事件边界）+ v0.6 签名认证纵向回归
+    desc: P2 本地 Relay-Daemon fixture 闭环（命令、SSE、只读 Workspace 与密文事件边界）+ v0.6 签名认证纵向回归 + P4 生产客户端签名闭环与回滚演练
     cmds:
-      - go test ./internal/relay -run '^(TestP2DaemonCommandLifecycleAndSSERecovery|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2DaemonProtocolAndRevocationFailClosed|TestP2FlutterDaemonObservationReadOnly|TestP2RelayDaemonDeterministicFullLoop|TestP2RelayDaemonDeterministicSessionLifecycleFullLoop|TestP2RelayDaemonRestart.*|TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay|TestV06SignedTerminalFullLoop|TestV06RequiredModeRejectsLegacyBearer|TestV06SignedTerminalRevocationFailClosed)$' -count=1
+      - go test ./internal/relay -run '^(TestP2DaemonCommandLifecycleAndSSERecovery|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2DaemonProtocolAndRevocationFailClosed|TestP2FlutterDaemonObservationReadOnly|TestP2RelayDaemonDeterministicFullLoop|TestP2RelayDaemonDeterministicSessionLifecycleFullLoop|TestP2RelayDaemonRestart.*|TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay|TestV06SignedTerminalFullLoop|TestV06RequiredModeRejectsLegacyBearer|TestV06SignedTerminalRevocationFailClosed|TestV06DaemonClientSignedProductionLoop|TestV06SignatureModeRollbackDrill)$' -count=1
+
+  test:v06:
+    desc: v0.6 发布门统一入口（P4 计划 §6：文档校验、静态检查、协议/加密/Relay/Daemon/纵向回归、Adapter 契约、soak、灾备、restart 与 headed 浏览器面）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - task: test:protocol
+      - task: test:crypto
+      - task: test:relay
+      - task: test:daemon
+      - task: test:e2e:relay
+      - task: test:contract
+      - task: test:v06:soak
+      - task: test:deploy
+      - task: test:restart
+      - node e2e-verify/run.mjs --suite p4-web-readonly
+      - node e2e-verify/run.mjs --suite p4-admin-readonly
 
   test:e2e:web:
     desc: P4 Web SSE cursor 的 headed Chrome 本地 fixture 旅程
