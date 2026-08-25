@@ -137,6 +137,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/devices/{id}/identity-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 返回 terminal 登记密钥的脱敏审计视图；不返回公钥材料。 */
+        get: operations["listTerminalIdentityKeys"];
+        put?: never;
+        /** @description 仅 android_owner 可为 terminal 登记签名公钥并进入轮换双读窗口（ADR-012）；同一公钥重复登记幂等返回既有 key，已 retired 的公钥禁止复用。 */
+        post: operations["registerTerminalIdentityKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/devices/{id}/identity-keys/{keyId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description 立即撤销一把登记密钥；后续使用该 key 的签名一律 KEY_UNKNOWN_OR_REVOKED。 */
+        delete: operations["revokeTerminalIdentityKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/devices/{id}": {
         parameters: {
             query?: never;
@@ -601,6 +636,23 @@ export interface paths {
         };
         /** @description 账号范围 SSE。Last-Event-ID 优先于 after_seq；两者都是 account_event_log 的跨会话单调 cursor，不能使用 session-local event_seq。客户端断线后从该 cursor 严格回放；实时 Hub 仅缩短延迟，SQLite 是恢复事实源。 */
         get: operations["streamEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 为已配对 terminal 签发一次性 hello challenge（ADR-012）。challenge 绑定当前 bearer 设备，5 分钟有效且只能被 signed hello 消费一次；跨 Relay 重启保持一次性语义。 */
+        get: operations["daemonChallenge"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1092,6 +1144,8 @@ export interface components {
             heartbeat_interval_seconds: number;
             /** Format: int64 */
             after_delivery_seq: number;
+            /** @description ADR-012 能力协商：optional 兼容窗口为 [bearer, signature_v1]；required 窗口只剩 [signature_v1]。客户端据此选择认证方式，不得自行猜测。 */
+            auth_modes?: ("bearer" | "signature_v1")[];
         };
         DaemonHeartbeatRequest: {
             protocol_version: number;
@@ -1168,7 +1222,7 @@ export interface components {
             event_seq: number;
             idempotent: boolean;
         };
-        /** @description Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。 */
+        /** @description Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。 */
         TerminalSignature: {
             protocol_version?: number;
             key_id?: string;
@@ -1177,6 +1231,28 @@ export interface components {
             nonce?: string;
             body_hash?: string;
             signature?: string;
+        };
+        DaemonChallengeResponse: {
+            challenge: string;
+            /** Format: int64 */
+            expires_at_unix_ms: number;
+        };
+        TerminalIdentityKeyRequest: {
+            /** @description Ed25519 公钥（base64/base64url）；私钥永远不离开 Terminal 本机。 */
+            identity_public_key: string;
+        };
+        TerminalIdentityKeyView: {
+            key_id: string;
+            device_id: string;
+            /** @enum {string} */
+            status: "active" | "retired";
+            /** Format: int64 */
+            created_at_unix_ms: number;
+            /** Format: int64 */
+            retired_at_unix_ms?: number;
+        };
+        TerminalIdentityKeyList: {
+            keys: components["schemas"]["TerminalIdentityKeyView"][];
         };
         /** @description Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。 */
         OpaqueCipherEnvelope: {
@@ -1505,6 +1581,82 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    listTerminalIdentityKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description registered keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalIdentityKeyList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    registerTerminalIdentityKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TerminalIdentityKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description registered key */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalIdentityKeyView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    revokeTerminalIdentityKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+                keyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     revokeDevice: {
@@ -2337,6 +2489,28 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    daemonChallenge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description issued challenge */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonChallengeResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     daemonHello: {

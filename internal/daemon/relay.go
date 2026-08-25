@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,19 +20,72 @@ import (
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
+	"github.com/yubi233/agent-sessions/internal/authz"
 	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
 const daemonProtocolVersion = 1
 
+// TerminalRequestSigner 为 Daemon 出站的 Terminal 协议请求生成 v0.6 Ed25519 签名
+// （ADR-012 canonical bytes）。私钥只保存在调用方内存中，不进入日志、报告或状态文件。
+// DeviceID 是 bearer 绑定的设备 ID 并进入 canonical bytes；KeyID 在桥接期等于 DeviceID，
+// 公钥登记轮换后为 tkey_ 前缀的登记密钥。
+type TerminalRequestSigner struct {
+	DeviceID string
+	KeyID    string
+	Priv     ed25519.PrivateKey
+	// Nonce 允许测试注入确定性值；生产默认使用 crypto/rand 十六进制串。
+	Nonce func() string
+}
+
+// sign 构造并签名一个 TerminalSignature。nonceOverride 非 0 时使用指定 nonce
+// （hello 必须使用 Relay 预签发的一次性 challenge），否则生成随机 nonce。
+func (s *TerminalRequestSigner) sign(method, path string, rawBody []byte, nonceOverride string) (authz.TerminalSignature, error) {
+	if s.DeviceID == "" || s.KeyID == "" {
+		return authz.TerminalSignature{}, errors.New("terminal request signer missing device or key id")
+	}
+	nonce := nonceOverride
+	if nonce == "" {
+		nonce = s.nextNonce()
+	}
+	sig := authz.TerminalSignature{
+		ProtocolVersion: daemonProtocolVersion,
+		KeyID:           s.KeyID,
+		TimestampMS:     time.Now().UnixMilli(),
+		Nonce:           nonce,
+		BodyHash:        authz.HashBody(rawBody),
+	}
+	signature, err := authz.SignTerminalRequest(s.Priv, sig, s.DeviceID, method, path)
+	if err != nil {
+		return authz.TerminalSignature{}, err
+	}
+	sig.Signature = signature
+	return sig, nil
+}
+
+// nextNonce 生成一次性随机 nonce；重复 nonce 会被 Relay 按重放拒绝。
+func (s *TerminalRequestSigner) nextNonce() string {
+	if s.Nonce != nil {
+		return s.Nonce()
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand 失败属于进程级异常，不能降级为可预测 nonce。
+		panic("terminal signer entropy unavailable: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
 // RelayClient 是 Daemon 到 Relay 的受限 REST + SSE 客户端。它只保存 bearer 在调用者提供的
 // 配置中，不会记录到日志、report 或命令行输出。
+// Signer 非 nil 时所有 POST 请求自动附加 v0.6 Terminal 签名；hello 先取一次性 challenge。
 type RelayClient struct {
 	BaseURL          string
 	AccessToken      string
 	HTTPClient       *http.Client
 	StreamHTTPClient *http.Client
+	Signer           *TerminalRequestSigner
 }
 
 type RelayHTTPError struct {
@@ -80,15 +135,24 @@ type RelayCommandWire struct {
 }
 
 // Hello 协商版本和 Terminal ID。Caller 应把 Terminal ID 仅保存在本机 state，作为诊断元数据。
+// 配置了 Signer 时先取一次性 challenge，再以 challenge 作为 hello 签名 nonce（ADR-012）。
 func (c *RelayClient) Hello(ctx context.Context, daemonVersion, hostname, platform string, capabilities []string) (RelayHello, error) {
 	var out RelayHello
-	err := c.postJSON(ctx, "/v1/daemon/hello", map[string]any{
+	challenge := ""
+	if c.Signer != nil {
+		issued, err := c.Challenge(ctx)
+		if err != nil {
+			return RelayHello{}, err
+		}
+		challenge = issued
+	}
+	err := c.postJSONSigned(ctx, "/v1/daemon/hello", map[string]any{
 		"protocol_version": daemonProtocolVersion,
 		"daemon_version":   daemonVersion,
 		"hostname":         hostname,
 		"platform":         platform,
 		"capabilities":     capabilities,
-	}, &out)
+	}, challenge, &out)
 	if err != nil {
 		return RelayHello{}, err
 	}
@@ -96,6 +160,39 @@ func (c *RelayClient) Hello(ctx context.Context, daemonVersion, hostname, platfo
 		return RelayHello{}, errors.New("relay hello response incomplete")
 	}
 	return out, nil
+}
+
+// relayChallenge 是 GET /v1/daemon/challenge 的响应投影。
+type relayChallenge struct {
+	Challenge       string `json:"challenge"`
+	ExpiresAtUnixMS int64  `json:"expires_at_unix_ms"`
+}
+
+// Challenge 获取绑定当前设备的一次性 hello challenge。GET 无 body；challenge 本身
+// 不签名，由随后的 signed hello 以 nonce 形式一次性消费。
+func (c *RelayClient) Challenge(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(c.BaseURL, "/")+"/v1/daemon/challenge", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	response, err := c.restClient().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return "", readRelayHTTPError(response)
+	}
+	var payload relayChallenge
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&payload); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(payload.Challenge) == "" {
+		return "", errors.New("relay challenge response incomplete")
+	}
+	return payload.Challenge, nil
 }
 
 func (c *RelayClient) Heartbeat(ctx context.Context) error {
@@ -225,12 +322,25 @@ func (c *RelayClient) Stream(ctx context.Context, afterDeliverySeq int64, consum
 }
 
 func (c *RelayClient) postJSON(ctx context.Context, path string, body any, output any) error {
+	return c.postJSONSigned(ctx, path, body, "", output)
+}
+
+// postJSONSigned 发送 POST JSON；Signer 非 nil 时为请求附加 v0.6 Terminal 签名。
+// nonceOverride 非 0 时使用指定 nonce（hello challenge），否则由 signer 生成随机 nonce。
+// 签名对象是"未包含 signature 字段的原始 body 字节"，与 Relay 的 body hash 校验一致。
+func (c *RelayClient) postJSONSigned(ctx context.Context, path string, body any, nonceOverride string, output any) error {
 	if strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.AccessToken) == "" {
 		return errors.New("relay base URL or daemon credential missing")
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return err
+	}
+	if c.Signer != nil {
+		raw, err = c.signBody(path, raw, nonceOverride)
+		if err != nil {
+			return err
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(raw))
 	if err != nil {
@@ -253,6 +363,25 @@ func (c *RelayClient) postJSON(ctx context.Context, path string, body any, outpu
 		return err
 	}
 	return nil
+}
+
+// signBody 把 TerminalSignature 注入请求 JSON 的 signature 字段。
+// body hash 覆盖注入前的原始字节，Relay 端以同样顺序校验，两端不允许自行拼接 canonical bytes。
+func (c *RelayClient) signBody(path string, raw []byte, nonceOverride string) ([]byte, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	sig, err := c.Signer.sign(http.MethodPost, path, raw, nonceOverride)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(sig)
+	if err != nil {
+		return nil, err
+	}
+	payload["signature"] = encoded
+	return json.Marshal(payload)
 }
 
 func (c *RelayClient) restClient() *http.Client {

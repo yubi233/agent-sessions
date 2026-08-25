@@ -5,33 +5,42 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yubi233/agent-sessions/internal/authz"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
 // usageUploadRequest 是 Daemon 上传 usage 事件的请求体。字段全部为白名单
 // 整数或归属标识；prompt、回复、费用与精确事件时间不允许出现在该 DTO。
+// Signature 是 v0.6 additive 字段：携带时必须完整校验，required 模式下必须存在。
 type usageUploadRequest struct {
-	UsageKey         string   `json:"usage_key"`
-	SessionID        string   `json:"session_id,omitempty"`
-	Provider         string   `json:"provider"`
-	Model            string   `json:"model,omitempty"`
-	UTCDay           string   `json:"utc_day"`
-	InputTokens      int64    `json:"input_tokens"`
-	OutputTokens     int64    `json:"output_tokens"`
-	CacheReadTokens  int64    `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64    `json:"cache_write_tokens,omitempty"`
-	TTFTMS           *int64   `json:"ttft_ms,omitempty"`
-	DecodeThroughput *float64 `json:"decode_throughput,omitempty"`
+	UsageKey         string                  `json:"usage_key"`
+	SessionID        string                  `json:"session_id,omitempty"`
+	Provider         string                  `json:"provider"`
+	Model            string                  `json:"model,omitempty"`
+	UTCDay           string                  `json:"utc_day"`
+	InputTokens      int64                   `json:"input_tokens"`
+	OutputTokens     int64                   `json:"output_tokens"`
+	CacheReadTokens  int64                   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64                   `json:"cache_write_tokens,omitempty"`
+	TTFTMS           *int64                  `json:"ttft_ms,omitempty"`
+	DecodeThroughput *float64                `json:"decode_throughput,omitempty"`
+	Signature        authz.TerminalSignature `json:"signature"`
 }
 
 // handleUsageUpload 只允许已配对 Terminal 上传 usage；按 usage_key_hash 去重，
 // 重复上传返回同一 canonical receipt，不重复累加（ADR-010）。
 func (a *API) handleUsageUpload(c *gin.Context) {
 	subj := subject(c)
+	// 使用原始 body 计算签名 body hash；绑定失败时不得进入业务处理。
 	var req usageUploadRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
 		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed request"))
+		return
+	}
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
 		return
 	}
 	// terminal_id 外键关联 terminals 表；subject 只带 device_id，需要先解析

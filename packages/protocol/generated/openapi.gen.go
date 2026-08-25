@@ -319,6 +319,24 @@ func (e DaemonEventUploadRequestEventType) Valid() bool {
 	}
 }
 
+// Defines values for DaemonHelloResponseAuthModes.
+const (
+	Bearer      DaemonHelloResponseAuthModes = "bearer"
+	SignatureV1 DaemonHelloResponseAuthModes = "signature_v1"
+)
+
+// Valid indicates whether the value is a known member of the DaemonHelloResponseAuthModes enum.
+func (e DaemonHelloResponseAuthModes) Valid() bool {
+	switch e {
+	case Bearer:
+		return true
+	case SignatureV1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegationStatus.
 const (
 	DelegationStatusApproved  DelegationStatus = "approved"
@@ -402,16 +420,16 @@ func (e DeviceRole) Valid() bool {
 
 // Defines values for DeviceStatus.
 const (
-	Active  DeviceStatus = "active"
-	Revoked DeviceStatus = "revoked"
+	DeviceStatusActive  DeviceStatus = "active"
+	DeviceStatusRevoked DeviceStatus = "revoked"
 )
 
 // Valid indicates whether the value is a known member of the DeviceStatus enum.
 func (e DeviceStatus) Valid() bool {
 	switch e {
-	case Active:
+	case DeviceStatusActive:
 		return true
-	case Revoked:
+	case DeviceStatusRevoked:
 		return true
 	default:
 		return false
@@ -475,6 +493,24 @@ func (e PairingRequestStatus) Valid() bool {
 	case PairingRequestStatusExpired:
 		return true
 	case PairingRequestStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TerminalIdentityKeyViewStatus.
+const (
+	TerminalIdentityKeyViewStatusActive  TerminalIdentityKeyViewStatus = "active"
+	TerminalIdentityKeyViewStatusRetired TerminalIdentityKeyViewStatus = "retired"
+)
+
+// Valid indicates whether the value is a known member of the TerminalIdentityKeyViewStatus enum.
+func (e TerminalIdentityKeyViewStatus) Valid() bool {
+	switch e {
+	case TerminalIdentityKeyViewStatusActive:
+		return true
+	case TerminalIdentityKeyViewStatusRetired:
 		return true
 	default:
 		return false
@@ -760,6 +796,12 @@ type CreateWorkspaceRequest struct {
 	TerminalId    *string `json:"terminal_id,omitempty"`
 }
 
+// DaemonChallengeResponse defines model for DaemonChallengeResponse.
+type DaemonChallengeResponse struct {
+	Challenge       string `json:"challenge"`
+	ExpiresAtUnixMs int64  `json:"expires_at_unix_ms"`
+}
+
 // DaemonCipherEventObservation defines model for DaemonCipherEventObservation.
 type DaemonCipherEventObservation struct {
 	// Envelope 仅证明 Relay 已验证版本化密文封装，不包含 key_id、nonce、ciphertext、aad_hash 或任何明文。
@@ -778,7 +820,7 @@ type DaemonCommandAckRequest struct {
 	ErrorCode       *string                        `json:"error_code,omitempty"`
 	ProtocolVersion int                            `json:"protocol_version"`
 
-	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
@@ -824,7 +866,7 @@ type DaemonCommandResultRequest struct {
 	ErrorCode       *string `json:"error_code,omitempty"`
 	ProtocolVersion int     `json:"protocol_version"`
 
-	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature               `json:"signature,omitempty"`
 	Status    DaemonCommandResultRequestStatus `json:"status"`
 }
@@ -857,7 +899,7 @@ type DaemonEventUploadRequest struct {
 	ProtocolVersion int                               `json:"protocol_version"`
 	SessionId       string                            `json:"session_id"`
 
-	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
@@ -875,7 +917,7 @@ type DaemonEventUploadResponse struct {
 type DaemonHeartbeatRequest struct {
 	ProtocolVersion int `json:"protocol_version"`
 
-	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
@@ -893,18 +935,24 @@ type DaemonHelloRequest struct {
 	Platform        string   `json:"platform"`
 	ProtocolVersion int      `json:"protocol_version"`
 
-	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
 // DaemonHelloResponse defines model for DaemonHelloResponse.
 type DaemonHelloResponse struct {
-	AfterDeliverySeq         int64  `json:"after_delivery_seq"`
-	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
-	MinProtocolVersion       int    `json:"min_protocol_version"`
-	ProtocolVersion          int    `json:"protocol_version"`
-	TerminalId               string `json:"terminal_id"`
+	AfterDeliverySeq int64 `json:"after_delivery_seq"`
+
+	// AuthModes ADR-012 能力协商：optional 兼容窗口为 [bearer, signature_v1]；required 窗口只剩 [signature_v1]。客户端据此选择认证方式，不得自行猜测。
+	AuthModes                *[]DaemonHelloResponseAuthModes `json:"auth_modes,omitempty"`
+	HeartbeatIntervalSeconds int                             `json:"heartbeat_interval_seconds"`
+	MinProtocolVersion       int                             `json:"min_protocol_version"`
+	ProtocolVersion          int                             `json:"protocol_version"`
+	TerminalId               string                          `json:"terminal_id"`
 }
+
+// DaemonHelloResponseAuthModes defines model for DaemonHelloResponse.AuthModes.
+type DaemonHelloResponseAuthModes string
 
 // DaemonObservationSession defines model for DaemonObservationSession.
 type DaemonObservationSession struct {
@@ -926,7 +974,7 @@ type DaemonWebReadResponseRequest struct {
 	Envelope        WebReadResponseEnvelope `json:"envelope"`
 	ProtocolVersion int                     `json:"protocol_version"`
 
-	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
@@ -1146,12 +1194,35 @@ type Terminal struct {
 	Status         string  `json:"status"`
 }
 
+// TerminalIdentityKeyList defines model for TerminalIdentityKeyList.
+type TerminalIdentityKeyList struct {
+	Keys []TerminalIdentityKeyView `json:"keys"`
+}
+
+// TerminalIdentityKeyRequest defines model for TerminalIdentityKeyRequest.
+type TerminalIdentityKeyRequest struct {
+	// IdentityPublicKey Ed25519 公钥（base64/base64url）；私钥永远不离开 Terminal 本机。
+	IdentityPublicKey string `json:"identity_public_key"`
+}
+
+// TerminalIdentityKeyView defines model for TerminalIdentityKeyView.
+type TerminalIdentityKeyView struct {
+	CreatedAtUnixMs int64                         `json:"created_at_unix_ms"`
+	DeviceId        string                        `json:"device_id"`
+	KeyId           string                        `json:"key_id"`
+	RetiredAtUnixMs *int64                        `json:"retired_at_unix_ms,omitempty"`
+	Status          TerminalIdentityKeyViewStatus `json:"status"`
+}
+
+// TerminalIdentityKeyViewStatus defines model for TerminalIdentityKeyView.Status.
+type TerminalIdentityKeyViewStatus string
+
 // TerminalList defines model for TerminalList.
 type TerminalList struct {
 	Terminals []Terminal `json:"terminals"`
 }
 
-// TerminalSignature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+// TerminalSignature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 type TerminalSignature struct {
 	BodyHash        *string `json:"body_hash,omitempty"`
 	KeyId           *string `json:"key_id,omitempty"`
@@ -1420,6 +1491,9 @@ type UploadUsageEventJSONRequestBody = UploadUsageEventRequest
 // DecideDelegationJSONRequestBody defines body for DecideDelegation for application/json ContentType.
 type DecideDelegationJSONRequestBody = DelegationDecisionRequest
 
+// RegisterTerminalIdentityKeyJSONRequestBody defines body for RegisterTerminalIdentityKey for application/json ContentType.
+type RegisterTerminalIdentityKeyJSONRequestBody = TerminalIdentityKeyRequest
+
 // BootstrapOwnerJSONRequestBody defines body for BootstrapOwner for application/json ContentType.
 type BootstrapOwnerJSONRequestBody = BootstrapRequest
 
@@ -1614,6 +1688,9 @@ type ServerInterface interface {
 	// (GET /v1/commands/{id})
 	GetCommand(c *gin.Context, id string)
 
+	// (GET /v1/daemon/challenge)
+	DaemonChallenge(c *gin.Context)
+
 	// (GET /v1/daemon/commands/stream)
 	StreamDaemonCommands(c *gin.Context, params StreamDaemonCommandsParams)
 
@@ -1646,6 +1723,15 @@ type ServerInterface interface {
 
 	// (DELETE /v1/devices/{id})
 	RevokeDevice(c *gin.Context, id string)
+
+	// (GET /v1/devices/{id}/identity-keys)
+	ListTerminalIdentityKeys(c *gin.Context, id string)
+
+	// (POST /v1/devices/{id}/identity-keys)
+	RegisterTerminalIdentityKey(c *gin.Context, id string)
+
+	// (DELETE /v1/devices/{id}/identity-keys/{keyId})
+	RevokeTerminalIdentityKey(c *gin.Context, id string, keyId string)
 
 	// (GET /v1/events)
 	StreamEvents(c *gin.Context, params StreamEventsParams)
@@ -1931,6 +2017,19 @@ func (siw *ServerInterfaceWrapper) GetCommand(c *gin.Context) {
 	siw.Handler.GetCommand(c, id)
 }
 
+// DaemonChallenge operation middleware
+func (siw *ServerInterfaceWrapper) DaemonChallenge(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.DaemonChallenge(c)
+}
+
 // StreamDaemonCommands operation middleware
 func (siw *ServerInterfaceWrapper) StreamDaemonCommands(c *gin.Context) {
 
@@ -2167,6 +2266,90 @@ func (siw *ServerInterfaceWrapper) RevokeDevice(c *gin.Context) {
 	}
 
 	siw.Handler.RevokeDevice(c, id)
+}
+
+// ListTerminalIdentityKeys operation middleware
+func (siw *ServerInterfaceWrapper) ListTerminalIdentityKeys(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ListTerminalIdentityKeys(c, id)
+}
+
+// RegisterTerminalIdentityKey operation middleware
+func (siw *ServerInterfaceWrapper) RegisterTerminalIdentityKey(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RegisterTerminalIdentityKey(c, id)
+}
+
+// RevokeTerminalIdentityKey operation middleware
+func (siw *ServerInterfaceWrapper) RevokeTerminalIdentityKey(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Path parameter "keyId" -------------
+	var keyId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "keyId", c.Param("keyId"), &keyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter keyId: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RevokeTerminalIdentityKey(c, id, keyId)
 }
 
 // StreamEvents operation middleware
@@ -2740,6 +2923,9 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/auth/refresh", wrapper.Refresh)
 	router.POST(options.BaseURL+"/v1/auth/logout", wrapper.Logout)
 	router.GET(options.BaseURL+"/v1/devices", wrapper.ListDevices)
+	router.GET(options.BaseURL+"/v1/devices/:id/identity-keys", wrapper.ListTerminalIdentityKeys)
+	router.POST(options.BaseURL+"/v1/devices/:id/identity-keys", wrapper.RegisterTerminalIdentityKey)
+	router.DELETE(options.BaseURL+"/v1/devices/:id/identity-keys/:keyId", wrapper.RevokeTerminalIdentityKey)
 	router.DELETE(options.BaseURL+"/v1/devices/:id", wrapper.RevokeDevice)
 	router.POST(options.BaseURL+"/v1/pairing/bootstrap", wrapper.BootstrapOwner)
 	router.POST(options.BaseURL+"/v1/pairing/requests", wrapper.CreatePairing)
@@ -2772,6 +2958,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/attachments/:id/complete", wrapper.CompleteAttachment)
 	router.GET(options.BaseURL+"/v1/capabilities", wrapper.GetCapabilities)
 	router.GET(options.BaseURL+"/v1/events", wrapper.StreamEvents)
+	router.GET(options.BaseURL+"/v1/daemon/challenge", wrapper.DaemonChallenge)
 	router.POST(options.BaseURL+"/v1/daemon/hello", wrapper.DaemonHello)
 	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)

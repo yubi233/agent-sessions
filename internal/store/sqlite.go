@@ -1152,11 +1152,13 @@ func nullableString(value string) any {
 	return value
 }
 
-// ConsumeTerminalAuthNonce 先清理过期 nonce，再以唯一键插入当前 nonce。
+// ConsumeTerminalAuthNonce 先清理"已过期"的 nonce，再以唯一键插入当前 nonce。
+// 清理阈值必须是当前时间 nowUnixMS：若误用新记录的过期时间（now+TTL）作为阈值，
+// 时钟前进会把仍在重放窗口内的历史 nonce 提前删除，造成重放放行。
 // 插入 0 行表示该 nonce 已被使用或仍存在，必须按重放拒绝。
-func (r *sqliteRepo) ConsumeTerminalAuthNonce(ctx context.Context, keyID, nonce string, expiresAtUnixMS int64) error {
+func (r *sqliteRepo) ConsumeTerminalAuthNonce(ctx context.Context, keyID, nonce string, nowUnixMS, expiresAtUnixMS int64) error {
 	if _, err := r.db.ExecContext(ctx,
-		`DELETE FROM terminal_auth_nonces WHERE expires_at_unix_ms < ?`, expiresAtUnixMS); err != nil {
+		`DELETE FROM terminal_auth_nonces WHERE expires_at_unix_ms < ?`, nowUnixMS); err != nil {
 		return err
 	}
 	result, err := r.db.ExecContext(ctx,
@@ -1174,6 +1176,123 @@ func (r *sqliteRepo) ConsumeTerminalAuthNonce(ctx context.Context, keyID, nonce 
 		return protocol.NewError(protocol.ErrNonceReused, "terminal nonce already used")
 	}
 	return nil
+}
+
+// CreateTerminalAuthChallenge 持久化一个绑定设备的 hello challenge。
+// challenge 值由领域层用安全随机数生成；这里只负责落库与主键冲突防护。
+func (r *sqliteRepo) CreateTerminalAuthChallenge(ctx context.Context, c TerminalAuthChallengeRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO terminal_auth_challenges(challenge,device_id,expires_at_unix_ms,created_at_unix_ms)
+		 VALUES(?,?,?,?)`,
+		c.Challenge, c.DeviceID, c.ExpiresAtUnixMS, c.CreatedAtUnixMS)
+	return err
+}
+
+// ConsumeTerminalAuthChallenge 以条件 UPDATE 实现一次性消费：
+// 只有"同设备、未过期、未消费"的挑战会被置为已消费，其余情况一律返回 false。
+// 条件更新是原子的，天然防住并发重放同一挑战。
+func (r *sqliteRepo) ConsumeTerminalAuthChallenge(ctx context.Context, deviceID, challenge string, nowUnixMS int64) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE terminal_auth_challenges
+		 SET consumed_at_unix_ms=?
+		 WHERE challenge=? AND device_id=? AND consumed_at_unix_ms=0 AND expires_at_unix_ms>=?`,
+		nowUnixMS, challenge, deviceID, nowUnixMS)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected == 1, nil
+}
+
+// DeleteExpiredTerminalAuthChallenges 清理过期挑战。失败不阻塞业务路径，
+// 由调用方决定是否记录诊断。
+func (r *sqliteRepo) DeleteExpiredTerminalAuthChallenges(ctx context.Context, nowUnixMS int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`DELETE FROM terminal_auth_challenges WHERE expires_at_unix_ms < ?`, nowUnixMS)
+	return err
+}
+
+// CreateTerminalIdentityKey 登记一把设备 Ed25519 公钥。key_id 由领域层派生并保证唯一。
+func (r *sqliteRepo) CreateTerminalIdentityKey(ctx context.Context, k TerminalIdentityKeyRow) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO terminal_identity_keys(key_id,device_id,account_id,public_key,status,created_at_unix_ms)
+		 VALUES(?,?,?,?,?,?)`,
+		k.KeyID, k.DeviceID, k.AccountID, k.PublicKey, k.Status, k.CreatedAtUnixMS)
+	return err
+}
+
+func (r *sqliteRepo) TerminalIdentityKeyByID(ctx context.Context, keyID string) (TerminalIdentityKeyRow, error) {
+	return scanTerminalIdentityKey(r.db.QueryRowContext(ctx,
+		`SELECT key_id,device_id,account_id,public_key,status,created_at_unix_ms,retired_at_unix_ms
+		 FROM terminal_identity_keys WHERE key_id=?`, keyID))
+}
+
+func scanTerminalIdentityKey(row *sql.Row) (TerminalIdentityKeyRow, error) {
+	var k TerminalIdentityKeyRow
+	if err := row.Scan(&k.KeyID, &k.DeviceID, &k.AccountID, &k.PublicKey, &k.Status, &k.CreatedAtUnixMS, &k.RetiredAtUnixMS); err != nil {
+		return TerminalIdentityKeyRow{}, err
+	}
+	return k, nil
+}
+
+func (r *sqliteRepo) ListTerminalIdentityKeys(ctx context.Context, deviceID string) ([]TerminalIdentityKeyRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT key_id,device_id,account_id,public_key,status,created_at_unix_ms,retired_at_unix_ms
+		 FROM terminal_identity_keys WHERE device_id=? ORDER BY created_at_unix_ms`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TerminalIdentityKeyRow
+	for rows.Next() {
+		var k TerminalIdentityKeyRow
+		if err := rows.Scan(&k.KeyID, &k.DeviceID, &k.AccountID, &k.PublicKey, &k.Status, &k.CreatedAtUnixMS, &k.RetiredAtUnixMS); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// CountActiveTerminalIdentityKeys 返回设备当前 active 密钥数量，
+// 用于把轮换双读窗口限制为"旧 + 新"两把。
+func (r *sqliteRepo) CountActiveTerminalIdentityKeys(ctx context.Context, deviceID string) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM terminal_identity_keys WHERE device_id=? AND status='active'`, deviceID).
+		Scan(&count)
+	return count, err
+}
+
+// RetireOtherTerminalIdentityKeys 把同一设备上除 keepKeyID 外的 active key 全部 retired。
+// 轮换收口（新 key 首次成功签名）与设备撤销都走这一条条件 UPDATE，保证一写语义。
+func (r *sqliteRepo) RetireOtherTerminalIdentityKeys(ctx context.Context, deviceID, keepKeyID string, nowUnixMS int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE terminal_identity_keys
+		 SET status='retired', retired_at_unix_ms=?
+		 WHERE device_id=? AND status='active' AND key_id<>?`,
+		nowUnixMS, deviceID, keepKeyID)
+	return err
+}
+
+// RetireTerminalIdentityKey 立即撤销单把登记密钥；幂等，重复撤销返回 false。
+func (r *sqliteRepo) RetireTerminalIdentityKey(ctx context.Context, keyID string, nowUnixMS int64) (bool, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE terminal_identity_keys
+		 SET status='retired', retired_at_unix_ms=?
+		 WHERE key_id=? AND status='active'`,
+		nowUnixMS, keyID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected == 1, nil
 }
 
 func (r *sqliteRepo) EnqueueOutbox(ctx context.Context, o OutboxRow) error {

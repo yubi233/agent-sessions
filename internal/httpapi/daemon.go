@@ -32,7 +32,7 @@ func (a *API) handleDaemonHello(c *gin.Context) {
 		return
 	}
 	subj := subject(c)
-	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -50,7 +50,20 @@ func (a *API) handleDaemonHello(c *gin.Context) {
 		MinProtocolVersion:       result.MinProtocolVersion,
 		HeartbeatIntervalSeconds: result.HeartbeatIntervalSeconds,
 		AfterDeliverySeq:         result.AfterDeliverySeq,
+		AuthModes:                result.AuthModes,
 	})
+}
+
+// handleDaemonChallenge 为 Terminal 签发一次性 hello challenge（ADR-012）。
+// 挑战绑定当前 bearer 设备且只能被 signed hello 消费一次；不返回任何设备元数据。
+func (a *API) handleDaemonChallenge(c *gin.Context) {
+	subj := subject(c)
+	challenge, err := a.Daemons.IssueTerminalAuthChallenge(c.Request.Context(), subj.AccountID, subj.DeviceID)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, challenge)
 }
 
 type daemonHeartbeatRequest struct {
@@ -66,7 +79,7 @@ func (a *API) handleDaemonHeartbeat(c *gin.Context) {
 		return
 	}
 	subj := subject(c)
-	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -177,7 +190,7 @@ func (a *API) handleDaemonCommandAck(c *gin.Context) {
 		return
 	}
 	subj := subject(c)
-	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -206,7 +219,7 @@ func (a *API) handleDaemonCommandResult(c *gin.Context) {
 		return
 	}
 	subj := subject(c)
-	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -236,7 +249,7 @@ func (a *API) handleDaemonWebReadResponse(c *gin.Context) {
 		return
 	}
 	subj := subject(c)
-	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -267,7 +280,7 @@ func (a *API) handleDaemonEventUpload(c *gin.Context) {
 		return
 	}
 	subj := subject(c)
-	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
 		writeError(c, err)
 		return
 	}
@@ -307,6 +320,8 @@ type daemonHelloView struct {
 	MinProtocolVersion       int    `json:"min_protocol_version"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
 	AfterDeliverySeq         int64  `json:"after_delivery_seq"`
+	// AuthModes 是 additive 能力协商字段：客户端据此选择 bearer 或 signature_v1。
+	AuthModes []string `json:"auth_modes,omitempty"`
 }
 
 type daemonHeartbeatView struct {
@@ -361,4 +376,24 @@ func bindJSONBody(c *gin.Context, out any) ([]byte, error) {
 		return nil, err
 	}
 	return raw, nil
+}
+
+// terminalSignedBody 返回参与签名 body hash 的字节：
+// 删除顶层 signature 成员后按"成员原文保持不变"的方式重新序列化。
+// 客户端对未注入 signature 的紧凑 JSON 计算哈希；两端都不允许把 signature 字段
+// 纳入哈希，否则会形成"签名覆盖自身"的循环依赖。非对象体或无签名字段时原样返回。
+func terminalSignedBody(raw []byte) []byte {
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(raw, &payload) != nil {
+		return raw
+	}
+	if _, exists := payload["signature"]; !exists {
+		return raw
+	}
+	delete(payload, "signature")
+	canonical, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return canonical
 }

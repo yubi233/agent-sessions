@@ -145,7 +145,28 @@ type Repository interface {
 	CompleteAttachment(ctx context.Context, attachmentID, idempotencyKey string) (bool, error)
 
 	// Terminal 签名一次性 nonce：插入成功表示首次使用；重复 nonce 返回稳定错误。
-	ConsumeTerminalAuthNonce(ctx context.Context, keyID, nonce string, expiresAtUnixMS int64) error
+	// nowUnixMS 用于过期清理阈值；expiresAtUnixMS 是新 nonce 的保留截止时间。
+	ConsumeTerminalAuthNonce(ctx context.Context, keyID, nonce string, nowUnixMS, expiresAtUnixMS int64) error
+
+	// ---- Terminal 签名认证（v0.6 P1） ----
+
+	// hello 一次性 challenge：签发后绑定设备；消费必须恰好一次，跨重启仍可查重。
+	CreateTerminalAuthChallenge(ctx context.Context, c TerminalAuthChallengeRow) error
+	// ConsumeTerminalAuthChallenge 把未过期且未消费的 challenge 置为已消费；
+	// 返回 false 表示不存在、已过期或已被消费，调用方必须按重放拒绝。
+	ConsumeTerminalAuthChallenge(ctx context.Context, deviceID, challenge string, nowUnixMS int64) (bool, error)
+	// DeleteExpiredTerminalAuthChallenges 清理已过期的 challenge 行，防止表无限增长。
+	DeleteExpiredTerminalAuthChallenges(ctx context.Context, nowUnixMS int64) error
+
+	// 设备签名公钥登记：key_id 唯一；轮换窗口内同一设备最多两个 active key。
+	CreateTerminalIdentityKey(ctx context.Context, k TerminalIdentityKeyRow) error
+	TerminalIdentityKeyByID(ctx context.Context, keyID string) (TerminalIdentityKeyRow, error)
+	ListTerminalIdentityKeys(ctx context.Context, deviceID string) ([]TerminalIdentityKeyRow, error)
+	CountActiveTerminalIdentityKeys(ctx context.Context, deviceID string) (int, error)
+	// RetireOtherTerminalIdentityKeys 在轮换收口时把设备上除 keepKeyID 外的 active key 全部 retired。
+	RetireOtherTerminalIdentityKeys(ctx context.Context, deviceID, keepKeyID string, nowUnixMS int64) error
+	// RetireTerminalIdentityKey 撤销单个 key（设备撤销或 owner 主动吊销）；返回 false 表示不存在。
+	RetireTerminalIdentityKey(ctx context.Context, keyID string, nowUnixMS int64) (bool, error)
 
 	// Outbox
 	EnqueueOutbox(ctx context.Context, o OutboxRow) error
@@ -467,4 +488,25 @@ type OutboxRow struct {
 	PayloadJSON string
 	Status      string
 	Attempts    int
+}
+
+// TerminalAuthChallengeRow 是 terminal_auth_challenges 表的行投影。
+// challenge 只保存随机值本身（非密钥），绑定设备且只能被消费一次。
+type TerminalAuthChallengeRow struct {
+	Challenge       string
+	DeviceID        string
+	ExpiresAtUnixMS int64
+	CreatedAtUnixMS int64
+}
+
+// TerminalIdentityKeyRow 是 terminal_identity_keys 表的行投影。
+// 只保存 Ed25519 公钥与状态；私钥永远不离开 Terminal 本机。
+type TerminalIdentityKeyRow struct {
+	KeyID           string
+	DeviceID        string
+	AccountID       string
+	PublicKey       string
+	Status          string
+	CreatedAtUnixMS int64
+	RetiredAtUnixMS int64
 }

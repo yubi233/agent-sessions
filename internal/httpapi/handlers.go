@@ -86,6 +86,10 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		owner.POST("/pairing/requests/:id/approve", a.handleApprovePairing)
 		owner.POST("/pairing/requests/:id/cancel", a.handleCancelPairing)
 		owner.POST("/recovery-codes", a.handleGenerateRecoveryCode)
+		// v0.6 Terminal 签名密钥生命周期：登记进入双读窗口、撤销立即生效（ADR-012）。
+		owner.POST("/devices/:id/identity-keys", a.handleRegisterIdentityKey)
+		owner.GET("/devices/:id/identity-keys", a.handleListIdentityKeys)
+		owner.DELETE("/devices/:id/identity-keys/:keyID", a.handleRevokeIdentityKey)
 
 		pair := v1.Group("")
 		pair.Use(a.RequireAuth())
@@ -97,6 +101,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		// Daemon 使用独立的 Terminal 范围 REST + SSE，绝不复用账号级 /events。
 		daemon := v1.Group("/daemon")
 		daemon.Use(a.RequireAuth(), a.RequireTerminal())
+		// 一次性 hello challenge：signed hello 的 nonce 必须来自这里（ADR-012）。
+		daemon.GET("/challenge", a.handleDaemonChallenge)
 		daemon.POST("/hello", a.handleDaemonHello)
 		daemon.POST("/heartbeat", a.handleDaemonHeartbeat)
 		daemon.GET("/commands/stream", a.handleDaemonCommandSSE(logger))
@@ -385,6 +391,67 @@ func (a *API) handleGenerateRecoveryCode(c *gin.Context) {
 		return
 	}
 	writeOK(c, gin.H{"recovery_code": code})
+}
+
+// identityKeyRegisterRequest 只接收公钥材料；私钥永远不离开 Terminal 本机。
+type identityKeyRegisterRequest struct {
+	IdentityPublicKey string `json:"identity_public_key"`
+}
+
+// handleRegisterIdentityKey 由 owner 为 Terminal 登记签名公钥，进入轮换双读窗口。
+func (a *API) handleRegisterIdentityKey(c *gin.Context) {
+	var req identityKeyRegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed identity key registration"))
+		return
+	}
+	row, err := a.Daemons.RegisterTerminalIdentityKey(
+		c.Request.Context(), subject(c).AccountID, c.Param("id"), req.IdentityPublicKey)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, newIdentityKeyView(row))
+}
+
+// handleListIdentityKeys 返回 Terminal 登记密钥的脱敏审计视图（key_id/状态/时间，不含公钥本体）。
+func (a *API) handleListIdentityKeys(c *gin.Context) {
+	rows, err := a.Daemons.ListTerminalIdentityKeys(c.Request.Context(), subject(c).AccountID, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	views := make([]identityKeyView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, newIdentityKeyView(row))
+	}
+	writeOK(c, gin.H{"keys": views})
+}
+
+// handleRevokeIdentityKey 立即撤销一把登记密钥；后续使用该 key 的签名一律拒绝。
+func (a *API) handleRevokeIdentityKey(c *gin.Context) {
+	if err := a.Daemons.RevokeTerminalIdentityKey(
+		c.Request.Context(), subject(c).AccountID, c.Param("id"), c.Param("keyID")); err != nil {
+		writeError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// identityKeyView 是登记密钥的白名单投影：不返回公钥材料，避免把可验签密钥扩散到管理面之外。
+type identityKeyView struct {
+	KeyID           string `json:"key_id"`
+	DeviceID        string `json:"device_id"`
+	Status          string `json:"status"`
+	CreatedAtUnixMS int64  `json:"created_at_unix_ms"`
+	RetiredAtUnixMS int64  `json:"retired_at_unix_ms,omitempty"`
+}
+
+func newIdentityKeyView(row store.TerminalIdentityKeyRow) identityKeyView {
+	return identityKeyView{
+		KeyID: row.KeyID, DeviceID: row.DeviceID, Status: row.Status,
+		CreatedAtUnixMS: row.CreatedAtUnixMS, RetiredAtUnixMS: row.RetiredAtUnixMS,
+	}
 }
 
 func (a *API) handleListSessions(c *gin.Context) {

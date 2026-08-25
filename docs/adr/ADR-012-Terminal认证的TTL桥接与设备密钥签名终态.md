@@ -42,10 +42,13 @@ timestamp_ms | nonce | sha256(body) | key_id
 
 字段使用 UTF-8 字符串和 `|` 分隔；整数/时间戳使用十进制 ASCII；`body` 为原始请求体字节，空 body 使用 `sha256("")`。Ed25519 签名对象为上述 canonical bytes 的 UTF-8 编码。
 
+`sha256(body)` 的 body 定义（P1 冻结）：签名以 JSON 对象形式存放在请求体的顶层 `signature` 成员中；`body_hash` 覆盖**删除该成员后**的紧凑 UTF-8 JSON 原文字节。两端都不得把 signature 字段纳入哈希——否则签名需要覆盖自身，构成循环依赖。请求体必须是紧凑 JSON（无多余空白），使"删除 signature 成员后的原文字节"在 Go/Dart/TypeScript 各端确定一致。
+
 #### 校验规则
 
 - 时间窗口：`timestamp_ms` 与 Relay 当前时间差不超过 300 秒；超窗返回稳定错误。
 - nonce：签名请求的 nonce 必须先在 SQLite 一次性记录中消费，跨 Relay 重启仍可查重；重复 nonce 返回稳定错误。
+- hello challenge：hello 的 `nonce` 字段必须使用 Relay 预先签发的一次性 challenge（`GET /v1/daemon/challenge`）。challenge 由 SQLite 持久化并绑定设备，5 分钟有效、只能消费一次；消费与 nonce 记录在同一事务内完成，Relay 重启后未完成/已完成的 challenge 都不能被重复使用。
 - 设备状态：设备必须属于该账号、角色为 `terminal`、状态为 `active`；撤销立即拒绝。
 - key id：必须对应设备当前已登记且未轮换撤销的 Ed25519 公钥。
 - 失败路径不得产生 command 状态变化、lease 变化、事件序号推进或 outbox 副作用。
@@ -53,9 +56,11 @@ timestamp_ms | nonce | sha256(body) | key_id
 #### N/N-1 与回滚
 
 - 签名模式通过 capability/feature flag 开启；默认保留已验证 bearer bridge。
+- Relay 以 `terminal_signature_mode=off|optional|required` 表达窗口进度：`optional` 为兼容窗口（签名可选、bearer 可用），`required` 表示窗口结束——旧 bearer Daemon 的 hello/heartbeat/ack/result/event 一律返回稳定 `UPGRADE_REQUIRED`，不再接受。
+- hello 响应以 additive 字段 `auth_modes` 声明当前接受的认证方式（如 `["bearer","signature_v1"]`）；Daemon 据此决定是否升级，不得自行猜测。
 - 兼容窗口内旧 bearer Daemon 可继续 hello/heartbeat/ack/result/event。
-- 回滚时关闭签名 flag，旧 bearer 路径立即恢复；不删除设备公钥、命令、事件或 outbox 历史。
-- 密钥轮换只允许旧/新 key 在短暂窗口内双读，一写；新 key 完成首次签名后旧 key 标记为轮换撤销。
+- 回滚时把 signature mode 降回 `optional`/`off`，旧 bearer 路径立即恢复；不删除设备公钥、命令、事件或 outbox 历史。
+- 密钥轮换只允许旧/新 key 在短暂窗口内双读，一写；新 key 完成首次成功签名后旧 key 标记为轮换撤销（`retired`），撤销立即拒绝新签名。
 - 所有回滚操作必须重新执行签名失败、设备撤销、命令幂等和 outbox 重放测试。
 
 ## 后果

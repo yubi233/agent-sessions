@@ -194,25 +194,30 @@
     },
     {
       "id": "AUTH-05",
-      "title": "Terminal 签名认证 canonical bytes、nonce 与错误契约",
-      "status": "planned",
+      "title": "Terminal 签名认证 challenge、canonical bytes、nonce、轮换与错误契约",
+      "status": "passed",
       "phase": "v0.6/P1",
       "category": "认证",
       "priority": "P0",
       "test_layer": "Relay integration + protocol vector",
       "precondition": "ADR-012 签名字段和 OpenAPI TerminalSignature 已冻结；设备 Ed25519 公钥、key id 与隔离 SQLite 已就绪。",
       "steps": [
-        "构造 canonical bytes（protocol_version|device_id|method|path|timestamp|nonce|sha256(body)|key_id）并签名",
-        "分别验证正确签名、错误签名、过期时间戳、重复 nonce、未知 key id、撤销设备",
-        "断言失败时不进入 hello/heartbeat/ack/result/event 业务处理"
+        "GET /v1/daemon/challenge 获取一次性挑战；signed hello 以挑战为 nonce 完成握手",
+        "构造 canonical bytes（protocol_version|device_id|method|path|timestamp|nonce|sha256(body)|key_id）并签名；body_hash 覆盖删除顶层 signature 成员后的紧凑 JSON",
+        "分别验证正确签名、错误签名、过期时间戳、重复 nonce/挑战、未知 key id、撤销设备",
+        "owner 登记/轮换/撤销 terminal 登记公钥；验证双读一写与 retired 密钥拒绝",
+        "required 签名模式下旧 bearer 请求断言 426 UPGRADE_REQUIRED",
+        "断言失败时不进入 hello/heartbeat/ack/result/event/usage 业务处理"
       ],
-      "expected": "签名模式正常通过；重放、篡改、过期、未知/撤销 key 和错误协议版本均返回稳定错误码，且不产生命令、lease、事件或 outbox 副作用。",
+      "expected": "optional 窗口 signed 全闭环通过且 auth_modes=[bearer,signature_v1]；挑战/nonce 重放、篡改 body hash、过期、未知/撤销 key 和错误协议版本均返回稳定错误码；轮换后新 key 可验签、撤销即时生效；required 模式 bearer 一律 426 且不产生命令、lease、事件或 outbox 副作用。",
       "cleanup": [
-        "删除测试设备、nonce 挑战记录与隔离数据库"
+        "删除测试设备、登记密钥、challenge/nonce 记录与隔离数据库"
       ],
       "evidence": [
-        "internal/authz/signed_terminal_test.go（P1 新增）",
-        "e2e-verify/reports/<ts>/RELAY-IDENTITY/auth-05.json"
+        "internal/authz/signed_terminal_test.go（P0/P1）",
+        "internal/domain/signed_terminal_test.go（P1 根因层：挑战重放、轮换双读一写、required 模式）",
+        "internal/store/terminal_auth_nonce_test.go（重启持久化与清理阈值回归）",
+        "internal/relay/v06_signed_terminal_contract_test.go（P1 纵向 HTTP full loop / required / 撤销 fail-closed，纳入 task test:e2e:relay）"
       ]
     },
     {

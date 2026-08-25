@@ -47,6 +47,17 @@ type DaemonHelloResult struct {
 	MinProtocolVersion       int
 	HeartbeatIntervalSeconds int
 	AfterDeliverySeq         int64
+	// AuthModes 是 Relay 当前接受的 Terminal 认证方式（ADR-012 能力协商）。
+	// optional 窗口为 ["bearer","signature_v1"]；required 窗口只剩 ["signature_v1"]。
+	AuthModes []string
+}
+
+// terminalAuthModes 按兼容窗口进度返回 additive auth_modes 投影。
+func (s *DaemonService) terminalAuthModes() []string {
+	if s.signatureRequired {
+		return []string{"signature_v1"}
+	}
+	return []string{"bearer", "signature_v1"}
 }
 
 type DaemonHeartbeatResult struct {
@@ -85,6 +96,9 @@ type DaemonEventResult struct {
 type DaemonService struct {
 	repo store.Repository
 	now  func() time.Time
+	// signatureRequired 是 ADR-012 N/N-1 兼容窗口开关：
+	// false 为 optional（bearer + 签名双轨），true 为 required（bearer 一律 UPGRADE_REQUIRED）。
+	signatureRequired bool
 }
 
 func NewDaemonService(repo store.Repository) *DaemonService {
@@ -138,6 +152,7 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 		MinProtocolVersion:       minDaemonProtocolVersion,
 		HeartbeatIntervalSeconds: int(daemonHeartbeatInterval.Seconds()),
 		AfterDeliverySeq:         0,
+		AuthModes:                s.terminalAuthModes(),
 	}, nil
 }
 

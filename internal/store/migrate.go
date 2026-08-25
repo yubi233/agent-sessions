@@ -330,6 +330,31 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS terminal_auth_nonces_expiry_idx
 		ON terminal_auth_nonces(expires_at_unix_ms);`,
+	// v0.6 P1 hello 一次性 challenge：绑定设备、限时有效、只能消费一次。
+	// challenge 与 nonce 一样持久化在 SQLite，Relay 重启后未完成/已完成的挑战都不能被重复使用。
+	`CREATE TABLE IF NOT EXISTS terminal_auth_challenges (
+		challenge TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		expires_at_unix_ms INTEGER NOT NULL,
+		created_at_unix_ms INTEGER NOT NULL,
+		consumed_at_unix_ms INTEGER NOT NULL DEFAULT 0
+	);`,
+	`CREATE INDEX IF NOT EXISTS terminal_auth_challenges_expiry_idx
+		ON terminal_auth_challenges(expires_at_unix_ms);`,
+	// v0.6 P1 设备签名公钥登记与轮换：key_id 是签名 canonical bytes 的 key id。
+	// active 密钥可验签；轮换窗口内同一设备最多两个 active key（双读），
+	// 新 key 首次成功签名后其余 active key 收口为 retired（一写）。
+	`CREATE TABLE IF NOT EXISTS terminal_identity_keys (
+		key_id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		account_id TEXT NOT NULL,
+		public_key TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'active',
+		created_at_unix_ms INTEGER NOT NULL,
+		retired_at_unix_ms INTEGER NOT NULL DEFAULT 0
+	);`,
+	`CREATE INDEX IF NOT EXISTS terminal_identity_keys_device_idx
+		ON terminal_identity_keys(device_id, status);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

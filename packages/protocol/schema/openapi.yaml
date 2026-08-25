@@ -145,6 +145,83 @@ paths:
                 $ref: "#/components/schemas/DeviceList"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/devices/{id}/identity-keys:
+    post:
+      operationId: registerTerminalIdentityKey
+      description: 仅 android_owner 可为 terminal 登记签名公钥并进入轮换双读窗口（ADR-012）；同一公钥重复登记幂等返回既有 key，已 retired 的公钥禁止复用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TerminalIdentityKeyRequest"
+      responses:
+        "201":
+          description: registered key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TerminalIdentityKeyView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    get:
+      operationId: listTerminalIdentityKeys
+      description: 返回 terminal 登记密钥的脱敏审计视图；不返回公钥材料。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: registered keys
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TerminalIdentityKeyList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/devices/{id}/identity-keys/{keyId}:
+    delete:
+      operationId: revokeTerminalIdentityKey
+      description: 立即撤销一把登记密钥；后续使用该 key 的签名一律 KEY_UNKNOWN_OR_REVOKED。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: keyId
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/devices/{id}:
     delete:
       operationId: revokeDevice
@@ -948,6 +1025,23 @@ paths:
                 type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/daemon/challenge:
+    get:
+      operationId: daemonChallenge
+      description: 为已配对 terminal 签发一次性 hello challenge（ADR-012）。challenge 绑定当前 bearer 设备，5 分钟有效且只能被 signed hello 消费一次；跨 Relay 重启保持一次性语义。
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: issued challenge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonChallengeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/daemon/hello:
     post:
       operationId: daemonHello
@@ -1908,6 +2002,12 @@ components:
           type: integer
           format: int64
           minimum: 0
+        auth_modes:
+          type: array
+          description: ADR-012 能力协商：optional 兼容窗口为 [bearer, signature_v1]；required 窗口只剩 [signature_v1]。客户端据此选择认证方式，不得自行猜测。
+          items:
+            type: string
+            enum: [bearer, signature_v1]
     DaemonHeartbeatRequest:
       type: object
       additionalProperties: false
@@ -2072,7 +2172,13 @@ components:
     TerminalSignature:
       type: object
       additionalProperties: false
-      description: Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+      description: >-
+        Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为
+        protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。
+        body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把
+        signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是
+        /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验；
+        optional 兼容窗口内允许旧 bearer 客户端忽略。
       properties:
         protocol_version:
           type: integer
@@ -2092,6 +2198,53 @@ components:
         signature:
           type: string
           maxLength: 256
+    DaemonChallengeResponse:
+      type: object
+      additionalProperties: false
+      required: [challenge, expires_at_unix_ms]
+      properties:
+        challenge:
+          type: string
+          maxLength: 128
+        expires_at_unix_ms:
+          type: integer
+          format: int64
+    TerminalIdentityKeyRequest:
+      type: object
+      additionalProperties: false
+      required: [identity_public_key]
+      properties:
+        identity_public_key:
+          type: string
+          maxLength: 128
+          description: Ed25519 公钥（base64/base64url）；私钥永远不离开 Terminal 本机。
+    TerminalIdentityKeyView:
+      type: object
+      additionalProperties: false
+      required: [key_id, device_id, status, created_at_unix_ms]
+      properties:
+        key_id:
+          type: string
+        device_id:
+          type: string
+        status:
+          type: string
+          enum: [active, retired]
+        created_at_unix_ms:
+          type: integer
+          format: int64
+        retired_at_unix_ms:
+          type: integer
+          format: int64
+    TerminalIdentityKeyList:
+      type: object
+      additionalProperties: false
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/TerminalIdentityKeyView"
     OpaqueCipherEnvelope:
       type: object
       description: Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。

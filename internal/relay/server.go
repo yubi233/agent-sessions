@@ -14,7 +14,18 @@ import (
 
 // NewServer 创建 Relay 的 HTTP 边界，装配健康检查与 /v1 业务路由。
 // 健康检查无鉴权；业务 API 以设备令牌和中间件保护。
+// 默认保持 ADR-012 的 optional 兼容窗口（bearer + 签名双轨）。
 func NewServer(db *sql.DB, logger *slog.Logger) *gin.Engine {
+	return newServer(db, logger, false)
+}
+
+// NewServerWithTerminalSignatureRequired 以 required 签名模式创建 Relay：
+// 旧 bearer Daemon 的签名端点一律返回稳定 UPGRADE_REQUIRED，用于兼容窗口结束后的发布形态。
+func NewServerWithTerminalSignatureRequired(db *sql.DB, logger *slog.Logger) *gin.Engine {
+	return newServer(db, logger, true)
+}
+
+func newServer(db *sql.DB, logger *slog.Logger, signatureRequired bool) *gin.Engine {
 	router := gin.New()
 	if logger == nil {
 		logger = slog.Default()
@@ -43,6 +54,8 @@ func NewServer(db *sql.DB, logger *slog.Logger) *gin.Engine {
 	delegations := domain.NewDelegationService(repo, daemon.NewDeterministicDelegationDispatcher())
 	presence := domain.NewPresenceHub(0)
 	api := httpapi.New(auth, pairing, sessions, delegations, repo)
+	// 签名窗口开关在路由装配前注入，保证首个请求就按当前模式校验。
+	api.Daemons.SetTerminalSignatureRequired(signatureRequired)
 	api.RegisterRoutes(router, logger, presence)
 	return router
 }
