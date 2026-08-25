@@ -4,11 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/daemon"
+	"github.com/yubi233/agent-sessions/internal/domain"
 )
 
 // TestV06DaemonClientSignedProductionLoop 是 P4 发布门的补口回归：
@@ -141,5 +144,86 @@ func TestV06DaemonClientSignedProductionLoop(t *testing.T) {
 	// 8) 幂等重放保护同样作用于生产客户端：重复 event_id（新 nonce）返回幂等回执而非二次追加。
 	if err := client.UploadEvent(ctx, event); err != nil {
 		t.Fatalf("duplicate event must be idempotent receipt: %v", err)
+	}
+}
+
+// TestV06DaemonSignerLoaderProductionWiring 是 v0.6 残余项收口（restart.sh/生产 Daemon
+// 签名私钥接线）的纵向补口回归。P4 的生产闭环用测试侧手工构造 Signer；本用例改为按
+// restart.sh --terminal-signing 的真实顺序走完整链路：
+//
+//	keygen 生成同源密钥对 → seed 写入本机 0600 文件 → 公钥随 pairing request 登记
+//	→ 环境变量只暴露文件路径 → LoadTerminalSignerFromEnv 构造签名者
+//	→ 生产 RelayClient 携带签名者完成 signed hello / heartbeat。
+//
+// 这防止"密钥文件格式、loader 解析、配对登记公钥"三方漂移。
+// 口径：local_test=true、fixture_data=true、real_browser=false、real_model=false。
+func TestV06DaemonSignerLoaderProductionWiring(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v06-signer-wiring@test.dev")
+
+	// 1) keygen 形态：GenerateTerminalSigningSeed 与 apps/daemon keygen 输出一致——
+	//    seed 写文件（0600，一行 base64url），公钥进配对请求。
+	seedB64, pubB64, err := daemon.GenerateTerminalSigningSeed()
+	if err != nil {
+		t.Fatalf("generate signing seed: %v", err)
+	}
+	keyPath := filepath.Join(t.TempDir(), "terminal_signing_seed.b64")
+	if err := os.WriteFile(keyPath, []byte(seedB64+"\n"), 0o600); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+
+	// 2) 配对：identity_public_key 使用生成的真实公钥（桥接期 key_id=device_id 验签依据）。
+	pending := env.do(t, http.MethodPost, "/v1/pairing/requests", map[string]any{
+		"role": "terminal", "display_name": "v06-signer-wiring-terminal", "platform": "test",
+		"identity_public_key": pubB64, "encryption_public_key": "ekk-v06-signer-wiring",
+	}, owner.AccessToken)
+	if pending.Code != http.StatusCreated {
+		t.Fatalf("pairing status=%d body=%s", pending.Code, pending.Body.String())
+	}
+	var pairing struct {
+		ID string `json:"id"`
+	}
+	decodeW1(t, pending.Body.Bytes(), &pairing)
+	approved := env.do(t, http.MethodPost, "/v1/pairing/requests/"+pairing.ID+"/approve", nil, owner.AccessToken)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("approve pairing status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	var device struct {
+		ID string `json:"id"`
+	}
+	decodeW1(t, approved.Body.Bytes(), &device)
+
+	// 3) 进程环境契约：与生产 Daemon 相同，环境里只有密钥文件路径；
+	//    loader 必须从文件恢复私钥并绑定 device id（KeyID=deviceID 桥接契约）。
+	t.Setenv(daemon.TerminalSigningKeyFileEnvironment, keyPath)
+	signer, err := daemon.LoadTerminalSignerFromEnv(os.Getenv, device.ID)
+	if err != nil || signer == nil {
+		t.Fatalf("loader wiring returned (%v,%v)", signer, err)
+	}
+	if signer.KeyID != device.ID || signer.DeviceID != device.ID {
+		t.Fatalf("loader must bind bridge-period identity to device id: %+v", signer)
+	}
+
+	// 4) 生产客户端携带 loader 产出的签名者，在真实 HTTP 栈上完成 signed hello/heartbeat。
+	server := httptest.NewServer(env.router)
+	t.Cleanup(server.Close)
+	client := &daemon.RelayClient{BaseURL: server.URL, AccessToken: "", Signer: signer}
+	tokens, err := domain.NewAuthService(env.repo).IssueForDevice(t.Context(), owner.AccountID, device.ID)
+	if err != nil {
+		t.Fatalf("issue bearer: %v", err)
+	}
+	client.AccessToken = tokens.AccessToken
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	hello, err := client.Hello(ctx, "v06-signer-wiring", "wiring-host", "darwin", []string{"start"})
+	if err != nil {
+		t.Fatalf("signed hello via loader-built signer: %v", err)
+	}
+	if hello.TerminalID == "" || hello.HeartbeatIntervalSeconds <= 0 {
+		t.Fatalf("hello projection incomplete: %+v", hello)
+	}
+	if err := client.Heartbeat(ctx); err != nil {
+		t.Fatalf("signed heartbeat via loader-built signer: %v", err)
 	}
 }

@@ -26,6 +26,13 @@ FLUTTER_DEVICE_HELPER="${AGENT_SESSIONS_FLUTTER_DEVICE_HELPER:-$ROOT_DIR/tools/f
 LOCAL_DEV_PAIRING="${AGENT_SESSIONS_LOCAL_DEV_PAIRING:-true}"
 LOCAL_DEV_PROJECT_ID="${AGENT_SESSIONS_LOCAL_DEV_PROJECT_ID:-local-dev}"
 LOCAL_DEV_WORKSPACE_ID="ws_${LOCAL_DEV_PROJECT_ID}"
+# v0.6 残余项收口：Terminal 签名模式接线。默认关闭（保持 bearer 兼容窗口），
+# 显式 --terminal-signing / AGENT_SESSIONS_DAEMON_SIGNING=true 后：
+#   1) 本机状态目录缺少密钥文件时用 `daemon keygen` 生成 Ed25519 身份密钥（0600）；
+#   2) 配对请求携带真实 identity_public_key，使 Relay 可验签（桥接期 key_id=device_id）；
+#   3) Daemon 进程通过 AGENT_SESSIONS_DAEMON_SIGNING_KEY_FILE 读取私钥并全程签名。
+TERMINAL_SIGNING="${AGENT_SESSIONS_DAEMON_SIGNING:-false}"
+DAEMON_SIGNING_KEY_FILE=""
 FLUTTER_TARGET=""
 if [[ -n "$FLUTTER_DEVICE" && "$FLUTTER_DEVICE" != "macos" && "$FLUTTER_MODE" == "mac" ]]; then
   FLUTTER_MODE=device
@@ -90,6 +97,9 @@ Options:
   --flutter-relay-base URL
                          Relay URL passed to Flutter; device mode requires this
   --fixture-daemon       Add --fixture-adapter to the Daemon command
+  --terminal-signing     Enable v0.6 Terminal Ed25519 signing for the Daemon
+                         (generate/register local identity key; env:
+                         AGENT_SESSIONS_DAEMON_SIGNING=true)
   --relay-addr ADDR      Relay listen address (default: 127.0.0.1:8787)
   --web-port PORT        Web Vite port (default: 5173)
   --admin-port PORT      Admin Vite port (default: 5174)
@@ -109,6 +119,7 @@ Environment:
   AGENT_SESSIONS_OPENCODE_URL, OPENCODE_BIN,
   AGENT_SESSIONS_FLUTTER_MODE, AGENT_SESSIONS_FLUTTER_DEVICE,
   AGENT_SESSIONS_FLUTTER_TIMEOUT_MS, AGENT_SESSIONS_FLUTTER_RELAY_BASE,
+  AGENT_SESSIONS_DAEMON_SIGNING,
   AGENT_SESSIONS_LOCAL_DEV_PAIRING, FLUTTER_BIN
 
 Logs and local Relay data never go to testbox; testbox remains the Agent session
@@ -836,10 +847,32 @@ ensure_local_owner_bootstrap() {
   echo "owner: bootstrapped local dev owner via Relay"
 }
 
+# ensure_daemon_signing_key 保证本机 Terminal 身份密钥文件存在并输出对应公钥。
+# 幂等：文件已存在时由 daemon keygen 直接回放其公钥，同一状态目录永远同一身份。
+# 全局副作用：DAEMON_SIGNING_KEY_FILE（密钥路径）、DAEMON_SIGNING_KEY_REGENERATED
+# （本次调用是否新建了密钥文件，用于判定缓存配对是否失效）。
+ensure_daemon_signing_key() {
+  DAEMON_SIGNING_KEY_FILE="$DAEMON_STATE_DIR/terminal_signing_seed.b64"
+  DAEMON_SIGNING_KEY_REGENERATED=""
+  local pub
+  if [[ ! -s "$DAEMON_SIGNING_KEY_FILE" ]]; then
+    mkdir -p "$DAEMON_STATE_DIR"
+    DAEMON_SIGNING_KEY_REGENERATED=1
+    echo "terminal-signing: generating local identity key at $DAEMON_SIGNING_KEY_FILE" >&2
+  fi
+  pub="$(go run ./apps/daemon keygen --out "$DAEMON_SIGNING_KEY_FILE")" || return 1
+  printf '%s' "$pub"
+}
+
 ensure_daemon_token() {
   if [[ "$WITH_DAEMON" != true ]]; then return 0; fi
   if [[ -n "$DAEMON_ACCESS_TOKEN" ]]; then
     DAEMON_TOKEN_SOURCE=env
+    # 外部 token + 签名开关但本机无私钥文件时，Daemon 只能保持 bearer；
+    # 显式告知操作者，而不是静默忽略签名开关。
+    if truthy "$TERMINAL_SIGNING" && [[ ! -s "$DAEMON_STATE_DIR/terminal_signing_seed.b64" ]]; then
+      echo "terminal-signing: 外部 token 且 $DAEMON_STATE_DIR/terminal_signing_seed.b64 不存在；Daemon 将保持 bearer 桥接" >&2
+    fi
     return 0
   fi
   if [[ "$WITH_RELAY" != true ]] || ! truthy "$LOCAL_DEV_PAIRING"; then
@@ -855,6 +888,17 @@ ensure_daemon_token() {
 
   local daemon_approval_file daemon_refresh
   daemon_approval_file="$(local_token_file local-daemon-approval.json)"
+  # v0.6 残余项收口：签名模式下先确保本机身份密钥就绪。密钥文件新建而缓存配对
+  # 仍绑定旧公钥（或旧占位符）时，必须作废缓存重新配对，否则 hello 验签必然
+  # fail-closed；这是有意的确定性失败，不能靠重试掩盖。
+  local signing_pub=""
+  if truthy "$TERMINAL_SIGNING"; then
+    signing_pub="$(ensure_daemon_signing_key)" || return 1
+    if [[ -n "$DAEMON_SIGNING_KEY_REGENERATED" && -s "$daemon_approval_file" ]]; then
+      echo "terminal-signing: 新建了本机身份密钥，缓存 Terminal 配对与新公钥不匹配；重建配对" >&2
+      rm -f "$(local_token_file local-daemon-token)" "$daemon_approval_file"
+    fi
+  fi
   if [[ -s "$daemon_approval_file" ]]; then
     daemon_refresh="$(json_get tokens.refresh_token < "$daemon_approval_file")"
     if response="$(http_request daemon.refresh \
@@ -881,7 +925,7 @@ ensure_daemon_token() {
   response="$(http_request daemon.pairing_request \
     -H 'Content-Type: application/json' \
     -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
-    -d '{"role":"terminal","display_name":"Local Dev Terminal","platform":"local","identity_public_key":"local-dev-terminal-identity-public-key","encryption_public_key":"local-dev-terminal-encryption-public-key"}' \
+    -d "{\"role\":\"terminal\",\"display_name\":\"Local Dev Terminal\",\"platform\":\"local\",\"identity_public_key\":\"${signing_pub:-local-dev-terminal-identity-public-key}\",\"encryption_public_key\":\"local-dev-terminal-encryption-public-key\"}" \
     "http://$RELAY_ADDR/v1/pairing/requests")" || return 1
   pairing_id="$(printf '%s' "$response" | json_get id)"
   response="$(http_request daemon.pairing_approve \
@@ -937,7 +981,12 @@ start_daemon() {
     echo "daemon: missing access token after pairing" >&2
     return 1
   fi
-  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_DSH_BIN="${AGENT_SESSIONS_DSH_BIN:-}" AGENT_SESSIONS_DSH_CONFIG="${AGENT_SESSIONS_DSH_CONFIG:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 go run ./apps/daemon run --relay-base "http://$RELAY_ADDR" --state-dir "$DAEMON_STATE_DIR")
+  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_DSH_BIN="${AGENT_SESSIONS_DSH_BIN:-}" AGENT_SESSIONS_DSH_CONFIG="${AGENT_SESSIONS_DSH_CONFIG:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 )
+  # v0.6：签名模式向 Daemon 注入本机私钥文件路径；未启用/文件缺失时保持 bearer 行为
+  if truthy "$TERMINAL_SIGNING" && [[ -n "$DAEMON_SIGNING_KEY_FILE" && -s "$DAEMON_SIGNING_KEY_FILE" ]]; then
+    args+=(AGENT_SESSIONS_DAEMON_SIGNING_KEY_FILE="$DAEMON_SIGNING_KEY_FILE")
+  fi
+  args+=(go run ./apps/daemon run --relay-base "http://$RELAY_ADDR" --state-dir "$DAEMON_STATE_DIR")
   if [[ "$FIXTURE_DAEMON" == true ]]; then
     args+=(--fixture-adapter)
   fi
@@ -1073,6 +1122,11 @@ start_action() {
     fi
     echo "  dsh: bridge=${dsh_bin:-<unset>} (config=${AGENT_SESSIONS_DSH_CONFIG:-<unset>}; per-session spawn)"
     echo "  flutter: $WITH_FLUTTER (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE owner_bootstrap=${LOCAL_OWNER_BOOTSTRAP_B64:+true} workspace=$LOCAL_DEV_WORKSPACE_ID)"
+    if truthy "$TERMINAL_SIGNING"; then
+      echo "  terminal-signing: on (key=$DAEMON_STATE_DIR/terminal_signing_seed.b64)"
+    else
+      echo "  terminal-signing: off (bearer bridge, N/N-1 兼容窗口)"
+    fi
     echo "  web: $WITH_WEB (127.0.0.1:$WEB_PORT)"
     echo "  admin: $WITH_ADMIN (127.0.0.1:$ADMIN_PORT)"
     return 0
@@ -1208,6 +1262,7 @@ parse_args() {
         shift 2
         ;;
       --fixture-daemon) FIXTURE_DAEMON=true; WITH_DAEMON=true; shift ;;
+      --terminal-signing) TERMINAL_SIGNING=true; shift ;;
       --relay-addr) [[ $# -ge 2 ]] || { echo "missing value for --relay-addr" >&2; return 2; }; RELAY_ADDR="$2"; shift 2 ;;
       --web-port) [[ $# -ge 2 ]] || { echo "missing value for --web-port" >&2; return 2; }; WEB_PORT="$2"; shift 2 ;;
       --admin-port) [[ $# -ge 2 ]] || { echo "missing value for --admin-port" >&2; return 2; }; ADMIN_PORT="$2"; shift 2 ;;

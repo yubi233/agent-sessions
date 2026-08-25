@@ -21,6 +21,18 @@ grep -F 'fixture=false' <<< "$dry_run_output" >/dev/null
 grep -F 'opencode: true' <<< "$dry_run_output" >/dev/null
 # v0.5.next P3：dsh 桥路径缺省未配置时 dry-run 摘要如实提示 per-session 拓扑。
 grep -F 'dsh: bridge=<unset>' <<< "$dry_run_output" >/dev/null
+# v0.6 残余项收口：签名模式默认关闭（bearer 兼容窗口），显式开关后摘要如实展示。
+grep -F 'terminal-signing: off' <<< "$dry_run_output" >/dev/null
+signing_dry_run="$(FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --no-flutter --terminal-signing --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run)"
+grep -F 'terminal-signing: on' <<< "$signing_dry_run" >/dev/null
+# keygen 幂等语义：同一密钥文件反复生成得到同一公钥；损坏文件必须拒绝。
+sign_key_dir="$(mktemp -d /tmp/agent-sessions-keygen.XXXXXX)"
+pub_first="$(go run ./apps/daemon keygen --out "$sign_key_dir/k.b64")"
+pub_second="$(go run ./apps/daemon keygen --out "$sign_key_dir/k.b64")"
+[[ -n "$pub_first" && "$pub_first" == "$pub_second" ]] || { echo 'daemon keygen is not idempotent' >&2; exit 1; }
+printf 'not-a-seed' > "$sign_key_dir/bad.b64"
+if go run ./apps/daemon keygen --out "$sign_key_dir/bad.b64" >/dev/null 2>&1; then echo 'daemon keygen accepted a corrupt seed file' >&2; exit 1; fi
+rm -rf "$sign_key_dir"
 # 显式给出不存在路径时必须出现 fail-closed 预告（stderr）。
 dsh_missing_notice="$(AGENT_SESSIONS_DSH_BIN=/nonexistent/dsh-acp-demo.js FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --no-flutter --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run 2>&1 >/dev/null || true)"
 grep -F '路径不存在' <<< "$dsh_missing_notice" >/dev/null

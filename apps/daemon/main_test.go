@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
@@ -9,6 +13,80 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
 	"github.com/yubi233/agent-sessions/internal/daemon"
 )
+
+// 本文件追加的 keygen 用例钉住 `daemon keygen` 子命令的进程级契约（v0.6 残余项收口）：
+// 生成 → 幂等回放 → 损坏文件 fail-closed。restart.sh 的 --terminal-signing
+// 配对流程依赖这三条语义，任何破坏都会造成设备身份漂移或静默失败。
+
+// TestKeygenIdempotentPubAndFilePerms：首次生成写 0600 种子文件并输出公钥；
+// 再次调用不覆盖文件且输出同一公钥（同一状态目录永远同一设备身份）。
+func TestKeygenIdempotentPubAndFilePerms(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "terminal_signing_seed.b64")
+
+	pubFirst := captureKeygenStdout(t, func() {
+		if err := cmdKeygen([]string{"--out", keyPath}); err != nil {
+			t.Fatalf("first keygen: %v", err)
+		}
+	})
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat seed file: %v", err)
+	}
+	// 私钥材料必须只有本机用户可读。
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("seed file perm = %o, want 600", perm)
+	}
+
+	pubSecond := captureKeygenStdout(t, func() {
+		if err := cmdKeygen([]string{"--out", keyPath}); err != nil {
+			t.Fatalf("second keygen: %v", err)
+		}
+	})
+	if pubFirst == "" || pubFirst != pubSecond {
+		t.Fatalf("keygen not idempotent: %q vs %q", pubFirst, pubSecond)
+	}
+}
+
+// TestKeygenRejectsCorruptSeedFile：内容非法的既有文件必须 fail-closed，
+// 不允许把坏密钥伪装成有效身份继续运行。
+func TestKeygenRejectsCorruptSeedFile(t *testing.T) {
+	dir := t.TempDir()
+	badPath := filepath.Join(dir, "bad.b64")
+	if err := os.WriteFile(badPath, []byte("not-a-seed\n"), 0o600); err != nil {
+		t.Fatalf("write bad file: %v", err)
+	}
+	err := cmdKeygen([]string{"--out", badPath})
+	if err == nil || !strings.Contains(err.Error(), "内容非法") {
+		t.Fatalf("corrupt seed must fail-closed with format error, got %v", err)
+	}
+}
+
+// TestKeygenRequiresOut：缺 --out 直接拒绝，避免把私钥写到不可预期位置。
+func TestKeygenRequiresOut(t *testing.T) {
+	if err := cmdKeygen(nil); err == nil || !strings.Contains(err.Error(), "--out") {
+		t.Fatalf("missing --out must be rejected, got %v", err)
+	}
+}
+
+// captureKeygenStdout 捕获子命令写入 stdout 的公钥行。
+func captureKeygenStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	fn()
+	os.Stdout = old
+	_ = w.Close()
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	return strings.TrimSpace(buf.String())
+}
 
 // P2-C：生产 run 与 fixture run 的 encoder 选择必须隔离，fixture 不得触碰生产环境中的 DEK。
 func TestEventEncoderForRunSeparatesFixtureAndProduction(t *testing.T) {

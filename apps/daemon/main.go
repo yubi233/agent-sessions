@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -42,6 +44,11 @@ func run(args []string) error {
 		sub = args[0]
 		args = args[1:]
 	}
+	// keygen 使用独立 flag 集（--out <file>），必须绕过主 flag 集解析，
+	// 否则 -out 会被当作未知全局参数拒绝。
+	if sub == "keygen" {
+		return cmdKeygen(args)
+	}
 	fs.Parse(args)
 
 	dir := *stateDir
@@ -70,9 +77,60 @@ func run(args []string) error {
 	case "doctor-path":
 		// 校验指定工作区路径安全。
 		return cmdDoctorPath(fs.Arg(0))
+	case "keygen":
+		// v0.6 残余项收口：生成本机 Terminal 身份密钥（ed25519 seed 文件 + stdout 公钥），
+		// restart.sh 在 --terminal-signing 配对流程中调用；详见 internal/daemon/terminal_signing.go。
+		return cmdKeygen(fs.Args())
 	default:
-		return fmt.Errorf("unknown command %q (支持 status/doctor/run/runner/workspace-confirm)", sub)
+		return fmt.Errorf("unknown command %q (支持 status/doctor/run/runner/workspace-confirm/keygen)", sub)
 	}
+}
+
+// cmdKeygen 生成本机 Terminal 签名身份密钥：--out 指定的文件写入一行 base64url
+// 编码的 ed25519 seed（0600），stdout 只输出对应公钥；私钥材料绝不进入 stdout/日志。
+// 幂等语义：文件已存在且内容合法时不覆盖，直接输出该 seed 派生的公钥——同一状态目录
+// 内反复调用永远得到同一设备身份；内容非法或无法解析时 fail-closed 报错。
+func cmdKeygen(args []string) error {
+	keyFs := flag.NewFlagSet("daemon keygen", flag.ExitOnError)
+	out := keyFs.String("out", "", "私钥种子文件输出路径（必须显式指定）")
+	if err := keyFs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*out) == "" {
+		return fmt.Errorf("keygen 需要 --out <file> 指定私钥种子文件路径")
+	}
+	if raw, err := os.ReadFile(*out); err == nil {
+		// 已存在：不覆盖旧身份（可能已绑定配对设备与历史事件），只回放其公钥。
+		pubB64, pubErr := derivePubFromSeedFile(raw)
+		if pubErr != nil {
+			return fmt.Errorf("密钥文件 %s 内容非法: %w", *out, pubErr)
+		}
+		fmt.Println(pubB64)
+		return nil
+	}
+	seedB64, pubB64, err := daemon.GenerateTerminalSigningSeed()
+	if err != nil {
+		return err
+	}
+	// 0600：只有运行 Daemon 的本机用户可读；写入失败时不落任何临时副本。
+	if err := os.WriteFile(*out, []byte(seedB64+"\n"), 0o600); err != nil {
+		return fmt.Errorf("写入 Terminal 私钥种子文件失败: %w", err)
+	}
+	fmt.Println(pubB64)
+	return nil
+}
+
+// derivePubFromSeedFile 从密钥文件内容（一行 base64url ed25519 seed）推导公钥。
+func derivePubFromSeedFile(raw []byte) (string, error) {
+	seed, err := daemon.DecodeTerminalSigningSeed(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return "", err
+	}
+	pub, ok := seed.Public().(ed25519.PublicKey)
+	if !ok {
+		return "", fmt.Errorf("ed25519 public key type assertion failed")
+	}
+	return base64.RawURLEncoding.EncodeToString(pub), nil
 }
 
 func cmdStatus(st *daemon.Store) error {
@@ -139,7 +197,16 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 	}
 	runner := daemon.NewSessionRunner(st, adapters, logger)
 	defer func() { _ = runner.Close(context.Background()) }()
-	loop := daemon.NewRelayLoop(st, &daemon.RelayClient{BaseURL: relayBase, AccessToken: accessToken}, runner, encoder, logger)
+	// v0.6 残余项收口：按环境契约加载 Terminal 出站签名器（文件/内联互斥）。
+	// 未配置时 signer 为 nil，进程保持 bearer 桥接行为；配置后所有 Terminal POST
+	// 自动附加 Ed25519 签名，且签名类失败会让 RelayLoop 立即退出（不静默回退 bearer，
+	// 见 internal/daemon.RelayLoop.RunWithRetry）。
+	deviceID, _ := st.Get("device_id")
+	signer, err := daemon.LoadTerminalSignerFromEnv(os.Getenv, deviceID)
+	if err != nil {
+		return fmt.Errorf("加载 Terminal 签名私钥: %w", err)
+	}
+	loop := daemon.NewRelayLoop(st, &daemon.RelayClient{BaseURL: relayBase, AccessToken: accessToken, Signer: signer}, runner, encoder, logger)
 	loop.DaemonVersion = "agent-sessions-daemon-p2"
 	loop.Hostname = hostname
 	loop.Platform = runtime.GOOS
@@ -154,7 +221,8 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 		loop.Capabilities = append(loop.Capabilities, "web_read_transport")
 		loop.WebRead = webRead
 	}
-	logger.Info("daemon relay loop starting", "fixture_adapter", useFixtureAdapter, "relay_configured", relayBase != "")
+	// 观测口径：只记录签名是否启用（布尔），绝不记录密钥材料或 key id 之外的设备元数据。
+	logger.Info("daemon relay loop starting", "fixture_adapter", useFixtureAdapter, "relay_configured", relayBase != "", "terminal_signing", signer != nil)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return loop.RunWithRetry(ctx)

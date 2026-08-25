@@ -325,6 +325,34 @@
       ]
     },
     {
+      "id": "RELEASE-V06-02",
+      "title": "生产 Daemon 签名私钥接线：keygen 幂等、环境契约与 fail-closed",
+      "status": "passed",
+      "phase": "v0.6/P4+",
+      "category": "发布",
+      "priority": "P0",
+      "test_layer": "unit + integration (real HTTP stack) + lifecycle gate",
+      "precondition": "本地 Go 工具链；临时密钥文件目录；无真实上游凭据要求。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestV06LoadTerminalSigner|TestGenerateTerminalSigningSeed|TestIsTerminalAuthErrorCode|TestV06RunWithRetryFailsFast'：环境契约矩阵（未配置=零行为变化、双来源互斥、缺 device id 拒绝、非法材料拒绝）+ 签名模式 RunWithRetry 快速失败 / bearer 对照组保持重试。",
+        "go test ./apps/daemon：keygen 首次生成写 0600 种子文件并输出公钥、二次调用幂等回放同一公钥、损坏文件 fail-closed。",
+        "go test ./internal/relay -run TestV06DaemonSignerLoaderProductionWiring：keygen 形态种子文件 → AGENT_SESSIONS_DAEMON_SIGNING_KEY_FILE → LoadTerminalSignerFromEnv → 生产 RelayClient 在真实 HTTP 栈完成 signed hello/heartbeat，Relay 用配对登记公钥验签。",
+        "bash tools/restart_test.sh：dry-run 摘要默认 terminal-signing: off、--terminal-signing 时 on；keygen CLI 幂等与损坏文件拒绝。"
+      ],
+      "expected": "未配置签名时 Daemon 行为与 bearer 桥接完全一致；配置后所有 Terminal POST 自动附加 Ed25519 签名，签名类协议错误（SIGNATURE_INVALID/NONCE_REUSED/TIMESTAMP_EXPIRED/KEY_UNKNOWN_OR_REVOKED/SIGNATURE_REQUIRED）使 RelayLoop 立即退出而不重试或回退 bearer；私钥只存在于本机 0600 文件与进程内存，不进入日志/报告。",
+      "cleanup": [
+        "清理临时密钥文件与临时状态目录"
+      ],
+      "evidence": [
+        "internal/daemon/terminal_signing_loader_test.go",
+        "internal/daemon/terminal_signing.go",
+        "apps/daemon/main_test.go",
+        "internal/relay/v06_daemon_client_signature_test.go#TestV06DaemonSignerLoaderProductionWiring",
+        "tools/restart_test.sh",
+        "restart.sh (--terminal-signing / AGENT_SESSIONS_DAEMON_SIGNING)"
+      ]
+    },
+    {
       "id": "ROLLBACK-V06-01",
       "title": "Terminal 签名模式 optional→required→optional 回滚演练不丢业务历史",
       "status": "passed",

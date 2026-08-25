@@ -1,6 +1,6 @@
 # ADR-012：Terminal 认证的 TTL 桥接与设备密钥签名终态
 
-- 状态：Accepted（桥接已实施；签名认证终态列入后续迭代）
+- 状态：Accepted（桥接已实施；签名认证协议与兼容窗口已交付；生产 Daemon 进程私钥接线已于 2026-08-26 落地——`daemon keygen` 生成 0600 本机种子文件、配对请求携带真实 `identity_public_key`、`AGENT_SESSIONS_DAEMON_SIGNING_KEY_FILE/B64` 互斥供给、签名类错误 fail-fast 不回退 bearer，测试 ID `RELEASE-V06-02`）
 - 日期：2026-08-23
 
 ## 背景
