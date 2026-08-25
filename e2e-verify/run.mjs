@@ -25,8 +25,8 @@ async function main() {
     process.exit(2);
   }
 
-  // 启动隔离 Relay，供所有场景复用。
-  const relay = await startRelay({ port: 8787 });
+  // 启动动态端口的隔离 Relay，避免误连用户已有本地服务。
+  const relay = await startRelay();
   const web = await startWeb({ relayBase: relay.base });
   const admin = await startAdmin({ port: 15174, relayBase: relay.base });
   const fixtureAccount = createFixtureAccountFactory(relay.base);

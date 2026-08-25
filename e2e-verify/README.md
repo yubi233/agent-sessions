@@ -1,6 +1,6 @@
 # 可见端到端回归与录屏
 
-`e2e-verify/`是 Agent Sessions 所有可重复 browser/Flutter 本地回归、录屏、脱敏报告和诊断证据的唯一入口。稳定验收 ID 定义在[测试套件索引](../docs/test/测试套件索引.json)，测试范围和口径见[自动化测试文档](../docs/zh/自动化测试文档.md)。
+`e2e-verify/`是 Agent Sessions 所有可重复 browser/Flutter 本地回归、录屏、脱敏报告和诊断证据的唯一入口。稳定验收 ID 定义在[测试套件索引](../docs/test/测试套件索引.json)，测试范围和口径见[自动化测试文档](../docs/zh/自动化测试文档.md)。Browser runner 默认通过 `startRelay()` 动态申请空闲端口并创建临时 SQLite；禁止把用户已有 8787 Relay 当作 fixture 数据源。
 
 ## 当前入口
 

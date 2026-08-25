@@ -163,7 +163,8 @@ async function main() {
   const frameDir = join(outDir, "frames");
   mkdirSync(frameDir, { recursive: true });
 
-  const relay = await startRelay({ port: 8787 });
+  // 录屏也必须使用隔离动态端口，不能碰用户已有 Relay 数据库。
+  const relay = await startRelay();
   const app = suite === "p4-admin" ? await startAdmin({ relayBase: relay.base }) : await startWeb({ relayBase: relay.base });
   const browser = await launchHeaded({ headless: false });
   const frames = [];

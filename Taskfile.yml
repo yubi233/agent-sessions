@@ -190,9 +190,9 @@ tasks:
       - pnpm --filter @agent-sessions/e2e-verify test:e2e
 
   test:e2e:harness:
-    desc: headed E2E runner 的纯 Node 生命周期与阻塞分类回归
+    desc: headed E2E runner 的生命周期、隔离端口与外部凭据阻塞分类回归
     cmds:
-      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs
+      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs
 
   test:record:
     desc: headed 录屏演示，必须在回归清单通过后执行

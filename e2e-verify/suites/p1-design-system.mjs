@@ -45,6 +45,50 @@ async function reloadAndReadTheme(page) {
   }));
 }
 
+// verifyAccessibilityModes 在真实 Chrome 中启用 reduced motion，并用 2x CSS zoom
+// 对应 200% 浏览器缩放的布局压力。只检查稳定的可观察结果，不读取实现 token。
+async function verifyAccessibilityModes(page) {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 640, height: 760 });
+  return page.evaluate(() => {
+    const durationMs = (raw) =>
+      raw
+        .split(",")
+        .map((part) => part.trim())
+        .map((part) =>
+          part.endsWith("ms")
+            ? Number.parseFloat(part)
+            : Number.parseFloat(part) * 1000,
+        )
+        .reduce((maximum, value) => Math.max(maximum, value || 0), 0);
+    const interactive = [...document.querySelectorAll("button, select, a")];
+    const reducedMotionApplied = interactive.every((element) => {
+      const style = getComputedStyle(element);
+      return (
+        durationMs(style.transitionDuration) <= 1 &&
+        durationMs(style.animationDuration) <= 1
+      );
+    });
+    document.documentElement.style.zoom = "2";
+    const themeControl = document.querySelector('[data-testid="theme-select"]');
+    const rect = themeControl?.getBoundingClientRect();
+    const result = {
+      reducedMotionQuery: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      reducedMotionApplied,
+      noHorizontalOverflow:
+        document.documentElement.scrollWidth <= window.innerWidth + 1,
+      themeControlVisible:
+        Boolean(rect) &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.left >= 0 &&
+        rect.right <= window.innerWidth + 1,
+    };
+    document.documentElement.style.zoom = "";
+    return result;
+  });
+}
+
 export const p1DesignSystem = {
   id: "p1-design-system",
   title: "P1 Web/Admin 主题与无障碍 headed 回归",
@@ -78,6 +122,7 @@ export const p1DesignSystem = {
       const webNarrowScreenshot = join(directory, "web-narrow-light.png");
       await webPage.screenshot({ path: webNarrowScreenshot, fullPage: true });
       artifacts.push(webNarrowScreenshot);
+      const webAccessibility = await verifyAccessibilityModes(webPage);
 
       const adminPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
       await adminPage.goto(admin.base, { waitUntil: "networkidle" });
@@ -96,6 +141,7 @@ export const p1DesignSystem = {
       const adminNarrowScreenshot = join(directory, "admin-narrow-light.png");
       await adminPage.screenshot({ path: adminNarrowScreenshot, fullPage: true });
       artifacts.push(adminNarrowScreenshot);
+      const adminAccessibility = await verifyAccessibilityModes(adminPage);
 
       const passed =
         webDark.resolved === "dark" &&
@@ -107,6 +153,10 @@ export const p1DesignSystem = {
         webLight.resolved === "light" &&
         webLight.preference === "light" &&
         webLight.noHorizontalOverflow &&
+        webAccessibility.reducedMotionQuery &&
+        webAccessibility.reducedMotionApplied &&
+        webAccessibility.noHorizontalOverflow &&
+        webAccessibility.themeControlVisible &&
         adminDark.resolved === "dark" &&
         adminDark.preference === "dark" &&
         adminDark.activeTestId === "theme-select" &&
@@ -115,7 +165,11 @@ export const p1DesignSystem = {
         adminDarkReloaded.selected === "dark" &&
         adminLight.resolved === "light" &&
         adminLight.preference === "light" &&
-        adminLight.noHorizontalOverflow;
+        adminLight.noHorizontalOverflow &&
+        adminAccessibility.reducedMotionQuery &&
+        adminAccessibility.reducedMotionApplied &&
+        adminAccessibility.noHorizontalOverflow &&
+        adminAccessibility.themeControlVisible;
 
       return report({
         suite: "p1-design-system",
@@ -130,12 +184,18 @@ export const p1DesignSystem = {
         browser: label,
         command: "node e2e-verify/run.mjs --suite p1-design-system",
         artifacts,
+        accessibility: {
+          zoom_percent: 200,
+          web: webAccessibility,
+          admin: adminAccessibility,
+        },
         failure_class: passed ? null : "product_defect",
         remaining_risk: passed
-          ? "仅覆盖隔离 Relay fixture；不证明 P4 的真实会话、机器、文件或 Git 路由。"
-          : "主题、键盘焦点或窄屏布局未满足 P1 设计系统契约。",
+          ? "隔离 Relay fixture 已覆盖 200% zoom 与 reduced motion；不证明 P4 的真实会话、机器、文件或 Git 路由。"
+          : "主题、键盘焦点、200% zoom、reduced motion 或窄屏布局未满足 P1 设计系统契约。",
       });
-    } catch {
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       return report({
         suite: "p1-design-system",
         planId: "V04-UI",
@@ -149,8 +209,8 @@ export const p1DesignSystem = {
         browser: label,
         command: "node e2e-verify/run.mjs --suite p1-design-system",
         artifacts,
-        failure_class: "environment_or_startup_failure",
-        remaining_risk: "P1 headed 浏览器或隔离 Relay fixture 未能完成启动，未生成用户可见验收结果。",
+        failure_class: "test_harness_defect",
+        remaining_risk: `P1 headed 流程异常：${detail}`,
       });
     } finally {
       await browser?.close();
