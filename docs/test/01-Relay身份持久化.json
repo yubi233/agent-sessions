@@ -193,6 +193,29 @@
       ]
     },
     {
+      "id": "AUTH-05",
+      "title": "Terminal 签名认证 canonical bytes、nonce 与错误契约",
+      "status": "planned",
+      "phase": "v0.6/P1",
+      "category": "认证",
+      "priority": "P0",
+      "test_layer": "Relay integration + protocol vector",
+      "precondition": "ADR-012 签名字段和 OpenAPI TerminalSignature 已冻结；设备 Ed25519 公钥、key id 与隔离 SQLite 已就绪。",
+      "steps": [
+        "构造 canonical bytes（protocol_version|device_id|method|path|timestamp|nonce|sha256(body)|key_id）并签名",
+        "分别验证正确签名、错误签名、过期时间戳、重复 nonce、未知 key id、撤销设备",
+        "断言失败时不进入 hello/heartbeat/ack/result/event 业务处理"
+      ],
+      "expected": "签名模式正常通过；重放、篡改、过期、未知/撤销 key 和错误协议版本均返回稳定错误码，且不产生命令、lease、事件或 outbox 副作用。",
+      "cleanup": [
+        "删除测试设备、nonce 挑战记录与隔离数据库"
+      ],
+      "evidence": [
+        "internal/authz/signed_terminal_test.go（P1 新增）",
+        "e2e-verify/reports/<ts>/RELAY-IDENTITY/auth-05.json"
+      ]
+    },
+    {
       "id": "MIG-01",
       "title": "迁移命名与兼容窗口",
       "status": "in_progress",

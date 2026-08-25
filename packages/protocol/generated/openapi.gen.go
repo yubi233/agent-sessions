@@ -777,6 +777,9 @@ type DaemonCommandAckRequest struct {
 	DeliverySeq     int64                          `json:"delivery_seq"`
 	ErrorCode       *string                        `json:"error_code,omitempty"`
 	ProtocolVersion int                            `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
 // DaemonCommandAckRequestAckKind defines model for DaemonCommandAckRequest.AckKind.
@@ -817,10 +820,13 @@ type DaemonCommandReceipt struct {
 
 // DaemonCommandResultRequest defines model for DaemonCommandResultRequest.
 type DaemonCommandResultRequest struct {
-	DeliverySeq     int64                            `json:"delivery_seq"`
-	ErrorCode       *string                          `json:"error_code,omitempty"`
-	ProtocolVersion int                              `json:"protocol_version"`
-	Status          DaemonCommandResultRequestStatus `json:"status"`
+	DeliverySeq     int64   `json:"delivery_seq"`
+	ErrorCode       *string `json:"error_code,omitempty"`
+	ProtocolVersion int     `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature               `json:"signature,omitempty"`
+	Status    DaemonCommandResultRequestStatus `json:"status"`
 }
 
 // DaemonCommandResultRequestStatus defines model for DaemonCommandResultRequest.Status.
@@ -850,6 +856,9 @@ type DaemonEventUploadRequest struct {
 	EventType       DaemonEventUploadRequestEventType `json:"event_type"`
 	ProtocolVersion int                               `json:"protocol_version"`
 	SessionId       string                            `json:"session_id"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
 // DaemonEventUploadRequestEventType defines model for DaemonEventUploadRequest.EventType.
@@ -865,6 +874,9 @@ type DaemonEventUploadResponse struct {
 // DaemonHeartbeatRequest defines model for DaemonHeartbeatRequest.
 type DaemonHeartbeatRequest struct {
 	ProtocolVersion int `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
 // DaemonHeartbeatResponse defines model for DaemonHeartbeatResponse.
@@ -880,6 +892,9 @@ type DaemonHelloRequest struct {
 	Hostname        string   `json:"hostname"`
 	Platform        string   `json:"platform"`
 	ProtocolVersion int      `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
 // DaemonHelloResponse defines model for DaemonHelloResponse.
@@ -910,6 +925,9 @@ type DaemonWebReadResponseRequest struct {
 	DeliverySeq     int64                   `json:"delivery_seq"`
 	Envelope        WebReadResponseEnvelope `json:"envelope"`
 	ProtocolVersion int                     `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature `json:"signature,omitempty"`
 }
 
 // Delegation parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。
@@ -1131,6 +1149,16 @@ type Terminal struct {
 // TerminalList defines model for TerminalList.
 type TerminalList struct {
 	Terminals []Terminal `json:"terminals"`
+}
+
+// TerminalSignature Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+type TerminalSignature struct {
+	BodyHash        *string `json:"body_hash,omitempty"`
+	KeyId           *string `json:"key_id,omitempty"`
+	Nonce           *string `json:"nonce,omitempty"`
+	ProtocolVersion *int    `json:"protocol_version,omitempty"`
+	Signature       *string `json:"signature,omitempty"`
+	TimestampMs     *int64  `json:"timestamp_ms,omitempty"`
 }
 
 // TokenPair defines model for TokenPair.

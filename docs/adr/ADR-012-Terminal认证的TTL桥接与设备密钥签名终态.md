@@ -21,14 +21,42 @@
 - 不引入 Daemon 侧刷新机制：避免与 restart.sh 的配对缓存形成双写者竞争。
 - 该桥接是过渡态，不得据此把长 TTL 扩散到其他角色或生产部署假设。
 
-### 终态（后续迭代，v0.6 候选）
+### 终态（v0.6 实施中）
 
-Terminal 认证从 bearer 令牌对迁移为**设备密钥挑战签名**（参考 Happy 的架构取向）：
+Terminal 认证从 bearer 令牌对迁移为**设备密钥挑战签名**（参考 Happy 的架构取向）。v0.6 仅做 additive 协议和兼容窗口，不删除旧 bearer 路径；签名模式未通过完整门禁前不得作为唯一认证方式。
 
 1. 配对时 Terminal 设备生成并保存 Ed25519 身份密钥（ADR-002 已有设备密钥模型）；hello、heartbeat、命令 ack/result、事件上传均携带时间戳 nonce 并以身份私钥签名。
-2. Relay 只存公钥与设备状态，校验签名与重放窗口；移除 terminal 角色的 access/refresh 令牌签发与 TTL 逻辑。
+2. Relay 只存公钥与设备状态，校验签名与重放窗口；移除 terminal 角色的 access/refresh 令牌签发与 TTL 逻辑仅在签名模式完全接管后执行。
 3. 协议版本走 N/N-1 兼容窗口（ADR-009 第 6 条）：旧 bearer Daemon 在 N-1 内继续可用，超窗返回 `UPGRADE_REQUIRED`。
-4. 迁移完成后删除 `TerminalAccessTTL` 与本 ADR 的桥接章节事实，回填项目文档。
+4. 签名失败不静默回退 bearer；只有明确登记的 N-1 客户端才允许 bearer。
+5. 迁移完成后删除 `TerminalAccessTTL` 与本 ADR 的桥接章节事实，回填项目文档。
+
+#### 签名 canonical bytes
+
+v0.6 冻结以下 canonical 拼接规则，任何 handler 不得自行拼接字符串：
+
+```text
+protocol_version | device_id | request_method | request_path |
+timestamp_ms | nonce | sha256(body) | key_id
+```
+
+字段使用 UTF-8 字符串和 `|` 分隔；整数/时间戳使用十进制 ASCII；`body` 为原始请求体字节，空 body 使用 `sha256("")`。Ed25519 签名对象为上述 canonical bytes 的 UTF-8 编码。
+
+#### 校验规则
+
+- 时间窗口：`timestamp_ms` 与 Relay 当前时间差不超过 300 秒；超窗返回稳定错误。
+- nonce：签名请求的 nonce 必须先在 SQLite 一次性记录中消费，跨 Relay 重启仍可查重；重复 nonce 返回稳定错误。
+- 设备状态：设备必须属于该账号、角色为 `terminal`、状态为 `active`；撤销立即拒绝。
+- key id：必须对应设备当前已登记且未轮换撤销的 Ed25519 公钥。
+- 失败路径不得产生 command 状态变化、lease 变化、事件序号推进或 outbox 副作用。
+
+#### N/N-1 与回滚
+
+- 签名模式通过 capability/feature flag 开启；默认保留已验证 bearer bridge。
+- 兼容窗口内旧 bearer Daemon 可继续 hello/heartbeat/ack/result/event。
+- 回滚时关闭签名 flag，旧 bearer 路径立即恢复；不删除设备公钥、命令、事件或 outbox 历史。
+- 密钥轮换只允许旧/新 key 在短暂窗口内双读，一写；新 key 完成首次签名后旧 key 标记为轮换撤销。
+- 所有回滚操作必须重新执行签名失败、设备撤销、命令幂等和 outbox 重放测试。
 
 ## 后果
 

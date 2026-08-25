@@ -1,7 +1,7 @@
 {
   "suite": "adpt-dsh",
   "suite_version": "1.0.0",
-  "status": "partial",
+  "status": "passed",
   "plan_id": "ADAPTER-DSH",
   "description": "DeepSeek Harness 第五类 Provider 接入：ACP 桥 transport、能力矩阵、进程所有权与 Flutter 入口的分层回归。",
   "id_registry": {
@@ -26,7 +26,7 @@
     {
       "id": "ADPT-DSH-01",
       "title": "Detect 握手与版本门（协议版本 1；低版本全 unsupported）",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P0",
@@ -48,7 +48,7 @@
     {
       "id": "ADPT-DSH-02",
       "title": "Start 创建桥会话并绑定 InstanceID",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P0",
@@ -70,7 +70,7 @@
     {
       "id": "ADPT-DSH-03",
       "title": "Send→prompt 往返与文本载荷边界",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P0",
@@ -91,7 +91,7 @@
     {
       "id": "ADPT-DSH-04",
       "title": "Abort→cancel 幂等",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P1",
@@ -112,7 +112,7 @@
     {
       "id": "ADPT-DSH-05",
       "title": "session/update 白名单映射与私有 payload 剥离",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P0",
@@ -134,7 +134,7 @@
     {
       "id": "ADPT-DSH-06",
       "title": "权限请求 fail-closed 决策往返",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P1",
@@ -155,7 +155,7 @@
     {
       "id": "ADPT-DSH-07",
       "title": "ForceKill 终止整个进程组且幂等（SESS-05 风格）",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P0",
@@ -177,7 +177,7 @@
     {
       "id": "ADPT-DSH-08",
       "title": "Resume 六态定级：恒 WakeUnsupported",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P1",
@@ -198,7 +198,7 @@
     {
       "id": "ADPT-DSH-09",
       "title": "能力矩阵与 ADR-013 附表一致性快照",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P1",
@@ -220,7 +220,7 @@
     {
       "id": "ADPT-DSH-10",
       "title": "registry 五类聚合与 List 排序稳定",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P1",
@@ -242,7 +242,7 @@
     {
       "id": "ADPT-DSH-11",
       "title": "新建会话页 DeepSeek Harness 入口可见可选",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P1",
@@ -263,7 +263,7 @@
     {
       "id": "ADPT-DSH-12",
       "title": "transport live gate（真实模型需授权）",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.5.next",
       "category": "DSH",
       "priority": "P0",

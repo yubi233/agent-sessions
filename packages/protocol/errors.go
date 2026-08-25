@@ -29,6 +29,11 @@ const (
 	ErrPayloadTooLarge         = "PAYLOAD_TOO_LARGE"
 	ErrDeadlineExceeded        = "DEADLINE_EXCEEDED"
 	ErrInvalidRequest          = "INVALID_REQUEST"
+	ErrSignatureRequired       = "SIGNATURE_REQUIRED"
+	ErrSignatureInvalid        = "SIGNATURE_INVALID"
+	ErrNonceReused             = "NONCE_REUSED"
+	ErrTimestampExpired        = "TIMESTAMP_EXPIRED"
+	ErrKeyUnknownOrRevoked     = "KEY_UNKNOWN_OR_REVOKED"
 )
 
 // APIError 是 REST/WS/SSE 共用的错误体。

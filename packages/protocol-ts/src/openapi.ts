@@ -1083,6 +1083,7 @@ export interface components {
             hostname: string;
             platform: string;
             capabilities: string[];
+            signature?: components["schemas"]["TerminalSignature"];
         };
         DaemonHelloResponse: {
             terminal_id: string;
@@ -1094,6 +1095,7 @@ export interface components {
         };
         DaemonHeartbeatRequest: {
             protocol_version: number;
+            signature?: components["schemas"]["TerminalSignature"];
         };
         DaemonHeartbeatResponse: {
             terminal_id: string;
@@ -1124,6 +1126,7 @@ export interface components {
             /** @enum {string} */
             ack_kind: "received" | "started" | "rejected";
             error_code?: string;
+            signature?: components["schemas"]["TerminalSignature"];
         };
         DaemonCommandResultRequest: {
             protocol_version: number;
@@ -1132,6 +1135,7 @@ export interface components {
             /** @enum {string} */
             status: "succeeded" | "failed" | "cancelled";
             error_code?: string;
+            signature?: components["schemas"]["TerminalSignature"];
         };
         DaemonCommandReceipt: {
             command_id: string;
@@ -1146,6 +1150,7 @@ export interface components {
             /** Format: int64 */
             delivery_seq: number;
             envelope: components["schemas"]["WebReadResponseEnvelope"];
+            signature?: components["schemas"]["TerminalSignature"];
         };
         DaemonEventUploadRequest: {
             protocol_version: number;
@@ -1155,12 +1160,23 @@ export interface components {
             /** @enum {string} */
             event_type: "session.lifecycle" | "turn.started" | "message.delta" | "message.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated";
             envelope: components["schemas"]["OpaqueCipherEnvelope"];
+            signature?: components["schemas"]["TerminalSignature"];
         };
         DaemonEventUploadResponse: {
             event_id: string;
             /** Format: int64 */
             event_seq: number;
             idempotent: boolean;
+        };
+        /** @description Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。 */
+        TerminalSignature: {
+            protocol_version?: number;
+            key_id?: string;
+            /** Format: int64 */
+            timestamp_ms?: number;
+            nonce?: string;
+            body_hash?: string;
+            signature?: string;
         };
         /** @description Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。 */
         OpaqueCipherEnvelope: {

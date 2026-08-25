@@ -1887,6 +1887,8 @@ components:
           items:
             type: string
             maxLength: 96
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
     DaemonHelloResponse:
       type: object
       required: [terminal_id, protocol_version, min_protocol_version, heartbeat_interval_seconds, after_delivery_seq]
@@ -1914,6 +1916,8 @@ components:
         protocol_version:
           type: integer
           minimum: 1
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
     DaemonHeartbeatResponse:
       type: object
       required: [terminal_id, server_time_unix_ms]
@@ -1976,6 +1980,8 @@ components:
         error_code:
           type: string
           maxLength: 96
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
     DaemonCommandResultRequest:
       type: object
       additionalProperties: false
@@ -1994,6 +2000,8 @@ components:
         error_code:
           type: string
           maxLength: 96
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
     DaemonCommandReceipt:
       type: object
       required: [command_id, delivery_seq, ack_kind, status]
@@ -2023,6 +2031,8 @@ components:
           minimum: 1
         envelope:
           $ref: "#/components/schemas/WebReadResponseEnvelope"
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
     DaemonEventUploadRequest:
       type: object
       additionalProperties: false
@@ -2045,6 +2055,8 @@ components:
           enum: [session.lifecycle, turn.started, message.delta, message.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated]
         envelope:
           $ref: "#/components/schemas/OpaqueCipherEnvelope"
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
     DaemonEventUploadResponse:
       type: object
       required: [event_id, event_seq, idempotent]
@@ -2057,6 +2069,29 @@ components:
           minimum: 1
         idempotent:
           type: boolean
+    TerminalSignature:
+      type: object
+      additionalProperties: false
+      description: Terminal 签名认证的 additive 请求字段。P0 先冻结契约，字段在签名模式启用后由 Relay 强制校验；未启用时允许旧 bearer 客户端忽略。
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        key_id:
+          type: string
+          maxLength: 128
+        timestamp_ms:
+          type: integer
+          format: int64
+        nonce:
+          type: string
+          maxLength: 128
+        body_hash:
+          type: string
+          maxLength: 128
+        signature:
+          type: string
+          maxLength: 256
     OpaqueCipherEnvelope:
       type: object
       description: Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。
