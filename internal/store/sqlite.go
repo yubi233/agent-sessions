@@ -1390,6 +1390,32 @@ func (r *sqliteRepo) RequeueFailedOutbox(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
+// CountOutboxByStatus 统计 outbox 状态分布；'done' 为历史 delivered 别名，一并计入。
+func (r *sqliteRepo) CountOutboxByStatus(ctx context.Context) (int64, int64, int64, error) {
+	var pending, failed, delivered int64
+	count := func(status string) (int64, error) {
+		var n int64
+		err := r.db.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM outbox WHERE status=?`, status).Scan(&n)
+		return n, err
+	}
+	var err error
+	if pending, err = count("pending"); err != nil {
+		return 0, 0, 0, err
+	}
+	if failed, err = count("failed"); err != nil {
+		return 0, 0, 0, err
+	}
+	if delivered, err = count("delivered"); err != nil {
+		return 0, 0, 0, err
+	}
+	legacyDone, err := count("done")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return pending, failed, delivered + legacyDone, nil
+}
+
 // UpsertUsageEvent 以 usage_key_hash 唯一约束写入 usage 事件。重复 key 返回
 // (false, nil)，调用方按 ADR-010 去重语义返回同一 canonical receipt。
 func (r *sqliteRepo) UpsertUsageEvent(ctx context.Context, u UsageEventRow) (bool, error) {

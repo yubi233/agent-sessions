@@ -90,6 +90,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		owner.POST("/devices/:id/identity-keys", a.handleRegisterIdentityKey)
 		owner.GET("/devices/:id/identity-keys", a.handleListIdentityKeys)
 		owner.DELETE("/devices/:id/identity-keys/:keyID", a.handleRevokeIdentityKey)
+		// P3 可观测性：owner-only 白名单整数指标，不含正文。
+		owner.GET("/diagnostics", a.handleDiagnostics)
 
 		pair := v1.Group("")
 		pair.Use(a.RequireAuth())
@@ -436,6 +438,29 @@ func (a *API) handleRevokeIdentityKey(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+// handleDiagnostics 返回 owner-only 的白名单整数指标（P3 可观测性收口）。
+// 只包含 outbox 积压、认证失败分类和 Daemon SSE 连接计数；不含任何正文、密文或 token。
+func (a *API) handleDiagnostics(c *gin.Context) {
+	pending, failed, delivered, err := a.Repo.CountOutboxByStatus(c.Request.Context())
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, gin.H{
+		"outbox": gin.H{
+			"pending":   pending,
+			"failed":    failed,
+			"delivered": delivered,
+		},
+		"terminal_sse": gin.H{
+			"active":          a.sseActive.Load(),
+			"connected_total": a.sseConnectedTotal.Load(),
+		},
+		"auth_failures_total": a.authFailuresTotal.Load(),
+		"auth_revoked_total":  a.authRevokedTotal.Load(),
+	})
 }
 
 // identityKeyView 是登记密钥的白名单投影：不返回公钥材料，避免把可验签密钥扩散到管理面之外。

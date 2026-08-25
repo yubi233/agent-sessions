@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,7 @@ import (
 const subjectKey = "auth_subject"
 
 // API 聚合领域服务与仓储，供 handler 调用。
+// 计数器只累计不含任何正文的整数指标，经 owner-only /v1/diagnostics 暴露。
 type API struct {
 	Auth             *domain.AuthService
 	Pairing          *domain.PairingService
@@ -28,6 +30,13 @@ type API struct {
 	Usage            *domain.UsageService
 	MessageFeedback  *domain.MessageFeedbackService
 	Repo             store.Repository
+
+	// authFailuresTotal：鉴权失败总次数（401 类）；authRevokedTotal：其中设备被撤销的次数。
+	authFailuresTotal atomic.Int64
+	authRevokedTotal  atomic.Int64
+	// sseActive / sseConnectedTotal：Daemon SSE 当前活跃连接数与历史连接总数。
+	sseActive         atomic.Int64
+	sseConnectedTotal atomic.Int64
 }
 
 // New 构造 HTTP API 聚合。
@@ -47,12 +56,14 @@ func (a *API) RequireAuth() gin.HandlerFunc {
 		raw := c.GetHeader("Authorization")
 		token, ok := strings.CutPrefix(raw, "Bearer ")
 		if !ok || token == "" {
+			a.authFailuresTotal.Add(1)
 			writeError(c, domain.ErrUnauthenticated)
 			return
 		}
 		at, err := a.Repo.AccessTokenByValue(c.Request.Context(), token)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
+				a.authFailuresTotal.Add(1)
 				writeError(c, domain.ErrUnauthenticated)
 				return
 			}
@@ -61,6 +72,7 @@ func (a *API) RequireAuth() gin.HandlerFunc {
 		}
 		if time.Now().After(at.ExpiresAt) {
 			_ = a.Repo.DeleteAccessToken(c.Request.Context(), token)
+			a.authFailuresTotal.Add(1)
 			writeError(c, domain.ErrUnauthenticated)
 			return
 		}
@@ -72,6 +84,7 @@ func (a *API) RequireAuth() gin.HandlerFunc {
 			dev, derr := a.Repo.DeviceByID(c.Request.Context(), at.DeviceID)
 			if derr != nil {
 				if errors.Is(derr, sql.ErrNoRows) {
+					a.authFailuresTotal.Add(1)
 					writeError(c, domain.ErrUnauthenticated)
 					return
 				}
@@ -79,10 +92,14 @@ func (a *API) RequireAuth() gin.HandlerFunc {
 				return
 			}
 			if dev.AccountID != at.AccountID || dev.Role != at.Role {
+				a.authFailuresTotal.Add(1)
 				writeError(c, domain.ErrUnauthenticated)
 				return
 			}
 			if dev.Status != domain.DeviceActive {
+				// 撤销类失败单独计数：它是安全审计最关心的分类。
+				a.authFailuresTotal.Add(1)
+				a.authRevokedTotal.Add(1)
 				writeError(c, domain.ErrDeviceRevoked)
 				return
 			}

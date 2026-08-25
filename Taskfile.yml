@@ -155,6 +155,11 @@ tasks:
     cmds:
       - node e2e-verify/perf/v04-baseline.mjs
 
+  test:v06:soak:
+    desc: v0.6 P3 受限并发 soak 诊断（SQLite 正确性、outbox 不丢行、延迟分位观测）
+    cmds:
+      - node e2e-verify/perf/v06-soak.mjs
+
   test:v04:local:
     desc: v0.4 本地 full gate（不隐式运行 Android、真实 Provider 或真实模型）
     cmds:

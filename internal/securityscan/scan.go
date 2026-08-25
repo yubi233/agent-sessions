@@ -31,6 +31,9 @@ var allowlisted = map[string]string{
 	"internal/httpapi/api.go":       "RequireAuth 解析 Bearer 头是鉴权边界，不输出 token",
 	"internal/httpapi/handlers.go":  "refresh_token 为服务端已哈希的 opaque 令牌 DTO 字段（api contract）",
 	"internal/securityscan/scan.go": "扫描器自身的标记定义，非泄漏",
+	// v0.6 P1：openapi 生成的 auth_modes 枚举常量名 `Bearer ... = "bearer"` 命中
+	// "Bearer " 标记；它是认证方式名称（ADR-012 能力协商），不含任何凭据。
+	"packages/protocol/generated/openapi.gen.go": "oapi-codegen 生成物；命中为 auth_modes 枚举标识符，非凭据",
 }
 
 // ScanPath 递归扫描目录，返回包含敏感标记的文件路径（已排除 allowlist 与测试夹具）。

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -112,6 +113,10 @@ func (a *API) handleDaemonCommandSSE(logger *slog.Logger) gin.HandlerFunc {
 		c.Header("Connection", "keep-alive")
 		c.Status(http.StatusOK)
 		c.Writer.Flush()
+		// SSE 连接计数只用于不含正文的可观测性指标（/v1/diagnostics）。
+		a.sseConnectedTotal.Add(1)
+		a.sseActive.Add(1)
+		defer a.sseActive.Add(-1)
 		lastSent := after
 		for _, delivery := range deliveries {
 			if err := a.writeDaemonDelivery(c, terminal, delivery); err != nil {
@@ -130,6 +135,12 @@ func (a *API) handleDaemonCommandSSE(logger *slog.Logger) gin.HandlerFunc {
 			case <-c.Request.Context().Done():
 				return
 			case <-ticker.C:
+				// 心跳前复核设备状态：设备撤销后最多一个周期内旧 SSE 被服务端关闭，
+				// 不依赖客户端自觉断开（ADR-012 撤销即时生效）。查询失败按 fail-closed 关闭。
+				if !a.daemonDeviceActive(c.Request.Context(), subj.AccountID, subj.DeviceID) {
+					logger.Warn("daemon sse closed: terminal device no longer active")
+					return
+				}
 				_, _ = c.Writer.Write([]byte(": heartbeat\n\n"))
 				c.Writer.Flush()
 			case delivery, ok := <-ch:
@@ -149,7 +160,31 @@ func (a *API) handleDaemonCommandSSE(logger *slog.Logger) gin.HandlerFunc {
 	}
 }
 
-const daemonSSEHeartbeatInterval = 15 * time.Second
+// daemonSSEHeartbeatInterval 是 Daemon SSE 的心跳/撤销检查周期。
+// 使用 var 仅为允许测试注入更短周期；生产代码不得修改。
+var daemonSSEHeartbeatInterval = 15 * time.Second
+
+// SetDaemonSSEHeartbeatIntervalForTest 仅供回归测试注入短周期并返回原值；
+// 生产路径必须使用默认 15 秒。
+func SetDaemonSSEHeartbeatIntervalForTest(d time.Duration) time.Duration {
+	previous := daemonSSEHeartbeatInterval
+	daemonSSEHeartbeatInterval = d
+	return previous
+}
+
+// DaemonSSEHeartbeatIntervalForTest 返回当前周期（测试断言用）。
+func DaemonSSEHeartbeatIntervalForTest() time.Duration {
+	return daemonSSEHeartbeatInterval
+}
+
+// daemonDeviceActive 复核 Terminal 设备是否仍属于该账号且 active。
+func (a *API) daemonDeviceActive(ctx context.Context, accountID, deviceID string) bool {
+	device, err := a.Repo.DeviceByID(ctx, deviceID)
+	if err != nil {
+		return false
+	}
+	return device.AccountID == accountID && device.Role == domain.RoleTerminal && device.Status == domain.DeviceActive
+}
 
 func (a *API) writeDaemonDelivery(c *gin.Context, terminal store.TerminalRow, delivery store.DaemonDeliveryRow) error {
 	command, workspaceID, err := a.Daemons.DeliveryCommandForTerminal(c.Request.Context(), terminal, delivery)

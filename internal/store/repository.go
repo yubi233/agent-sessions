@@ -180,6 +180,8 @@ type Repository interface {
 	ListPendingOutbox(ctx context.Context, limit int) ([]OutboxRow, error)
 	// RequeueFailedOutbox 把 failed 行复位为 pending 并清零退避（人工/自动恢复入口）。
 	RequeueFailedOutbox(ctx context.Context) (int64, error)
+	// CountOutboxByStatus 返回 outbox 各状态的行数投影，用于不含正文的可观测性指标。
+	CountOutboxByStatus(ctx context.Context) (pending, failed, delivered int64, err error)
 
 	// Usage（ADR-010）：usage_key_hash 唯一约束去重；聚合只读白名单整数计数。
 	// UpsertUsageEvent 返回 false 表示该 usage key 已存在（重复上传，不重复累加）。
