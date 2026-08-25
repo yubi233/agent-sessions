@@ -107,13 +107,13 @@ const p4WebReadOnlyDemoScript = [
     }, dwell: 1000 },
   { name: "文件页 unavailable 降级", action: async (page) => {
       await page.getByTestId("session-files-link").click();
-      await page.getByTestId("files-unavailable").waitFor({ state: "visible" });
+      await page.getByTestId("files-error").waitFor({ state: "visible" });
     }, dwell: 900 },
   { name: "Git Diff unavailable 降级", action: async (page) => {
       await page.goBack();
       await page.getByTestId("session-detail-meta").waitFor({ state: "visible" });
       await page.getByTestId("session-git-link").click();
-      await page.getByTestId("git-unavailable").waitFor({ state: "visible" });
+      await page.getByTestId("git-error").waitFor({ state: "visible" });
     }, dwell: 900 },
   { name: "终端状态", action: async (page) => {
       await page.goBack();

@@ -49,6 +49,25 @@ func TestScanSkipsDeps(t *testing.T) {
 	}
 }
 
+// 本地 .task 运行态可能包含测试 token，但该目录已被 .gitignore 排除，不能阻塞交付扫描。
+func TestScanSkipsLocalRuntimeState(t *testing.T) {
+	dir := t.TempDir()
+	runtimeDir := filepath.Join(dir, ".task", "restart")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatalf("mkdir runtime state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeDir, "owner.json"), []byte(`{"refresh_token":"local-only"}`), 0o600); err != nil {
+		t.Fatalf("write runtime state: %v", err)
+	}
+	hits, err := ScanPath(dir)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("local runtime state should be skipped, got %v", hits)
+	}
+}
+
 func TestScanAllowsDynamicAuthorizationButRejectsHardcodedBearer(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dir, "dynamic.ts"), []byte("headers: { Authorization: `Bearer ${accessToken}` }\n"), 0o600)

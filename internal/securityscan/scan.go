@@ -41,9 +41,10 @@ func ScanPath(root string) ([]string, error) {
 			return nil
 		}
 		if info.IsDir() {
-			// 跳过依赖与构建产物，避免误报。
+			// 跳过依赖、构建产物和本地运行态目录，避免把本机 token/cache
+			// 当成源码泄漏；这些运行态文件由 .gitignore 排除，不属于交付物。
 			name := info.Name()
-			if name == "node_modules" || name == ".git" || name == "dist" || name == "build" || name == "coverage" || name == ".dart_tool" {
+			if name == "node_modules" || name == ".git" || name == ".task" || name == "dist" || name == "build" || name == "coverage" || name == ".dart_tool" {
 				return filepath.SkipDir
 			}
 			return nil
