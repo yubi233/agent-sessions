@@ -161,14 +161,20 @@ func (a *Adapter) setRPC(client *RPCClient) bool {
 		return false
 	}
 	a.rpc = client
-	go a.pumpNotifications(client)
-	go a.pumpApprovals(client)
+	// 订阅必须在启动泵 goroutine 之前同步登记：Notifications()/Requests()
+	// 是"调用即注册等待通道"的懒订阅模型，若在 goroutine 内才注册，
+	// 首个请求的响应通知可能在 notifyWait 仍为空时到达并被
+	// dispatchNotification 静默丢弃（v0.6 发布门实测的 golden trace 偶发丢事件）。
+	notifications := client.Notifications()
+	requests := client.Requests()
+	go a.pumpNotifications(client, notifications)
+	go a.pumpApprovals(client, requests)
 	return true
 }
 
 // pumpNotifications 消费共享通知流，按 threadId 路由到对应 handle。
-func (a *Adapter) pumpNotifications(client *RPCClient) {
-	for n := range client.Notifications() {
+func (a *Adapter) pumpNotifications(client *RPCClient, notifications <-chan RPCNotification) {
+	for n := range notifications {
 		var probe struct {
 			ThreadID string `json:"threadId"`
 		}
@@ -310,8 +316,8 @@ func (a *Adapter) Decide(ctx context.Context, itemID, decision string) error {
 }
 
 // pumpApprovals 消费服务端审批请求：登记 pending 并投递 permission_request 事件。
-func (a *Adapter) pumpApprovals(client *RPCClient) {
-	for req := range client.Requests() {
+func (a *Adapter) pumpApprovals(client *RPCClient, requests <-chan RPCServerRequest) {
+	for req := range requests {
 		itemID, command, ev := mapApprovalRequest(req.Method, req.Params)
 		if itemID == "" {
 			continue // 未知服务端请求安全降级（W3 只证明 commandExecution 审批）

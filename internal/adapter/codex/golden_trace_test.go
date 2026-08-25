@@ -358,17 +358,19 @@ func TestGoldenTraceThreadSessionMapping(t *testing.T) {
 			}
 
 			// 收集事件直到达到期望数量或超时。
+			// 注意：deadline 命中必须用带标签的 break 退出 for 循环。
+			// 裸 break 只能退出 select——并行包测试拖慢事件生产时，
+			// 该循环会在 deadline 就绪后永久空转，把整个测试包拖到
+			// go test 的 10 分钟超时（v0.6 发布门实测复现）。
 			var got []adapter.Event
 			deadline := time.After(3 * time.Second)
+		collect:
 			for len(got) < len(scenario.ExpectedEvents) {
 				select {
 				case ev := <-events:
 					got = append(got, ev)
 				case <-deadline:
-					break
-				}
-				if len(scenario.ExpectedEvents) == 0 {
-					break
+					break collect
 				}
 			}
 			time.Sleep(50 * time.Millisecond) // 观察窗口：不应出现多余事件
