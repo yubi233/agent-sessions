@@ -144,6 +144,9 @@ type Repository interface {
 	CountAttachmentChunks(ctx context.Context, attachmentID string) (int, error)
 	CompleteAttachment(ctx context.Context, attachmentID, idempotencyKey string) (bool, error)
 
+	// Terminal 签名一次性 nonce：插入成功表示首次使用；重复 nonce 返回稳定错误。
+	ConsumeTerminalAuthNonce(ctx context.Context, keyID, nonce string, expiresAtUnixMS int64) error
+
 	// Outbox
 	EnqueueOutbox(ctx context.Context, o OutboxRow) error
 	ClaimOutbox(ctx context.Context, id int64) (OutboxRow, error)

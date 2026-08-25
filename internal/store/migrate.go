@@ -320,6 +320,16 @@ var migrations = []string{
 	`CREATE INDEX IF NOT EXISTS usage_events_session_idx
 		ON usage_events(account_id, session_id, created_at_unix_ms DESC)
 		WHERE session_id <> '';`,
+	// v0.6 Terminal 签名 nonce 一次性状态。Relay 重启后仍能查重；过期记录由消费时顺带清理。
+	`CREATE TABLE IF NOT EXISTS terminal_auth_nonces (
+		key_id TEXT NOT NULL,
+		nonce TEXT NOT NULL,
+		expires_at_unix_ms INTEGER NOT NULL,
+		created_at_unix_ms INTEGER NOT NULL,
+		PRIMARY KEY(key_id, nonce)
+	);`,
+	`CREATE INDEX IF NOT EXISTS terminal_auth_nonces_expiry_idx
+		ON terminal_auth_nonces(expires_at_unix_ms);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+
+	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
 // sqliteRepo 是 Repository 的 SQLite 实现，绑定一个 *sql.DB 或 *sql.Tx。
@@ -1148,6 +1150,30 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+// ConsumeTerminalAuthNonce 先清理过期 nonce，再以唯一键插入当前 nonce。
+// 插入 0 行表示该 nonce 已被使用或仍存在，必须按重放拒绝。
+func (r *sqliteRepo) ConsumeTerminalAuthNonce(ctx context.Context, keyID, nonce string, expiresAtUnixMS int64) error {
+	if _, err := r.db.ExecContext(ctx,
+		`DELETE FROM terminal_auth_nonces WHERE expires_at_unix_ms < ?`, expiresAtUnixMS); err != nil {
+		return err
+	}
+	result, err := r.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO terminal_auth_nonces(key_id, nonce, expires_at_unix_ms, created_at_unix_ms)
+		 VALUES(?,?,?,?)`,
+		keyID, nonce, expiresAtUnixMS, expiresAtUnixMS)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return protocol.NewError(protocol.ErrNonceReused, "terminal nonce already used")
+	}
+	return nil
 }
 
 func (r *sqliteRepo) EnqueueOutbox(ctx context.Context, o OutboxRow) error {

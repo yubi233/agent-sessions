@@ -9,26 +9,33 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yubi233/agent-sessions/internal/authz"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/store"
 	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
 type daemonHelloRequest struct {
-	ProtocolVersion int      `json:"protocol_version"`
-	DaemonVersion   string   `json:"daemon_version"`
-	Hostname        string   `json:"hostname"`
-	Platform        string   `json:"platform"`
-	Capabilities    []string `json:"capabilities"`
+	ProtocolVersion int                     `json:"protocol_version"`
+	DaemonVersion   string                  `json:"daemon_version"`
+	Hostname        string                  `json:"hostname"`
+	Platform        string                  `json:"platform"`
+	Capabilities    []string                `json:"capabilities"`
+	Signature       authz.TerminalSignature `json:"signature"`
 }
 
 func (a *API) handleDaemonHello(c *gin.Context) {
 	var req daemonHelloRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
 		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon hello"))
 		return
 	}
 	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+		writeError(c, err)
+		return
+	}
 	result, err := a.Daemons.Hello(c.Request.Context(), domain.DaemonHelloInput{
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
 		ProtocolVersion: req.ProtocolVersion, DaemonVersion: req.DaemonVersion,
@@ -47,16 +54,22 @@ func (a *API) handleDaemonHello(c *gin.Context) {
 }
 
 type daemonHeartbeatRequest struct {
-	ProtocolVersion int `json:"protocol_version"`
+	ProtocolVersion int                     `json:"protocol_version"`
+	Signature       authz.TerminalSignature `json:"signature"`
 }
 
 func (a *API) handleDaemonHeartbeat(c *gin.Context) {
 	var req daemonHeartbeatRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
 		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon heartbeat"))
 		return
 	}
 	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+		writeError(c, err)
+		return
+	}
 	result, err := a.Daemons.Heartbeat(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, req.ProtocolVersion)
 	if err != nil {
 		writeError(c, err)
@@ -149,19 +162,25 @@ func (a *API) writeDaemonDelivery(c *gin.Context, terminal store.TerminalRow, de
 }
 
 type daemonCommandAckRequest struct {
-	ProtocolVersion int    `json:"protocol_version"`
-	DeliverySeq     int64  `json:"delivery_seq"`
-	AckKind         string `json:"ack_kind"`
-	ErrorCode       string `json:"error_code"`
+	ProtocolVersion int                     `json:"protocol_version"`
+	DeliverySeq     int64                   `json:"delivery_seq"`
+	AckKind         string                  `json:"ack_kind"`
+	ErrorCode       string                  `json:"error_code"`
+	Signature       authz.TerminalSignature `json:"signature"`
 }
 
 func (a *API) handleDaemonCommandAck(c *gin.Context) {
 	var req daemonCommandAckRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
 		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon command acknowledgement"))
 		return
 	}
 	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+		writeError(c, err)
+		return
+	}
 	receipt, err := a.Daemons.Acknowledge(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
 		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.AckKind, req.ErrorCode)
 	if err != nil {
@@ -172,19 +191,25 @@ func (a *API) handleDaemonCommandAck(c *gin.Context) {
 }
 
 type daemonCommandResultRequest struct {
-	ProtocolVersion int    `json:"protocol_version"`
-	DeliverySeq     int64  `json:"delivery_seq"`
-	Status          string `json:"status"`
-	ErrorCode       string `json:"error_code"`
+	ProtocolVersion int                     `json:"protocol_version"`
+	DeliverySeq     int64                   `json:"delivery_seq"`
+	Status          string                  `json:"status"`
+	ErrorCode       string                  `json:"error_code"`
+	Signature       authz.TerminalSignature `json:"signature"`
 }
 
 func (a *API) handleDaemonCommandResult(c *gin.Context) {
 	var req daemonCommandResultRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
 		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon command result"))
 		return
 	}
 	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+		writeError(c, err)
+		return
+	}
 	receipt, err := a.Daemons.Resolve(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
 		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.Status, req.ErrorCode)
 	if err != nil {
@@ -195,20 +220,26 @@ func (a *API) handleDaemonCommandResult(c *gin.Context) {
 }
 
 type daemonWebReadResponseRequest struct {
-	ProtocolVersion int             `json:"protocol_version"`
-	DeliverySeq     int64           `json:"delivery_seq"`
-	Envelope        json.RawMessage `json:"envelope"`
+	ProtocolVersion int                     `json:"protocol_version"`
+	DeliverySeq     int64                   `json:"delivery_seq"`
+	Envelope        json.RawMessage         `json:"envelope"`
+	Signature       authz.TerminalSignature `json:"signature"`
 }
 
 // handleDaemonWebReadResponse 只接收浏览器临时密钥可解的 envelope。Relay 不会将其投影到
 // session_events 或账号 SSE，避免文件/代码/diff 内容穿过普通事件通道。
 func (a *API) handleDaemonWebReadResponse(c *gin.Context) {
 	var req daemonWebReadResponseRequest
-	if err := c.ShouldBindJSON(&req); err != nil || !json.Valid(req.Envelope) {
+	raw, err := bindJSONBody(c, &req)
+	if err != nil || !json.Valid(req.Envelope) {
 		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed web read response"))
 		return
 	}
 	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+		writeError(c, err)
+		return
+	}
 	receipt, err := a.Daemons.StoreWebReadResponse(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
 		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, string(req.Envelope))
 	if err != nil {
@@ -219,21 +250,27 @@ func (a *API) handleDaemonWebReadResponse(c *gin.Context) {
 }
 
 type daemonEventUploadRequest struct {
-	ProtocolVersion int             `json:"protocol_version"`
-	EventID         string          `json:"event_id"`
-	CommandID       string          `json:"command_id"`
-	SessionID       string          `json:"session_id"`
-	EventType       string          `json:"event_type"`
-	Envelope        json.RawMessage `json:"envelope"`
+	ProtocolVersion int                     `json:"protocol_version"`
+	EventID         string                  `json:"event_id"`
+	CommandID       string                  `json:"command_id"`
+	SessionID       string                  `json:"session_id"`
+	EventType       string                  `json:"event_type"`
+	Envelope        json.RawMessage         `json:"envelope"`
+	Signature       authz.TerminalSignature `json:"signature"`
 }
 
 func (a *API) handleDaemonEventUpload(c *gin.Context) {
 	var req daemonEventUploadRequest
-	if err := c.ShouldBindJSON(&req); err != nil || !json.Valid(req.Envelope) {
+	raw, err := bindJSONBody(c, &req)
+	if err != nil || !json.Valid(req.Envelope) {
 		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon event"))
 		return
 	}
 	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, raw); err != nil {
+		writeError(c, err)
+		return
+	}
 	result, err := a.Daemons.UploadEvent(c.Request.Context(), domain.DaemonEventInput{
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
 		ProtocolVersion: req.ProtocolVersion, EventID: req.EventID, CommandID: req.CommandID,
@@ -312,4 +349,16 @@ type daemonEventUploadView struct {
 	EventID    string `json:"event_id"`
 	EventSeq   int64  `json:"event_seq"`
 	Idempotent bool   `json:"idempotent"`
+}
+
+// bindJSONBody 读取原始请求体并解析 JSON，返回原始字节供签名 body hash 校验。
+func bindJSONBody(c *gin.Context, out any) ([]byte, error) {
+	raw, err := c.GetRawData()
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
