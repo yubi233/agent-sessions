@@ -27,17 +27,20 @@
       "category": "Adapter",
       "priority": "P0",
       "test_layer": "contract",
-      "precondition": "mock runtime 已注册。",
+      "precondition": "mock runtime 已注册；Claude/Codex/OpenCode/OpenClaw 的 transport 环境变量可在隔离测试中显式清空。",
       "steps": [
-        "Detect",
-        "Capabilities",
-        "未知能力默认"
+        "验证 SPI Detect/Capabilities 与未知能力默认值。",
+        "清空四类 Provider 的 bin/URL/credential 配置并逐一 Detect。",
+        "断言能力名称完整、无重复、全部 unsupported 且带原因；Start 拒绝，Resume 返回 unsupported 且不携带 instance ID。"
       ],
-      "expected": "每项 native/emulated/unsupported；未知为 unsupported。",
+      "expected": "每项只允许 native/emulated/unsupported；未知为 unsupported；安装、URL、历史 smoke 或未配置 transport 不能开放写能力。",
       "cleanup": [
-        "停止 mock"
+        "停止 mock，测试框架恢复 Provider 环境变量"
       ],
       "evidence": [
+        "internal/adapter/spi_test.go",
+        "internal/adapter/provider_truth_test.go",
+        "go test ./internal/adapter/... -count=1",
         "e2e-verify/reports/<ts>/ADAPTER-PLATFORM/adpt-01.json"
       ]
     },

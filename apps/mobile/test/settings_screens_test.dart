@@ -242,6 +242,18 @@ void main() {
       expect(nativeChip.backgroundColor, isNotNull);
       expect(emulatedChip.backgroundColor, isNotNull);
       expect(nativeChip.backgroundColor, isNot(emulatedChip.backgroundColor));
+      _expectCapabilityState(
+        provider: 'codex',
+        capability: 'start',
+        label: '原生',
+        icon: Icons.check_circle_outline,
+      );
+      _expectCapabilityState(
+        provider: 'codex',
+        capability: 'delegate_cross_provider',
+        label: '兼容',
+        icon: Icons.sync_alt,
+      );
 
       // 其余 Provider 卡片
       await tester.scrollUntilVisible(
@@ -249,9 +261,23 @@ void main() {
         240,
         scrollable: find.byType(Scrollable),
       );
-      // opencode 未声明能力：unsupported chip 无背景色
+      // opencode 未声明能力：unsupported 仍有语义底色，并以图标和文案共同表达。
       final unsupportedChip = _chipInside(tester, 'opencode', 'start');
-      expect(unsupportedChip.backgroundColor, isNull);
+      expect(unsupportedChip.backgroundColor, isNotNull);
+      expect(
+        unsupportedChip.backgroundColor,
+        isNot(nativeChip.backgroundColor),
+      );
+      expect(
+        unsupportedChip.backgroundColor,
+        isNot(emulatedChip.backgroundColor),
+      );
+      _expectCapabilityState(
+        provider: 'opencode',
+        capability: 'start',
+        label: '不可用',
+        icon: Icons.block_outlined,
+      );
       expect(
         find.descendant(
           of: find.byKey(const Key('settings-agents-provider-opencode')),
@@ -290,13 +316,11 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(
-        find.descendant(
-          of: find.byKey(const Key('settings-agents-provider-codex')),
-          matching: find.text('不可用'),
-        ),
-        findsOneWidget,
+      final providerStatus = find.byKey(
+        const Key('settings-provider-status-codex'),
       );
+      expect(providerStatus, findsOneWidget);
+      expect(tester.widget<Text>(providerStatus).data, '不可用');
       expect(find.text('可用'), findsNothing);
     });
 
@@ -524,6 +548,22 @@ class _PlaceholderScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       Scaffold(body: Center(child: Text('$label-placeholder')));
+}
+
+// 三态能力不能只靠颜色：稳定 chip 内必须同时存在状态文字和对应图标。
+void _expectCapabilityState({
+  required String provider,
+  required String capability,
+  required String label,
+  required IconData icon,
+}) {
+  final chip = find.byKey(Key('settings-capability-$provider-$capability'));
+  expect(chip, findsOneWidget);
+  expect(find.descendant(of: chip, matching: find.text(label)), findsOneWidget);
+  expect(
+    find.descendant(of: chip, matching: find.byIcon(icon)),
+    findsOneWidget,
+  );
 }
 
 /// 在指定 Provider 卡片内按能力名找到对应 chip。

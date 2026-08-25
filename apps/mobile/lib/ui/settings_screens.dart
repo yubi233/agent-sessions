@@ -499,6 +499,7 @@ class _ProviderCapabilityCard extends StatelessWidget {
               ),
               Text(
                 availability,
+                key: Key('settings-provider-status-${profile.kind}'),
                 style: Theme.of(context).textTheme.labelMedium?.copyWith(
                   color: profile.available
                       ? context.appColors.success
@@ -521,11 +522,25 @@ class _ProviderCapabilityCard extends StatelessWidget {
             runSpacing: 6,
             children: [
               for (final entry in profile.capabilities)
-                Chip(
-                  label: Text(entry.name),
-                  labelStyle: Theme.of(context).textTheme.labelSmall,
-                  visualDensity: VisualDensity.compact,
-                  backgroundColor: _capabilityChipColor(context, entry),
+                Tooltip(
+                  message: _capabilityTooltip(entry),
+                  child: Chip(
+                    key: Key(
+                      'settings-capability-${profile.kind}-${entry.name}',
+                    ),
+                    avatar: Icon(_capabilityIcon(entry), size: 16),
+                    label: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(entry.name),
+                        const SizedBox(width: 4),
+                        Text(_capabilityLabel(entry)),
+                      ],
+                    ),
+                    labelStyle: Theme.of(context).textTheme.labelSmall,
+                    visualDensity: VisualDensity.compact,
+                    backgroundColor: _capabilityChipColor(context, entry),
+                  ),
                 ),
             ],
           ),
@@ -534,12 +549,36 @@ class _ProviderCapabilityCard extends StatelessWidget {
     );
   }
 
+  // 能力三态必须同时使用图标、文字和颜色，避免色觉差异导致写能力误判。
+  String _capabilityLabel(CapabilityEntry entry) =>
+      switch (entry.availability) {
+        CapabilityAvailability.native => '原生',
+        CapabilityAvailability.emulated => '兼容',
+        CapabilityAvailability.unsupported => '不可用',
+      };
+
+  IconData _capabilityIcon(CapabilityEntry entry) =>
+      switch (entry.availability) {
+        CapabilityAvailability.native => Icons.check_circle_outline,
+        CapabilityAvailability.emulated => Icons.sync_alt,
+        CapabilityAvailability.unsupported => Icons.block_outlined,
+      };
+
+  String _capabilityTooltip(CapabilityEntry entry) {
+    final state = _capabilityLabel(entry);
+    final reason = entry.reason;
+    return reason == null
+        ? '${entry.name}：$state'
+        : '${entry.name}：$state；$reason';
+  }
+
   Color? _capabilityChipColor(BuildContext context, CapabilityEntry entry) {
     final colors = context.appColors;
     return switch (entry.availability) {
       CapabilityAvailability.native => colors.success.withValues(alpha: 0.12),
       CapabilityAvailability.emulated => colors.warning.withValues(alpha: 0.12),
-      CapabilityAvailability.unsupported => null,
+      // 第三态不再裸奔 M3 默认底：用抬升面同族浅色，保持三态同一视觉语言。
+      CapabilityAvailability.unsupported => colors.surfaceRaised,
     };
   }
 }
