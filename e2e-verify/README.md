@@ -6,6 +6,8 @@
 
 | 命令                                                                                               | 场景                                                              | 可见性与证据                                                                              |
 | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `task test:v04:local`                                                                              | v0.4 统一本地 full gate                                            | 编排根因、PERF-04、headed Chrome 与 Flutter macOS；不隐式运行 Android/真实 Provider       |
+| `task test:v04:perf`                                                                               | PERF-04 固定样本命令/事件/Hub 背压                                 | 脱敏报告写入 `reports/<timestamp>/RELIABILITY-RELEASE/`，不等于可见客户端性能              |
 | `task test:e2e`                                                                                    | Web/Admin headed Playwright 回归                                  | 默认启动系统 Chrome，`real_browser=true`、`headless=false`                                |
 | `node e2e-verify/run.mjs --suite p0-health`                                                        | 单个 headed Web smoke                                             | 报告写入 `e2e-verify/reports/<timestamp>/<plan_id>/`                                      |
 | `task test:record`                                                                                 | 已通过 browser gate 后的 CDP 录屏                                 | 帧、manifest、mp4 写入 `e2e-verify/screencasts/<timestamp>/`                              |

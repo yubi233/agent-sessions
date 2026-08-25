@@ -3,7 +3,9 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -115,4 +117,129 @@ func TestLeaseCompetitionLoad(t *testing.T) {
 	if !seenGT1 {
 		t.Fatalf("expected epoch escalation under competition, got %v", epochs)
 	}
+}
+
+// TestPERF04RelayCommandEventBackpressureBaseline 固定本地样本量，验证命令入队、
+// 事件持久化和账号 Hub 的有界背压。该基线只约束 deterministic SQLite/进程内链路，
+// 不代表真实 Provider、网络、浏览器渲染或移动设备性能。
+func TestPERF04RelayCommandEventBackpressureBaseline(t *testing.T) {
+	const (
+		fixtureSeed       = 404
+		commandSamples    = 128
+		eventSamples      = 256
+		p95Budget         = 250 * time.Millisecond
+		subscriberBacklog = 64
+	)
+
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "perf-04@fixture.test")
+	sessionID, _ := env.createSessionForProject(t, owner.AccessToken, owner.AccountID, "perf-04-project")
+	service := domain.NewSessionService(env.repo)
+	epoch, err := service.AcquireLease(t.Context(), sessionID, "perf-04-device", "")
+	if err != nil {
+		t.Fatalf("acquire PERF-04 lease: %v", err)
+	}
+
+	commandLatencies := make([]time.Duration, 0, commandSamples)
+	for i := 0; i < commandSamples; i++ {
+		started := time.Now()
+		_, err := service.SubmitCommand(t.Context(), domain.CommandInput{
+			AccountID: owner.AccountID, DeviceID: "perf-04-device", Role: "android_owner",
+			SessionID: sessionID, Kind: "session.abort", LeaseEpoch: epoch,
+			IdempotencyKey: fmt.Sprintf("perf-04-%d-%03d", fixtureSeed, i),
+		})
+		if err != nil {
+			t.Fatalf("enqueue command %d: %v", i, err)
+		}
+		commandLatencies = append(commandLatencies, time.Since(started))
+	}
+
+	hub := domain.NewPresenceHub(time.Minute)
+	slowSubscriber, cancelSlow := hub.SubscribeAccount(owner.AccountID)
+	defer cancelSlow()
+	fastSubscriber, cancelFast := hub.SubscribeAccount(owner.AccountID)
+	defer cancelFast()
+	fastReceived := 0
+
+	existing, err := env.repo.ListEventsAfter(t.Context(), sessionID, 0)
+	if err != nil {
+		t.Fatalf("list initial session events: %v", err)
+	}
+	lastEventSeq := int64(0)
+	if len(existing) > 0 {
+		lastEventSeq = existing[len(existing)-1].EventSeq
+	}
+	eventLatencies := make([]time.Duration, 0, eventSamples)
+	for i := 0; i < eventSamples; i++ {
+		started := time.Now()
+		seq, err := env.repo.AppendEvent(t.Context(), store.SessionEventRow{
+			SessionID: sessionID, EventSeq: lastEventSeq + 1, EventType: "perf.fixture", EnvelopeJSON: `{}`,
+		})
+		if err != nil {
+			t.Fatalf("append event %d: %v", i, err)
+		}
+		persisted, err := env.repo.ListEventsAfter(t.Context(), sessionID, lastEventSeq)
+		if err != nil || len(persisted) != 1 {
+			t.Fatalf("reload event %d: count=%d err=%v", i, len(persisted), err)
+		}
+		lastEventSeq = seq
+		hub.PublishAccount(owner.AccountID, persisted[0])
+		select {
+		case received := <-fastSubscriber:
+			if received.EventSeq != seq {
+				t.Fatalf("fast subscriber event_seq=%d, want %d", received.EventSeq, seq)
+			}
+			fastReceived++
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("fast subscriber was blocked by slow subscriber")
+		}
+		eventLatencies = append(eventLatencies, time.Since(started))
+	}
+
+	if fastReceived != eventSamples {
+		t.Fatalf("fast subscriber count=%d, want %d", fastReceived, eventSamples)
+	}
+	if depth := len(slowSubscriber); depth != subscriberBacklog {
+		t.Fatalf("slow subscriber backlog=%d, want bounded depth %d", depth, subscriberBacklog)
+	}
+	accountEvents, err := env.repo.ListAccountEventsAfter(t.Context(), owner.AccountID, 0)
+	if err != nil {
+		t.Fatalf("list account cursor log: %v", err)
+	}
+	for i := 1; i < len(accountEvents); i++ {
+		if accountEvents[i].AccountEventCursor <= accountEvents[i-1].AccountEventCursor {
+			t.Fatalf("account cursor is not strictly increasing at %d", i)
+		}
+	}
+
+	commandP95 := percentile95(commandLatencies)
+	eventP95 := percentile95(eventLatencies)
+	if commandP95 > p95Budget || eventP95 > p95Budget {
+		t.Fatalf("PERF-04 budget exceeded: command_p95=%s event_p95=%s budget=%s", commandP95, eventP95, p95Budget)
+	}
+	metrics := map[string]any{
+		"fixture_seed": fixtureSeed, "command_samples": commandSamples, "event_samples": eventSamples,
+		"subscriber_backlog_limit": subscriberBacklog, "account_event_count": len(accountEvents),
+		"command_p50_us": percentile50(commandLatencies).Microseconds(), "command_p95_us": commandP95.Microseconds(),
+		"event_p50_us": percentile50(eventLatencies).Microseconds(), "event_p95_us": eventP95.Microseconds(),
+		"p95_budget_us": p95Budget.Microseconds(),
+	}
+	encoded, err := json.Marshal(metrics)
+	if err != nil {
+		t.Fatalf("encode PERF-04 metrics: %v", err)
+	}
+	t.Logf("PERF04_METRICS=%s", encoded)
+}
+
+func percentile50(samples []time.Duration) time.Duration { return percentile(samples, 50) }
+func percentile95(samples []time.Duration) time.Duration { return percentile(samples, 95) }
+
+func percentile(samples []time.Duration, value int) time.Duration {
+	ordered := append([]time.Duration(nil), samples...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	index := (len(ordered)*value + 99) / 100
+	if index <= 0 {
+		index = 1
+	}
+	return ordered[index-1]
 }

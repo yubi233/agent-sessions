@@ -150,6 +150,30 @@ tasks:
       - task: test:mobile:p2f
       - git diff --check
 
+  test:v04:perf:
+    desc: PERF-04 固定样本的本地命令、事件与 Hub 背压基线
+    cmds:
+      - node e2e-verify/perf/v04-baseline.mjs
+
+  test:v04:local:
+    desc: v0.4 本地 full gate（不隐式运行 Android、真实 Provider 或真实模型）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - task: test
+      - task: test:e2e:relay
+      - task: test:android
+      - task: test:v04:perf
+      - task: test:e2e:harness
+      - node e2e-verify/run.mjs --suite p1-design-system
+      - node e2e-verify/run.mjs --suite p4-web-readonly
+      - node e2e-verify/run.mjs --suite p4-web-read-transport
+      - node e2e-verify/run.mjs --suite p4-admin-readonly
+      - task: test:flutter:local
+      - task: test:deploy
+      - task: test:restart
+      - git diff --check
+
   test:
     desc: 单元与集成回归
     cmds:

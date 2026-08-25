@@ -277,22 +277,25 @@
     {
       "id": "PERF-04",
       "title": "Daemon 命令/事件延迟与长列表代码视图基线",
-      "status": "planned",
+      "status": "partial",
       "phase": "v0.4/P7",
       "category": "性能",
       "priority": "P1",
-      "test_layer": "profile + load + visible-client diagnostic",
-      "precondition": "P2 命令流与 P3/P4 长列表、代码阅读界面已实现；测试数据含 1000 条消息、500 个文件条目和受限大 diff。",
+      "test_layer": "local profile + load + visible-client diagnostic",
+      "precondition": "隔离 Relay SQLite 可写；固定 seed=404；命令样本 128、事件样本 256；浏览器与 Flutter 可见性能由后续 headed full gate 单独执行。",
       "steps": [
-        "测量 enqueue-to-ack、event ingest-to-client、heartbeat age、重连次数和队列深度。",
-        "在 Android AVD/物理设备和 headed Web 滚动长列表、搜索文件并打开大 diff。",
-        "记录 frame timing、峰值内存、布局跳动与降级行为。"
+        "运行 task test:v04:perf，测量 command enqueue 与 event append/query/publish 的 p50/p95。",
+        "保持一个账号订阅者不消费，验证 backlog 固定为 64，另一个订阅者仍收到全部 256 个事件。",
+        "校验账号事件 cursor 严格单调，并将主机摘要、样本量、阈值和指标写入脱敏报告。",
+        "在阶段 D 的 headed Web 与 Flutter macOS gate 中继续检查长列表、大 diff、布局跳动与降级行为。"
       ],
-      "expected": "报告给出 p50/p95、硬件/数据 seed 与失败阈值；超预算时先降级/分页，不以关闭断言或减少数据量伪造通过。",
+      "expected": "本地 SQLite/Hub 的 command/event p95 均不高于 250ms，慢订阅者不阻塞正常订阅者，报告包含固定 seed、样本量和硬件摘要；可见渲染和真实网络/Provider/设备性能保持 partial，不以减少样本或 fixture 冒充通过。",
       "cleanup": [
-        "停止负载，清理测试数据、性能 trace 和临时报告"
+        "测试框架关闭隔离 SQLite、取消 Hub 订阅并清理临时目录；仅保留脱敏性能报告"
       ],
       "evidence": [
+        "internal/relay/p5_reliability_test.go#TestPERF04RelayCommandEventBackpressureBaseline",
+        "Taskfile.yml#test:v04:perf",
         "e2e-verify/perf/v04-baseline.mjs",
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-04.json"
       ]
