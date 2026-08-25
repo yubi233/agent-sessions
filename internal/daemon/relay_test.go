@@ -454,9 +454,9 @@ func (a *startGuardAdapter) Start(context.Context, adapter.StartRequest) (adapte
 	return nil, nil
 }
 
-// Relay 对事件内容的确定性 4xx 拒绝必须按毒丸丢弃，不能无限重试卡死 relay 循环；
-// 5xx 保持可安全重试。
-func TestFlushEventsDropsPoisonPillOn4xxAndRetriesOn5xx(t *testing.T) {
+// Relay 对事件内容的确定性 4xx 拒绝必须立即转入 failed 并保留脱敏原因（毒丸不占退避队列）；
+// 5xx 保持 pending 可安全重试，并计入 attempts 指数退避。
+func TestFlushEventsMarksPoisonFailedOn4xxAndRetriesOn5xx(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -486,11 +486,18 @@ func TestFlushEventsDropsPoisonPillOn4xxAndRetriesOn5xx(t *testing.T) {
 
 	status = http.StatusBadRequest
 	if err := loop.flushEvents(context.Background()); err != nil {
-		t.Fatalf("4xx must be dropped without failing the flush: %v", err)
+		t.Fatalf("4xx must fail-fast without failing the flush: %v", err)
 	}
 	pending, err := store.PendingRelayEvents()
 	if err != nil || len(pending) != 0 {
-		t.Fatalf("poison event must leave outbox, pending=%d err=%v", len(pending), err)
+		t.Fatalf("poison event must leave retry queue, pending=%d err=%v", len(pending), err)
+	}
+	snapshot, err := store.RelayEventOutboxSnapshot()
+	if err != nil || len(snapshot) != 1 {
+		t.Fatalf("poison event row must be retained for audit: rows=%d err=%v", len(snapshot), err)
+	}
+	if snapshot[0].Status != "failed" || snapshot[0].LastError != relayEventPermanentReject {
+		t.Fatalf("poison event must be failed with permanent reason: %+v", snapshot[0])
 	}
 
 	if err := store.EnqueueRelayEvent(RelayEvent{
@@ -503,9 +510,23 @@ func TestFlushEventsDropsPoisonPillOn4xxAndRetriesOn5xx(t *testing.T) {
 	if err := loop.flushEvents(context.Background()); err == nil {
 		t.Fatal("5xx must keep the retryable error")
 	}
+	// 瞬态失败保持 pending，但进入指数退避：立即出队不可见，attempts 记账 +1。
 	pending, err = store.PendingRelayEvents()
-	if err != nil || len(pending) != 1 {
-		t.Fatalf("5xx event must stay pending, pending=%d err=%v", len(pending), err)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("backoff-gated event must not be due immediately, pending=%d err=%v", len(pending), err)
+	}
+	snapshot, err = store.RelayEventOutboxSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retryRow *RelayEventOutboxRow
+	for i := range snapshot {
+		if snapshot[i].EventID == "evt-retry" {
+			retryRow = &snapshot[i]
+		}
+	}
+	if retryRow == nil || retryRow.Status != "pending" || retryRow.Attempts != 1 || retryRow.NextAttemptAt <= 0 {
+		t.Fatalf("transient failure must record attempt and backoff: %+v", retryRow)
 	}
 }
 

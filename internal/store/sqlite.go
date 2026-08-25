@@ -754,9 +754,24 @@ func (r *sqliteRepo) CommandByScopeKey(ctx context.Context, scopeHash, idempoten
 		 FROM commands WHERE scope_hash=? AND idempotency_key=?`, scopeHash, idempotencyKey))
 }
 
+// UpdateCommandStatus 直接改写命令状态；状态机合法性由领域层校验。
 func (r *sqliteRepo) UpdateCommandStatus(ctx context.Context, id, status string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE commands SET status=? WHERE id=?`, status, id)
 	return err
+}
+
+// ExpireStaleCommands 在 lease epoch 递增的同一事务内，把旧 epoch 下仍未终态的命令
+// 收敛为 expired。只有 accepted/running 会被过期；已终态行保持历史不变。
+func (r *sqliteRepo) ExpireStaleCommands(ctx context.Context, sessionID string, belowEpoch int64) (int64, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE commands
+		 SET status='expired'
+		 WHERE session_id=? AND status IN ('accepted','running') AND lease_epoch < ?`,
+		sessionID, belowEpoch)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (r *sqliteRepo) SetCommandReadResponse(ctx context.Context, id, envelopeJSON string) error {
@@ -1295,6 +1310,10 @@ func (r *sqliteRepo) RetireTerminalIdentityKey(ctx context.Context, keyID string
 	return affected == 1, nil
 }
 
+// RelayOutboxRetryCap 是 Relay outbox 行的最大自动重试次数。
+// 超过上限的 failed 行保留在库中，等待 RequeueFailedOutbox 恢复入口复位。
+const RelayOutboxRetryCap = 8
+
 func (r *sqliteRepo) EnqueueOutbox(ctx context.Context, o OutboxRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO outbox(kind,payload_json,status,attempts) VALUES(?,?,?,?)`,
@@ -1305,26 +1324,46 @@ func (r *sqliteRepo) EnqueueOutbox(ctx context.Context, o OutboxRow) error {
 func (r *sqliteRepo) ClaimOutbox(ctx context.Context, id int64) (OutboxRow, error) {
 	var o OutboxRow
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT id,kind,payload_json,status,attempts FROM outbox WHERE id=?`, id).
-		Scan(&o.ID, &o.Kind, &o.PayloadJSON, &o.Status, &o.Attempts); err != nil {
+		`SELECT id,kind,payload_json,status,attempts,next_attempt_at_unix_ms FROM outbox WHERE id=?`, id).
+		Scan(&o.ID, &o.Kind, &o.PayloadJSON, &o.Status, &o.Attempts, &o.NextAttemptAtUnixMS); err != nil {
 		return OutboxRow{}, err
 	}
 	return o, nil
 }
 
 func (r *sqliteRepo) MarkOutboxDone(ctx context.Context, id int64) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE outbox SET status='done', attempts=attempts+1 WHERE id=?`, id)
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE outbox SET status='delivered', attempts=attempts+1, next_attempt_at_unix_ms=0 WHERE id=?`, id)
 	return err
 }
 
+// MarkOutboxFailed 记录失败尝试并按指数退避推迟下一次重试；达到上限后行保持 failed，
+// 不再被 ListPendingOutbox 选出，直到显式恢复。历史行永不删除。
 func (r *sqliteRepo) MarkOutboxFailed(ctx context.Context, id int64, attempts int) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE outbox SET status='failed', attempts=? WHERE id=?`, attempts, id)
+	backoff := int64(30 * time.Second / time.Millisecond)
+	for i := 1; i < attempts; i++ {
+		backoff *= 2
+		if backoff >= int64(15*time.Minute/time.Millisecond) {
+			backoff = int64(15 * time.Minute / time.Millisecond)
+			break
+		}
+	}
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE outbox SET status='failed', attempts=?, next_attempt_at_unix_ms=? WHERE id=?`,
+		attempts, time.Now().UnixMilli()+backoff, id)
 	return err
 }
 
+// ListPendingOutbox 返回到达重试时间的 pending/failed(未达上限) 行，按序出队。
+// 已达重试上限的 failed 行必须通过 RequeueFailedOutbox 显式恢复后才会再次出现。
 func (r *sqliteRepo) ListPendingOutbox(ctx context.Context, limit int) ([]OutboxRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id,kind,payload_json,status,attempts FROM outbox WHERE status IN ('pending','failed') ORDER BY id LIMIT ?`, limit)
+		`SELECT id,kind,payload_json,status,attempts,next_attempt_at_unix_ms FROM outbox
+		 WHERE (status IN ('pending','failed','in_flight'))
+		   AND attempts < ?
+		   AND next_attempt_at_unix_ms <= ?
+		 ORDER BY id LIMIT ?`,
+		RelayOutboxRetryCap, time.Now().UnixMilli(), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1332,12 +1371,23 @@ func (r *sqliteRepo) ListPendingOutbox(ctx context.Context, limit int) ([]Outbox
 	var out []OutboxRow
 	for rows.Next() {
 		var o OutboxRow
-		if err := rows.Scan(&o.ID, &o.Kind, &o.PayloadJSON, &o.Status, &o.Attempts); err != nil {
+		if err := rows.Scan(&o.ID, &o.Kind, &o.PayloadJSON, &o.Status, &o.Attempts, &o.NextAttemptAtUnixMS); err != nil {
 			return nil, err
 		}
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// RequeueFailedOutbox 把全部 failed 行复位为 pending（恢复入口），返回受影响行数。
+// 复位同时清零 attempts 与退避时间，否则达到上限的行会立即再次被上限过滤。
+func (r *sqliteRepo) RequeueFailedOutbox(ctx context.Context) (int64, error) {
+	result, err := r.db.ExecContext(ctx,
+		`UPDATE outbox SET status='pending', attempts=0, next_attempt_at_unix_ms=0 WHERE status='failed'`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // UpsertUsageEvent 以 usage_key_hash 唯一约束写入 usage 事件。重复 key 返回

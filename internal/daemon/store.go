@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS relay_commands (
 CREATE INDEX IF NOT EXISTS relay_commands_pending_idx
 	ON relay_commands(status, delivery_seq);
 -- Provider canonical event 在本机 outbox 内等待可靠上传；payload 只能是已加密 envelope。
+-- attempts/next_attempt_at/last_error 由 migrate() 的 additive 列迁移补齐（v0.6 P2）。
 CREATE TABLE IF NOT EXISTS relay_event_outbox (
 	event_id TEXT PRIMARY KEY,
 	command_id TEXT NOT NULL,
@@ -130,7 +131,54 @@ func (s *Store) migrate() error {
 	}
 	// P2 新增 workspace_id 时，已有 Daemon 本地库仍可能包含旧版 relay_commands。
 	// 这里采用 additive ALTER，保留已落盘的命令、游标和 outbox，避免升级后重放失去状态。
-	return s.ensureRelayCommandWorkspaceIDColumn()
+	if err := s.ensureRelayCommandWorkspaceIDColumn(); err != nil {
+		return err
+	}
+	// v0.6 P2：事件 outbox 增加重试退避与失败原因列。旧库升级只加列，不重写历史行，
+	// 已落盘的 pending/delivered 状态与密文 envelope 保持原样。
+	return s.ensureRelayEventOutboxRetryColumns()
+}
+
+// ensureColumnIfExists 是 additive 列迁移的最小实现：存在即跳过，缺失才 ALTER。
+func (s *Store) ensureColumnIfExists(table, column, ddl string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + ddl)
+	return err
+}
+
+// ensureRelayEventOutboxRetryColumns 为事件 outbox 补齐 v0.6 重试语义列：
+// next_attempt_at 控制指数退避的最早重试时间；last_error 只保存脱敏错误分类。
+func (s *Store) ensureRelayEventOutboxRetryColumns() error {
+	if err := s.ensureColumnIfExists("relay_event_outbox", "attempts", "attempts INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnIfExists("relay_event_outbox", "next_attempt_at", "next_attempt_at INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return s.ensureColumnIfExists("relay_event_outbox", "last_error", "last_error TEXT NOT NULL DEFAULT ''")
 }
 
 func (s *Store) ensureRelayCommandWorkspaceIDColumn() error {
@@ -563,12 +611,37 @@ func (s *Store) EnqueueRelayEvent(event RelayEvent) error {
 	return err
 }
 
+// relayEventRetry 常量定义事件 outbox 的重试上限与指数退避窗口。
+// base 30 秒、按 2 的幂增长、封顶 15 分钟；达到 maxRelayEventAttempts 后转入 failed
+// 长期保留，由 RequeueFailedRelayEvents 恢复入口重新入队，绝不静默删除。
+const (
+	relayEventRetryBaseMS = int64(30 * time.Second / time.Millisecond)
+	relayEventRetryCapMS  = int64(15 * time.Minute / time.Millisecond)
+	maxRelayEventAttempts = 8
+)
+
+// relayEventBackoffMS 计算第 attempts 次失败后的退避毫秒数。
+func relayEventBackoffMS(attempts int) int64 {
+	backoff := relayEventRetryBaseMS
+	for i := 1; i < attempts && backoff < relayEventRetryCapMS; i++ {
+		backoff *= 2
+	}
+	if backoff > relayEventRetryCapMS {
+		backoff = relayEventRetryCapMS
+	}
+	return backoff
+}
+
+// PendingRelayEvents 返回到达重试时间的 pending 事件。
+// 未到 next_attempt_at 的事件保持 pending 但跳过本轮，避免断网期间忙循环重试。
 func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT event_id,command_id,session_id,event_type,envelope_json
-		 FROM relay_event_outbox WHERE status='pending' ORDER BY created_at,event_id`)
+		 FROM relay_event_outbox
+		 WHERE status='pending' AND next_attempt_at <= ?
+		 ORDER BY created_at,event_id`, time.Now().UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -584,11 +657,127 @@ func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
 	return events, rows.Err()
 }
 
+// MarkRelayEventDelivered 只在 Relay 明确确认后调用；网络中断或响应损坏的事件必须保持
+// pending 并走 MarkRelayEventAttempt，绝不能被提前标记 delivered。
 func (s *Store) MarkRelayEventDelivered(eventID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(`UPDATE relay_event_outbox SET status='delivered' WHERE event_id=?`, eventID)
+	_, err := s.db.Exec(`UPDATE relay_event_outbox SET status='delivered', last_error='' WHERE event_id=?`, eventID)
 	return err
+}
+
+// MarkRelayEventAttempt 在一次上传失败后记录尝试次数与脱敏错误分类，
+// 并把下一次重试推迟到指数退避时间点；达到上限后转入 failed 长期保留。
+func (s *Store) MarkRelayEventAttempt(eventID, sanitizedError string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var attempts int
+	var status string
+	if err := s.db.QueryRow(
+		`SELECT attempts,status FROM relay_event_outbox WHERE event_id=?`, eventID).
+		Scan(&attempts, &status); err != nil {
+		return err
+	}
+	// 已 delivered 的历史事件不允许被失败路径复活；failed 只在未达上限前继续累计。
+	if status != "pending" && status != "failed" {
+		return errors.New("relay event not retryable: " + eventID)
+	}
+	nextAttempts := attempts + 1
+	now := time.Now().UnixMilli()
+	nextStatus := "pending"
+	if nextAttempts >= maxRelayEventAttempts || status == "failed" {
+		nextStatus = "failed"
+	}
+	backoff := relayEventBackoffMS(nextAttempts)
+	_, err := s.db.Exec(
+		`UPDATE relay_event_outbox
+		 SET attempts=?, last_error=?, status=?, next_attempt_at=?
+		 WHERE event_id=?`,
+		nextAttempts, sanitizedError, nextStatus, now+backoff, eventID)
+	return err
+}
+
+// relayEventPermanentReject 标记 Relay 对该事件内容的确定性拒绝（4xx 除 429）。
+// 这类事件重试永远不会成功，转入 failed 长期保留；只有显式全量恢复才会重新入队。
+const relayEventPermanentReject = "RELAY_REJECTED_PERMANENT"
+
+// MarkRelayEventFailedNow 把事件立即置为 failed 并保留脱敏原因，不进入自动退避队列。
+// 用于确定性拒绝（毒丸）等重试无意义的场景；失败行保留供审计和人工恢复。
+func (s *Store) MarkRelayEventFailedNow(eventID, sanitizedReason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.db.Exec(
+		`UPDATE relay_event_outbox
+		 SET status='failed', last_error=?, next_attempt_at=0
+		 WHERE event_id=? AND status IN ('pending','failed')`,
+		sanitizedReason, eventID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return errors.New("relay event not markable as failed: " + eventID)
+	}
+	return nil
+}
+
+// RequeueFailedRelayEvents 全量恢复 failed 事件（人工恢复入口）。
+// 恢复不删除任何历史行，重复 event_id 仍由 Relay 幂等去重兜底。
+func (s *Store) RequeueFailedRelayEvents() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requeueFailedRelayEventsWhere(`status='failed'`)
+}
+
+// RequeueTransientFailedRelayEvents 只恢复瞬态失败的 failed 事件（hello 成功后的自动恢复）。
+// 确定性被 Relay 拒绝的毒丸事件保持 failed，避免每次重连都空转烧尽退避窗口。
+func (s *Store) RequeueTransientFailedRelayEvents() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requeueFailedRelayEventsWhere(`status='failed' AND last_error <> '` + relayEventPermanentReject + `'`)
+}
+
+// requeueFailedRelayEventsLocked 把 failed 事件批量恢复为 pending 的内部实现。
+func (s *Store) requeueFailedRelayEventsWhere(where string) (int64, error) {
+	result, err := s.db.Exec(
+		`UPDATE relay_event_outbox
+		 SET status='pending', attempts=0, next_attempt_at=0
+		 WHERE ` + where)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// RelayEventOutboxRow 是事件 outbox 的诊断/可观测性投影：只含状态元数据，
+// 不含密文 envelope，可安全用于日志、健康指标与测试断言。
+type RelayEventOutboxRow struct {
+	EventID       string
+	Status        string
+	Attempts      int
+	NextAttemptAt int64
+	LastError     string
+}
+
+// RelayEventOutboxSnapshot 返回事件 outbox 的全量状态投影，供 P3 可观测性与回归使用。
+func (s *Store) RelayEventOutboxSnapshot() ([]RelayEventOutboxRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT event_id,status,attempts,next_attempt_at,last_error
+		 FROM relay_event_outbox ORDER BY created_at,event_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RelayEventOutboxRow
+	for rows.Next() {
+		var row RelayEventOutboxRow
+		if err := rows.Scan(&row.EventID, &row.Status, &row.Attempts, &row.NextAttemptAt, &row.LastError); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) EnqueueRelayUsage(usage RelayUsage) error {

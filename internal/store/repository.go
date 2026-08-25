@@ -101,6 +101,10 @@ type Repository interface {
 	CommandByID(ctx context.Context, id string) (CommandRow, error)
 	CommandByScopeKey(ctx context.Context, scopeHash, idempotencyKey string) (CommandRow, error)
 	UpdateCommandStatus(ctx context.Context, id, status string) error
+	// ExpireStaleCommands 把会话内 lease_epoch 低于新 epoch 且仍未终态（accepted/running）
+	// 的命令收敛为 expired，返回受影响行数。必须在 AcquireLease 的同一事务内调用，
+	// 保证"旧控制权失效"与"新 epoch 生效"原子可见。
+	ExpireStaleCommands(ctx context.Context, sessionID string, belowEpoch int64) (int64, error)
 	// SetCommandReadResponse 只保存 Web 临时公钥可解的 response envelope；调用方不得传入文件、代码或 diff 明文。
 	SetCommandReadResponse(ctx context.Context, id, envelopeJSON string) error
 	ListCommands(ctx context.Context, sessionID string) ([]CommandRow, error)
@@ -168,12 +172,14 @@ type Repository interface {
 	// RetireTerminalIdentityKey 撤销单个 key（设备撤销或 owner 主动吊销）；返回 false 表示不存在。
 	RetireTerminalIdentityKey(ctx context.Context, keyID string, nowUnixMS int64) (bool, error)
 
-	// Outbox
+	// Outbox：pending → delivered/failed 的状态机由领域层驱动；failed 行保留并可恢复。
 	EnqueueOutbox(ctx context.Context, o OutboxRow) error
 	ClaimOutbox(ctx context.Context, id int64) (OutboxRow, error)
 	MarkOutboxDone(ctx context.Context, id int64) error
 	MarkOutboxFailed(ctx context.Context, id int64, attempts int) error
 	ListPendingOutbox(ctx context.Context, limit int) ([]OutboxRow, error)
+	// RequeueFailedOutbox 把 failed 行复位为 pending 并清零退避（人工/自动恢复入口）。
+	RequeueFailedOutbox(ctx context.Context) (int64, error)
 
 	// Usage（ADR-010）：usage_key_hash 唯一约束去重；聚合只读白名单整数计数。
 	// UpsertUsageEvent 返回 false 表示该 usage key 已存在（重复上传，不重复累加）。
@@ -488,6 +494,8 @@ type OutboxRow struct {
 	PayloadJSON string
 	Status      string
 	Attempts    int
+	// NextAttemptAtUnixMS 是指数退避后的最早重试时间；0 表示立即可重试。
+	NextAttemptAtUnixMS int64
 }
 
 // TerminalAuthChallengeRow 是 terminal_auth_challenges 表的行投影。

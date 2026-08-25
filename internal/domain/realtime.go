@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/id"
@@ -437,6 +438,9 @@ func checkLeaseWithRepo(ctx context.Context, repo store.Repository, sessionID, d
 }
 
 // AcquireLease 抢占写控制权；返回当前 epoch。竞态时只保留一个写端。
+// epoch 递增的同一事务内，旧 epoch 下仍未终态（accepted/running）的 Daemon 命令
+// 一并收敛为 expired：它们已不可能被合法执行，必须 fail-closed 而不是永久滞留，
+// 也不能留给迟到的 result 复活。
 func (s *SessionService) AcquireLease(ctx context.Context, sessionID, deviceID, instanceID string) (int64, error) {
 	var epoch int64
 	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
@@ -444,15 +448,30 @@ func (s *SessionService) AcquireLease(ctx context.Context, sessionID, deviceID, 
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err == nil && lease.DeviceID != "" && lease.DeviceID != deviceID {
-			return ErrLeaseConflict
-		}
 		if err == nil {
+			if lease.DeviceID != "" && lease.DeviceID != deviceID {
+				return ErrLeaseConflict
+			}
 			epoch = lease.Epoch + 1
 		} else {
 			epoch = 1
 		}
-		return tx.AcquireLease(ctx, store.LeaseRow{SessionID: sessionID, DeviceID: deviceID, Epoch: epoch, InstanceID: instanceID})
+		if err := tx.AcquireLease(ctx, store.LeaseRow{SessionID: sessionID, DeviceID: deviceID, Epoch: epoch, InstanceID: instanceID}); err != nil {
+			return err
+		}
+		session, sessionErr := tx.SessionByID(ctx, sessionID)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		expired, expireErr := tx.ExpireStaleCommands(ctx, sessionID, epoch)
+		if expireErr != nil {
+			return expireErr
+		}
+		if expired > 0 {
+			_ = tx.AppendAudit(ctx, session.AccountID, "command.expired_stale_epoch",
+				`{"session_id":"`+sessionID+`","count":`+strconv.FormatInt(expired, 10)+`}`)
+		}
+		return nil
 	})
 	if err != nil {
 		return 0, err

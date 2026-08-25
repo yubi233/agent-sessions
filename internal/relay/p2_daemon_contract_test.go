@@ -142,6 +142,8 @@ func TestP2DaemonCommandLifecycleAndSSERecovery(t *testing.T) {
 }
 
 // RELAY-LEASE-03：Daemon 在命令已经发出、Android 控制权已换代后不能以旧 epoch 启动执行。
+// v0.6 起 lease 换代会在同一事务内把旧 epoch 未终态命令收敛为 expired；
+// 迟到的 started ack 收到权威终态回执（status=expired），命令绝不进入 running。
 func TestP2DaemonRejectsStaleLeaseBeforeStart(t *testing.T) {
 	env := newTestEnv(t)
 	owner := env.registerAs(t, "p2-daemon-stale@test.dev")
@@ -168,8 +170,24 @@ func TestP2DaemonRejectsStaleLeaseBeforeStart(t *testing.T) {
 	started := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.ID+"/ack", map[string]any{
 		"protocol_version": 1, "delivery_seq": 1, "ack_kind": "started",
 	}, terminal.AccessToken)
-	if started.Code != http.StatusConflict {
-		t.Fatalf("stale start status=%d want 409 body=%s", started.Code, started.Body.String())
+	if started.Code != http.StatusOK {
+		t.Fatalf("stale start receipt status=%d body=%s", started.Code, started.Body.String())
+	}
+	var receipt struct {
+		Status string `json:"status"`
+	}
+	decodeW1(t, started.Body.Bytes(), &receipt)
+	if receipt.Status != domain.CommandExpired {
+		t.Fatalf("stale command must converge to expired, got %q body=%s", receipt.Status, started.Body.String())
+	}
+	// 终态权威视图：owner 读取的命令状态同样是 expired，不会复活为 running。
+	got := env.do(t, http.MethodGet, "/v1/commands/"+submitted.ID, nil, owner.AccessToken)
+	var commandView struct {
+		Status string `json:"status"`
+	}
+	decodeW1(t, got.Body.Bytes(), &commandView)
+	if commandView.Status != domain.CommandExpired {
+		t.Fatalf("command view after stale ack status=%q want expired", commandView.Status)
 	}
 }
 

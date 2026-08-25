@@ -140,6 +140,8 @@ var migrations = []string{
 		status TEXT NOT NULL,
 		attempts INTEGER NOT NULL DEFAULT 0
 	);`,
+	// v0.6 P2：outbox 增加指数退避列。旧库升级只加列；'done' 为历史 delivered 语义别名。
+	`ALTER TABLE outbox ADD COLUMN next_attempt_at_unix_ms INTEGER NOT NULL DEFAULT 0;`,
 	`CREATE TABLE IF NOT EXISTS audit_events (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		account_id TEXT,

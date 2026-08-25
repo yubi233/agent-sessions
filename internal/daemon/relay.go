@@ -541,6 +541,13 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if err := l.Client.Heartbeat(ctx); err != nil {
 		return err
 	}
+	// hello/heartbeat 成功说明 Relay 可达：自动恢复上一轮因瞬态故障转入 failed 的事件。
+	// 确定性毒丸（RELAY_REJECTED_PERMANENT）不参与自动恢复，只能显式全量恢复。
+	if recovered, recoverErr := l.Store.RequeueTransientFailedRelayEvents(); recoverErr != nil {
+		return recoverErr
+	} else if recovered > 0 {
+		l.Logger.Info("daemon event outbox auto recovery", "requeued", recovered)
+	}
 	// delivery cursor 已跳过已落盘命令。进程重启后先收敛本地 pending 状态，不能只等待 SSE
 	// 重放，否则 started 命令会永久滞留，或依赖下一条无关命令才恢复。
 	if err := l.processPending(ctx); err != nil {
@@ -927,18 +934,23 @@ func (l *RelayLoop) flushEvents(ctx context.Context) error {
 	}
 	for _, event := range events {
 		if err := l.Client.UploadEvent(ctx, event); err != nil {
-			// 4xx（除 429）是 Relay 对该事件内容的确定性拒绝：重试永远不会成功，
-			// 只会把整个 relay 循环卡死在 reconnect backoff 里。按毒丸处理：
-			// 记录告警后丢弃，其余错误保持可安全重试。
+			// 4xx（除 429）是 Relay 对该事件内容的确定性拒绝：重试永远不会成功。
+			// 按毒丸处理：立即转入 failed 并保留脱敏原因，不占用退避队列；
+			// 只有显式全量恢复才会重新入队。其余错误保持可安全重试。
 			var httpErr *RelayHTTPError
 			if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 && httpErr.Status != http.StatusTooManyRequests {
-				l.Logger.Warn("daemon event dropped: relay permanently rejected payload",
+				l.Logger.Warn("daemon event failed permanently: relay rejected payload",
 					"event_id", event.EventID, "session_id", event.SessionID,
 					"event_type", event.EventType, "status", httpErr.Status)
-				if dropErr := l.Store.MarkRelayEventDelivered(event.EventID); dropErr != nil {
-					return dropErr
+				if failErr := l.Store.MarkRelayEventFailedNow(event.EventID, relayEventPermanentReject); failErr != nil {
+					return failErr
 				}
 				continue
+			}
+			// 瞬态失败（网络断开、5xx、超时）：记录尝试次数与指数退避后交给既有重连路径。
+			// 事件保持 pending，达到重试上限后转入 failed 等待恢复入口，绝不静默删除。
+			if attemptErr := l.Store.MarkRelayEventAttempt(event.EventID, sanitizeRelayUploadError(err)); attemptErr != nil {
+				l.Logger.Warn("daemon event attempt accounting failed", "event_id", event.EventID, "error", attemptErr)
 			}
 			return err
 		}
@@ -947,6 +959,20 @@ func (l *RelayLoop) flushEvents(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// sanitizeRelayUploadError 把上传失败压缩为脱敏错误分类，只写入 outbox 的 last_error。
+// 不记录 body、envelope 或原始错误文本，防止密文或环境细节进入本地状态文件。
+func sanitizeRelayUploadError(err error) string {
+	var httpErr *RelayHTTPError
+	switch {
+	case errors.As(err, &httpErr):
+		return fmt.Sprintf("RELAY_HTTP_%d", httpErr.Status)
+	case errors.Is(err, context.DeadlineExceeded):
+		return "RELAY_TIMEOUT"
+	default:
+		return "RELAY_NETWORK"
+	}
 }
 
 func (l *RelayLoop) flushUsages(ctx context.Context) error {
