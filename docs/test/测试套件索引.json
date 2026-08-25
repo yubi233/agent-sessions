@@ -556,14 +556,17 @@
         "DEPLOY-02",
         "DEPLOY-03",
         "DEPLOY-04",
-        "DEPLOY-05",
         "SYNC-04",
         "PERF-01",
         "PERF-02",
         "PERF-03",
-        "PERF-04",
         "E2E-RELAY-01",
-        "E2E-RELAY-02"
+        "E2E-RELAY-02",
+        "DEPLOY-05",
+        "PERF-04",
+        "RELEASE-V06-01",
+        "ROLLBACK-V06-01",
+        "RECORD-V06-01"
       ],
       "consumed_ids": [
         "SEC-01",

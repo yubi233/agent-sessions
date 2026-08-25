@@ -1,6 +1,6 @@
 {
   "suite": "reliability-release",
-  "suite_version": 2,
+  "suite_version": 4,
   "status": "in_progress",
   "plan_id": "RELIABILITY-RELEASE",
   "description": "本地 Relay + SQLite 启停、备份恢复、升级回滚、性能与跨层 full gate。真实 Provider gate 仍由各 ADAPTER_* 授权。",
@@ -298,6 +298,78 @@
         "Taskfile.yml#test:v04:perf",
         "e2e-verify/perf/v04-baseline.mjs",
         "e2e-verify/reports/<ts>/RELIABILITY-RELEASE/perf-04.json"
+      ]
+    },
+    {
+      "id": "RELEASE-V06-01",
+      "title": "v0.6 发布门统一入口全量通过",
+      "status": "passed",
+      "phase": "v0.6/P4",
+      "category": "发布",
+      "priority": "P0",
+      "test_layer": "local full gate (unit + integration + contract + soak + deploy + restart + headed browser)",
+      "precondition": "本地 macOS 工具链（Go、Node、pnpm、Flutter、Chrome、ffmpeg）；无真实上游凭据要求。",
+      "steps": [
+        "运行 task test:v06（docs:verify、check、protocol、crypto、relay、daemon、e2e:relay、contract、soak、deploy、restart、headed p4-web-readonly 与 p4-admin-readonly）。",
+        "逐项核对每个子命令的退出码与报告产物，失败项必须先分类再修复。"
+      ],
+      "expected": "task test:v06 所有子任务退出码为 0；headed 浏览器套件以 real_browser=true、headless=false 记录；soak 报告落盘 e2e-verify/reports 下且不包含正文或密钥。",
+      "cleanup": [
+        "关闭 headed 浏览器与临时 Relay 进程；保留脱敏报告"
+      ],
+      "evidence": [
+        "Taskfile.yml#test:v06",
+        "e2e-verify/reports/2026-08-25T15-18-22-112Z/RELIABILITY-RELEASE/v06-soak.json",
+        "e2e-verify/reports/2026-08-25T15-18-44-556Z/WEB/p4-web-readonly.json",
+        "e2e-verify/reports/2026-08-25T15-18-52-584Z/ADMIN/p4-admin-readonly.json"
+      ]
+    },
+    {
+      "id": "ROLLBACK-V06-01",
+      "title": "Terminal 签名模式 optional→required→optional 回滚演练不丢业务历史",
+      "status": "passed",
+      "phase": "v0.6/P4",
+      "category": "回滚演练",
+      "priority": "P0",
+      "test_layer": "integration regression（同一 SQLite 上重建路由模拟进程重启）",
+      "precondition": "隔离 Relay SQLite；已配对带 Ed25519 身份公钥的 Terminal；已沉淀会话+命令+密文事件数据。",
+      "steps": [
+        "optional 模式完成 signed hello 并提交命令、上传 opaque 事件。",
+        "切换 required：旧 bearer hello 返回 426 UPGRADE_REQUIRED；signed hello 仅声明 signature_v1。",
+        "回退 optional：旧 bearer 立即恢复且 auth_modes 回到双轨。",
+        "对比 accounts/devices/sessions/commands/session_events/outbox/terminal_identity_keys 行数与命令终态前后一致；挑战表只增不减；已消费挑战仍不可重放。"
+      ],
+      "expected": "模式切换只影响认证语义；任何业务历史行与终态在三次切换前后完全一致；一次性挑战/nonce 状态保持 fail-closed。",
+      "cleanup": [
+        "测试框架销毁临时 SQLite 与路由 fixture"
+      ],
+      "evidence": [
+        "internal/relay/v06_rollback_drill_test.go#TestV06SignatureModeRollbackDrill",
+        "Taskfile.yml#test:e2e:relay"
+      ]
+    },
+    {
+      "id": "RECORD-V06-01",
+      "title": "v0.6 signed Terminal 闭环 headed Chrome 录屏（先定义后录制）",
+      "status": "passed",
+      "phase": "v0.6/P4",
+      "category": "录屏演示",
+      "priority": "P1",
+      "test_layer": "recording (real browser + CDP screencast)",
+      "precondition": "RELEASE-V06-01 通过后才允许录制；隔离 Relay/Web 动态端口；Node 侧签名实现与 ADR-012 canonical bytes 一致。",
+      "steps": [
+        "回归内容清单（录制定义）：1) 打开 Web 只读首页并登录；2) 会话列表可见；3) 进入会话详情 SSE 就绪；4) 后台 challenge→signed hello 断言双轨 auth_modes；5) owner 获取 lease 并提交命令；6) signed ack started + 密文事件上传；7) 页面实时反映事件序号增长；8) signed result 收口 succeeded；9) 页面展示终态并查看终端在线。",
+        "运行 node e2e-verify/record.mjs --suite v06，任一后台步骤断言失败即整次录制失败。",
+        "核对 manifest 步骤清单与帧数、mp4 产物和脱敏报告 v06-signed-loop-recording。"
+      ],
+      "expected": "录屏可见完整 signed 闭环与只读 Web 实时联动；manifest 记录全部步骤；报告 real_browser=true、headless=false、fixture_data=true；不出现 token、私钥或明文正文。",
+      "cleanup": [
+        "关闭浏览器、Web 与 Relay 子进程；保留 screencasts/<ts>/ 与脱敏报告"
+      ],
+      "evidence": [
+        "e2e-verify/record.mjs#createV06DemoScript",
+        "e2e-verify/screencasts/2026-08-25T15-20-06-828Z/manifest.json",
+        "e2e-verify/reports/2026-08-25T15-20-23-980Z/RELIABILITY-RELEASE/v06-signed-loop-recording.json"
       ]
     }
   ]

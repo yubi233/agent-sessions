@@ -42,7 +42,7 @@ timestamp_ms | nonce | sha256(body) | key_id
 
 字段使用 UTF-8 字符串和 `|` 分隔；整数/时间戳使用十进制 ASCII；`body` 为原始请求体字节，空 body 使用 `sha256("")`。Ed25519 签名对象为上述 canonical bytes 的 UTF-8 编码。
 
-`sha256(body)` 的 body 定义（P1 冻结）：签名以 JSON 对象形式存放在请求体的顶层 `signature` 成员中；`body_hash` 覆盖**删除该成员后**的紧凑 UTF-8 JSON 原文字节。两端都不得把 signature 字段纳入哈希——否则签名需要覆盖自身，构成循环依赖。请求体必须是紧凑 JSON（无多余空白），使"删除 signature 成员后的原文字节"在 Go/Dart/TypeScript 各端确定一致。
+`sha256(body)` 的 body 定义（P1 冻结）：签名以 JSON 对象形式存放在请求体的顶层 `signature` 成员中；`body_hash` 覆盖**删除该成员后**的紧凑 UTF-8 JSON 字节，其中顶层成员按键名字典序排列、无多余空白，嵌套值保持发送方序列化原样。两端都不得把 signature 字段纳入哈希——否则签名需要覆盖自身，构成循环依赖。Go/Dart/TypeScript 各端按同一规则实现确定一致的字节。
 
 #### 校验规则
 
