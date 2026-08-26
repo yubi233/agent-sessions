@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+
 import '../domain/models.dart';
 
 const _localDevOwnerBootstrapB64 = String.fromEnvironment(
@@ -15,12 +17,15 @@ class LocalDevOwnerBootstrap {
 }
 
 Future<LocalDevOwnerBootstrap?> readLocalDevOwnerBootstrap() async {
-  if (_localDevOwnerBootstrapB64.isEmpty) {
+  final bootstrapB64 = _localDevOwnerBootstrapB64.isNotEmpty
+      ? _localDevOwnerBootstrapB64
+      : Platform.environment['LOCAL_DEV_OWNER_BOOTSTRAP_B64'] ?? '';
+  if (bootstrapB64.isEmpty) {
     return null;
   }
   late final String raw;
   try {
-    raw = utf8.decode(base64Decode(_localDevOwnerBootstrapB64));
+    raw = utf8.decode(base64Decode(bootstrapB64));
   } on FormatException {
     throw const RelayFailure(RelayFailureKind.protocol, '本地 owner 配对注入格式错误。');
   }

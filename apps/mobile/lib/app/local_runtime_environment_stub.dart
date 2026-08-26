@@ -5,6 +5,8 @@ bool get localFixtureModeFromRuntime => false;
 
 String get localVisualScenarioFromRuntime => '';
 
+String get localDevTargetSessionIdFromRuntime => '';
+
 String get localVisualFrameDirectoryFromRuntime => '';
 
 int get localVisualFrameCountFromRuntime => 0;

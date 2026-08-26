@@ -27,6 +27,9 @@ const _compileTimeLocalFixtureMode = bool.fromEnvironment('LOCAL_FIXTURE_MODE');
 const _compileTimeLocalVisualScenarioValue = String.fromEnvironment(
   'LOCAL_VISUAL_SCENARIO',
 );
+const _compileTimeLocalDevTargetSessionId = String.fromEnvironment(
+  'LOCAL_DEV_TARGET_SESSION_ID',
+);
 
 /// 编译期定义仍是 CI/Android 的唯一 fixture 开关；macOS debug 视觉 runner 可在已构建 app 上安全切换固定场景。
 bool get _useLocalFixtureMode =>
@@ -37,6 +40,13 @@ String get _localVisualScenarioValue =>
     ? _compileTimeLocalVisualScenarioValue
     : kDebugMode
     ? localVisualScenarioFromRuntime
+    : '';
+
+String get _localDevTargetSessionId =>
+    _compileTimeLocalDevTargetSessionId.isNotEmpty
+    ? _compileTimeLocalDevTargetSessionId
+    : kDebugMode
+    ? localDevTargetSessionIdFromRuntime
     : '';
 
 /// Android 目标手机画布，macOS 本地验收也使用同一逻辑尺寸，避免桌面屏幕高度改变移动布局。
@@ -104,15 +114,25 @@ Future<void> main() async {
         localVisualScenario:
             localVisualFixture?.scenario ?? LocalVisualScenario.none,
         localVisualPairingRequestId: localVisualFixture?.pairingRequestId,
-        localVisualSessionId: localVisualFixture?.sessionId,
+        localVisualSessionId:
+            localVisualFixture?.sessionId ??
+            (_localDevTargetSessionId.isEmpty
+                ? null
+                : _localDevTargetSessionId),
         localVisualRecovery: localVisualFixture?.stageLifecycleRecovery,
-        localVisualFrameDirectory: _useLocalFixtureMode && kDebugMode
+        localVisualFrameDirectory:
+            (_useLocalFixtureMode || _localDevTargetSessionId.isNotEmpty) &&
+                kDebugMode
             ? localVisualFrameDirectoryFromRuntime
             : '',
-        localVisualFrameCount: _useLocalFixtureMode && kDebugMode
+        localVisualFrameCount:
+            (_useLocalFixtureMode || _localDevTargetSessionId.isNotEmpty) &&
+                kDebugMode
             ? localVisualFrameCountFromRuntime
             : 0,
-        localVisualFrameIntervalMs: _useLocalFixtureMode && kDebugMode
+        localVisualFrameIntervalMs:
+            (_useLocalFixtureMode || _localDevTargetSessionId.isNotEmpty) &&
+                kDebugMode
             ? localVisualFrameIntervalMsFromRuntime
             : 0,
       ),
@@ -220,8 +240,8 @@ class _LocalVisualFrameRecorderState extends State<_LocalVisualFrameRecorder> {
   }
 
   Future<void> _captureAfterScenarioSettles() async {
-    // Coordinator 需要完成认证、选会话和 lease；固定等待只存在于 deterministic visual fixture。
-    await Future<void>.delayed(const Duration(milliseconds: 1400));
+    // Coordinator 需要完成认证、选会话和 lease；真实本地 session 还需要一次 Relay snapshot 拉取。
+    await Future<void>.delayed(const Duration(milliseconds: 3000));
     final boundary = _boundaryKey.currentContext?.findRenderObject();
     if (boundary is! RenderRepaintBoundary) return;
     // 预热 raster 与 PNG 编码；严格采样从预热后开始，避免首帧初始化拖慢 200ms 节拍。

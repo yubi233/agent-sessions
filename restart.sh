@@ -22,6 +22,7 @@ FLUTTER_MODE="${AGENT_SESSIONS_FLUTTER_MODE:-mac}"
 FLUTTER_DEVICE="${AGENT_SESSIONS_FLUTTER_DEVICE:-}"
 FLUTTER_TIMEOUT_MS="${AGENT_SESSIONS_FLUTTER_TIMEOUT_MS:-30000}"
 FLUTTER_RELAY_BASE="${AGENT_SESSIONS_FLUTTER_RELAY_BASE:-}"
+FLUTTER_TARGET_SESSION_ID="${AGENT_SESSIONS_FLUTTER_TARGET_SESSION_ID:-}"
 FLUTTER_DEVICE_HELPER="${AGENT_SESSIONS_FLUTTER_DEVICE_HELPER:-$ROOT_DIR/tools/flutter_device.sh}"
 LOCAL_DEV_PAIRING="${AGENT_SESSIONS_LOCAL_DEV_PAIRING:-true}"
 LOCAL_DEV_PROJECT_ID="${AGENT_SESSIONS_LOCAL_DEV_PROJECT_ID:-local-dev}"
@@ -96,6 +97,8 @@ Options:
   --flutter-device ID    Flutter device id; non-macos ids select device mode
   --flutter-relay-base URL
                          Relay URL passed to Flutter; device mode requires this
+  --flutter-target-session ID
+                         Local macOS verification: open an existing session on launch
   --fixture-daemon       Add --fixture-adapter to the Daemon command
   --terminal-signing     Enable v0.6 Terminal Ed25519 signing for the Daemon
                          (generate/register local identity key; env:
@@ -119,7 +122,10 @@ Environment:
   AGENT_SESSIONS_OPENCODE_URL, OPENCODE_BIN,
   AGENT_SESSIONS_FLUTTER_MODE, AGENT_SESSIONS_FLUTTER_DEVICE,
   AGENT_SESSIONS_FLUTTER_TIMEOUT_MS, AGENT_SESSIONS_FLUTTER_RELAY_BASE,
+  AGENT_SESSIONS_FLUTTER_TARGET_SESSION_ID,
   AGENT_SESSIONS_DAEMON_SIGNING,
+  AGENT_SESSIONS_DSH_BIN, AGENT_SESSIONS_DSH_CONFIG,
+  AGENT_SESSIONS_DSH_PERSIST_ROOT,
   AGENT_SESSIONS_LOCAL_DEV_PAIRING, FLUTTER_BIN
 
 Logs and local Relay data never go to testbox; testbox remains the Agent session
@@ -981,7 +987,7 @@ start_daemon() {
     echo "daemon: missing access token after pairing" >&2
     return 1
   fi
-  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_DSH_BIN="${AGENT_SESSIONS_DSH_BIN:-}" AGENT_SESSIONS_DSH_CONFIG="${AGENT_SESSIONS_DSH_CONFIG:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 )
+  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_DSH_BIN="${AGENT_SESSIONS_DSH_BIN:-}" AGENT_SESSIONS_DSH_CONFIG="${AGENT_SESSIONS_DSH_CONFIG:-}" AGENT_SESSIONS_DSH_PERSIST_ROOT="${AGENT_SESSIONS_DSH_PERSIST_ROOT:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 )
   # v0.6：签名模式向 Daemon 注入本机私钥文件路径；未启用/文件缺失时保持 bearer 行为
   if truthy "$TERMINAL_SIGNING" && [[ -n "$DAEMON_SIGNING_KEY_FILE" && -s "$DAEMON_SIGNING_KEY_FILE" ]]; then
     args+=(AGENT_SESSIONS_DAEMON_SIGNING_KEY_FILE="$DAEMON_SIGNING_KEY_FILE")
@@ -1008,6 +1014,14 @@ start_flutter() {
   fi
   if [[ "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
     args+=("--dart-define=LOCAL_DEV_WORKSPACE_ID=$LOCAL_DEV_WORKSPACE_ID")
+  fi
+  if [[ -n "$FLUTTER_TARGET_SESSION_ID" && "$FLUTTER_MODE" == "mac" ]]; then
+    args+=("--dart-define=LOCAL_DEV_TARGET_SESSION_ID=$FLUTTER_TARGET_SESSION_ID")
+  fi
+  if [[ -n "${LOCAL_VISUAL_FRAME_DIRECTORY:-}" && "$FLUTTER_MODE" == "mac" ]]; then
+    args+=("--dart-define=LOCAL_VISUAL_FRAME_DIRECTORY=$LOCAL_VISUAL_FRAME_DIRECTORY")
+    args+=("--dart-define=LOCAL_VISUAL_FRAME_COUNT=${LOCAL_VISUAL_FRAME_COUNT:-0}")
+    args+=("--dart-define=LOCAL_VISUAL_FRAME_INTERVAL_MS=${LOCAL_VISUAL_FRAME_INTERVAL_MS:-0}")
   fi
   start_process flutter "$file" "$(component_log flutter)" "$ROOT_DIR/apps/mobile" "${args[@]}"
   STARTED_FLUTTER=true
@@ -1120,8 +1134,8 @@ start_action() {
     if [[ -n "$dsh_bin" && ! -f "$dsh_bin" ]]; then
       echo "  dsh: bridge=$dsh_bin (路径不存在；provider 将以 unavailable 呈现)" >&2
     fi
-    echo "  dsh: bridge=${dsh_bin:-<unset>} (config=${AGENT_SESSIONS_DSH_CONFIG:-<unset>}; per-session spawn)"
-    echo "  flutter: $WITH_FLUTTER (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE owner_bootstrap=${LOCAL_OWNER_BOOTSTRAP_B64:+true} workspace=$LOCAL_DEV_WORKSPACE_ID)"
+    echo "  dsh: bridge=${dsh_bin:-<unset>} (config=${AGENT_SESSIONS_DSH_CONFIG:-<unset>}; persist_root=${AGENT_SESSIONS_DSH_PERSIST_ROOT:-<temp-cleanup>}; per-session spawn)"
+    echo "  flutter: $WITH_FLUTTER (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE owner_bootstrap=${LOCAL_OWNER_BOOTSTRAP_B64:+true} workspace=$LOCAL_DEV_WORKSPACE_ID target_session=${FLUTTER_TARGET_SESSION_ID:-<unset>})"
     if truthy "$TERMINAL_SIGNING"; then
       echo "  terminal-signing: on (key=$DAEMON_STATE_DIR/terminal_signing_seed.b64)"
     else
@@ -1259,6 +1273,11 @@ parse_args() {
       --flutter-relay-base)
         [[ $# -ge 2 ]] || { echo "missing value for --flutter-relay-base" >&2; return 2; }
         FLUTTER_RELAY_BASE="$2"
+        shift 2
+        ;;
+      --flutter-target-session)
+        [[ $# -ge 2 ]] || { echo "missing value for --flutter-target-session" >&2; return 2; }
+        FLUTTER_TARGET_SESSION_ID="$2"
         shift 2
         ;;
       --fixture-daemon) FIXTURE_DAEMON=true; WITH_DAEMON=true; shift ;;
