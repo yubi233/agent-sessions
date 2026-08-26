@@ -499,6 +499,14 @@ func (l *RelayLoop) RunWithRetry(ctx context.Context) error {
 		if errors.As(err, &httpErr) && (httpErr.Status == http.StatusForbidden || httpErr.Status == http.StatusUnauthorized || httpErr.Status == http.StatusConflict || httpErr.Status == http.StatusUpgradeRequired) {
 			return err
 		}
+		// v0.6 残余项收口：配置了 Terminal 签名后，签名类协议错误由 Relay 以 400 +
+		// 稳定错误码返回（SIGNATURE_INVALID/NONCE_REUSED/TIMESTAMP_EXPIRED/
+		// KEY_UNKNOWN_OR_REVOKED/SIGNATURE_REQUIRED）。这类失败是密钥供给、时钟或
+		// 重放状态的确定性故障，重试不可能自愈；继续退避重试只会掩盖配置错误。
+		// 因此签名模式下立即退出并保留原始错误；未配置签名的 bearer 路径行为不变。
+		if l.Client != nil && l.Client.Signer != nil && errors.As(err, &httpErr) && IsTerminalAuthErrorCode(httpErr.Code) {
+			return err
+		}
 		l.Logger.Warn("daemon relay reconnect deferred", "error", err, "backoff_ms", backoff.Milliseconds())
 		select {
 		case <-ctx.Done():
