@@ -58,3 +58,6 @@ packages/protocol/generated/.cache/
 # tool-internal scratch (not project artifacts)
 .dsh-fix-*/
 .dsh-media/
+.dsh-sessions/
+# 本地个人 LLM 接入配置（dsh-happy-init 生成，含个人端点；fixture 版本在 e2e-verify/fixtures/dsh/）
+cordis.yml
