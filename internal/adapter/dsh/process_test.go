@@ -57,6 +57,76 @@ func startShTransport(t *testing.T, script string, env []string, grace time.Dura
 	return tr, cmd.Process.Pid
 }
 
+// withEnvUnset 临时清理环境变量，测试结束后恢复原值。
+func withEnvUnset(t *testing.T, key string) {
+	t.Helper()
+	old, ok := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, old)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+}
+
+func TestPersistRootDefaultsToTemporaryAndCleanup(t *testing.T) {
+	withEnvUnset(t, EnvPersistRoot)
+	root, retain, err := newPersistRoot()
+	if err != nil {
+		t.Fatalf("newPersistRoot: %v", err)
+	}
+	if retain {
+		t.Fatal("默认 persist root 不应保留")
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("默认 persist root 应已创建: %v", err)
+	}
+	tr := &dshBinTransport{persistRoot: root}
+	tr.cleanupPersistRoot()
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("默认 persist root 应被清理，stat err=%v", err)
+	}
+}
+
+func TestPersistRootRetentionOptIn(t *testing.T) {
+	verificationRoot := t.TempDir()
+	t.Setenv(EnvPersistRoot, verificationRoot)
+	root, retain, err := newPersistRoot()
+	if err != nil {
+		t.Fatalf("newPersistRoot: %v", err)
+	}
+	if !retain {
+		t.Fatal("设置验证根目录后必须保留 persist root")
+	}
+	if !strings.HasPrefix(root, verificationRoot+string(os.PathSeparator)) {
+		t.Fatalf("persist root = %q, want under %q", root, verificationRoot)
+	}
+	marker := filepath.Join(root, "marker.txt")
+	if err := os.WriteFile(marker, []byte("cache-retained"), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	tr := &dshBinTransport{persistRoot: root, retainPersistRoot: true}
+	tr.cleanupPersistRoot()
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("验证 persist root 应保留 marker: %v", err)
+	}
+}
+
+func TestPersistRootRejectsEmptyOrRelativeOptIn(t *testing.T) {
+	for _, value := range []string{"", "relative/cache"} {
+		t.Run(fmt.Sprintf("value=%q", value), func(t *testing.T) {
+			t.Setenv(EnvPersistRoot, value)
+			if _, _, err := newPersistRoot(); err == nil {
+				t.Fatalf("%s=%q 应 fail-closed", EnvPersistRoot, value)
+			}
+		})
+	}
+}
+
 // awaitPidFile 轮询等待 pid 文件出现（SESS-05 awaitChildPID 同款口径）。
 func awaitPidFile(t *testing.T, path string) int {
 	t.Helper()

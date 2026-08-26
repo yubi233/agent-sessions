@@ -25,6 +25,8 @@ const (
 	EnvBin = "AGENT_SESSIONS_DSH_BIN"
 	// EnvConfig 覆盖桥的 cordis 配置文件路径；未设置时缺省 P0 冒烟核实的路径。
 	EnvConfig = "AGENT_SESSIONS_DSH_CONFIG"
+	// EnvPersistRoot 是验证专用的 DSH session cache 保留根目录；未设置时仍使用临时目录并在关闭后删除。
+	EnvPersistRoot = "AGENT_SESSIONS_DSH_PERSIST_ROOT"
 )
 
 // 缺省桥路径（spec 冻结，与 e2e-verify/real/dsh-acp-smoke.mjs --dsh-root 一致）。
@@ -87,11 +89,11 @@ func newBinTransport() (*dshBinTransport, error) {
 	// 桥启动目录固定为 DSH 检出根（bin 上溯 5 级），与 P0 冒烟 cwd=--dsh-root 一致：
 	// 组合内插件按 DSH 树解析，loadEnv 读取 DSH 根 .env（LLM key 由 DSH 侧承载）。
 	runRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(bin)))))
-	// 每次会话独立的临时持久化目录：把 .sessions / session-query.db 隔离出真实工作区，
-	// adr 口径与冒烟脚本 childEnv.DSH_SNAPSHOT_SESSIONS_ROOT 一致。
-	persistRoot, err := os.MkdirTemp("", "dsh-bridge-")
+	// 每次会话独立持久化目录：默认放入系统临时目录并在关闭后删除；验证时可通过
+	// AGENT_SESSIONS_DSH_PERSIST_ROOT 保留 cache，以把 DSH 原始会话日志与 Relay/Flutter 证据绑定。
+	persistRoot, retainPersistRoot, err := newPersistRoot()
 	if err != nil {
-		return nil, fmt.Errorf("创建桥持久化临时目录: %w", err)
+		return nil, err
 	}
 	ring := &diagRing{}
 	cmd := exec.Command(node, bin, "-c", config)
@@ -117,10 +119,11 @@ func newBinTransport() (*dshBinTransport, error) {
 		return nil, fmt.Errorf("启动 dsh-acp-demo: %w", err)
 	}
 	t := &dshBinTransport{
-		cmd:         cmd,
-		stdin:       stdin,
-		stderr:      ring,
-		persistRoot: persistRoot,
+		cmd:               cmd,
+		stdin:             stdin,
+		stderr:            ring,
+		persistRoot:       persistRoot,
+		retainPersistRoot: retainPersistRoot,
 	}
 	// stdout 每行一帧；scanner 缓冲上限 1 MiB，容忍较大的助手文本块。
 	scanner := bufio.NewScanner(stdout)
@@ -129,12 +132,44 @@ func newBinTransport() (*dshBinTransport, error) {
 	return t, nil
 }
 
+// newPersistRoot 创建桥持久化目录。默认使用系统临时目录并由 Close/ForceKill 清理；
+// 设置 AGENT_SESSIONS_DSH_PERSIST_ROOT 时只在该根目录下创建独立子目录并保留，用于真实
+// 模型验证把 DSH 原始 session cache 作为可审计 artifact。该开关要求绝对路径，避免相对
+// 路径随 dsh checkout cwd 漂移并误落入源码树。
+func newPersistRoot() (path string, retain bool, err error) {
+	if raw, ok := os.LookupEnv(EnvPersistRoot); ok {
+		root := strings.TrimSpace(raw)
+		if root == "" {
+			return "", false, fmt.Errorf("%s 显式置空，视为未配置", EnvPersistRoot)
+		}
+		if !filepath.IsAbs(root) {
+			return "", false, fmt.Errorf("%s 必须是绝对路径", EnvPersistRoot)
+		}
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return "", false, fmt.Errorf("创建 DSH 验证持久化根目录: %w", err)
+		}
+		path, err := os.MkdirTemp(root, "dsh-bridge-")
+		if err != nil {
+			return "", false, fmt.Errorf("创建 DSH 验证持久化会话目录: %w", err)
+		}
+		return path, true, nil
+	}
+	path, err = os.MkdirTemp("", "dsh-bridge-")
+	if err != nil {
+		return "", false, fmt.Errorf("创建桥持久化临时目录: %w", err)
+	}
+	return path, false, nil
+}
+
 // minimalEnv 构造子进程最小环境：PATH/HOME/TMPDIR + 持久化重定向（DPO 冒烟口径）。
 func minimalEnv(persistRoot string) []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 		"TMPDIR=" + os.Getenv("TMPDIR"),
+		// acp-demo 仅在 snapshot mode 已定义时为 stdin EOF 安装退出处理；
+		// per-session 桥显式使用 record 模式以兑现 Dispose 的 graceful EOF 契约。
+		"DSH_SNAPSHOT=record",
 	}
 	if persistRoot != "" {
 		env = append(env, "DSH_SNAPSHOT_SESSIONS_ROOT="+filepath.Join(persistRoot, "sessions"))
@@ -144,11 +179,12 @@ func minimalEnv(persistRoot string) []string {
 
 // dshBinTransport 是 BridgeTransport 的子进程实现。
 type dshBinTransport struct {
-	cmd         *exec.Cmd
-	stdin       io.WriteCloser
-	scanner     *bufio.Scanner
-	stderr      *diagRing
-	persistRoot string
+	cmd               *exec.Cmd
+	stdin             io.WriteCloser
+	scanner           *bufio.Scanner
+	stderr            *diagRing
+	persistRoot       string
+	retainPersistRoot bool
 
 	writeMu   sync.Mutex // stdin 写串行化（Send/通知/权限应答并发安全）
 	closeOnce sync.Once
@@ -231,17 +267,25 @@ func (t *dshBinTransport) close(force bool) error {
 		case <-time.After(t.effectiveGrace()):
 			t.killGroup()
 			<-waitDone
-			_ = os.RemoveAll(t.persistRoot)
+			t.cleanupPersistRoot()
 			return errors.New("dsh bridge 未在宽限内退出，已强制终止进程组")
 		}
-		_ = os.RemoveAll(t.persistRoot)
+		t.cleanupPersistRoot()
 		// 桥异常退出（非 0）时返回含退出码与脱敏 stderr 摘要的错误，便于诊断。
 		return t.exitErr()
 	}
 	t.killGroup()
 	<-waitDone
-	_ = os.RemoveAll(t.persistRoot)
+	t.cleanupPersistRoot()
 	return nil
+}
+
+// cleanupPersistRoot 保留验证显式指定的 DSH cache，默认仍清理临时目录。
+func (t *dshBinTransport) cleanupPersistRoot() {
+	if t.retainPersistRoot || t.persistRoot == "" {
+		return
+	}
+	_ = os.RemoveAll(t.persistRoot)
 }
 
 // effectiveGrace 返回本实例生效的宽限期：显式注入（grace>0）优先，否则回落到

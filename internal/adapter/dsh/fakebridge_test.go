@@ -226,8 +226,8 @@ func TestDetectVersionMismatchFailClosed(t *testing.T) {
 }
 
 // (b) Start/Send 往返（initialize → session/new(cwd) → session/prompt 单文本块）
-// 与 agent_message_chunk → message_delta 映射。
-func TestStartSendRoundTripAndMessageDelta(t *testing.T) {
+// 与 agent_message_chunk → message_completed 映射。
+func TestStartSendRoundTripAndMessageCompleted(t *testing.T) {
 	const sessionID = "sess-0001"
 	fb := newFakeBridge()
 	fb.script = respondByMethod(t, sessionID)
@@ -292,20 +292,20 @@ func TestStartSendRoundTripAndMessageDelta(t *testing.T) {
 		t.Fatalf("prompt 文本块形状不符: %#v", block)
 	}
 
-	// 事件流映射：agent_message_chunk → message_delta（携带文本与 message_id）。
+	// 事件流映射：agent_message_chunk → message_completed（携带文本与 message_id）。
 	select {
 	case ev := <-h.Events():
-		if ev.Type != adapter.EventMessageDelta {
-			t.Fatalf("事件类型 = %q, want message_delta", ev.Type)
+		if ev.Type != adapter.EventMessageCompleted {
+			t.Fatalf("事件类型 = %q, want message_completed", ev.Type)
 		}
 		if ev.Payload["text"] != "你好，DSH" {
-			t.Fatalf("delta 文本 = %v", ev.Payload["text"])
+			t.Fatalf("completed 文本 = %v", ev.Payload["text"])
 		}
 		if ev.Payload["message_id"] != "msg-1" {
-			t.Fatalf("delta message_id = %v", ev.Payload["message_id"])
+			t.Fatalf("completed message_id = %v", ev.Payload["message_id"])
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("等待 message_delta 事件超时")
+		t.Fatal("等待 message_completed 事件超时")
 	}
 }
 
@@ -438,8 +438,8 @@ func TestEOFAndBadFrameTolerance(t *testing.T) {
 	})
 	select {
 	case ev := <-h.Events():
-		if ev.Type != adapter.EventMessageDelta {
-			t.Fatalf("坏帧后有效通知映射 = %q, want message_delta", ev.Type)
+		if ev.Type != adapter.EventMessageCompleted {
+			t.Fatalf("坏帧后有效通知映射 = %q, want message_completed", ev.Type)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("坏帧后读循环未继续处理有效帧")

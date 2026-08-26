@@ -19,6 +19,7 @@ import (
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
 	"github.com/yubi233/agent-sessions/internal/adapter/codex"
+	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
 	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
 	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
@@ -172,6 +173,12 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 		hostname = "agent-sessions-daemon"
 	}
 	adapters := map[string]adapter.Adapter{"opencode": opencode.New()}
+	if !useFixtureAdapter {
+		// dsh 由每个 session 自己 spawn ACP 桥；注册表中的 dsh 能力快照
+		// 与 Daemon 执行侧必须使用同一个生产适配器，否则 Flutter 创建
+		// provider=dsh 的 session.start 会在 runner 处错误地 fail-closed。
+		adapters["dsh"] = dsh.New()
+	}
 	encoder, clearEventDEK, err := eventEncoderForRun(useFixtureAdapter, os.Getenv)
 	if err != nil {
 		return fmt.Errorf("加载生产 event E2EE 配置: %w", err)

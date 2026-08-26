@@ -538,7 +538,7 @@ func TestW1CapabilitiesUseProviderEnvelope(t *testing.T) {
 		} `json:"providers"`
 	}
 	decodeW1(t, response.Body.Bytes(), &body)
-	if len(body.Providers) != 4 || body.Providers[0].Kind == "" || len(body.Providers[0].Capabilities) == 0 || body.Providers[0].Capabilities[0].Status == "" {
+	if len(body.Providers) != 5 || body.Providers[0].Kind == "" || len(body.Providers[0].Capabilities) == 0 || body.Providers[0].Capabilities[0].Status == "" {
 		t.Fatalf("capabilities provider envelope is incomplete")
 	}
 	if containsStr(response.Body.String(), `"state"`) {
