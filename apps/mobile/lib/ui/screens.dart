@@ -659,7 +659,11 @@ class _StatusScaffold extends StatelessWidget {
                       key: const Key('app-error-message'),
                       width: double.infinity,
                       margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(12),
+                      // 与内联错误横幅同款节奏：图标 24 + h12/v8。
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.errorContainer,
                         border: Border.all(
@@ -667,7 +671,17 @@ class _StatusScaffold extends StatelessWidget {
                         ),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Text(errorMessage!),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.error_outline,
+                            size: 24,
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text(errorMessage!)),
+                        ],
+                      ),
                     ),
                   ),
                 Expanded(child: child),
@@ -705,8 +719,8 @@ class _MobileHeaderTitle extends StatelessWidget {
         const SizedBox(width: 8),
         Container(
           key: const Key('mobile-header-status'),
-          width: 7,
-          height: 7,
+          width: AppSizes.statusDot,
+          height: AppSizes.statusDot,
           decoration: BoxDecoration(
             color: context.appColors.success,
             shape: BoxShape.circle,
@@ -776,6 +790,20 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 24),
-    child: Center(child: Text(text)),
+    // 与全局空状态同节奏：icon32 + caption，替代裸文本。
+    child: Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.inbox_outlined,
+            size: 32,
+            color: context.appColors.textSecondary,
+          ),
+          const SizedBox(height: 12),
+          Text(text, style: Theme.of(context).textTheme.bodyMedium),
+        ],
+      ),
+    ),
   );
 }

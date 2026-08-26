@@ -459,6 +459,7 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
     screenshotDirectory: join(root, "screenshots"),
     appPath: "/fixture/app",
     observeWindow: async () => ({ count: 1, windows: [] }),
+    sandboxNamespace: "recording-20260825-attempt-1",
     waitForStableFrame: async () => {},
     captureFrames: async () => {
       throw new Error("Screen Recording denied");
@@ -489,7 +490,10 @@ test("CoreGraphics 截图失败时仍须由同一可见窗口写齐 5fps Flutter
     },
   });
 
-  assert.match(receivedLaunch.localVisualFrameDirectoryName, /^agent-sessions-visual-/);
+  assert.match(
+    receivedLaunch.localVisualFrameDirectoryName,
+    /^agent-sessions-visual-recording-20260825-attempt-1-/,
+  );
   assert.equal(receivedLaunch.localVisualFrameCount, WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT);
   assert.equal(receivedLaunch.localVisualFrameIntervalMs, 200);
   assert.match(

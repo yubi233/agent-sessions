@@ -429,8 +429,10 @@ Color _commandColor(
   DaemonObservationCommandStatus status,
 ) => switch (status) {
   DaemonObservationCommandStatus.succeeded => context.appColors.success,
+  // failed/rejected 是失败语义：与全局口径一致用 error 红，不再落 warning 琥珀。
   DaemonObservationCommandStatus.failed ||
-  DaemonObservationCommandStatus.rejected => context.appColors.warning,
+  DaemonObservationCommandStatus.rejected =>
+    Theme.of(context).colorScheme.error,
   DaemonObservationCommandStatus.cancelled ||
   DaemonObservationCommandStatus.expired => context.appColors.neutral,
   _ => context.appColors.info,

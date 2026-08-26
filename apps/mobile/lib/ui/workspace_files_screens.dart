@@ -8,6 +8,7 @@ import '../app/providers.dart';
 import '../domain/workspace_files_models.dart';
 import '../state/workspace_files_controller.dart';
 import 'appearance_controls.dart';
+import 'app_theme.dart';
 import 'code_viewer_screens.dart';
 
 /// Happy 风格的只读工作区文件浏览：树、搜索、文本预览与安全摘要。
@@ -205,20 +206,22 @@ class _WorkspaceRejectionBanner extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     key: const Key('workspace-files-rejection-banner'),
     margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    // 与其余内联错误横幅同款：errorContainer + error 描边 + h12/v8 + 图标 24。
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: Theme.of(context).colorScheme.error),
     ),
     child: Row(
       children: [
-        const Icon(Icons.shield_outlined, size: 16),
-        const SizedBox(width: 6),
+        const Icon(Icons.shield_outlined, size: 24),
+        const SizedBox(width: 12),
         Expanded(child: Text(message)),
         IconButton(
           tooltip: '关闭',
           onPressed: onDismiss,
-          icon: const Icon(Icons.close, size: 16),
+          icon: const Icon(Icons.close, size: 18),
         ),
       ],
     ),
@@ -275,9 +278,21 @@ class _WorkspaceEntryList extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.all(24),
             child: Center(
-              child: Text(
-                '此目录没有可浏览的文件。',
-                key: const Key('workspace-files-empty'),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.folder_open_outlined,
+                    size: 32,
+                    color: context.appColors.textSecondary,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '此目录没有可浏览的文件。',
+                    key: const Key('workspace-files-empty'),
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
               ),
             ),
           ),
@@ -316,9 +331,25 @@ class _WorkspaceSearchResults extends StatelessWidget {
             onTap: () => onOpen(entry),
           ),
         if (results.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(24),
-            child: Center(child: Text('没有匹配的文件。')),
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.search_off_outlined,
+                    size: 32,
+                    color: context.appColors.textSecondary,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '没有匹配的文件。',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
           ),
       ],
     );
@@ -340,7 +371,7 @@ class _WorkspacePreviewPanel extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(12, 4, 12, 12),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        border: Border.all(color: Theme.of(context).dividerColor),
+        border: Border.all(color: context.appColors.border),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -366,7 +397,7 @@ class _WorkspacePreviewPanel extends StatelessWidget {
               ],
             ),
           ),
-          Divider(height: 1, color: Theme.of(context).dividerColor),
+          Divider(height: 1, color: context.appColors.border),
           Expanded(
             child: limited
                 ? _WorkspaceLimitedPreview(content: content)

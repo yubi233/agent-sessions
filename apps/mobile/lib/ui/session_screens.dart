@@ -1035,7 +1035,7 @@ class _SessionQuickMenu extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           key: Key('session-quick-fork'),
           value: 'fork',
           enabled: false,
@@ -1044,14 +1044,14 @@ class _SessionQuickMenu extends StatelessWidget {
             title: Text('Fork 会话'),
             subtitle: Text(
               'Provider 未声明 fork 能力',
-              style: TextStyle(fontSize: 11),
+              style: Theme.of(context).textTheme.labelSmall,
             ),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),
         ),
         // v0.3/P2：duplicate 与 fork/archive 同规则——capability 未声明时 fail-closed。
-        const PopupMenuItem(
+        PopupMenuItem(
           key: Key('session-quick-duplicate'),
           value: 'duplicate',
           enabled: false,
@@ -1060,20 +1060,23 @@ class _SessionQuickMenu extends StatelessWidget {
             title: Text('Duplicate 会话'),
             subtitle: Text(
               'Provider 未声明 duplicate 能力',
-              style: TextStyle(fontSize: 11),
+              style: Theme.of(context).textTheme.labelSmall,
             ),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           key: Key('session-quick-archive'),
           value: 'archive',
           enabled: false,
           child: ListTile(
             leading: Icon(Icons.archive_outlined),
             title: Text('归档会话'),
-            subtitle: Text('Provider 未声明归档能力', style: TextStyle(fontSize: 11)),
+            subtitle: Text(
+              'Provider 未声明归档能力',
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),
@@ -2906,14 +2909,9 @@ class _SessionComposerState extends State<_SessionComposer> {
                 border: Border.all(
                   color: Theme.of(context).dividerColor.withValues(alpha: 0.7),
                 ),
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x12000000),
-                    blurRadius: 12,
-                    offset: Offset(0, 3),
-                  ),
-                ],
+                // 胶囊圆角与投影收口为全局 token，避免第二处硬编码扩散。
+                borderRadius: BorderRadius.circular(AppRadius.pill),
+                boxShadow: AppShadows.composerPill,
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
@@ -4071,8 +4069,8 @@ class _SessionListItem extends StatelessWidget {
                       children: [
                         Container(
                           key: Key('session-status-dot-${session.id}'),
-                          width: 7,
-                          height: 7,
+                          width: AppSizes.statusDot,
+                          height: AppSizes.statusDot,
                           decoration: BoxDecoration(
                             color: statusColor,
                             shape: BoxShape.circle,
@@ -4184,7 +4182,8 @@ class _ReadOnlyBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('session-readonly-banner'),
-    padding: const EdgeInsets.all(10),
+    // 提示条统一 note 档 padding=12。
+    padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
       border: Border.all(color: Theme.of(context).dividerColor),
@@ -4254,8 +4253,8 @@ class _SessionStatusStrip extends StatelessWidget {
       child: Row(
         children: [
           Container(
-            width: 7,
-            height: 7,
+            width: AppSizes.statusDot,
+            height: AppSizes.statusDot,
             decoration: BoxDecoration(
               color: statusColor,
               shape: BoxShape.circle,
@@ -4268,29 +4267,42 @@ class _SessionStatusStrip extends StatelessWidget {
               style: Theme.of(context).textTheme.labelMedium,
             ),
           ),
-          Tooltip(
-            message: providerTooltip,
-            child: Container(
-              key: const Key('session-provider-version-chip'),
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: providerConnected
-                    ? Theme.of(context).colorScheme.surfaceContainerHighest
-                    : Theme.of(context).colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                providerLabel,
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          // provider chip 与 lease 文本不约束宽度时，长版本串会撑爆状态条：
+          // 包 Flexible（loose）让 ellipsis 在空间不足时生效，空间充裕时仍按内容宽。
+          Flexible(
+            child: Tooltip(
+              message: providerTooltip,
+              child: Container(
+                key: const Key('session-provider-version-chip'),
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
                   color: providerConnected
-                      ? null
-                      : Theme.of(context).colorScheme.error,
+                      ? Theme.of(context).colorScheme.surfaceContainerHighest
+                      : Theme.of(context).colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  providerLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: providerConnected
+                        ? null
+                        : Theme.of(context).colorScheme.error,
+                  ),
                 ),
               ),
             ),
           ),
-          Text(leaseText, style: Theme.of(context).textTheme.labelMedium),
+          Flexible(
+            child: Text(
+              leaseText,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ),
           IconButton(
             key: const Key('session-acquire-lease-button'),
             tooltip: leaseText,
@@ -4443,7 +4455,7 @@ class _InlineError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(10),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
@@ -4452,7 +4464,7 @@ class _InlineError extends StatelessWidget {
     child: Row(
       children: [
         const Icon(Icons.error_outline),
-        const SizedBox(width: 8),
+        const SizedBox(width: 12),
         Expanded(child: Text(message)),
         IconButton(
           tooltip: '关闭提示',
@@ -4511,8 +4523,8 @@ class _SessionHeaderTitle extends StatelessWidget {
         const SizedBox(width: 8),
         Container(
           key: const Key('mobile-header-status'),
-          width: 7,
-          height: 7,
+          width: AppSizes.statusDot,
+          height: AppSizes.statusDot,
           decoration: BoxDecoration(
             color: context.appColors.success,
             shape: BoxShape.circle,

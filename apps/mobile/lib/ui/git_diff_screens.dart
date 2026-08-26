@@ -176,12 +176,15 @@ class _GitSnapshotHeader extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                snapshot.branch,
-                key: const Key('git-branch-label'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.labelMedium,
+              // 长分支名在 480 宽下会撑爆 Row：包 Flexible 让 ellipsis 生效。
+              Flexible(
+                child: Text(
+                  snapshot.branch,
+                  key: const Key('git-branch-label'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.labelMedium,
+                ),
               ),
             ],
           ),
@@ -288,9 +291,23 @@ class _GitFileTree extends StatelessWidget {
     return SizedBox(
       height: height,
       child: files.isEmpty
-          ? const Center(
-              key: Key('git-file-tree-empty'),
-              child: Text('没有匹配的变更文件。'),
+          ? Center(
+              key: const Key('git-file-tree-empty'),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.filter_alt_off_outlined,
+                    size: 32,
+                    color: context.appColors.textSecondary,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '没有匹配的变更文件。',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
             )
           : ListView.builder(
               key: const Key('git-file-tree'),
@@ -329,10 +346,11 @@ class _GitFileRow extends StatelessWidget {
         : Colors.transparent;
     return Material(
       color: selectedColor,
-      borderRadius: BorderRadius.circular(6),
+      // 文件行是卡状列表项：圆角回归 8 档，与全局卡片一致。
+      borderRadius: BorderRadius.circular(AppRadius.card),
       child: InkWell(
         key: Key('git-diff-file-${_keyPath(file.path)}'),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
@@ -422,7 +440,7 @@ class _GitDiffToolbar extends StatelessWidget {
     height: 50,
     padding: const EdgeInsets.symmetric(horizontal: 12),
     decoration: BoxDecoration(
-      border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+      border: Border(top: BorderSide(color: context.appColors.border)),
     ),
     child: Row(
       children: [
@@ -491,13 +509,45 @@ class _GitDiffContent extends StatelessWidget {
     }
     final selected = controller.selectedFile;
     if (selected == null) {
-      return const Center(child: Text('工作区没有可显示的变更。'));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.folder_open_outlined,
+              size: 32,
+              color: context.appColors.textSecondary,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '工作区没有可显示的变更。',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      );
     }
     if (selected.limitedKind != GitDiffLimitedKind.none) {
       return _LimitedDiffState(file: selected);
     }
     if (controller.hunks.isEmpty) {
-      return const Center(child: Text('此文件没有可显示的文本差异。'));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.notes,
+              size: 32,
+              color: context.appColors.textSecondary,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '此文件没有可显示的文本差异。',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      );
     }
     return ListView(
       key: const Key('git-diff-scroll'),
@@ -547,7 +597,7 @@ class _LimitedDiffState extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: Theme.of(context).dividerColor),
+        border: Border.all(color: context.appColors.border),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -603,7 +653,7 @@ class _GitHunkPanel extends StatelessWidget {
     margin: const EdgeInsets.only(bottom: 10),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surface,
-      border: Border.all(color: Theme.of(context).dividerColor),
+      border: Border.all(color: context.appColors.border),
       borderRadius: BorderRadius.circular(8),
     ),
     child: Column(
@@ -679,10 +729,12 @@ class _UnifiedDiffLine extends StatelessWidget {
               '${_linePrefix(line.kind)}${line.text}',
               key: Key('git-unified-line-${line.oldLine ?? line.newLine ?? 0}'),
               softWrap: true,
-              style: const TextStyle(
+              // 差异正文是核心内容：显式 onSurface，避免继承 bodyMedium 的次级灰。
+              style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 12,
                 height: 1.35,
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
           ),
@@ -739,10 +791,12 @@ class _SplitCell extends StatelessWidget {
             child: Text(
               show ? line.text : '',
               softWrap: true,
-              style: const TextStyle(
+              // 与统一视图同口径：显式 onSurface，12px 对齐统一视图行。
+              style: TextStyle(
                 fontFamily: 'monospace',
-                fontSize: 11,
+                fontSize: 12,
                 height: 1.35,
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
           ),
@@ -809,7 +863,7 @@ class _GitDiffFailureState extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
-          border: Border.all(color: Theme.of(context).dividerColor),
+          border: Border.all(color: context.appColors.border),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(

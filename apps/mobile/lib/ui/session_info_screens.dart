@@ -371,7 +371,18 @@ class _InfoEmptyState extends StatelessWidget {
     key: const Key('session-info-empty'),
     child: Padding(
       padding: const EdgeInsets.symmetric(vertical: 56),
-      child: Text('未找到会话信息。', style: Theme.of(context).textTheme.bodyMedium),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.info_outline,
+            size: 32,
+            color: context.appColors.textSecondary,
+          ),
+          const SizedBox(height: 12),
+          Text('未找到会话信息。', style: Theme.of(context).textTheme.bodyMedium),
+        ],
+      ),
     ),
   );
 }

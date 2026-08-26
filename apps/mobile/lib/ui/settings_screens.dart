@@ -284,17 +284,12 @@ class SettingsAppearanceScreen extends ConsumerWidget {
               key: const Key('settings-appearance-list'),
               padding: const EdgeInsets.all(16),
               children: [
-                const Text(
-                  '主题模式',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
+                // 分组标题统一走 titleSmall 文本角色（16/w600），不再 ad-hoc。
+                Text('主题模式', style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 8),
                 const _AppearanceModeSelector(),
                 const SizedBox(height: 24),
-                const Text(
-                  '强调色',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
+                Text('强调色', style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 8),
                 const _AppearanceAccentSelector(),
                 const SizedBox(height: 16),
@@ -379,9 +374,10 @@ class SettingsComposerScreen extends ConsumerWidget {
               key: const Key('settings-composer-list'),
               padding: const EdgeInsets.all(16),
               children: [
-                const Text(
+                // 分组标题统一走 titleSmall 文本角色（16/w600），不再 ad-hoc。
+                Text(
                   'busy Enter 行为',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
                 const SizedBox(height: 8),
                 const _ComposerEnterBehaviorSelector(),
@@ -715,10 +711,22 @@ class _SettingsEmptyHint extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 24),
     child: Center(
-      child: Text(
-        message,
-        style: Theme.of(context).textTheme.bodyMedium,
-        textAlign: TextAlign.center,
+      // 与全局空状态同节奏：icon32 + caption，保留原 message 文案。
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.inbox_outlined,
+            size: 32,
+            color: context.appColors.textSecondary,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            style: Theme.of(context).textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     ),
   );

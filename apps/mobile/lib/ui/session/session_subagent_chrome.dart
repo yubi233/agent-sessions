@@ -139,7 +139,12 @@ class _SessionSubagentCatalogSheetState
       return [
         Padding(
           key: Key('session-subagent-branch-loading-$parentId'),
-          padding: EdgeInsets.only(left: 24.0 * level, top: 8, bottom: 8),
+          // 与 delegation 行同缩进公式：12 + (level-1)*24，避免树形锯齿。
+          padding: EdgeInsets.only(
+            left: 12.0 + (level - 1) * 24,
+            top: 8,
+            bottom: 8,
+          ),
           child: const LinearProgressIndicator(),
         ),
       ];
@@ -148,7 +153,11 @@ class _SessionSubagentCatalogSheetState
       return [
         ListTile(
           key: Key('session-subagent-branch-error-$parentId'),
-          contentPadding: EdgeInsets.only(left: 24.0 * level, right: 12),
+          // 与 delegation 行同缩进公式：12 + (level-1)*24，避免树形锯齿。
+          contentPadding: EdgeInsets.only(
+            left: 12.0 + (level - 1) * 24,
+            right: 12,
+          ),
           leading: const Icon(Icons.error_outline),
           title: Text(message ?? '子树不可用'),
           trailing: TextButton(
@@ -164,7 +173,11 @@ class _SessionSubagentCatalogSheetState
       return [
         ListTile(
           key: Key('session-subagent-branch-empty-$parentId'),
-          contentPadding: EdgeInsets.only(left: 24.0 * level, right: 12),
+          // 与 delegation 行同缩进公式：12 + (level-1)*24，避免树形锯齿。
+          contentPadding: EdgeInsets.only(
+            left: 12.0 + (level - 1) * 24,
+            right: 12,
+          ),
           dense: true,
           leading: const Icon(Icons.horizontal_rule, size: 16),
           title: const Text('没有更深层子会话'),
@@ -374,7 +387,8 @@ class SessionSubagentBreadcrumb extends StatelessWidget {
       child: InkWell(
         key: const Key('session-subagent-breadcrumb'),
         onTap: onOpenParent,
-        borderRadius: BorderRadius.circular(4),
+        // 小控件圆角对齐全局 6 档（原为孤例 4）。
+        borderRadius: BorderRadius.circular(6),
         child: const Padding(
           padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           child: Row(

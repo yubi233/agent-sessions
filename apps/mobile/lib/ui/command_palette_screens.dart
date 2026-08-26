@@ -151,9 +151,20 @@ class _PaletteResults extends StatelessWidget {
     if (results.isEmpty) {
       return Center(
         key: const Key('command-palette-empty'),
-        child: Text(
-          controller.query.trim().isEmpty ? '输入关键字开始搜索' : '没有匹配的命令',
-          style: Theme.of(context).textTheme.bodyMedium,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.manage_search_outlined,
+              size: 32,
+              color: context.appColors.textSecondary,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              controller.query.trim().isEmpty ? '输入关键字开始搜索' : '没有匹配的命令',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
         ),
       );
     }

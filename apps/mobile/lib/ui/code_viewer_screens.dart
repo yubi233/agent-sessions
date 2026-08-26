@@ -128,7 +128,29 @@ class _CodeViewerScreenState extends ConsumerState<CodeViewerScreen> {
       );
     }
     final content = controller.content;
-    if (content == null) return const SizedBox.shrink();
+    // 就绪但无内容：给可见占位而非整屏空白（空白会被误读为卡死）。
+    if (content == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 56),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.code_off_outlined,
+                size: 32,
+                color: context.appColors.textSecondary,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '暂无可显示的内容。',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     // 二进制/超大文件：与文件浏览页一致的受限摘要，不渲染正文。
     if (content.limitedKind != WorkspaceFileLimitedKind.none) {
       return _CodeLimitedView(content: content);
@@ -316,7 +338,8 @@ class _CodeTextColumn extends StatelessWidget {
           Container(
             height: 20,
             padding: const EdgeInsets.only(left: 8, right: 16),
-            width: 960,
+            // 行宽自适应内容：不再固定 960 制造"滚动虚空"，
+            // 横向滚动范围收敛到最长行；高亮带随文本长度而非画布宽度。
             color: index + 1 == activeMatchLine
                 ? colors.warning.withValues(alpha: 0.22)
                 : null,

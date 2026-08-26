@@ -210,7 +210,8 @@ _StatusPresentation _statusPresentation(
     MobileSessionStatus.errored => _StatusPresentation(
       label: '出错',
       icon: Icons.error_outline,
-      color: colors.warning,
+      // "出错"是明确的失败语义：用 error 红而非 warning 琥珀，与 git 错误色一致。
+      color: Theme.of(context).colorScheme.error,
     ),
     MobileSessionStatus.idle || MobileSessionStatus.unknown => _StatusPresentation(
       label: '空闲',

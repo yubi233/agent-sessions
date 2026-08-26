@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -16,10 +17,12 @@ import {
   createMacosWindowObserver,
   macosDebugAppBundle,
   runMacosFlutterBuild,
+  terminateMacosAppProcessesForBundle,
 } from "./macos.mjs";
 import {
   MACOS_SCREENSHOT_SCENARIOS,
   recordMacosVisualScenario,
+  waitForNoMacosWindows,
 } from "./run-macos.mjs";
 import {
   WINDOW_EVIDENCE_MINIMUM_CANDIDATE_FRAME_COUNT,
@@ -33,6 +36,7 @@ const MOBILE_ROOT = join(ROOT, "apps", "mobile");
 const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
 export const FLUTTER_RECORDING_FPS = 5;
 export const FLUTTER_RECORDING_FRAME_COUNT = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT;
+export const FLUTTER_RECORDING_SCENARIO_MAX_ATTEMPTS = 2;
 // 录屏范围：P6 生命周期恢复、v0.2 快捷菜单/Resume、文件浏览、composer 控制面、
 // P3 终端状态与 P3-A 设置中心/会话信息，以及 v0.5 resident shell / StatsLine / Trajectory / composer dock。
 export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
@@ -76,6 +80,10 @@ function safeError(error) {
     .replace(/([?&](?:token|password|secret)=)[^&#\s"']+/gi, "$1[REDACTED]")
     .replace(/\/(?:Users|private|var|tmp)\/[^\s"']+/g, "[PATH REDACTED]")
     .slice(0, 500);
+}
+
+export function isRetryableRecordingFailure(error) {
+  return error?.failureClass === "environment_or_startup_failure";
 }
 
 function positiveInteger(value, flag) {
@@ -349,15 +357,54 @@ async function main() {
     }
 
     for (const scenario of selectRecordingScenarios()) {
-      process.stdout.write(
-        `[flutter-record] 采集 ${scenario.id} 的连续 5fps 可见窗口帧\n`,
-      );
-      const visualRun = await recordMacosVisualScenario({
-        scenario,
-        screenshotDirectory: frameDirectory,
-        appPath,
-        observeWindow: () => windowObserver.observe(),
-      });
+      let visualRun = null;
+      const retryFailures = [];
+      for (
+        let attempt = 1;
+        attempt <= FLUTTER_RECORDING_SCENARIO_MAX_ATTEMPTS;
+        attempt += 1
+      ) {
+        process.stdout.write(
+          `[flutter-record] 采集 ${scenario.id} 的连续 5fps 可见窗口帧（attempt ${attempt}/${FLUTTER_RECORDING_SCENARIO_MAX_ATTEMPTS}）\n`,
+        );
+        try {
+          visualRun = await recordMacosVisualScenario({
+            scenario,
+            screenshotDirectory: frameDirectory,
+            appPath,
+            observeWindow: () => windowObserver.observe(),
+            sandboxNamespace: `${timestamp}-attempt-${attempt}`,
+          });
+          break;
+        } catch (error) {
+          retryFailures.push({
+            attempt,
+            failure_class: error?.failureClass ?? "test_harness_defect",
+            summary: safeError(error),
+          });
+          if (
+            attempt >= FLUTTER_RECORDING_SCENARIO_MAX_ATTEMPTS
+            || !isRetryableRecordingFailure(error)
+          ) {
+            throw error;
+          }
+          rmSync(join(frameDirectory, scenario.directory), {
+            force: true,
+            recursive: true,
+          });
+          rmSync(join(outputDirectory, `${scenario.directory}.mp4`), {
+            force: true,
+          });
+          await terminateMacosAppProcessesForBundle({ appPath });
+          const released = await waitForNoMacosWindows({
+            observeWindow: () => windowObserver.observe(),
+          });
+          if (!released) throw error;
+          process.stdout.write(
+            `[flutter-record] ${scenario.id} 环境类采集失败，清理后重试：${safeError(error)}\n`,
+          );
+        }
+      }
       const scenarioFrameDirectory = join(frameDirectory, scenario.directory);
       const mp4Path = join(outputDirectory, `${scenario.directory}.mp4`);
       await encodeMp4({
@@ -387,6 +434,8 @@ async function main() {
           width: frame.width,
         })),
         id: scenario.id,
+        attempt_count: retryFailures.length + 1,
+        retry_failures: retryFailures,
         selected_frame_count: FLUTTER_RECORDING_FRAME_COUNT,
         observed_window_frame: visualRun.smoke.window.portraitMobileWindow,
         observed_window_mode: visualRun.smoke.window.portraitMobileWindowMode,

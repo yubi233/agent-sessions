@@ -234,10 +234,14 @@ function wait(milliseconds) {
   return new Promise((resolveWait) => setTimeout(resolveWait, milliseconds));
 }
 
-function visualScenarioSandboxDirectoryName({ screenshotDirectory, scenario }) {
+function visualScenarioSandboxDirectoryName({
+  screenshotDirectory,
+  scenario,
+  sandboxNamespace = null,
+}) {
   return [
     "agent-sessions-visual",
-    basename(dirname(screenshotDirectory)),
+    sandboxNamespace ?? basename(dirname(screenshotDirectory)),
     scenario.directory,
   ].join("-");
 }
@@ -334,6 +338,7 @@ export async function recordMacosVisualScenario({
   screenshotDirectory,
   appPath,
   observeWindow,
+  sandboxNamespace = null,
   runPrebuiltApp = runMacosPrebuiltApp,
   captureFrames = captureMacosWindowFrameSeries,
   waitForFlutterRenderFrames = waitForFlutterRenderFrameSeries,
@@ -345,6 +350,7 @@ export async function recordMacosVisualScenario({
   const sandboxDirectoryName = visualScenarioSandboxDirectoryName({
     screenshotDirectory,
     scenario,
+    sandboxNamespace,
   });
   const sandboxFrameDirectory = macosSandboxVisualFrameDirectory(
     sandboxDirectoryName,

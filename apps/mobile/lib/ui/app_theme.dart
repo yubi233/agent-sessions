@@ -85,6 +85,38 @@ extension AppThemeContext on BuildContext {
   }
 }
 
+/// 样式专项 token：4pt 网格间距。业务代码用语义档位取值，不再散落魔法数。
+abstract final class AppSpacing {
+  static const double xs = 4;
+  static const double sm = 8;
+  static const double md = 12;
+  static const double lg = 16;
+  static const double xl = 20;
+  static const double xxl = 24;
+}
+
+/// 圆角三档：小控件（chip/ripple/tooltip）6、卡片 8、胶囊（composer 输入坞）22。
+abstract final class AppRadius {
+  static const double small = 6;
+  static const double card = 8;
+  static const double pill = 22;
+}
+
+/// 高频固定尺寸 token，避免同类元素在不同屏幕各自漂移。
+abstract final class AppSizes {
+  static const double statusDot = 7;
+  static const double avatarSmall = 34;
+  static const double avatarMedium = 38;
+  static const double avatarLarge = 42;
+}
+
+/// 阴影 token：目前仅 composer 胶囊一处投影，先收口避免第二处硬编码扩散。
+abstract final class AppShadows {
+  static const List<BoxShadow> composerPill = [
+    BoxShadow(color: Color(0x12000000), blurRadius: 12, offset: Offset(0, 3)),
+  ];
+}
+
 /// P1 的主题入口：系统字体、内容优先层级和紧凑 8px 圆角，不复制 Apple 品牌资产。
 abstract final class AppTheme {
   static ThemeData light(AppAccent accent) =>
@@ -173,6 +205,20 @@ abstract final class AppTheme {
         color: primaryText,
         fontSize: 17,
         fontWeight: FontWeight.w600,
+        letterSpacing: 0,
+      ),
+      // 此前未定义：调用点静默回落 Material 默认（11px/w500/letterSpacing 0.5），
+      // 补齐后全部 labelSmall 调用点一次性回到应用字阶。
+      titleSmall: TextStyle(
+        color: primaryText,
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0,
+      ),
+      labelSmall: TextStyle(
+        color: secondaryText,
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
         letterSpacing: 0,
       ),
       bodyLarge: TextStyle(color: primaryText, fontSize: 17, letterSpacing: 0),

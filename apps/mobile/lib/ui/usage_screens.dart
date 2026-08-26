@@ -221,7 +221,26 @@ class _UsageProviderChart extends StatelessWidget {
           (providers[aggregate.provider] ?? 0) + aggregate.totalTokens;
     }
     if (providers.isEmpty) {
-      return const SizedBox.shrink();
+      // 不再静默消失：图表区块为空时给出可见说明，避免"区块凭空蒸发"。
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Row(
+          children: [
+            Icon(
+              Icons.info_outline,
+              size: 18,
+              color: Theme.of(context).textTheme.bodySmall?.color,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '本期暂无 Provider 用量数据。',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      );
     }
     final maxValue = providers.values.reduce((a, b) => a > b ? a : b);
     return Container(
@@ -238,7 +257,9 @@ class _UsageProviderChart extends StatelessWidget {
           Text('Provider 用量', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 12),
           SizedBox(
-            height: 120,
+            // 120 恰好等于"数值行+4+柱80+4+名称行"，零冗余：textScale>1 即溢出。
+            // 放宽到 136 留出余量，并约束两行文本 ellipsis 防换行撑爆。
+            height: 136,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
@@ -249,6 +270,8 @@ class _UsageProviderChart extends StatelessWidget {
                       children: [
                         Text(
                           _formatTokens(entry.value),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.labelSmall,
                         ),
                         const SizedBox(height: 4),
@@ -267,6 +290,8 @@ class _UsageProviderChart extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           entry.key,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.labelSmall,
                         ),
                       ],
