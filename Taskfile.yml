@@ -117,7 +117,7 @@ tasks:
       - task: test:e2e:relay
       - task: test:contract
       - task: test:restart
-      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs e2e-verify/real/v07-runner.test.mjs e2e-verify/real/v07-full-gate.test.mjs
+      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs e2e-verify/real/v07-runner.test.mjs e2e-verify/real/v07-full-gate.test.mjs e2e-verify/record-v07.test.mjs e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
       - cmd: cd apps/mobile && flutter test test/session_controller_test.dart test/session_screens_test.dart test/composer_controls_test.dart test/session_workspace_create_test.dart test/http_relay_repository_test.dart --concurrency=1
       - node e2e-verify/run.mjs --suite p4-web-readonly
       - node e2e-verify/run.mjs --suite p4-admin-readonly
@@ -136,15 +136,20 @@ tasks:
       - HEADLESS=false node e2e-verify/suites/v07-headed-readonly.mjs
 
   record:v07:
-    desc: v0.7 录屏入口（必须先提供已通过的 V07 gate 报告）
+    desc: v0.7 录屏入口（必须分别提供 Flutter macOS 与 headed Web passed gate 报告）
     cmds:
       - |
-        if [[ -z "${V07_GATE_REPORT:-}" || ! -f "$V07_GATE_REPORT" ]]; then
-          echo "record:v07 blocked: set V07_GATE_REPORT to a passed V07-05/V07-06 gate report first" >&2
+        if [[ -z "${V07_FLUTTER_GATE_REPORT:-}" || ! -f "$V07_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v07 blocked: set V07_FLUTTER_GATE_REPORT to a passed Flutter macOS gate report first" >&2
           exit 2
         fi
-      - pnpm flutter:smoke:record -- --seconds 10 --fps 3
-      - node e2e-verify/record-v07.mjs
+        if [[ -z "${V07_WEB_GATE_REPORT:-}" || ! -f "$V07_WEB_GATE_REPORT" ]]; then
+          echo "record:v07 blocked: set V07_WEB_GATE_REPORT to a passed headed Web gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/record-v07.test.mjs e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --gate-report "$V07_FLUTTER_GATE_REPORT"
+      - node e2e-verify/record-v07.mjs --gate-report "$V07_WEB_GATE_REPORT" --fixture
 
   test:e2e:web:
     desc: P4 Web SSE cursor 的 headed Chrome 本地 fixture 旅程

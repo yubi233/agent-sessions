@@ -2568,17 +2568,50 @@ Future<void> _waitForEnabledIconButton(WidgetTester tester, Key key) async {
 }
 
 Future<void> _scrollChatUntilVisible(WidgetTester tester, Finder finder) async {
-  await tester.scrollUntilVisible(
-    finder,
-    120,
-    scrollable: find.descendant(
-      of: find.byKey(const Key('session-chat-view')),
-      matching: find.byType(Scrollable),
-    ),
-    maxScrolls: 24,
-  );
-  for (var frame = 0; frame < 3; frame += 1) {
+  final scrollable = find
+      .descendant(
+        of: find.byKey(const Key('session-chat-view')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  await _waitForVisible(tester, scrollable);
+  final state = tester.state<ScrollableState>(scrollable);
+
+  // Chat 下方的 composer seat 可能把 viewport 压到很窄，测试拖拽中心点会落在
+  // seat overlay 上。直接推进 ScrollPosition，先让懒加载列表项进入树，再使用
+  // ensureVisible 完成最终定位，避免把命中警告误判成产品滚动失败。
+  final start = state.position.pixels;
+  state.position.jumpTo(0);
+  await tester.pump();
+  for (var attempt = 0; attempt < 24; attempt += 1) {
+    if (finder.evaluate().isNotEmpty) {
+      await tester.ensureVisible(finder);
+      for (var frame = 0; frame < 3; frame += 1) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      if (finder.evaluate().isNotEmpty) {
+        expect(finder, findsOneWidget);
+        return;
+      }
+    }
+    if (!state.position.hasContentDimensions) {
+      await tester.pump(const Duration(milliseconds: 50));
+      continue;
+    }
+    final next = (state.position.pixels + 120)
+        .clamp(0, state.position.maxScrollExtent)
+        .toDouble();
+    if (next == state.position.pixels) break;
+    state.position.jumpTo(next);
     await tester.pump(const Duration(milliseconds: 50));
+  }
+
+  // 失败时恢复调用前的阅读位置，便于失败截图和后续断言保留上下文。
+  if (state.position.hasContentDimensions) {
+    state.position.jumpTo(
+      start.clamp(0, state.position.maxScrollExtent).toDouble(),
+    );
+    await tester.pump();
   }
   expect(finder, findsOneWidget);
 }

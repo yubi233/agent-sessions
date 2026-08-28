@@ -855,31 +855,38 @@ class _ReasoningRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final summary = node.safeReasoningSummary?.trim();
-    return Card(
+    return Container(
       key: Key('session-reasoning-row-${node.sequence}'),
-      elevation: 0,
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: ExpansionTile(
-        leading: const Icon(Icons.psychology_alt_outlined),
-        title: Text(node.isStreaming ? 'Think · 运行中' : 'Think'),
-        subtitle: Text(
-          summary?.isNotEmpty == true ? summary! : '没有可展示的安全推理摘要',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                summary?.isNotEmpty == true
-                    ? summary!
-                    : '上游未提供 display-safe summary。',
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      // ExpansionTile 的 ListTile 需要最近的 Material 承载背景和水波纹，
+      // 否则外层 DecoratedBox 会触发 Flutter 的不可见水波纹断言。
+      child: Material(
+        type: MaterialType.transparency,
+        child: ExpansionTile(
+          leading: const Icon(Icons.psychology_alt_outlined),
+          title: Text(node.isStreaming ? 'Think · 运行中' : 'Think'),
+          subtitle: Text(
+            summary?.isNotEmpty == true ? summary! : '没有可展示的安全推理摘要',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  summary?.isNotEmpty == true
+                      ? summary!
+                      : '上游未提供 display-safe summary。',
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -923,61 +930,65 @@ class _ToolStepRow extends StatelessWidget {
       _SystemRowTone.error => scheme.error,
     };
     final detail = node.toolStatus ?? node.text;
-    return Card(
+    return Container(
       key: Key('session-compact-node-${node.sequence}-${node.kind.name}'),
-      elevation: 0,
-      color: scheme.surfaceContainerLowest,
-      shape: RoundedRectangleBorder(
-        side: BorderSide(color: color.withValues(alpha: 0.5)),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLowest,
+        border: Border.all(color: color.withValues(alpha: 0.5)),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: ExpansionTile(
-        key: Key('session-tool-details-${node.sequence}'),
-        leading: Icon(Icons.build_outlined, color: color),
-        title: Text(
-          node.label,
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-            color: color,
-            fontWeight: FontWeight.w700,
+      // 与推理折叠行保持同一 Material 边界，保证点击反馈不会被卡片背景遮住。
+      child: Material(
+        type: MaterialType.transparency,
+        child: ExpansionTile(
+          leading: Icon(Icons.build_outlined, color: color),
+          title: Text(
+            node.label,
+            // 把稳定定位键放在可点击标题上，避免懒加载/底部 composer 使整行中心落到视口外。
+            key: Key('session-tool-details-${node.sequence}'),
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-        subtitle: _ToolRowSubtitle(
-          detail: detail,
-          node: node,
-          hasPath: hasPath,
-          onOpenFile: onOpenFile,
-        ),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-        children: [
-          if (details?.input?.trim().isNotEmpty == true)
-            _ToolDetailBlock(
-              key: Key('session-tool-input-${node.sequence}'),
-              label: 'IN',
-              text: details!.input!,
-            ),
-          if (details?.output?.trim().isNotEmpty == true)
-            _ToolDetailBlock(
-              key: Key('session-tool-output-${node.sequence}'),
-              label: 'OUT',
-              text: details!.output!,
-            ),
-          if (details?.subcalls.isNotEmpty == true)
-            _ToolSubcallTree(
-              key: const ValueKey('session-tool-subcalls'),
-              subcalls: details!.subcalls,
-              onOpenFile: onOpenFile,
-            ),
-          if (details?.inspectTarget?.trim().isNotEmpty == true)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                key: Key('session-tool-inspect-${node.sequence}'),
-                onPressed: () => onInspect?.call(details!.inspectTarget!),
-                icon: const Icon(Icons.manage_search_outlined, size: 16),
-                label: const Text('Inspect'),
+          subtitle: _ToolRowSubtitle(
+            detail: detail,
+            node: node,
+            hasPath: hasPath,
+            onOpenFile: onOpenFile,
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+          children: [
+            if (details?.input?.trim().isNotEmpty == true)
+              _ToolDetailBlock(
+                key: Key('session-tool-input-${node.sequence}'),
+                label: 'IN',
+                text: details!.input!,
               ),
-            ),
-        ],
+            if (details?.output?.trim().isNotEmpty == true)
+              _ToolDetailBlock(
+                key: Key('session-tool-output-${node.sequence}'),
+                label: 'OUT',
+                text: details!.output!,
+              ),
+            if (details?.subcalls.isNotEmpty == true)
+              _ToolSubcallTree(
+                key: const ValueKey('session-tool-subcalls'),
+                subcalls: details!.subcalls,
+                onOpenFile: onOpenFile,
+              ),
+            if (details?.inspectTarget?.trim().isNotEmpty == true)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: Key('session-tool-inspect-${node.sequence}'),
+                  onPressed: () => onInspect?.call(details!.inspectTarget!),
+                  icon: const Icon(Icons.manage_search_outlined, size: 16),
+                  label: const Text('Inspect'),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
