@@ -27,23 +27,44 @@ type Adapter struct {
 	handles  map[string]*handle
 	detected bool
 	version  string
+	// modelCatalog 只缓存上次健康探测得到的免费目录摘要，不缓存 provider 原始配置。
+	modelCatalog    ModelCatalog
+	modelCatalogErr error
+	defaultModelErr error
 }
 
 // New 构造 OpenCode 适配器。
 func New() *Adapter {
+	_, defaultErr := configuredDefaultModel()
 	return &Adapter{
-		url:     strings.TrimSpace(os.Getenv(EnvURL)),
-		handles: map[string]*handle{},
+		url:             strings.TrimSpace(os.Getenv(EnvURL)),
+		handles:         map[string]*handle{},
+		defaultModelErr: defaultErr,
 	}
 }
 
 // NewWithClient 构造指定客户端的适配器（测试注入 httptest）。
 func NewWithClient(c *Client) *Adapter {
+	_, defaultErr := configuredDefaultModel()
 	return &Adapter{
-		url:     c.base,
-		client:  c,
-		handles: map[string]*handle{},
+		url:             c.base,
+		client:          c,
+		handles:         map[string]*handle{},
+		defaultModelErr: defaultErr,
 	}
+}
+
+// configuredDefaultModel 返回显式环境默认值及其校验错误。默认值不能在这里
+// 静默替换为付费模型；后续 Detect 会把错误反映为 model_select fail-closed。
+func configuredDefaultModel() (string, error) {
+	value := strings.TrimSpace(os.Getenv(EnvDefaultModel))
+	if value == "" {
+		return "", nil
+	}
+	if err := ValidateModelRef(value); err != nil {
+		return "", fmt.Errorf("%s 无效: %w", EnvDefaultModel, err)
+	}
+	return value, nil
 }
 
 // health 探测本地服务；未配置 URL 或凭据缺失时返回确定性错误，供 Detect fail-closed。
@@ -73,6 +94,16 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	a.version = health.Version
 	a.mu.Unlock()
 
+	// 能力矩阵中的模型目录来自本机 OpenCode 服务，而非静态 Provider 名称。
+	// 目录获取失败只影响 model_select；基础会话能力仍按已验证 transport 声明。
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	catalog, catalogErr := a.getClient().DiscoverZenFreeModels(probeCtx)
+	cancel()
+	a.mu.Lock()
+	a.modelCatalog = catalog
+	a.modelCatalogErr = catalogErr
+	a.mu.Unlock()
+
 	caps := make([]adapter.Capability, 0, len(adapter.CapabilityNames))
 	for _, name := range adapter.CapabilityNames {
 		status := adapter.CapabilityUnsupported
@@ -85,8 +116,24 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 		case "permission":
 			// opencode server 提供 /session/{id}/permissions/{id} 决策接口，但 Adapter 尚未实现。
 			status = adapter.CapabilityUnsupported
+		case "model_select":
+			if catalogErr == nil && len(catalog.Options) > 0 {
+				status = adapter.CapabilityNative
+				reason = ""
+			} else if a.defaultModelErr != nil {
+				reason = a.defaultModelErr.Error()
+			} else if catalogErr != nil {
+				reason = "未发现已配置的 OpenCode Zen 免费模型，模型选择已安全禁用。"
+			} else {
+				reason = "OpenCode Zen 免费模型目录为空，模型选择已安全禁用。"
+			}
 		}
-		caps = append(caps, adapter.Capability{Name: name, Status: status, Reason: reason})
+		entry := adapter.Capability{Name: name, Status: status, Reason: reason}
+		if name == "model_select" && status == adapter.CapabilityNative {
+			entry.Options = append([]string(nil), catalog.Options...)
+			entry.Default = catalog.Default
+		}
+		caps = append(caps, entry)
 	}
 	return adapter.Capabilities{
 		Provider:     "opencode",
@@ -168,6 +215,24 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	}
 	if req.WorkspaceRoot == "" {
 		return nil, errors.New("Start 需要 workspace root")
+	}
+	// 未指定模型时优先使用最近一次健康探测确认过的 Zen 免费默认值；目录尚未
+	// 探测时仅允许显式、结构合法的环境值，除此之外保留空值以兼容旧服务端。
+	// Relay 能力矩阵会把“目录未确认”展示为不可选，真实 gate 则始终显式传入已发现模型。
+	if strings.TrimSpace(req.Model) == "" {
+		a.mu.Lock()
+		model := a.modelCatalog.Default
+		defaultErr := a.defaultModelErr
+		a.mu.Unlock()
+		if model == "" {
+			if defaultErr != nil {
+				return nil, defaultErr
+			}
+			model, _ = configuredDefaultModel()
+		}
+		if model != "" {
+			req.Model = model
+		}
 	}
 	session, err := client.CreateSession(ctx, sessionTitle(req))
 	if err != nil {
@@ -257,17 +322,31 @@ func (h *handle) attach(ctx context.Context) error {
 		return err
 	}
 	h.stream = stream
-	sub, _ := stream.subscribe(h.sessionID)
+	sub, ok := stream.subscribe(h.sessionID)
+	if !ok {
+		return errors.New("opencode 事件流已关闭")
+	}
 	h.sub = sub
 	// 把订阅的规范化事件按 handle 序列号转发。
 	go func() {
-		for ev := range sub.ev {
-			h.mu.Lock()
-			ev.Seq = h.seq
-			h.seq++
-			h.mu.Unlock()
+		// This goroutine is the sole owner of h.events closure. Dispose only
+		// signals h.done, so an in-flight send can never race a close.
+		defer close(h.events)
+		for {
 			select {
-			case h.events <- ev:
+			case ev, ok := <-sub.ev:
+				if !ok {
+					return
+				}
+				h.mu.Lock()
+				ev.Seq = h.seq
+				h.seq++
+				h.mu.Unlock()
+				select {
+				case h.events <- ev:
+				case <-h.done:
+					return
+				}
 			case <-h.done:
 				return
 			}
@@ -301,6 +380,7 @@ type handle struct {
 	events    chan adapter.Event
 	seq       int64
 	done      chan struct{}
+	doneOnce  sync.Once
 	// model 是创建/恢复时透传的模型选择；Send 时随 prompt_async 一起提交。
 	model string
 }
@@ -338,14 +418,7 @@ func (h *handle) Events() <-chan adapter.Event { return h.events }
 // Dispose 释放订阅并回收句柄。
 func (h *handle) Dispose(ctx context.Context) error {
 	_ = ctx
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	select {
-	case <-h.done:
-		return nil
-	default:
-		close(h.done)
-	}
+	h.doneOnce.Do(func() { close(h.done) })
 	h.adapter.detach(h)
 	return nil
 }

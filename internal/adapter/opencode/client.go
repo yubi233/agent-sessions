@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -25,7 +26,45 @@ const EnvURL = "AGENT_SESSIONS_OPENCODE_URL"
 const (
 	EnvUsername = "OPENCODE_SERVER_USERNAME"
 	EnvPassword = "OPENCODE_SERVER_PASSWORD"
+	// EnvDefaultModel 是本地栈约定的默认 Zen 模型。它只在非空且通过
+	// provider/model 校验时进入 Daemon/Relay；空值绝不能被替换成未知的付费模型。
+	EnvDefaultModel = "AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL"
+	// DefaultZenModel 是当前 OpenCode Zen 官方标注的免费候选。真正使用前仍须
+	// 经过本机 /config/providers 的动态目录确认，避免免费条目轮换时误发请求。
+	DefaultZenModel = "opencode/big-pickle"
 )
+
+// ValidateModelRef 校验跨进程传递的 provider/model 标识。
+// 这里只校验结构，不根据名称猜测供应商或价格；免费白名单由动态目录决定。
+func ValidateModelRef(value string) error {
+	model := strings.TrimSpace(value)
+	if model == "" {
+		return errors.New("模型标识不能为空")
+	}
+	if model != value {
+		return fmt.Errorf("模型标识不能包含首尾空白: %q", value)
+	}
+	provider, modelID, ok := strings.Cut(model, "/")
+	if !ok || provider == "" || modelID == "" || strings.Contains(modelID, "/") {
+		return fmt.Errorf("模型必须使用 provider/model 格式: %q", value)
+	}
+	for _, part := range []string{provider, modelID} {
+		if strings.ContainsAny(part, "\r\n\t") {
+			return fmt.Errorf("模型标识包含控制字符: %q", value)
+		}
+	}
+	return nil
+}
+
+// DefaultModelFromEnv 读取经过结构校验的默认模型。无效环境值按 fail-closed
+// 处理并返回空字符串；调用方仍可让 Adapter 依据健康服务的动态免费目录选默认值。
+func DefaultModelFromEnv() string {
+	value := strings.TrimSpace(os.Getenv(EnvDefaultModel))
+	if value == "" || ValidateModelRef(value) != nil {
+		return ""
+	}
+	return value
+}
 
 // HealthResult 是 /global/health 的响应。只有 healthy 时才允许声明 Version。
 type HealthResult struct {
@@ -44,6 +83,37 @@ type Session struct {
 		Output    int64 `json:"output"`
 		Reasoning int64 `json:"reasoning"`
 	} `json:"tokens"`
+}
+
+// ModelCatalog 是 OpenCode 本机已配置且确认属于 Zen 免费目录的模型摘要。
+// 只保留 provider/model、默认值和数量所需字段，不把 provider 原始配置回传给客户端。
+type ModelCatalog struct {
+	Options []string
+	Default string
+}
+
+type providerModelsResponse struct {
+	Providers []providerModelProvider `json:"providers"`
+	All       []providerModelProvider `json:"all"`
+	Default   map[string]string       `json:"default"`
+}
+
+type providerModelProvider struct {
+	ID     string                   `json:"id"`
+	Models map[string]providerModel `json:"models"`
+}
+
+type providerModel struct {
+	ID         string `json:"id"`
+	ProviderID string `json:"providerID"`
+	Status     string `json:"status"`
+	API        struct {
+		URL string `json:"url"`
+	} `json:"api"`
+	Cost struct {
+		Input  float64 `json:"input"`
+		Output float64 `json:"output"`
+	} `json:"cost"`
 }
 
 // Part 是会话消息的一个组成部分（text/step-start/step-finish/tool/reasoning）。
@@ -187,6 +257,122 @@ func (c *Client) Health(ctx context.Context) (HealthResult, error) {
 		return HealthResult{}, err
 	}
 	return decode[HealthResult](resp)
+}
+
+// DiscoverZenFreeModels 从 OpenCode 本机的 provider 目录提取 Zen 免费模型。
+// 服务端返回体可能包含 API key 等敏感字段，但 JSON decoder 只映射下面的白名单
+// 字段，且本方法绝不把原始响应写入错误、日志或报告。
+func (c *Client) DiscoverZenFreeModels(ctx context.Context) (ModelCatalog, error) {
+	payload, err := c.fetchProviderModels(ctx, "/config/providers")
+	if err != nil {
+		// Older OpenCode builds expose the same safe projection at /provider.
+		// Only the endpoint path is retained in the error; response bodies are never copied.
+		payload, err = c.fetchProviderModels(ctx, "/provider")
+		if err != nil {
+			return ModelCatalog{}, err
+		}
+	} else if len(payload.Providers) == 0 && len(payload.All) == 0 {
+		// A few builds return an empty compatibility object from /config/providers
+		// while /provider still carries the connected roster.
+		if alternate, alternateErr := c.fetchProviderModels(ctx, "/provider"); alternateErr == nil {
+			payload = alternate
+		}
+	}
+
+	allowed := make(map[string]struct{})
+	providers := payload.Providers
+	if len(providers) == 0 {
+		providers = payload.All
+	}
+	for _, provider := range providers {
+		providerID := strings.TrimSpace(provider.ID)
+		for mapID, item := range provider.Models {
+			modelID := strings.TrimSpace(item.ID)
+			if modelID == "" {
+				modelID = strings.TrimSpace(mapID)
+			}
+			if modelID == "" {
+				continue
+			}
+			modelProviderID := providerID
+			if item.ProviderID != "" {
+				modelProviderID = strings.TrimSpace(item.ProviderID)
+			}
+			if !isZenFreeProviderModel(modelProviderID, modelID, item) {
+				continue
+			}
+			allowed[modelProviderID+"/"+modelID] = struct{}{}
+		}
+	}
+	options := make([]string, 0, len(allowed))
+	for model := range allowed {
+		options = append(options, model)
+	}
+	sort.Strings(options)
+	if len(options) == 0 {
+		return ModelCatalog{}, errors.New("OpenCode 本机未发现已配置的 Zen 免费模型")
+	}
+
+	// 默认值优先级：显式环境值（但必须在动态免费目录中）-> 服务端默认值
+	// -> 当前官方候选（若仍在目录）-> 稳定排序后的第一项。
+	configured := DefaultModelFromEnv()
+	if configured != "" && containsString(options, configured) {
+		return ModelCatalog{Options: options, Default: configured}, nil
+	}
+	for providerID, modelID := range payload.Default {
+		candidate := strings.TrimSpace(providerID) + "/" + strings.TrimSpace(modelID)
+		if containsString(options, candidate) {
+			return ModelCatalog{Options: options, Default: candidate}, nil
+		}
+	}
+	if containsString(options, DefaultZenModel) {
+		return ModelCatalog{Options: options, Default: DefaultZenModel}, nil
+	}
+	return ModelCatalog{Options: options, Default: options[0]}, nil
+}
+
+// fetchProviderModels 只解码 provider/model 目录与默认值白名单。
+func (c *Client) fetchProviderModels(ctx context.Context, path string) (providerModelsResponse, error) {
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return providerModelsResponse{}, err
+	}
+	defer resp.Body.Close()
+	var payload providerModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return providerModelsResponse{}, fmt.Errorf("decode OpenCode model catalog: %w", err)
+	}
+	return payload, nil
+}
+
+// isZenFreeProviderModel 仅接受 OpenCode Zen provider 的零价或官方 -free 模型。
+// opencode-go/其它自定义 provider 即使成本字段为 0，也不自动纳入本轮免费授权范围。
+func isZenFreeProviderModel(providerID, modelID string, item providerModel) bool {
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
+	if providerID != "opencode" && providerID != "opencode-zen" && providerID != "zen" {
+		return false
+	}
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	if modelID == "" || strings.ContainsAny(modelID, "\r\n\t/") {
+		return false
+	}
+	// 目录服务在不同 OpenCode 版本中有两种表达：cost=0 或模型名带 -free。
+	// 两者都要求 provider 已明确是 Zen，避免把其它 provider 的零价代理误收。
+	if strings.EqualFold(strings.TrimSpace(item.Status), "disabled") {
+		return false
+	}
+	return strings.HasSuffix(modelID, "-free") ||
+		modelID == "big-pickle" ||
+		(item.Cost.Input == 0 && item.Cost.Output == 0)
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateSession 创建新会话（POST /session）。返回会话 ID。

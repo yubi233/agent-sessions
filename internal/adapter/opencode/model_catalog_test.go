@@ -1,0 +1,203 @@
+package opencode
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/yubi233/agent-sessions/internal/adapter"
+)
+
+// 模型目录 fixture 只验证白名单字段；其中故意放入类似凭据的字段，确保 decoder
+// 不会把 provider 原始配置带入 ModelCatalog 或错误摘要。
+func newModelCatalogServer(t *testing.T, useFallback bool) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	configHandler := func(w http.ResponseWriter, r *http.Request) {
+		if useFallback {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writeModelCatalogJSON(w, false)
+	}
+	mux.HandleFunc("/config/providers", configHandler)
+	mux.HandleFunc("/provider", func(w http.ResponseWriter, r *http.Request) {
+		writeModelCatalogJSON(w, true)
+	})
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"healthy": true, "version": "1.17.13"})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func writeModelCatalogJSON(w http.ResponseWriter, fallback bool) {
+	w.Header().Set("Content-Type", "application/json")
+	providersKey := "providers"
+	if fallback {
+		providersKey = "all"
+	}
+	body := map[string]any{
+		providersKey: []any{
+			map[string]any{
+				"id": "opencode",
+				"models": map[string]any{
+					"big-pickle": map[string]any{
+						"id": "big-pickle", "providerID": "opencode", "status": "active",
+						"cost": map[string]any{"input": 0, "output": 0},
+					},
+					"mimo-v2.5-free": map[string]any{
+						"id": "mimo-v2.5-free", "providerID": "opencode", "status": "active",
+						"cost": map[string]any{"input": 0.1, "output": 0.2},
+					},
+					"disabled-free": map[string]any{
+						"id": "disabled-free", "providerID": "opencode", "status": "disabled",
+					},
+				},
+			},
+			map[string]any{
+				"id": "opencode-go",
+				"models": map[string]any{
+					"paid": map[string]any{
+						"id": "paid", "providerID": "opencode-go", "status": "active",
+						"cost": map[string]any{"input": 0, "output": 0},
+					},
+				},
+			},
+			map[string]any{
+				"id": "openai",
+				"models": map[string]any{
+					"proxy-zero": map[string]any{
+						"id": "proxy-zero", "providerID": "openai", "status": "active",
+						"cost": map[string]any{"input": 0, "output": 0},
+					},
+				},
+			},
+		},
+		"default": map[string]string{"opencode": "big-pickle"},
+		// 该字段模拟服务端可能返回的敏感配置；白名单 decoder 应忽略它。
+		"key": "do-not-copy",
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func modelCatalogClient(t *testing.T, server *httptest.Server) *Client {
+	t.Helper()
+	t.Setenv(EnvURL, server.URL)
+	t.Setenv(EnvUsername, "opencode")
+	t.Setenv(EnvPassword, "fixture-password")
+	client, err := NewClient()
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	return client
+}
+
+func TestValidateModelRefAndDefaultModelFromEnv(t *testing.T) {
+	for _, value := range []string{"opencode/big-pickle", "zen/model-v1", "provider/model.id"} {
+		if err := ValidateModelRef(value); err != nil {
+			t.Fatalf("ValidateModelRef(%q): %v", value, err)
+		}
+	}
+	for _, value := range []string{"", "big-pickle", "/model", "provider/", "provider/model/extra", "provider/model\n"} {
+		if value == "" {
+			continue
+		}
+		if err := ValidateModelRef(value); err == nil {
+			t.Fatalf("ValidateModelRef(%q) unexpectedly succeeded", value)
+		}
+	}
+	t.Setenv(EnvDefaultModel, " opencode/big-pickle ")
+	if got := DefaultModelFromEnv(); got != "opencode/big-pickle" {
+		t.Fatalf("default model = %q", got)
+	}
+	t.Setenv(EnvDefaultModel, "paid-model")
+	if got := DefaultModelFromEnv(); got != "" {
+		t.Fatalf("invalid default model = %q, want empty", got)
+	}
+}
+
+func TestDiscoverZenFreeModelsFiltersProviderAndPicksDefault(t *testing.T) {
+	t.Setenv(EnvDefaultModel, "")
+	server := newModelCatalogServer(t, false)
+	catalog, err := modelCatalogClient(t, server).DiscoverZenFreeModels(context.Background())
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if got, want := catalog.Options, []string{"opencode/big-pickle", "opencode/mimo-v2.5-free"}; !equalStrings(got, want) {
+		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+	if catalog.Default != "opencode/big-pickle" {
+		t.Fatalf("default = %q", catalog.Default)
+	}
+}
+
+func TestDiscoverZenFreeModelsSupportsProviderFallback(t *testing.T) {
+	server := newModelCatalogServer(t, true)
+	catalog, err := modelCatalogClient(t, server).DiscoverZenFreeModels(context.Background())
+	if err != nil {
+		t.Fatalf("fallback discover: %v", err)
+	}
+	if len(catalog.Options) != 2 || catalog.Default != "opencode/big-pickle" {
+		t.Fatalf("fallback catalog = %#v", catalog)
+	}
+}
+
+func TestDetectExposesDynamicModelCapability(t *testing.T) {
+	server := newModelCatalogServer(t, false)
+	client := modelCatalogClient(t, server)
+	a := NewWithClient(client)
+	caps, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	entry := byCapabilityName(caps, "model_select")
+	if entry.Status != adapter.CapabilityNative {
+		t.Fatalf("model_select status = %q, reason=%q", entry.Status, entry.Reason)
+	}
+	if !equalStrings(entry.Options, []string{"opencode/big-pickle", "opencode/mimo-v2.5-free"}) {
+		t.Fatalf("model options = %#v", entry.Options)
+	}
+	if entry.Default != "opencode/big-pickle" {
+		t.Fatalf("model default = %q", entry.Default)
+	}
+}
+
+func TestDetectKeepsModelSelectionFailClosedWhenCatalogMissing(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"healthy": true, "version": "1.17.13"})
+	})
+	mux.HandleFunc("/config/providers", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"providers": []any{}})
+	})
+	mux.HandleFunc("/provider", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	a := NewWithClient(modelCatalogClient(t, server))
+	caps, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	entry := byCapabilityName(caps, "model_select")
+	if entry.Status != adapter.CapabilityUnsupported || entry.Reason == "" {
+		t.Fatalf("missing catalog entry = %#v", entry)
+	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
