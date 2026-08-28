@@ -19,12 +19,14 @@ export const ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 export const ZEN_PROVIDER_IDS = Object.freeze(["opencode", "opencode-zen", "zen"]);
 export const DEFAULT_SMOKE_TIMEOUT_MS = 180_000;
 export const FAILURE_CLASSES = Object.freeze([
+  "product_defect",
   "provider_http_error",
   "provider_timeout",
   "model_contract_failure",
   "model_flakiness",
   "credential_or_quota_blocker",
   "environment_or_startup_failure",
+  "checkpoint_mismatch",
   "test_harness_defect",
 ]);
 
@@ -305,7 +307,7 @@ async function runProcess(file, args, { cwd = ROOT, env = safeProcessEnvironment
   });
 }
 
-async function buildDaemon(binaryDir) {
+export async function buildDaemon(binaryDir) {
   const binary = join(binaryDir, "daemon");
   const result = await runProcess("go", ["build", "-o", binary, "./apps/daemon"], {
     cwd: ROOT,
@@ -325,7 +327,7 @@ async function postOwner(base, token, path, body) {
   return requestJson(base, path, { token, method: "POST", body });
 }
 
-async function registerOwner(relayBase) {
+export async function registerOwner(relayBase) {
   const email = `v07-${Date.now()}-${Math.random().toString(16).slice(2)}@test.dev`;
   const response = await postOwner(relayBase, "", "/v1/auth/register", {
     email,
@@ -337,7 +339,7 @@ async function registerOwner(relayBase) {
   return { accessToken: response.access_token, refreshToken: response.refresh_token };
 }
 
-async function pairTerminal(relayBase, ownerToken) {
+export async function pairTerminal(relayBase, ownerToken) {
   // pairing 只需要非空公钥形状；smoke 不启用签名模式，私钥不会生成或落盘。
   const request = await postOwner(relayBase, ownerToken, "/v1/pairing/requests", {
     role: "terminal",
@@ -359,7 +361,7 @@ async function pairTerminal(relayBase, ownerToken) {
   };
 }
 
-async function waitForTerminal(relayBase, ownerToken, deviceId, timeoutMs = 30_000) {
+export async function waitForTerminal(relayBase, ownerToken, deviceId, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const body = await requestJson(relayBase, "/v1/terminals", { token: ownerToken, timeoutMs: 10_000 });
@@ -371,7 +373,7 @@ async function waitForTerminal(relayBase, ownerToken, deviceId, timeoutMs = 30_0
   throw new V07HarnessError("Daemon Terminal 未在期限内上线", { failureClass: "environment_or_startup_failure" });
 }
 
-function opaqueSessionEnvelope({ kind, sessionId, provider, model, message, workspaceRoot = "" }) {
+export function opaqueSessionEnvelope({ kind, sessionId, provider, model, message, workspaceRoot = "" }) {
   const fixturePayload = { session_id: sessionId, provider, model };
   if (message !== undefined) fixturePayload.message = message;
   return {
@@ -384,7 +386,7 @@ function opaqueSessionEnvelope({ kind, sessionId, provider, model, message, work
   };
 }
 
-async function waitCommand(relayBase, ownerToken, commandId, timeoutMs = 30_000) {
+export async function waitCommand(relayBase, ownerToken, commandId, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const command = await requestJson(relayBase, `/v1/commands/${encodeURIComponent(commandId)}`, { token: ownerToken, timeoutMs: 10_000 });
@@ -400,7 +402,7 @@ function fixturePayloadFromEnvelope(envelope) {
   return null;
 }
 
-function snapshotSummary(snapshot) {
+export function snapshotSummary(snapshot) {
   const events = Array.isArray(snapshot?.events) ? snapshot.events : [];
   const eventTypes = [...new Set(events.map((event) => String(event?.event_type ?? "")).filter(Boolean))];
   const assistantTexts = [];
@@ -427,7 +429,7 @@ function snapshotSummary(snapshot) {
   };
 }
 
-async function waitForTurn(relayBase, ownerToken, sessionId, { timeoutMs = DEFAULT_SMOKE_TIMEOUT_MS, afterSeq = 0 } = {}) {
+export async function waitForTurn(relayBase, ownerToken, sessionId, { timeoutMs = DEFAULT_SMOKE_TIMEOUT_MS, afterSeq = 0 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
   while (Date.now() < deadline) {
@@ -452,7 +454,7 @@ async function waitForTurn(relayBase, ownerToken, sessionId, { timeoutMs = DEFAU
   });
 }
 
-async function waitForUsage(relayBase, ownerToken, sessionId, timeoutMs = 20_000) {
+export async function waitForUsage(relayBase, ownerToken, sessionId, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs;
   let latest = null;
   while (Date.now() < deadline) {
@@ -470,7 +472,7 @@ async function waitForUsage(relayBase, ownerToken, sessionId, timeoutMs = 20_000
   });
 }
 
-async function startDaemon(binary, { relayBase, terminal, opencodeBase, model, workspaceRoot, stateDir }) {
+export async function startDaemon(binary, { relayBase, terminal, opencodeBase, model, workspaceRoot, stateDir }) {
   const env = safeProcessEnvironment({
     AGENT_SESSIONS_OPENCODE_URL: opencodeBase,
     AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT: "1",
@@ -478,6 +480,8 @@ async function startDaemon(binary, { relayBase, terminal, opencodeBase, model, w
     AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL: model,
     // 测试拓扑明确使用 bearer 双轨；不读取调用者可能遗留的 required 配置。
     AGENT_SESSIONS_TERMINAL_SIGNATURE_MODE: "optional",
+    // 凭据通过受限子进程环境传递，不出现在 ps/命令行或报告中。
+    AGENT_SESSIONS_DAEMON_TOKEN: terminal.token,
     ...(process.env.OPENCODE_SERVER_USERNAME ? { OPENCODE_SERVER_USERNAME: process.env.OPENCODE_SERVER_USERNAME } : {}),
     ...(process.env.OPENCODE_SERVER_PASSWORD ? { OPENCODE_SERVER_PASSWORD: process.env.OPENCODE_SERVER_PASSWORD } : {}),
   });
@@ -485,8 +489,6 @@ async function startDaemon(binary, { relayBase, terminal, opencodeBase, model, w
     "run",
     "--relay-base",
     relayBase,
-    "--access-token",
-    terminal.token,
     "--state-dir",
     stateDir,
   ], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });

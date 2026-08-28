@@ -117,7 +117,7 @@ tasks:
       - task: test:e2e:relay
       - task: test:contract
       - task: test:restart
-      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs e2e-verify/real/v07-runner.test.mjs
+      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs e2e-verify/real/v07-runner.test.mjs e2e-verify/real/v07-full-gate.test.mjs
       - cmd: cd apps/mobile && flutter test test/session_controller_test.dart test/session_screens_test.dart test/composer_controls_test.dart test/session_workspace_create_test.dart test/http_relay_repository_test.dart --concurrency=1
       - node e2e-verify/run.mjs --suite p4-web-readonly
       - node e2e-verify/run.mjs --suite p4-admin-readonly
