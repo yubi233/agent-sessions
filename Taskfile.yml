@@ -105,6 +105,48 @@ tasks:
       - node e2e-verify/run.mjs --suite p4-web-readonly
       - node e2e-verify/run.mjs --suite p4-admin-readonly
 
+  test:v07:local:
+    desc: v0.7 本地统一回归入口（不启动 Android、不调用真实模型；headed Web 使用可见 Chrome）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - task: test:protocol
+      - task: test:crypto
+      - task: test:relay
+      - task: test:daemon
+      - task: test:e2e:relay
+      - task: test:contract
+      - task: test:restart
+      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs
+      - cmd: flutter test test/session_controller_test.dart test/session_screens_test.dart test/composer_controls_test.dart --concurrency=1
+        dir: apps/mobile
+      - node e2e-verify/run.mjs --suite p4-web-readonly
+      - node e2e-verify/run.mjs --suite p4-admin-readonly
+      - git diff --check
+
+  test:v07:real:
+    desc: v0.7 OpenCode Zen 免费模型 smoke/full gate（必须显式 AGENT_SESSIONS_ZEN_REAL=1）
+    cmds:
+      - |
+        if [[ "${AGENT_SESSIONS_ZEN_REAL:-}" != "1" ]]; then
+          echo "test:v07:real blocked: set AGENT_SESSIONS_ZEN_REAL=1 after confirming Zen Free model scope" >&2
+          exit 2
+        fi
+      - node e2e-verify/real/v07-zen-smoke.mjs
+      - node e2e-verify/real/v07-full-gate.mjs
+      - HEADLESS=false node e2e-verify/suites/v07-headed-readonly.mjs
+
+  record:v07:
+    desc: v0.7 录屏入口（必须先提供已通过的 V07 gate 报告）
+    cmds:
+      - |
+        if [[ -z "${V07_GATE_REPORT:-}" || ! -f "$V07_GATE_REPORT" ]]; then
+          echo "record:v07 blocked: set V07_GATE_REPORT to a passed V07-05/V07-06 gate report first" >&2
+          exit 2
+        fi
+      - pnpm flutter:smoke:record -- --seconds 10 --fps 3
+      - node e2e-verify/record-v07.mjs
+
   test:e2e:web:
     desc: P4 Web SSE cursor 的 headed Chrome 本地 fixture 旅程
     cmds:

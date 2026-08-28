@@ -1,5 +1,5 @@
 {
-  "registry_version": 3,
+  "registry_version": 4,
   "status": "in_progress",
   "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
   "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
@@ -104,6 +104,11 @@
         "RELAY-LEASE-02",
         "RELAY-LEASE-03",
         "SESS-05",
+        "SESS-06",
+        "SESS-07",
+        "SESS-08",
+        "SESS-09",
+        "SESS-10",
         "SEC-01"
       ],
       "consumed_ids": [],
@@ -266,7 +271,9 @@
         "ADPT-OPENCODE-06",
         "HAPPY-OPENCODE-01",
         "E2E-OPENCODE-01",
-        "ADPT-OPENCODE-07"
+        "ADPT-OPENCODE-07",
+        "ADPT-OPENCODE-08",
+        "ADPT-OPENCODE-09"
       ],
       "consumed_ids": [
         "ADPT-01",
@@ -650,6 +657,41 @@
         "ADPT-DSH-12"
       ],
       "consumed_ids": []
+    },
+    {
+      "plan_id": "V07-RELEASE",
+      "suite_path": "docs/test/10-v0.7全链路.json",
+      "owner": "Agent Sessions v0.7",
+      "id_prefix": [
+        "V07-"
+      ],
+      "owned_ids": [
+        "V07-01",
+        "V07-02",
+        "V07-03",
+        "V07-04",
+        "V07-05",
+        "V07-06",
+        "V07-07",
+        "V07-08",
+        "V07-09",
+        "V07-10",
+        "V07-11",
+        "V07-12"
+      ],
+      "consumed_ids": [],
+      "dependencies": [
+        "PROTO-CRYPTO",
+        "RELAY-IDENTITY",
+        "RELAY-REALTIME",
+        "DAEMON-CORE",
+        "ADAPTER-OPENCODE",
+        "ANDROID",
+        "WEB"
+      ],
+      "status": "in_progress",
+      "allow_real_upstream": true,
+      "uniqueness_rule": "v0.7 的统一入口、OpenCode Zen 免费模型 smoke/full gate、会话内新建工作区跨层验收、headed 只读观察和录屏证据由此 suite 定义；根因测试仍归所属领域 suite，Android 实机明确排除。"
     }
   ]
 }
