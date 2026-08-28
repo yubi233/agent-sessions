@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -18,7 +19,22 @@ var (
 	ErrNotAGitRoot    = errors.New("path is not a git root")
 	ErrWorkspaceMoved = errors.New("workspace moved")
 	ErrControlChar    = errors.New("path contains control characters")
+	ErrWorkspaceName  = errors.New("workspace name is invalid")
 )
+
+var workspaceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
+
+// ValidateWorkspaceName 是创建工作区共享的名称边界。名称只能成为授权根的直接子目录名，
+// 因此拒绝隐藏目录、dot-segment、分隔符和控制字符，Relay 与 daemon 必须复用该规则。
+func ValidateWorkspaceName(name string) error {
+	if name == "" || strings.TrimSpace(name) != name || !workspaceNamePattern.MatchString(name) {
+		return ErrWorkspaceName
+	}
+	if name == "." || name == ".." || strings.HasPrefix(name, ".") || strings.ContainsAny(name, `/\\`) {
+		return ErrWorkspaceName
+	}
+	return nil
+}
 
 // Workspace 描述一个已确认的工作区及其 canonical root。
 type Workspace struct {

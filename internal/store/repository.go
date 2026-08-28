@@ -120,6 +120,10 @@ type Repository interface {
 	CreateDaemonEventReceipt(ctx context.Context, r DaemonEventReceiptRow) error
 	SetDaemonEventReceiptSeq(ctx context.Context, eventID string, eventSeq int64) error
 
+	// workspace.create 的结果单独保存，避免 canonical_root 进入普通 command result/客户端投影。
+	UpsertWorkspaceCommandResult(ctx context.Context, result WorkspaceCommandResultRow) error
+	WorkspaceCommandResultByCommandID(ctx context.Context, commandID string) (WorkspaceCommandResultRow, error)
+
 	// Delegation：父子 Session 图只存密文 envelope 与白名单索引，Relay 不解密任务书或摘要。
 	CreateDelegation(ctx context.Context, d DelegationRow) error
 	DelegationByID(ctx context.Context, id string) (DelegationRow, error)
@@ -420,6 +424,18 @@ type DaemonEventReceiptRow struct {
 	CommandID       string
 	SessionID       string
 	EventSeq        int64
+	CreatedAtUnixMS int64
+}
+
+// WorkspaceCommandResultRow 是 workspace.create 专用的 daemon 回执。
+// canonical_root 只在 Relay 内部用于登记 Workspace，不得由普通命令接口返回。
+type WorkspaceCommandResultRow struct {
+	CommandID       string
+	AccountID       string
+	WorkspaceID     string
+	CanonicalRoot   string
+	Status          string
+	ErrorCode       string
 	CreatedAtUnixMS int64
 }
 

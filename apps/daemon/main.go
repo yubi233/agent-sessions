@@ -204,6 +204,12 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 	}
 	runner := daemon.NewSessionRunner(st, adapters, logger)
 	defer func() { _ = runner.Close(context.Background()) }()
+	// workspace.create 的绝对路径只能由本机授权根推导；授权根在进程启动时
+	// fail-closed 校验，避免 Daemon 在错误目录下先上线再处理命令。
+	workspaceManager, err := daemon.NewWorkspaceManager(st, os.Getenv(daemon.WorkspaceRootEnv))
+	if err != nil {
+		return fmt.Errorf("加载工作区授权根: %w", err)
+	}
 	// v0.6 残余项收口：按环境契约加载 Terminal 出站签名器（文件/内联互斥）。
 	// 未配置时 signer 为 nil，进程保持 bearer 桥接行为；配置后所有 Terminal POST
 	// 自动附加 Ed25519 签名，且签名类失败会让 RelayLoop 立即退出（不静默回退 bearer，
@@ -217,10 +223,11 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 	loop.DaemonVersion = "agent-sessions-daemon-p2"
 	loop.Hostname = hostname
 	loop.Platform = runtime.GOOS
+	loop.WorkspaceManager = workspaceManager
 	if useFixtureAdapter {
-		loop.Capabilities = []string{"start", "send", "resume", "abort", "file_read", "git_read"}
+		loop.Capabilities = []string{"start", "send", "resume", "abort", "model_select", "effort_select", "file_read", "git_read", "workspace_create"}
 	} else {
-		loop.Capabilities = []string{"start", "send", "resume", "abort"}
+		loop.Capabilities = []string{"start", "send", "resume", "abort", "model_select", "effort_select", "workspace_create"}
 	}
 	if webRead != nil {
 		// 只在私钥实际可用时声明 browser read capability；缺失配置时 Web endpoint 必须保持

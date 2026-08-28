@@ -407,6 +407,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/create-with-folder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅 Android owner/write 控制端提交工作区名称；Relay 通过 workspace.create 命令要求在线 Terminal 在本机授权根的直接子目录创建 Git 工作区。响应不包含 canonical_root。 */
+        post: operations["createWorkspaceWithFolder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/create-with-folder/{commandID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 读取同账号 workspace.create 的脱敏状态；不返回命令 payload、Terminal ID 或 canonical_root。 */
+        get: operations["getWorkspaceCreateWithFolder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions": {
         parameters: {
             query?: never;
@@ -740,6 +774,23 @@ export interface paths {
         put?: never;
         /** @description 目标 terminal 回写命令终态；详细结果必须通过独立、幂等的密文 canonical event 上传，不回显 Provider 正文。 */
         post: operations["resolveDaemonCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/commands/{id}/workspace-result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description workspace.create 的专用 daemon 回执。canonical_root 仅用于 Relay 内部登记 Workspace，响应不会回显路径。 */
+        post: operations["resolveDaemonWorkspaceCommand"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1167,7 +1218,10 @@ export interface components {
             /** @description Relay 从 Session 推导的 opaque ID；不是本机路径，也不能替代 Daemon 本机确认。 */
             workspace_id: string;
             kind: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description workspace.create 无会话 lease，使用 0；会话控制命令仍必须为正数。
+             */
             lease_epoch: number;
             target_instance_id?: string;
             target_terminal_id: string;
@@ -1190,6 +1244,42 @@ export interface components {
             status: "succeeded" | "failed" | "cancelled";
             error_code?: string;
             signature?: components["schemas"]["TerminalSignature"];
+        };
+        /** @description workspace.create 的专用回执。canonical_root 仅由受控 Terminal 上传，Relay 只内部登记，不回传客户端。 */
+        DaemonWorkspaceResultRequest: {
+            protocol_version: number;
+            /** Format: int64 */
+            delivery_seq: number;
+            workspace_id: string;
+            /** @description 成功时为本机授权根下的 canonical Git 根；失败时可省略。 */
+            canonical_root?: string;
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "cancelled";
+            error_code?: string;
+            signature?: components["schemas"]["TerminalSignature"];
+        };
+        DaemonWorkspaceResultReceipt: {
+            command_id: string;
+            /** Format: int64 */
+            delivery_seq: number;
+            workspace_id: string;
+            /** @enum {string} */
+            status: "succeeded" | "failed" | "cancelled";
+            error_code?: string;
+        };
+        CreateWorkspaceWithFolderRequest: {
+            /** @description 授权根的直接子目录名；不允许隐藏名、dot-segment、空白或路径分隔符。 */
+            name: string;
+            /** @description 可选目标 Terminal；省略时由 Relay 选择账号下在线且声明 workspace_create 的 Terminal。 */
+            terminal_id?: string;
+        };
+        WorkspaceCreateResponse: {
+            /** @enum {string} */
+            status: "pending" | "succeeded" | "failed" | "cancelled" | "rejected" | "expired";
+            command_id?: string;
+            workspace_id: string;
+            error_code?: string;
+            workspace?: components["schemas"]["Workspace"];
         };
         DaemonCommandReceipt: {
             command_id: string;
@@ -2025,6 +2115,68 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    createWorkspaceWithFolder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkspaceWithFolderRequest"];
+            };
+        };
+        responses: {
+            /** @description workspace already created or idempotent result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCreateResponse"];
+                };
+            };
+            /** @description workspace.create command accepted and awaiting daemon */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCreateResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getWorkspaceCreateWithFolder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commandID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description workspace creation state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCreateResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     listSessions: {
         parameters: {
             query?: never;
@@ -2659,6 +2811,36 @@ export interface operations {
                     "application/json": components["schemas"]["DaemonCommandReceipt"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    resolveDaemonWorkspaceCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonWorkspaceResultRequest"];
+            };
+        };
+        responses: {
+            /** @description workspace result accepted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonWorkspaceResultReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];

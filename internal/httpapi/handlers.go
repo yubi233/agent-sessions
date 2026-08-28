@@ -77,6 +77,9 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.GET("/capabilities", a.handleCapabilities)
 		auth.POST("/workspaces", a.RequireWrite(), a.handleCreateWorkspace)
 		auth.GET("/workspaces", a.handleListWorkspaces)
+		// 会话内新建工作区只提交名称；Terminal Daemon 根据本机授权根创建目录。
+		auth.POST("/workspaces/create-with-folder", a.RequireWrite(), a.handleCreateWorkspaceWithFolder)
+		auth.GET("/workspaces/create-with-folder/:commandID", a.handleGetWorkspaceCreateWithFolder)
 
 		owner := v1.Group("")
 		owner.Use(a.RequireAuth(), a.RequireOwner())
@@ -110,6 +113,7 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.GET("/commands/stream", a.handleDaemonCommandSSE(logger))
 		daemon.POST("/commands/:id/ack", a.handleDaemonCommandAck)
 		daemon.POST("/commands/:id/result", a.handleDaemonCommandResult)
+		daemon.POST("/commands/:id/workspace-result", a.handleDaemonWorkspaceResult)
 		daemon.POST("/commands/:id/readonly-response", a.handleDaemonWebReadResponse)
 		daemon.POST("/events", a.handleDaemonEventUpload)
 
@@ -1231,6 +1235,75 @@ func (a *API) handleListWorkspaces(c *gin.Context) {
 		views = append(views, newWorkspaceView(workspace))
 	}
 	writeOK(c, gin.H{"workspaces": views})
+}
+
+type createWorkspaceWithFolderRequest struct {
+	Name       string `json:"name"`
+	TerminalID string `json:"terminal_id,omitempty"`
+}
+
+// workspaceCreateView 是 workspace.create 的客户端白名单投影。canonical_root
+// 只在 Relay 内部 workspace 行和专用 daemon 回执中流转，绝不出现在 HTTP 响应。
+type workspaceCreateView struct {
+	Status      string         `json:"status"`
+	CommandID   string         `json:"command_id,omitempty"`
+	WorkspaceID string         `json:"workspace_id"`
+	ErrorCode   string         `json:"error_code,omitempty"`
+	Workspace   *workspaceView `json:"workspace,omitempty"`
+}
+
+func newWorkspaceCreateView(state domain.WorkspaceCreateState) workspaceCreateView {
+	view := workspaceCreateView{
+		Status: state.Status, CommandID: state.CommandID, WorkspaceID: state.WorkspaceID,
+		ErrorCode: state.ErrorCode,
+	}
+	if state.Workspace != nil {
+		workspace := newWorkspaceView(*state.Workspace)
+		view.Workspace = &workspace
+	}
+	return view
+}
+
+// handleCreateWorkspaceWithFolder 创建异步 workspace.create 命令；目录本身不由 Relay
+// 触碰。已完成的幂等请求直接返回 succeeded，尚未收口的命令返回 202。
+func (a *API) handleCreateWorkspaceWithFolder(c *gin.Context) {
+	var req createWorkspaceWithFolderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed workspace create request"))
+		return
+	}
+	subj := subject(c)
+	state, err := a.Workspaces.CreateWithFolder(c.Request.Context(), domain.WorkspaceCreateInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		Name: req.Name, TerminalID: req.TerminalID,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if state.CommandID != "" {
+		// 命令已在事务中持久化；Hub 仅缩短在线 Daemon 的发现延迟，断线仍可由 SSE cursor 回放。
+		if delivery, deliveryErr := a.Repo.DaemonDeliveryByCommandID(c.Request.Context(), state.CommandID); deliveryErr == nil {
+			a.DaemonDeliveries.Publish(delivery.TerminalID, delivery)
+		}
+	}
+	view := newWorkspaceCreateView(state)
+	if state.Status == domain.CommandSucceeded {
+		writeOK(c, view)
+		return
+	}
+	c.JSON(http.StatusAccepted, view)
+}
+
+// handleGetWorkspaceCreateWithFolder 返回同账号 workspace.create 的脱敏状态；读取不暴露
+// 命令 payload、Terminal ID 或 canonical_root。
+func (a *API) handleGetWorkspaceCreateWithFolder(c *gin.Context) {
+	state, err := a.Workspaces.GetCreateWithFolder(c.Request.Context(), subject(c).AccountID, c.Param("commandID"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newWorkspaceCreateView(state))
 }
 
 // 以下 DTO 是 REST 白名单投影，避免直接序列化 store/domain 行而泄露账号、公钥或密文参数。

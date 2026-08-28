@@ -214,6 +214,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
   );
   final _formKey = GlobalKey<FormState>();
   final _workspaceController = TextEditingController(text: _defaultWorkspaceId);
+  final _workspaceNameController = TextEditingController();
   String _provider = 'codex';
   String _agentPresetId = fixtureAgentPresetOptions.first.id;
 
@@ -225,6 +226,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
   @override
   void dispose() {
     _workspaceController.dispose();
+    _workspaceNameController.dispose();
     super.dispose();
   }
 
@@ -279,6 +281,51 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                           return true;
                         },
                       ),
+                      if (app.canManageDevices) ...[
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          key: const Key('new-session-workspace-name-input'),
+                          controller: _workspaceNameController,
+                          maxLength: 64,
+                          decoration: const InputDecoration(
+                            labelText: '新建工作区名称',
+                            hintText: '例如 demo-project',
+                            helperText: '仅允许授权根下的直接子目录名',
+                          ),
+                          validator: (value) {
+                            final name = value?.trim() ?? '';
+                            if (name.isEmpty) return null;
+                            if (name != value ||
+                                !RegExp(
+                                  r'^[a-zA-Z0-9._-]{1,64}$',
+                                ).hasMatch(name) ||
+                                name == '.' ||
+                                name == '..' ||
+                                name.startsWith('.')) {
+                              return '请输入合法工作区名称。';
+                            }
+                            return null;
+                          },
+                        ),
+                        OutlinedButton.icon(
+                          key: const Key('new-session-create-workspace-button'),
+                          onPressed: sessions.isBusy
+                              ? null
+                              : () => _createWorkspaceByName(app, sessions),
+                          icon: const Icon(Icons.create_new_folder_outlined),
+                          label: const Text('新建工作区'),
+                        ),
+                        if (sessions.workspaceSettling) ...[
+                          const SizedBox(height: 8),
+                          const Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              '正在创建工作区…',
+                              key: Key('new-session-workspace-pending'),
+                            ),
+                          ),
+                        ],
+                      ],
                       const SizedBox(height: 12),
                       TextFormField(
                         key: const Key('new-session-workspace-input'),

@@ -246,6 +246,16 @@ type daemonCommandResultRequest struct {
 	Signature       authz.TerminalSignature `json:"signature"`
 }
 
+type daemonWorkspaceResultRequest struct {
+	ProtocolVersion int                     `json:"protocol_version"`
+	DeliverySeq     int64                   `json:"delivery_seq"`
+	WorkspaceID     string                  `json:"workspace_id"`
+	CanonicalRoot   string                  `json:"canonical_root"`
+	Status          string                  `json:"status"`
+	ErrorCode       string                  `json:"error_code"`
+	Signature       authz.TerminalSignature `json:"signature"`
+}
+
 func (a *API) handleDaemonCommandResult(c *gin.Context) {
 	var req daemonCommandResultRequest
 	raw, err := bindJSONBody(c, &req)
@@ -265,6 +275,29 @@ func (a *API) handleDaemonCommandResult(c *gin.Context) {
 		return
 	}
 	writeOK(c, newDaemonCommandReceiptView(receipt))
+}
+
+// handleDaemonWorkspaceResult 是 workspace.create 唯一的路径回执入口。Relay 接收
+// canonical_root 后只用于受控 Workspace 登记，响应仍使用不含路径的 receipt。
+func (a *API) handleDaemonWorkspaceResult(c *gin.Context) {
+	var req daemonWorkspaceResultRequest
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed workspace command result"))
+		return
+	}
+	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
+		return
+	}
+	result, err := a.Daemons.ResolveWorkspace(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
+		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.WorkspaceID, req.CanonicalRoot, req.Status, req.ErrorCode)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newDaemonWorkspaceResultView(result))
 }
 
 type daemonWebReadResponseRequest struct {
@@ -386,6 +419,21 @@ type daemonCommandReceiptView struct {
 	AckKind     string `json:"ack_kind"`
 	Status      string `json:"status"`
 	ErrorCode   string `json:"error_code,omitempty"`
+}
+
+type daemonWorkspaceResultView struct {
+	CommandID   string `json:"command_id"`
+	DeliverySeq int64  `json:"delivery_seq"`
+	WorkspaceID string `json:"workspace_id"`
+	Status      string `json:"status"`
+	ErrorCode   string `json:"error_code,omitempty"`
+}
+
+func newDaemonWorkspaceResultView(result domain.WorkspaceCommandResult) daemonWorkspaceResultView {
+	return daemonWorkspaceResultView{
+		CommandID: result.CommandID, DeliverySeq: result.DeliverySeq, WorkspaceID: result.WorkspaceID,
+		Status: result.Status, ErrorCode: result.ErrorCode,
+	}
 }
 
 func newDaemonCommandReceiptView(receipt domain.DaemonCommandReceipt) daemonCommandReceiptView {

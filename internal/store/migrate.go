@@ -255,6 +255,20 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS daemon_event_receipts_command_idx
 		ON daemon_event_receipts(command_id, event_seq);`,
+	// v0.7 workspace.create 专用回执。canonical_root 只供 Relay 完成登记，
+	// 不复用普通 command result，避免路径意外进入客户端/日志投影。
+	`CREATE TABLE IF NOT EXISTS workspace_command_results (
+		command_id TEXT PRIMARY KEY,
+		account_id TEXT NOT NULL,
+		workspace_id TEXT NOT NULL,
+		canonical_root TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		error_code TEXT NOT NULL DEFAULT '',
+		created_at_unix_ms INTEGER NOT NULL,
+		FOREIGN KEY(command_id) REFERENCES commands(id)
+	);`,
+	`CREATE INDEX IF NOT EXISTS workspace_command_results_account_idx
+		ON workspace_command_results(account_id, workspace_id);`,
 	// P3 usage（ADR-010）：Relay 只保留白名单整数计数与 UTC 日桶，不保存 prompt、
 	// 回复、工具参数、路径、费用或精确事件时间。usage_key_hash 唯一约束保证
 	// Daemon 断线 outbox 重复上传返回同一 canonical receipt，不重复累加。

@@ -44,6 +44,7 @@ class SessionController extends ChangeNotifier {
   List<MobileWorkspace> _workspaces = const [];
   String? _workspaceErrorMessage;
   String? _pendingWorkspaceId;
+  String? _pendingWorkspaceCommandId;
   bool _workspaceSettling = false;
   String? _selectedSessionId;
   List<SessionTimelineEvent> _timeline = const [];
@@ -85,6 +86,7 @@ class SessionController extends ChangeNotifier {
       List<MobileWorkspace>.unmodifiable(_workspaces);
   String? get workspaceErrorMessage => _workspaceErrorMessage;
   String? get pendingWorkspaceId => _pendingWorkspaceId;
+  String? get pendingWorkspaceCommandId => _pendingWorkspaceCommandId;
   bool get workspaceSettling => _workspaceSettling;
   List<SessionTimelineEvent> get timeline =>
       List<SessionTimelineEvent>.unmodifiable(_timeline);
@@ -242,6 +244,107 @@ class SessionController extends ChangeNotifier {
     }
     return created;
   }
+
+  /// 真实 Relay 工作区创建只接受名称，并等待 Terminal Daemon 的异步回执。
+  /// 轮询期间保留 pending 状态；成功后把脱敏 Workspace 投影放入列表，绝不接触
+  /// canonical root 或把移动端路径当成 Host 路径。
+  Future<MobileWorkspace?> createWorkspaceWithName({
+    required String name,
+    required String? deviceId,
+    required bool canWrite,
+    String terminalId = '',
+  }) async {
+    if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
+      return null;
+    }
+    final input = CreateMobileWorkspaceWithFolderInput(
+      name: name,
+      deviceId: deviceId!,
+      terminalId: terminalId,
+    );
+    try {
+      input.validate();
+    } on RelayFailure catch (failure) {
+      _workspaceErrorMessage = failure.message;
+      notifyListeners();
+      return null;
+    }
+    final normalizedName = name.trim();
+    // workspace.create 是异步 Terminal 命令；显式暴露 settling 状态让页面禁用
+    // 重复点击，并让回归测试能区分 pending 与已完成投影。
+    _workspaceSettling = true;
+    notifyListeners();
+    try {
+      final created = await _runAction<MobileWorkspace?>(
+        'workspace-create-name:$normalizedName',
+        () async {
+          var state = await _relay.createWorkspaceWithFolder(input);
+          if (state.isPending) {
+            final commandID = state.commandId;
+            if (commandID == null || commandID.trim().isEmpty) {
+              throw const RelayFailure(
+                RelayFailureKind.protocol,
+                'Relay 未返回工作区创建命令标识。',
+              );
+            }
+            _pendingWorkspaceCommandId = commandID;
+            _pendingWorkspaceId = state.workspaceId;
+            notifyListeners();
+            // Daemon 创建目录是异步的；有限次轮询避免网络异常时永久占住 UI。
+            for (var attempt = 0; attempt < 40 && state.isPending; attempt++) {
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+              state = await _relay.getWorkspaceCreateState(commandID);
+              notifyListeners();
+            }
+          }
+          if (!state.isSucceeded) {
+            throw RelayFailure(
+              RelayFailureKind.unavailable,
+              _workspaceCreateFailureMessage(state.errorCode),
+            );
+          }
+          var workspace = state.workspace;
+          if (workspace == null) {
+            await refreshWorkspaces();
+            workspace = _workspaces
+                .where((item) => item.id == state.workspaceId)
+                .firstOrNull;
+          }
+          if (workspace == null) {
+            throw const RelayFailure(
+              RelayFailureKind.protocol,
+              'Relay 已完成工作区创建，但未返回工作区。',
+            );
+          }
+          _workspaces = [
+            workspace,
+            ..._workspaces.where((item) => item.id != workspace!.id),
+          ];
+          _workspacePhase = WorkspaceListPhase.ready;
+          _workspaceErrorMessage = null;
+          return workspace;
+        },
+      );
+      if (created == null && _errorMessage != null) {
+        _workspaceErrorMessage = _errorMessage;
+      }
+      return created;
+    } finally {
+      _pendingWorkspaceCommandId = null;
+      _pendingWorkspaceId = null;
+      _workspaceSettling = false;
+      notifyListeners();
+    }
+  }
+
+  String _workspaceCreateFailureMessage(String? errorCode) =>
+      switch (errorCode) {
+        'WORKSPACE_PATH_DENIED' => '工作区名称或授权路径不允许。',
+        'WORKSPACE_MOVED' => '工作区授权根已移动，请重新连接 Terminal。',
+        'TERMINAL_OFFLINE' => '没有在线且支持新建工作区的 Terminal。',
+        'CAPABILITY_UNSUPPORTED' => '当前 Terminal 不支持新建工作区。',
+        _ => '工作区创建失败，请稍后重试。',
+      };
 
   /// Reuse an empty session for the workspace or create one. Session-scoped
   /// input and opaque attachment handles move only after the destination has

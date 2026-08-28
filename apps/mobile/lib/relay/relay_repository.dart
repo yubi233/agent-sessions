@@ -57,6 +57,14 @@ abstract interface class RelayRepository {
   /// Register a directory selected by the composed host directory flow.
   Future<MobileWorkspace> createWorkspace(CreateMobileWorkspaceInput input);
 
+  /// 仅提交名称的真实 workspace.create 编排；结果不包含 Host canonical root。
+  Future<WorkspaceCreateState> createWorkspaceWithFolder(
+    CreateMobileWorkspaceWithFolderInput input,
+  );
+
+  /// 轮询 workspace.create 的脱敏状态。
+  Future<WorkspaceCreateState> getWorkspaceCreateState(String commandId);
+
   /// 新建会话仍由认证设备身份授权，HTTP body 不允许客户端伪造 device_id。
   Future<MobileSession> createSession(CreateMobileSessionInput input);
 

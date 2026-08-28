@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/internal/store"
+	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
@@ -71,6 +73,18 @@ type DaemonCommandReceipt struct {
 	AckKind     string
 	Status      string
 	ErrorCode   string
+}
+
+// WorkspaceCommandResult 是 workspace.create 专用回执。canonical_root 只在 Relay 内部使用，
+// HTTP 层必须通过不含路径的 workspaceCreateView 投影给 Android。
+type WorkspaceCommandResult struct {
+	CommandID    string
+	DeliverySeq  int64
+	WorkspaceID  string
+	Status       string
+	ErrorCode    string
+	Workspace    store.WorkspaceRow
+	HasWorkspace bool
 }
 
 type DaemonEventInput struct {
@@ -227,6 +241,17 @@ func (s *DaemonService) DeliveryCommandForTerminal(ctx context.Context, terminal
 	if command.AccountID != terminal.AccountID || command.TargetTerminalID != terminal.ID {
 		return store.CommandRow{}, "", ErrScopeDenied
 	}
+	if isWorkspaceCreateCommand(command) {
+		// workspace.create 没有 Session，Workspace ID 从命令的非敏感 payload 复核，
+		// 不允许把缺失/伪造的 ID 投影给 daemon。
+		var payload struct {
+			WorkspaceID string `json:"workspace_id"`
+		}
+		if err := json.Unmarshal([]byte(command.CiphertextJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
+			return store.CommandRow{}, "", ErrScopeDenied
+		}
+		return command, strings.TrimSpace(payload.WorkspaceID), nil
+	}
 	session, err := s.repo.SessionByID(ctx, command.SessionID)
 	if err != nil {
 		return store.CommandRow{}, "", err
@@ -281,7 +306,7 @@ func (s *DaemonService) Acknowledge(ctx context.Context, accountID, deviceID, ro
 		case "started":
 			// browser 只读请求没有 Android lease；只有 lease_epoch=0 且固定 kind 的命令可走
 			// 该分支，其他命令仍必须经过既有 owner/instance fencing。
-			if !isWebReadCommand(cmd) {
+			if !isWebReadCommand(cmd) && !isWorkspaceCreateCommand(cmd) {
 				if err := validateCommandFence(ctx, tx, cmd); err != nil {
 					return err
 				}
@@ -336,6 +361,11 @@ func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, 
 			result = daemonReceipt(cmd, delivery)
 			return nil
 		}
+		if isWorkspaceCreateCommand(cmd) {
+			// workspace.create 必须通过专用 result endpoint 携带受控回执，
+			// 防止普通 command result 漏出或丢失 canonical_root 绑定。
+			return ErrDaemonCommandState
+		}
 		if !isWebReadCommand(cmd) {
 			if err := validateCommandFence(ctx, tx, cmd); err != nil {
 				return err
@@ -364,6 +394,163 @@ func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, 
 		return DaemonCommandReceipt{}, err
 	}
 	return result, nil
+}
+
+// ResolveWorkspace 收口 workspace.create 的 daemon 回执，并在同一事务内登记 Relay Workspace。
+// canonicalRoot 仅写入 workspace_command_results/workspaces，普通 command receipt 不会携带它。
+func (s *DaemonService) ResolveWorkspace(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, workspaceID, canonicalRoot, status, errorCode string) (WorkspaceCommandResult, error) {
+	if err := validateDaemonProtocol(protocolVersion); err != nil {
+		return WorkspaceCommandResult{}, err
+	}
+	if deliverySeq <= 0 || !validWorkspaceResultStatus(status) || strings.TrimSpace(workspaceID) == "" {
+		return WorkspaceCommandResult{}, protocol.NewError(protocol.ErrInvalidRequest, "invalid workspace command result")
+	}
+	canonicalRoot = strings.TrimSpace(canonicalRoot)
+	if status == CommandSucceeded && (!filepath.IsAbs(canonicalRoot) || hasControlCharacter(canonicalRoot)) {
+		return WorkspaceCommandResult{}, protocol.NewError(protocol.ErrInvalidRequest, "workspace result path is invalid")
+	}
+	terminal, err := s.TerminalForDevice(ctx, accountID, deviceID, role)
+	if err != nil {
+		return WorkspaceCommandResult{}, err
+	}
+	var result WorkspaceCommandResult
+	err = s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		cmd, delivery, err := daemonCommandForTerminal(ctx, tx, terminal, commandID, deliverySeq)
+		if err != nil {
+			return err
+		}
+		if !isWorkspaceCreateCommand(cmd) {
+			return ErrScopeDenied
+		}
+		var payload struct {
+			WorkspaceID string `json:"workspace_id"`
+			ProjectID   string `json:"project_id"`
+			Name        string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(cmd.CiphertextJSON), &payload); err != nil ||
+			strings.TrimSpace(payload.WorkspaceID) != strings.TrimSpace(workspaceID) ||
+			strings.TrimSpace(payload.ProjectID) == "" {
+			return ErrScopeDenied
+		}
+		if existing, lookupErr := tx.WorkspaceCommandResultByCommandID(ctx, cmd.ID); lookupErr == nil {
+			if existing.AccountID != accountID || existing.WorkspaceID != workspaceID {
+				return ErrScopeDenied
+			}
+			result = workspaceCommandResultFromRow(ctx, tx, existing)
+			result.DeliverySeq = delivery.DeliverySeq
+			return nil
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		}
+		if delivery.ResultStatus != "" || isTerminal(cmd.Status) {
+			return ErrDaemonCommandState
+		}
+
+		if status == CommandSucceeded {
+			// 名称仍在 Relay 根因层复核，避免被伪造 payload 写入奇怪的 project 索引。
+			if err := validateWorkspaceCreateName(payload.Name); err != nil {
+				return err
+			}
+			projects, err := tx.ListProjects(ctx, accountID)
+			if err != nil {
+				return err
+			}
+			projectOwned := false
+			for _, project := range projects {
+				if project.ID == payload.ProjectID {
+					projectOwned = project.AccountID == accountID
+					break
+				}
+			}
+			if !projectOwned {
+				if err := tx.CreateProject(ctx, store.ProjectRow{ID: payload.ProjectID, AccountID: accountID, Fingerprint: "fp_" + payload.ProjectID}); err != nil {
+					return err
+				}
+			}
+			workspace, lookupErr := tx.WorkspaceByID(ctx, workspaceID)
+			if lookupErr == nil {
+				if workspace.ProjectID != payload.ProjectID || workspace.TerminalID != terminal.ID {
+					return ErrScopeDenied
+				}
+				result.Workspace = workspace
+			} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+				return lookupErr
+			} else {
+				workspace = store.WorkspaceRow{ID: workspaceID, ProjectID: payload.ProjectID, TerminalID: terminal.ID, CanonicalRoot: canonicalRoot, Status: "active"}
+				if err := tx.CreateWorkspace(ctx, workspace); err != nil {
+					return err
+				}
+				result.Workspace = workspace
+			}
+			result.HasWorkspace = true
+		}
+		if err := tx.UpdateCommandStatus(ctx, cmd.ID, status); err != nil {
+			return err
+		}
+		cmd.Status = status
+		delivery.ResultStatus = status
+		delivery.ErrorCode = safeErrorCode(errorCode)
+		delivery.UpdatedAtUnixMS = s.now().UnixMilli()
+		if err := tx.UpdateDaemonDelivery(ctx, delivery); err != nil {
+			return err
+		}
+		if err := tx.UpsertWorkspaceCommandResult(ctx, store.WorkspaceCommandResultRow{
+			CommandID: cmd.ID, AccountID: accountID, WorkspaceID: workspaceID,
+			CanonicalRoot: canonicalRoot, Status: status, ErrorCode: safeErrorCode(errorCode),
+			CreatedAtUnixMS: s.now().UnixMilli(),
+		}); err != nil {
+			return err
+		}
+		if err := tx.AppendAudit(ctx, accountID, "workspace.create.resolved", `{"command_id":"`+cmd.ID+`","workspace_id":"`+workspaceID+`","status":"`+status+`"}`); err != nil {
+			return err
+		}
+		if err := tx.EnqueueOutbox(ctx, store.OutboxRow{Kind: "command.updated", PayloadJSON: `{"command_id":"` + cmd.ID + `"}`, Status: "pending"}); err != nil {
+			return err
+		}
+		result.CommandID, result.DeliverySeq, result.WorkspaceID, result.Status, result.ErrorCode = cmd.ID, delivery.DeliverySeq, workspaceID, status, safeErrorCode(errorCode)
+		return nil
+	})
+	if err != nil {
+		return WorkspaceCommandResult{}, err
+	}
+	return result, nil
+}
+
+func workspaceCommandResultFromRow(ctx context.Context, repo store.Repository, row store.WorkspaceCommandResultRow) WorkspaceCommandResult {
+	result := WorkspaceCommandResult{CommandID: row.CommandID, WorkspaceID: row.WorkspaceID, Status: row.Status, ErrorCode: row.ErrorCode}
+	if row.Status == CommandSucceeded {
+		if workspace, err := repo.WorkspaceByID(ctx, row.WorkspaceID); err == nil {
+			result.Workspace, result.HasWorkspace = workspace, true
+		}
+	}
+	return result
+}
+
+func validWorkspaceResultStatus(status string) bool {
+	switch status {
+	case CommandSucceeded, CommandFailed, CommandCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func isWorkspaceCreateCommand(command store.CommandRow) bool {
+	return command.Kind == "workspace.create" && command.SessionID == ""
+}
+
+func validateWorkspaceCreateName(name string) error {
+	// 领域层复用 workspacesafe 的名称规则，避免 HTTP 与 daemon 两套口径漂移。
+	return workspacesafe.ValidateWorkspaceName(name)
+}
+
+func hasControlCharacter(value string) bool {
+	for _, r := range value {
+		if r == 0 || r < 0x20 {
+			return true
+		}
+	}
+	return false
 }
 
 // StoreWebReadResponse 保存 Daemon 对浏览器临时公钥回封的结果。该 endpoint 不接受普通 event，

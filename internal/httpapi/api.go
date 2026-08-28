@@ -29,7 +29,9 @@ type API struct {
 	Capabilities     *adapterreg.Registry
 	Usage            *domain.UsageService
 	MessageFeedback  *domain.MessageFeedbackService
-	Repo             store.Repository
+	// Workspaces 编排会话内新建工作区；目录创建只在 Terminal Daemon 本机执行。
+	Workspaces *domain.WorkspaceService
+	Repo       store.Repository
 
 	// authFailuresTotal：鉴权失败总次数（401 类）；authRevokedTotal：其中设备被撤销的次数。
 	authFailuresTotal atomic.Int64
@@ -45,7 +47,8 @@ func New(auth *domain.AuthService, pairing *domain.PairingService, sessions *dom
 		Auth: auth, Pairing: pairing, Sessions: sessions, Delegations: delegations,
 		Attachments: domain.NewAttachmentService(repo), Daemons: domain.NewDaemonService(repo),
 		DaemonDeliveries: domain.NewDaemonDeliveryHub(), Capabilities: adapterreg.New(),
-		Usage: domain.NewUsageService(repo), MessageFeedback: domain.NewMessageFeedbackService(repo), Repo: repo,
+		Usage: domain.NewUsageService(repo), MessageFeedback: domain.NewMessageFeedbackService(repo),
+		Workspaces: domain.NewWorkspaceService(repo), Repo: repo,
 	}
 }
 

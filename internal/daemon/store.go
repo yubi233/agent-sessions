@@ -408,7 +408,9 @@ type RelayUsage struct {
 func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if command.CommandID == "" || command.DeliverySeq <= 0 || command.Kind == "" || command.SessionID == "" {
+	if command.CommandID == "" || command.DeliverySeq <= 0 || command.Kind == "" ||
+		(command.SessionID == "" && command.Kind != "workspace.create") ||
+		(command.Kind == "workspace.create" && command.WorkspaceID == "") {
 		return false, errors.New("invalid relay command")
 	}
 	tx, err := s.db.Begin()

@@ -118,6 +118,16 @@ type RelayCommandReceipt struct {
 	ErrorCode   string `json:"error_code"`
 }
 
+// WorkspaceCommandReceipt 是 workspace.create 专用回执；canonical_root 只由 daemon 上传，
+// Relay 不把它放进普通 command result，也不会回传给客户端。
+type WorkspaceCommandReceipt struct {
+	CommandID   string `json:"command_id"`
+	DeliverySeq int64  `json:"delivery_seq"`
+	WorkspaceID string `json:"workspace_id"`
+	Status      string `json:"status"`
+	ErrorCode   string `json:"error_code"`
+}
+
 type RelayDelivery struct {
 	DeliverySeq int64        `json:"delivery_seq"`
 	Command     RelayCommand `json:"command"`
@@ -215,6 +225,27 @@ func (c *RelayClient) Resolve(ctx context.Context, commandID string, deliverySeq
 	}
 	if !validRelayResultStatus(out.Status) {
 		return RelayCommandReceipt{}, errors.New("relay command result receipt incomplete")
+	}
+	return out, nil
+}
+
+// ResolveWorkspace 上传 workspace.create 的受控结果。路径字段只存在于该专用请求，
+// 普通 ack/result 端点永远不接受或返回 canonical_root。
+func (c *RelayClient) ResolveWorkspace(ctx context.Context, commandID string, deliverySeq int64, workspaceID, canonicalRoot, status, errorCode string) (WorkspaceCommandReceipt, error) {
+	var out WorkspaceCommandReceipt
+	err := c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/workspace-result", map[string]any{
+		"protocol_version": daemonProtocolVersion,
+		"delivery_seq":     deliverySeq,
+		"workspace_id":     workspaceID,
+		"canonical_root":   canonicalRoot,
+		"status":           status,
+		"error_code":       errorCode,
+	}, &out)
+	if err != nil {
+		return WorkspaceCommandReceipt{}, err
+	}
+	if out.CommandID == "" || out.WorkspaceID == "" || !validRelayResultStatus(out.Status) {
+		return WorkspaceCommandReceipt{}, errors.New("relay workspace result receipt incomplete")
 	}
 	return out, nil
 }
@@ -456,6 +487,8 @@ type RelayLoop struct {
 	Runner   *SessionRunner
 	ReadOnly *ReadOnlyDispatcher
 	Encoder  EventEncoder
+	// WorkspaceManager 是 workspace.create 的本机执行器；缺失时必须 fail-closed。
+	WorkspaceManager *WorkspaceManager
 	// WebRead 只用于 browser -> Daemon -> browser 的临时密钥只读响应；它与 Provider event
 	// encoder 分离，不能把浏览器文件结果塞进账号事件或复用共享 DEK。
 	WebRead       *WebReadTransport
@@ -688,6 +721,12 @@ func capabilityForCommand(kind string) string {
 		return "abort"
 	case "session.kill":
 		return "kill"
+	case "session.model_select":
+		return "model_select"
+	case "session.effort_select":
+		return "effort_select"
+	case "workspace.create":
+		return "workspace_create"
 	case "file.tree", "file.read", "code.read":
 		return "file_read"
 	case "git.status", "git.changes", "git.diff":
@@ -748,6 +787,35 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			startedThisPass = true
 		}
 		if command.ResultStatus != "" {
+			continue
+		}
+		if command.Kind == "workspace.create" {
+			// 工作区命令没有 Session lease；名称解析、mkdir、git init 和本机确认
+			// 全部在授权根边界内完成，结果必须走专用回执通道。
+			status, errorCode := "succeeded", ""
+			var confirmed ConfirmedWorkspace
+			var err error
+			if l.WorkspaceManager == nil {
+				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
+			} else {
+				var payload WorkspaceCreatePayload
+				payload, err = DecodeWorkspaceCreatePayload(command.PayloadJSON, command.WorkspaceID)
+				if err == nil {
+					confirmed, err = l.WorkspaceManager.Create(ctx, command.WorkspaceID, payload.Name)
+				}
+				if err != nil {
+					status, errorCode = "failed", WorkspaceCreateErrorCode(err)
+					l.Logger.Warn("daemon workspace creation failed", "command", command.CommandID, "error_code", errorCode)
+				}
+			}
+			receipt, resolveErr := l.Client.ResolveWorkspace(ctx, command.CommandID, command.DeliverySeq,
+				command.WorkspaceID, confirmed.Root, status, errorCode)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
+				return err
+			}
 			continue
 		}
 		if command.Status == "started" && !startedThisPass {

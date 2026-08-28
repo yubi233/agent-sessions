@@ -21,6 +21,7 @@ class FixtureRelayRepository implements RelayRepository {
   final Map<String, PairingRequest> _pairings = {};
   final Map<String, _FixtureSessionState> _sessions = {};
   final Map<String, MobileWorkspace> _workspaces = {};
+  final Map<String, WorkspaceCreateState> _workspaceCreateStates = {};
   final Map<String, _FixtureAttachmentState> _attachments = {};
   final Map<String, _FixtureDelegationState> _delegations = {};
   final Map<String, Map<String, ConversationFeedbackItem>> _feedback = {};
@@ -363,6 +364,46 @@ class FixtureRelayRepository implements RelayRepository {
     );
     _workspaces[id] = workspace;
     return workspace;
+  }
+
+  @override
+  Future<WorkspaceCreateState> createWorkspaceWithFolder(
+    CreateMobileWorkspaceWithFolderInput input,
+  ) async {
+    input.validate();
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final projectId = 'fixture-${input.name.trim()}';
+    final workspaceID = 'ws_$projectId';
+    var workspace = _workspaces[workspaceID];
+    workspace ??= await createWorkspace(
+      CreateMobileWorkspaceInput(
+        projectId: projectId,
+        canonicalRoot: '/fixture/${input.name.trim()}',
+        deviceId: input.deviceId,
+        terminalId: input.terminalId,
+      ),
+    );
+    final commandID = 'fixture-workspace-create-${workspace.id}';
+    final state = WorkspaceCreateState(
+      status: 'succeeded',
+      commandId: commandID,
+      workspaceId: workspace.id,
+      workspace: workspace,
+    );
+    // fixture 没有异步 Daemon，但仍记录 command-like key 以覆盖轮询读取契约。
+    _workspaceCreateStates[commandID] = state;
+    return state;
+  }
+
+  @override
+  Future<WorkspaceCreateState> getWorkspaceCreateState(String commandId) async {
+    _requireFixtureNetwork();
+    final state = _workspaceCreateStates[commandId];
+    if (state == null) {
+      throw const RelayFailure(RelayFailureKind.validation, '工作区创建命令不存在。');
+    }
+    return state;
   }
 
   @override

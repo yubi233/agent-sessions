@@ -278,6 +278,84 @@ void main() {
       expect(call, 2);
     });
 
+    test('V07 workspace.create 只发送名称和可选 Terminal，不泄漏路径或 device_id', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/workspaces/create-with-folder');
+        expect(options.method, 'POST');
+        expect(options.data, {
+          'name': 'v07-http-project',
+          'terminal_id': 'term_1',
+        });
+        final body = options.data as Map;
+        expect(body.containsKey('canonical_root'), isFalse);
+        expect(body.containsKey('device_id'), isFalse);
+        return _jsonResponse({
+          'status': 'succeeded',
+          'workspace_id': 'ws_v07_http',
+          'workspace': {
+            'id': 'ws_v07_http',
+            'project_id': 'proj_v07_http',
+            'terminal_id': 'term_1',
+            'status': 'active',
+          },
+        });
+      });
+
+      final state = await _authenticatedRepository(adapter)
+          .createWorkspaceWithFolder(
+            const CreateMobileWorkspaceWithFolderInput(
+              name: 'v07-http-project',
+              deviceId: 'android-owner-local-boundary',
+              terminalId: 'term_1',
+            ),
+          );
+      expect(state.isSucceeded, isTrue);
+      expect(state.workspaceId, 'ws_v07_http');
+      expect(state.workspace?.projectId, 'proj_v07_http');
+    });
+
+    test('V07 workspace.create pending 状态轮询只读取 command id 且拒绝路径字段', () async {
+      var call = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        call += 1;
+        expect(options.method, 'GET');
+        expect(options.path, '/v1/workspaces/create-with-folder/cmd_v07');
+        expect(options.data, isNull);
+        return _jsonResponse({
+          'status': 'pending',
+          'command_id': 'cmd_v07',
+          'workspace_id': 'ws_v07_pending',
+          // 恶意/错误服务端字段不能被 DTO 传播到客户端模型。
+          'canonical_root': '/Users/secret/project',
+        });
+      });
+      final state = await _authenticatedRepository(
+        adapter,
+      ).getWorkspaceCreateState('cmd_v07');
+      expect(call, 1);
+      expect(state.isPending, isTrue);
+      expect(state.commandId, 'cmd_v07');
+      expect(state.workspace, isNull);
+    });
+
+    test('V07 workspace.create 非法名称在客户端校验，不发 HTTP 请求', () async {
+      var calls = 0;
+      final adapter = _FixtureHttpAdapter((_) {
+        calls += 1;
+        return _jsonResponse({});
+      });
+      await expectLater(
+        _authenticatedRepository(adapter).createWorkspaceWithFolder(
+          const CreateMobileWorkspaceWithFolderInput(
+            name: '../escape',
+            deviceId: 'android-owner-local-boundary',
+          ),
+        ),
+        throwsA(isA<RelayFailure>()),
+      );
+      expect(calls, 0);
+    });
+
     test('真实 Relay 未定义 agent preset 时会话创建保持协议白名单', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/sessions');

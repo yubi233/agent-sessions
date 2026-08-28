@@ -888,6 +888,32 @@ func (r *sqliteRepo) DaemonEventReceiptByID(ctx context.Context, eventID string)
 	return row, nil
 }
 
+// UpsertWorkspaceCommandResult 保存 workspace.create 的唯一结果；重复回执只能重放同一结果，
+// 不允许用新的 canonical_root 覆盖已确认的本机路径。
+func (r *sqliteRepo) UpsertWorkspaceCommandResult(ctx context.Context, result WorkspaceCommandResultRow) error {
+	if result.CreatedAtUnixMS == 0 {
+		result.CreatedAtUnixMS = time.Now().UnixMilli()
+	}
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO workspace_command_results(command_id,account_id,workspace_id,canonical_root,status,error_code,created_at_unix_ms)
+		 VALUES(?,?,?,?,?,?,?)
+		 ON CONFLICT(command_id) DO UPDATE SET
+			status=CASE WHEN workspace_command_results.status='succeeded' THEN workspace_command_results.status ELSE excluded.status END,
+			error_code=CASE WHEN workspace_command_results.status='succeeded' THEN workspace_command_results.error_code ELSE excluded.error_code END,
+			canonical_root=CASE WHEN workspace_command_results.status='succeeded' THEN workspace_command_results.canonical_root ELSE excluded.canonical_root END`,
+		result.CommandID, result.AccountID, result.WorkspaceID, result.CanonicalRoot, result.Status, result.ErrorCode, result.CreatedAtUnixMS)
+	return err
+}
+
+func (r *sqliteRepo) WorkspaceCommandResultByCommandID(ctx context.Context, commandID string) (WorkspaceCommandResultRow, error) {
+	var result WorkspaceCommandResultRow
+	err := r.db.QueryRowContext(ctx,
+		`SELECT command_id,account_id,workspace_id,canonical_root,status,error_code,created_at_unix_ms
+		 FROM workspace_command_results WHERE command_id=?`, commandID).
+		Scan(&result.CommandID, &result.AccountID, &result.WorkspaceID, &result.CanonicalRoot, &result.Status, &result.ErrorCode, &result.CreatedAtUnixMS)
+	return result, err
+}
+
 func (r *sqliteRepo) CreateDaemonEventReceipt(ctx context.Context, receipt DaemonEventReceiptRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO daemon_event_receipts(event_id,terminal_id,command_id,session_id,event_seq,created_at_unix_ms)

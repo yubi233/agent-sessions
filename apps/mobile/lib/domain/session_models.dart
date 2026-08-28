@@ -181,6 +181,86 @@ class CreateMobileWorkspaceInput {
   }
 }
 
+/// 真实 Relay 的会话内新建工作区请求。移动端只提交共享名称，Host
+/// canonical root 由 Terminal Daemon 在授权根内推导，不能从客户端传入。
+class CreateMobileWorkspaceWithFolderInput {
+  const CreateMobileWorkspaceWithFolderInput({
+    required this.name,
+    required this.deviceId,
+    this.terminalId = '',
+  });
+
+  final String name;
+  final String deviceId;
+  final String terminalId;
+
+  void validate() {
+    final value = name.trim();
+    if (value.isEmpty ||
+        value != name ||
+        value.length > 64 ||
+        !RegExp(r'^[a-zA-Z0-9._-]+$').hasMatch(value) ||
+        value == '.' ||
+        value == '..' ||
+        value.startsWith('.')) {
+      throw const RelayFailure.validation('工作区名称无效。');
+    }
+    if (deviceId.trim().isEmpty) {
+      throw const RelayFailure.validation('当前设备没有 Android 写控制端。');
+    }
+  }
+}
+
+/// workspace.create 的脱敏状态；不持有 canonical root。
+class WorkspaceCreateState {
+  const WorkspaceCreateState({
+    required this.status,
+    required this.workspaceId,
+    this.commandId,
+    this.errorCode,
+    this.workspace,
+  });
+
+  factory WorkspaceCreateState.fromRelayJson(Map<String, dynamic> json) {
+    final status = json['status'];
+    final workspaceId = json['workspace_id'];
+    if (status is! String ||
+        status.trim().isEmpty ||
+        workspaceId is! String ||
+        workspaceId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.protocol, '工作区创建状态格式错误。');
+    }
+    final rawWorkspace = json['workspace'];
+    return WorkspaceCreateState(
+      status: status,
+      workspaceId: workspaceId,
+      commandId: _nullableString(json['command_id']),
+      errorCode: _nullableString(json['error_code']),
+      workspace: rawWorkspace is Map
+          ? MobileWorkspace.fromRelayJson(
+              Map<String, dynamic>.from(rawWorkspace),
+            )
+          : null,
+    );
+  }
+
+  final String status;
+  final String workspaceId;
+  final String? commandId;
+  final String? errorCode;
+  final MobileWorkspace? workspace;
+
+  bool get isPending => status == 'pending';
+  bool get isSucceeded => status == 'succeeded';
+  bool get isTerminal => const {
+    'succeeded',
+    'failed',
+    'cancelled',
+    'rejected',
+    'expired',
+  }.contains(status);
+}
+
 /// Relay snapshot 中的原始事件。客户端尚未获得会话解密材料时只能保留 envelope，不能猜测正文。
 class RelaySessionEvent {
   const RelaySessionEvent({
@@ -729,6 +809,11 @@ String? _nullableString(Object? value) =>
 
 DateTime? _nullableDateTime(Object? value) =>
     value is String ? DateTime.tryParse(value) : null;
+
+DateTime? _nullableDateTimeFromMillis(Object? value) =>
+    value is num && value.toInt() > 0
+    ? DateTime.fromMillisecondsSinceEpoch(value.toInt(), isUtc: true)
+    : null;
 
 List<String> _stringList(Object? value) => value is List
     ? value

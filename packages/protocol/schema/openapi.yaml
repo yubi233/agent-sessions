@@ -554,6 +554,64 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/workspaces/create-with-folder:
+    post:
+      operationId: createWorkspaceWithFolder
+      description: 仅 Android owner/write 控制端提交工作区名称；Relay 通过 workspace.create 命令要求在线 Terminal 在本机授权根的直接子目录创建 Git 工作区。响应不包含 canonical_root。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkspaceWithFolderRequest"
+      responses:
+        "200":
+          description: workspace already created or idempotent result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceCreateResponse"
+        "202":
+          description: workspace.create command accepted and awaiting daemon
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceCreateResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/workspaces/create-with-folder/{commandID}:
+    get:
+      operationId: getWorkspaceCreateWithFolder
+      description: 读取同账号 workspace.create 的脱敏状态；不返回命令 payload、Terminal ID 或 canonical_root。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: commandID
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: workspace creation state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceCreateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /v1/sessions:
     get:
       operationId: listSessions
@@ -1178,6 +1236,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DaemonCommandReceipt"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/daemon/commands/{id}/workspace-result:
+    post:
+      operationId: resolveDaemonWorkspaceCommand
+      description: workspace.create 的专用 daemon 回执。canonical_root 仅用于 Relay 内部登记 Workspace，响应不会回显路径。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonWorkspaceResultRequest"
+      responses:
+        "200":
+          description: workspace result accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonWorkspaceResultReceipt"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -2055,7 +2146,8 @@ components:
         lease_epoch:
           type: integer
           format: int64
-          minimum: 1
+          minimum: 0
+          description: workspace.create 无会话 lease，使用 0；会话控制命令仍必须为正数。
         target_instance_id:
           type: string
         target_terminal_id:
@@ -2102,6 +2194,81 @@ components:
           maxLength: 96
         signature:
           $ref: "#/components/schemas/TerminalSignature"
+    DaemonWorkspaceResultRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, delivery_seq, workspace_id, status]
+      description: workspace.create 的专用回执。canonical_root 仅由受控 Terminal 上传，Relay 只内部登记，不回传客户端。
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        delivery_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        workspace_id:
+          type: string
+          maxLength: 128
+        canonical_root:
+          type: string
+          maxLength: 4096
+          description: 成功时为本机授权根下的 canonical Git 根；失败时可省略。
+        status:
+          type: string
+          enum: [succeeded, failed, cancelled]
+        error_code:
+          type: string
+          maxLength: 96
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
+    DaemonWorkspaceResultReceipt:
+      type: object
+      required: [command_id, delivery_seq, workspace_id, status]
+      properties:
+        command_id:
+          type: string
+        delivery_seq:
+          type: integer
+          format: int64
+          minimum: 1
+        workspace_id:
+          type: string
+        status:
+          type: string
+          enum: [succeeded, failed, cancelled]
+        error_code:
+          type: string
+    CreateWorkspaceWithFolderRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[a-zA-Z0-9._-]+$"
+          description: 授权根的直接子目录名；不允许隐藏名、dot-segment、空白或路径分隔符。
+        terminal_id:
+          type: string
+          maxLength: 128
+          description: 可选目标 Terminal；省略时由 Relay 选择账号下在线且声明 workspace_create 的 Terminal。
+    WorkspaceCreateResponse:
+      type: object
+      required: [status, workspace_id]
+      properties:
+        status:
+          type: string
+          enum: [pending, succeeded, failed, cancelled, rejected, expired]
+        command_id:
+          type: string
+        workspace_id:
+          type: string
+        error_code:
+          type: string
+        workspace:
+          $ref: "#/components/schemas/Workspace"
     DaemonCommandReceipt:
       type: object
       required: [command_id, delivery_seq, ack_kind, status]

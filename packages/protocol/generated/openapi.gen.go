@@ -337,6 +337,48 @@ func (e DaemonHelloResponseAuthModes) Valid() bool {
 	}
 }
 
+// Defines values for DaemonWorkspaceResultReceiptStatus.
+const (
+	DaemonWorkspaceResultReceiptStatusCancelled DaemonWorkspaceResultReceiptStatus = "cancelled"
+	DaemonWorkspaceResultReceiptStatusFailed    DaemonWorkspaceResultReceiptStatus = "failed"
+	DaemonWorkspaceResultReceiptStatusSucceeded DaemonWorkspaceResultReceiptStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the DaemonWorkspaceResultReceiptStatus enum.
+func (e DaemonWorkspaceResultReceiptStatus) Valid() bool {
+	switch e {
+	case DaemonWorkspaceResultReceiptStatusCancelled:
+		return true
+	case DaemonWorkspaceResultReceiptStatusFailed:
+		return true
+	case DaemonWorkspaceResultReceiptStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonWorkspaceResultRequestStatus.
+const (
+	DaemonWorkspaceResultRequestStatusCancelled DaemonWorkspaceResultRequestStatus = "cancelled"
+	DaemonWorkspaceResultRequestStatusFailed    DaemonWorkspaceResultRequestStatus = "failed"
+	DaemonWorkspaceResultRequestStatusSucceeded DaemonWorkspaceResultRequestStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the DaemonWorkspaceResultRequestStatus enum.
+func (e DaemonWorkspaceResultRequestStatus) Valid() bool {
+	switch e {
+	case DaemonWorkspaceResultRequestStatusCancelled:
+		return true
+	case DaemonWorkspaceResultRequestStatusFailed:
+		return true
+	case DaemonWorkspaceResultRequestStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegationStatus.
 const (
 	DelegationStatusApproved  DelegationStatus = "approved"
@@ -646,6 +688,36 @@ func (e WebReadTransportAlgorithm) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceCreateResponseStatus.
+const (
+	WorkspaceCreateResponseStatusCancelled WorkspaceCreateResponseStatus = "cancelled"
+	WorkspaceCreateResponseStatusExpired   WorkspaceCreateResponseStatus = "expired"
+	WorkspaceCreateResponseStatusFailed    WorkspaceCreateResponseStatus = "failed"
+	WorkspaceCreateResponseStatusPending   WorkspaceCreateResponseStatus = "pending"
+	WorkspaceCreateResponseStatusRejected  WorkspaceCreateResponseStatus = "rejected"
+	WorkspaceCreateResponseStatusSucceeded WorkspaceCreateResponseStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceCreateResponseStatus enum.
+func (e WorkspaceCreateResponseStatus) Valid() bool {
+	switch e {
+	case WorkspaceCreateResponseStatusCancelled:
+		return true
+	case WorkspaceCreateResponseStatusExpired:
+		return true
+	case WorkspaceCreateResponseStatusFailed:
+		return true
+	case WorkspaceCreateResponseStatusPending:
+		return true
+	case WorkspaceCreateResponseStatusRejected:
+		return true
+	case WorkspaceCreateResponseStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UsageSummaryParamsDays.
 const (
 	N1  UsageSummaryParamsDays = 1
@@ -796,6 +868,15 @@ type CreateWorkspaceRequest struct {
 	TerminalId    *string `json:"terminal_id,omitempty"`
 }
 
+// CreateWorkspaceWithFolderRequest defines model for CreateWorkspaceWithFolderRequest.
+type CreateWorkspaceWithFolderRequest struct {
+	// Name 授权根的直接子目录名；不允许隐藏名、dot-segment、空白或路径分隔符。
+	Name string `json:"name"`
+
+	// TerminalId 可选目标 Terminal；省略时由 Relay 选择账号下在线且声明 workspace_create 的 Terminal。
+	TerminalId *string `json:"terminal_id,omitempty"`
+}
+
 // DaemonChallengeResponse defines model for DaemonChallengeResponse.
 type DaemonChallengeResponse struct {
 	Challenge       string `json:"challenge"`
@@ -876,13 +957,15 @@ type DaemonCommandResultRequestStatus string
 
 // DaemonDeliveredCommand defines model for DaemonDeliveredCommand.
 type DaemonDeliveredCommand struct {
-	Ciphertext       map[string]interface{} `json:"ciphertext"`
-	Id               string                 `json:"id"`
-	Kind             string                 `json:"kind"`
-	LeaseEpoch       int64                  `json:"lease_epoch"`
-	SessionId        string                 `json:"session_id"`
-	TargetInstanceId *string                `json:"target_instance_id,omitempty"`
-	TargetTerminalId string                 `json:"target_terminal_id"`
+	Ciphertext map[string]interface{} `json:"ciphertext"`
+	Id         string                 `json:"id"`
+	Kind       string                 `json:"kind"`
+
+	// LeaseEpoch workspace.create 无会话 lease，使用 0；会话控制命令仍必须为正数。
+	LeaseEpoch       int64   `json:"lease_epoch"`
+	SessionId        string  `json:"session_id"`
+	TargetInstanceId *string `json:"target_instance_id,omitempty"`
+	TargetTerminalId string  `json:"target_terminal_id"`
 
 	// WorkspaceId Relay 从 Session 推导的 opaque ID；不是本机路径，也不能替代 Daemon 本机确认。
 	WorkspaceId string `json:"workspace_id"`
@@ -977,6 +1060,35 @@ type DaemonWebReadResponseRequest struct {
 	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
 }
+
+// DaemonWorkspaceResultReceipt defines model for DaemonWorkspaceResultReceipt.
+type DaemonWorkspaceResultReceipt struct {
+	CommandId   string                             `json:"command_id"`
+	DeliverySeq int64                              `json:"delivery_seq"`
+	ErrorCode   *string                            `json:"error_code,omitempty"`
+	Status      DaemonWorkspaceResultReceiptStatus `json:"status"`
+	WorkspaceId string                             `json:"workspace_id"`
+}
+
+// DaemonWorkspaceResultReceiptStatus defines model for DaemonWorkspaceResultReceipt.Status.
+type DaemonWorkspaceResultReceiptStatus string
+
+// DaemonWorkspaceResultRequest workspace.create 的专用回执。canonical_root 仅由受控 Terminal 上传，Relay 只内部登记，不回传客户端。
+type DaemonWorkspaceResultRequest struct {
+	// CanonicalRoot 成功时为本机授权根下的 canonical Git 根；失败时可省略。
+	CanonicalRoot   *string `json:"canonical_root,omitempty"`
+	DeliverySeq     int64   `json:"delivery_seq"`
+	ErrorCode       *string `json:"error_code,omitempty"`
+	ProtocolVersion int     `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
+	Signature   *TerminalSignature                 `json:"signature,omitempty"`
+	Status      DaemonWorkspaceResultRequestStatus `json:"status"`
+	WorkspaceId string                             `json:"workspace_id"`
+}
+
+// DaemonWorkspaceResultRequestStatus defines model for DaemonWorkspaceResultRequest.Status.
+type DaemonWorkspaceResultRequestStatus string
 
 // Delegation parent Session 的安全 Delegation 投影。task_envelope 永不出现在此资源或事件流中。
 type Delegation struct {
@@ -1380,6 +1492,18 @@ type Workspace struct {
 	TerminalId string  `json:"terminal_id"`
 }
 
+// WorkspaceCreateResponse defines model for WorkspaceCreateResponse.
+type WorkspaceCreateResponse struct {
+	CommandId   *string                       `json:"command_id,omitempty"`
+	ErrorCode   *string                       `json:"error_code,omitempty"`
+	Status      WorkspaceCreateResponseStatus `json:"status"`
+	Workspace   *Workspace                    `json:"workspace,omitempty"`
+	WorkspaceId string                        `json:"workspace_id"`
+}
+
+// WorkspaceCreateResponseStatus defines model for WorkspaceCreateResponse.Status.
+type WorkspaceCreateResponseStatus string
+
 // WorkspaceList defines model for WorkspaceList.
 type WorkspaceList struct {
 	Workspaces []Workspace `json:"workspaces"`
@@ -1476,6 +1600,9 @@ type StoreWebReadResponseJSONRequestBody = DaemonWebReadResponseRequest
 // ResolveDaemonCommandJSONRequestBody defines body for ResolveDaemonCommand for application/json ContentType.
 type ResolveDaemonCommandJSONRequestBody = DaemonCommandResultRequest
 
+// ResolveDaemonWorkspaceCommandJSONRequestBody defines body for ResolveDaemonWorkspaceCommand for application/json ContentType.
+type ResolveDaemonWorkspaceCommandJSONRequestBody = DaemonWorkspaceResultRequest
+
 // UploadDaemonEventJSONRequestBody defines body for UploadDaemonEvent for application/json ContentType.
 type UploadDaemonEventJSONRequestBody = DaemonEventUploadRequest
 
@@ -1517,6 +1644,9 @@ type SubmitWebReadRequestJSONRequestBody = WebReadRequest
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
+
+// CreateWorkspaceWithFolderJSONRequestBody defines body for CreateWorkspaceWithFolder for application/json ContentType.
+type CreateWorkspaceWithFolderJSONRequestBody = CreateWorkspaceWithFolderRequest
 
 // Getter for additional properties for OpaqueCipherEnvelope. Returns the specified
 // element and whether it was found
@@ -1703,6 +1833,9 @@ type ServerInterface interface {
 	// (POST /v1/daemon/commands/{id}/result)
 	ResolveDaemonCommand(c *gin.Context, id string)
 
+	// (POST /v1/daemon/commands/{id}/workspace-result)
+	ResolveDaemonWorkspaceCommand(c *gin.Context, id string)
+
 	// (POST /v1/daemon/events)
 	UploadDaemonEvent(c *gin.Context)
 
@@ -1804,6 +1937,12 @@ type ServerInterface interface {
 
 	// (POST /v1/workspaces)
 	CreateWorkspace(c *gin.Context)
+
+	// (POST /v1/workspaces/create-with-folder)
+	CreateWorkspaceWithFolder(c *gin.Context)
+
+	// (GET /v1/workspaces/create-with-folder/{commandID})
+	GetWorkspaceCreateWithFolder(c *gin.Context, commandID string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -2151,6 +2290,31 @@ func (siw *ServerInterfaceWrapper) ResolveDaemonCommand(c *gin.Context) {
 	}
 
 	siw.Handler.ResolveDaemonCommand(c, id)
+}
+
+// ResolveDaemonWorkspaceCommand operation middleware
+func (siw *ServerInterfaceWrapper) ResolveDaemonWorkspaceCommand(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ResolveDaemonWorkspaceCommand(c, id)
 }
 
 // UploadDaemonEvent operation middleware
@@ -2888,6 +3052,44 @@ func (siw *ServerInterfaceWrapper) CreateWorkspace(c *gin.Context) {
 	siw.Handler.CreateWorkspace(c)
 }
 
+// CreateWorkspaceWithFolder operation middleware
+func (siw *ServerInterfaceWrapper) CreateWorkspaceWithFolder(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.CreateWorkspaceWithFolder(c)
+}
+
+// GetWorkspaceCreateWithFolder operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkspaceCreateWithFolder(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "commandID" -------------
+	var commandID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "commandID", c.Param("commandID"), &commandID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter commandID: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetWorkspaceCreateWithFolder(c, commandID)
+}
+
 // GinServerOptions provides options for the Gin server.
 type GinServerOptions struct {
 	BaseURL      string
@@ -2941,6 +3143,8 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/projects", wrapper.ListProjects)
 	router.GET(options.BaseURL+"/v1/workspaces", wrapper.ListWorkspaces)
 	router.POST(options.BaseURL+"/v1/workspaces", wrapper.CreateWorkspace)
+	router.POST(options.BaseURL+"/v1/workspaces/create-with-folder", wrapper.CreateWorkspaceWithFolder)
+	router.GET(options.BaseURL+"/v1/workspaces/create-with-folder/:commandID", wrapper.GetWorkspaceCreateWithFolder)
 	router.GET(options.BaseURL+"/v1/sessions", wrapper.ListSessions)
 	router.POST(options.BaseURL+"/v1/sessions", wrapper.CreateSession)
 	router.POST(options.BaseURL+"/v1/sessions/:id/lease", wrapper.AcquireSessionLease)
@@ -2964,6 +3168,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/ack", wrapper.AcknowledgeDaemonCommand)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/result", wrapper.ResolveDaemonCommand)
+	router.POST(options.BaseURL+"/v1/daemon/commands/:id/workspace-result", wrapper.ResolveDaemonWorkspaceCommand)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/readonly-response", wrapper.StoreWebReadResponse)
 	router.POST(options.BaseURL+"/v1/daemon/events", wrapper.UploadDaemonEvent)
 }

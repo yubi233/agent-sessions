@@ -279,6 +279,35 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<WorkspaceCreateState> createWorkspaceWithFolder(
+    CreateMobileWorkspaceWithFolderInput input,
+  ) async {
+    input.validate();
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/workspaces/create-with-folder',
+      data: {
+        'name': input.name.trim(),
+        if (input.terminalId.trim().isNotEmpty)
+          'terminal_id': input.terminalId.trim(),
+      },
+    );
+    return WorkspaceCreateState.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<WorkspaceCreateState> getWorkspaceCreateState(String commandId) async {
+    if (commandId.trim().isEmpty) {
+      throw const RelayFailure.validation('工作区创建命令标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/workspaces/create-with-folder/${commandId.trim()}',
+    );
+    return WorkspaceCreateState.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
   Future<MobileSession> createSession(CreateMobileSessionInput input) async {
     input.validate();
     final response = await _authenticatedSend(
