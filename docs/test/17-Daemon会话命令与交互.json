@@ -1,0 +1,303 @@
+{
+  "suite": "daemon-command-interaction",
+  "description": "Daemon 会话命令/事件/生命周期完整单元测试矩阵，与 App 消息交互契约测试。覆盖命令全种类、模型路由、错误可见性、事件时序、lease 边界与 App 侧收发/合并/清账契约；每条缺陷修复必须在对应层级沉淀根因回归。",
+  "plan_id": "V07-RELEASE",
+  "owner": "iterative-workflow",
+  "status": "passed",
+  "suite_version": 1,
+  "environment": {
+    "daemon_test": "go test ./internal/daemon/ ./internal/adapter/opencode/ -count=1",
+    "relay_contract": "go test ./internal/relay/ ./internal/domain/ -count=1",
+    "app_test": "cd apps/mobile && flutter test test/session_controller_test.dart test/http_relay_repository_test.dart",
+    "relay_base": "http://127.0.0.1:8787（仅真实栈 smoke 使用，单元测试一律 fixture）"
+  },
+  "verification_defaults": {
+    "report_kind": "not_run",
+    "real_browser": false,
+    "real_model": false,
+    "real_upstream": false,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false
+  },
+  "id_registry": [
+    "DCM-01",
+    "DCM-02",
+    "DCM-03",
+    "DCM-04",
+    "DCM-05",
+    "DCM-06",
+    "AMI-01",
+    "AMI-02",
+    "AMI-03",
+    "AMI-04"
+  ],
+  "cases": [
+    {
+      "id": "DCM-01",
+      "title": "session.model_select 持久化与 fail-closed",
+      "phase": "P0",
+      "category": "命令处理",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "runner fixture（store + fake adapter）。",
+      "steps": [
+        "提交 session.model_select 带 session_id 与合法 model，断言 store 写入 model:<session_id>",
+        "缺 session_id、缺 model、envelope 不可解三种输入分别失败且不改写 store",
+        "空字符串 model 拒绝"
+      ],
+      "expected": "合法选择持久化；所有非法输入返回稳定错误且 store 原值不变。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "DCM-02",
+      "title": "session.send 模型解析链与空模型兜底",
+      "phase": "P0",
+      "category": "模型路由",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "runner fixture + 带模型记录的 fake handle；adapter 侧 fixture opencode。",
+      "steps": [
+        "send 密文随行模型 → SetModel 应用随行值",
+        "send 不带模型但 store 有 model_select 持久化 → 应用持久化值",
+        "两者皆空 → handle 现值（Start 时的目录默认）",
+        "handle 模型为空且目录非空 → PromptAsync 请求体显式携带目录首项",
+        "目录为空 → 保持空值不发明模型名，PromptAsync 行为与现状一致"
+      ],
+      "expected": "任何路径下 prompt 绝不带未经目录确认的模型；优先级为密文 > 持久化 > 现值 > 目录首项。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "DCM-03",
+      "title": "重复 session.start 回收旧句柄且不泄漏",
+      "phase": "P0",
+      "category": "生命周期",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "runner fixture，同一 session_id 连续两次 start。",
+      "steps": [
+        "第一次 start 后记录 handle A",
+        "第二次 start 成功",
+        "向旧 handle A 注入事件，断言不再进入时间线"
+      ],
+      "expected": "旧 handle 被取消并 Dispose，事件不再串流；新 handle 正常收发。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "DCM-04",
+      "title": "session.error 必须产出可见错误事件且不得伪装成功",
+      "phase": "P0",
+      "category": "错误可见性",
+      "priority": "P0",
+      "test_layer": "unit+contract",
+      "precondition": "fixture opencode SSE。",
+      "steps": [
+        "适配器收到嵌套对象形态 session.error → EventSessionError 携带 data.message",
+        "daemon 侧 EventSessionError 经本地开发编码器映射为 system_notice（label Provider 错误）",
+        "错误后回合终态不得是 completed_turn=true 的成功标记"
+      ],
+      "expected": "Provider 失败在事件时间线可见；成功与失败终态可区分。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "DCM-05",
+      "title": "命令全种类收口与失败分类",
+      "phase": "P1",
+      "category": "命令处理",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "runner fixture。",
+      "steps": [
+        "start/send/abort/kill/model_select/effort_select 各自的 accept 与 fail-closed 路径",
+        "未知 kind 拒绝",
+        "abort/kill 对不存在 session 的错误语义稳定"
+      ],
+      "expected": "每种命令的成功与失败路径都有断言；错误消息不含正文或凭据。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "DCM-06",
+      "title": "事件转发时序与合成终态",
+      "phase": "P1",
+      "category": "事件链路",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "runner fixture 注入事件序列。",
+      "steps": [
+        "provider 终态与合成终态不重复（已有回归继续有效）",
+        "cancellation 抑制合成终态",
+        "last_event 元数据永不持久化 payload"
+      ],
+      "expected": "序列单调、终态唯一、元数据无正文。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "AMI-01",
+      "title": "App 发送契约：密文形状与乐观回显生命周期",
+      "phase": "P0",
+      "category": "消息交互",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "SessionController + fixture relay。",
+      "steps": [
+        "send 密文 = fixture_payload{message, model?}；模型为空时不带字段",
+        "乐观回显：提交前挂出、canonical user.message 合并时清账、提交失败撤回",
+        "会话切换时残留的 pending 状态不泄漏到新会话视图"
+      ],
+      "expected": "发送密文与 daemon 解析契约一致；回显生命周期无泄漏。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "AMI-02",
+      "title": "快照合并：重复/乱序/缺口事件",
+      "phase": "P0",
+      "category": "消息交互",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "SessionController。",
+      "steps": [
+        "重复 sequence 不产生重复节点",
+        "乱序到达按 sequence 排序",
+        "缺口（after_seq 漏事件）时时间线保持一致且 cursor 前进安全"
+      ],
+      "expected": "时间线以 sequence 为唯一序，重放/乱序不破坏视图。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "AMI-03",
+      "title": "时间线事件种类全覆盖解析",
+      "phase": "P1",
+      "category": "消息交互",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "SessionTimelineEvent.fromRelayEvent。",
+      "steps": [
+        "user_message/assistant_message(含 completed_turn)/tool_activity/system_notice/system_notice(Provider 错误)/未知 kind 各构造 envelope",
+        "断言 kind、label、text、streaming、copy_text 解析正确"
+      ],
+      "expected": "daemon 本地开发编码器产出的每种 fixture_payload 形状都有解析断言；未知 kind 不崩溃。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    },
+    {
+      "id": "AMI-04",
+      "title": "lease 冲突与 409/401/403 语义映射",
+      "phase": "P1",
+      "category": "消息交互",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "HttpRelayRepository fixture adapter。",
+      "steps": [
+        "409 → 会话控制权已更新提示",
+        "401 → 刷新重放一次后仍失败才未授权",
+        "403 → 权限提示",
+        "lease epoch 过期后写命令的失败路径"
+      ],
+      "expected": "HTTP 状态到用户可理解错误的映射稳定；重试不放大。",
+      "status": "passed",
+      "last_run": {
+        "status": "passed",
+        "real_browser": false,
+        "real_model": false,
+        "real_upstream": false,
+        "fixture_data": true,
+        "local_test": true,
+        "headless": false,
+        "date": "2026-08-29"
+      }
+    }
+  ],
+  "evidence": {
+    "daemon": "go test ./internal/... -count=1 全过；新增 DCM 缺口回归 10+ 项（runner_test.go、opencode_test.go）",
+    "app": "flutter test session_controller/http_relay_repository/session_timeline_parsing 等套件全过；新增终态确认、跨会话泄漏、合并去重、解析契约、状态映射回归"
+  }
+}
