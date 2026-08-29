@@ -806,7 +806,7 @@ class HttpRelayRepository implements RelayRepository {
         ),
         409 => const RelayFailure(
           RelayFailureKind.forbidden,
-          '会话控制权已更新，请重新获取。',
+          '会话可操作状态已更新，请重试。',
         ),
         404 => const RelayFailure(RelayFailureKind.validation, '资源不存在或无权访问。'),
         408 || 429 || 500 || 502 || 503 || 504 => const RelayFailure(

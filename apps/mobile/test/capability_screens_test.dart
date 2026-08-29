@@ -182,7 +182,7 @@ Future<void> _openWritableFixtureSession(WidgetTester tester, String _) async {
     tester,
     find.byKey(const Key('session-acquire-lease-button')),
   );
-  await _waitForVisible(tester, find.text('已获得控制权'));
+  await _waitForVisible(tester, find.text('可操作'));
 }
 
 Future<void> _waitForVisible(

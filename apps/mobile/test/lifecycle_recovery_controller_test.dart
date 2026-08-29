@@ -100,14 +100,14 @@ void main() {
 
       await recovery.reportAppVisibility(MobileAppVisibility.background);
       await sessions.sendMessage(
-        message: '这条消息需要用户重新获取控制权后显式发送',
+        message: '这条消息需要用户重新可操作后显式发送',
         deviceId: _ownerDeviceId,
         canWrite: true,
       );
 
       expect(created, isNotNull);
       expect(sessions.selectedLease, isNull);
-      expect(sessions.errorMessage, '请先获取此会话的控制权。');
+      expect(sessions.errorMessage, '会话暂不可操作，请稍后重试。');
       expect(relay.submittedCommandCount, commandCountBefore);
     });
 

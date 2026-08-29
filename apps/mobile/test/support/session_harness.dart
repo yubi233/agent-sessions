@@ -35,7 +35,7 @@ Future<MobileAppHarness> openWritableSession(
     tester,
     find.byKey(const Key('session-acquire-lease-button')),
   );
-  await waitForVisible(tester, find.text('已获得控制权'));
+  await waitForVisible(tester, find.text('可操作'));
   return harness;
 }
 

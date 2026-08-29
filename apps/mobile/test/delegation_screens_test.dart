@@ -18,7 +18,7 @@ class _AcquireLeaseBlockingRelay extends FixtureRelayRepository {
     if (blockAcquire) {
       throw const RelayFailure(
         RelayFailureKind.forbidden,
-        '测试 Relay 拒绝授予会话控制权。',
+        '测试 Relay 拒绝授予会话可操作状态。',
       );
     }
     return super.acquireSessionLease(sessionId);
@@ -47,7 +47,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     expect(
       find.byKey(const Key('delegation-security-boundary')),
       findsOneWidget,
@@ -63,7 +63,7 @@ void main() {
       tester,
       find.byKey(Key('delegation-open-child-${proposal.id}')),
     );
-    expect(find.text('子会话使用独立控制权'), findsOneWidget);
+    expect(find.text('子会话使用独立可操作状态'), findsOneWidget);
     // child 标题和正文均不回流到 parent detail；父页只呈现图节点投影。
     expect(find.text('新的会话 2'), findsNothing);
 
@@ -105,7 +105,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     await _tapVisible(
       tester,
       find.byKey(Key('delegation-reject-${rejected.id}')),
@@ -130,7 +130,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     final approve = tester.widget<IconButton>(
       find.byKey(Key('delegation-approve-${unsupported.id}')),
     );
@@ -205,7 +205,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     await _tapVisible(
       tester,
       find.byKey(Key('delegation-approve-${proposal.id}')),
@@ -289,7 +289,7 @@ void main() {
       tester,
       find.byKey(const Key('delegation-propose-blocked')),
     );
-    expect(find.textContaining('控制权'), findsWidgets);
+    expect(find.textContaining('可操作'), findsWidgets);
     final parentId = (await harness.relay.listSessions()).single.id;
     expect(
       await harness.relay.listSessionDelegations(parentId),
@@ -311,7 +311,7 @@ Future<void> _createAndAcquireParent(WidgetTester tester) async {
     tester,
     find.byKey(const Key('session-acquire-lease-button')).first,
   );
-  await _waitForVisible(tester, find.text('已获得控制权'));
+  await _waitForVisible(tester, find.text('可操作'));
 }
 
 Future<void> _refreshSession(WidgetTester tester) async {

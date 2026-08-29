@@ -669,7 +669,7 @@ class FixtureRelayRepository implements RelayRepository {
     _requireFixtureOwner();
     final state = _sessionState(sessionId);
     if (input.leaseEpoch != state.leaseEpoch) {
-      throw const RelayFailure(RelayFailureKind.forbidden, '会话控制权已更新，请重新获取。');
+      throw const RelayFailure(RelayFailureKind.forbidden, '会话可操作状态已更新，请重试。');
     }
     final existing = state.commandReceipts[input.idempotencyKey];
     if (existing != null) {
@@ -1620,7 +1620,7 @@ class FixtureRelayRepository implements RelayRepository {
 
   void _ensureFixtureLease(_FixtureSessionState session, int leaseEpoch) {
     if (leaseEpoch != session.leaseEpoch || leaseEpoch <= 0) {
-      throw const RelayFailure(RelayFailureKind.forbidden, '会话控制权已更新，请重新获取。');
+      throw const RelayFailure(RelayFailureKind.forbidden, '会话可操作状态已更新，请重试。');
     }
   }
 

@@ -75,7 +75,7 @@ class SessionRecoveryController extends ChangeNotifier {
       _recoveryPending = true;
       _sessions.invalidateSelectedLeaseForRuntimePause();
       _phase = SessionRecoveryPhase.paused;
-      _message = '应用已进入后台，控制权将在返回前台后重新确认。';
+      _message = '应用已进入后台，返回后将重新确认可操作状态。';
       if (changed) notifyListeners();
       return;
     }

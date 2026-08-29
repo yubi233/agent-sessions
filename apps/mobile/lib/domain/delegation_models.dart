@@ -142,7 +142,7 @@ class DelegationProposalInput {
       throw const RelayFailure(RelayFailureKind.validation, '派发请求缺少目标或身份信息。');
     }
     if (parentLeaseEpoch <= 0) {
-      throw const RelayFailure(RelayFailureKind.validation, '父会话控制权已失效，请重新获取。');
+      throw const RelayFailure(RelayFailureKind.validation, '父会话可操作状态已失效，请重试。');
     }
     _validateOpaqueSummaryEnvelope(taskEnvelope);
     _validateOpaqueSummaryEnvelope(summaryEnvelope);
@@ -168,7 +168,7 @@ class DelegationDecisionInput {
       throw const RelayFailure(RelayFailureKind.validation, '派发决策缺少设备或幂等标识。');
     }
     if (parentLeaseEpoch <= 0) {
-      throw const RelayFailure(RelayFailureKind.validation, '父会话控制权已失效，请重新获取。');
+      throw const RelayFailure(RelayFailureKind.validation, '父会话可操作状态已失效，请重试。');
     }
   }
 }

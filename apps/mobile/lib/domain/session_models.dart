@@ -439,7 +439,7 @@ class SessionForkInput {
       throw const RelayFailure(RelayFailureKind.validation, '分支消息或幂等标识无效。');
     }
     if (leaseEpoch <= 0 || deviceId.trim().isEmpty) {
-      throw const RelayFailure(RelayFailureKind.validation, '会话控制权已失效，请重新获取。');
+      throw const RelayFailure(RelayFailureKind.validation, '会话可操作状态已失效，请重试。');
     }
   }
 }
@@ -497,7 +497,7 @@ class SessionCommandInput {
 
   void validate() {
     if (leaseEpoch <= 0) {
-      throw const RelayFailure(RelayFailureKind.validation, '会话控制权已失效，请重新获取。');
+      throw const RelayFailure(RelayFailureKind.validation, '会话可操作状态已失效，请重试。');
     }
     if (idempotencyKey.trim().isEmpty || deviceId.trim().isEmpty) {
       throw const RelayFailure(RelayFailureKind.validation, '写命令缺少设备或幂等标识。');

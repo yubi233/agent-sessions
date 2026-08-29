@@ -148,7 +148,7 @@ class DelegationController extends ChangeNotifier {
     if (parentLease == null ||
         parentLease.sessionId != delegation.parentSessionId ||
         parentLease.epoch <= 0) {
-      return '请先获取父会话控制权';
+      return '请先在父会话中确认可操作状态后重试';
     }
     final capability = capabilities
         .provider(delegation.targetProvider)
@@ -241,7 +241,7 @@ class DelegationController extends ChangeNotifier {
     if (parentLease == null ||
         parentLease.sessionId != _parentSessionId ||
         parentLease.epoch <= 0) {
-      return '请先获取父会话控制权';
+      return '请先在父会话中确认可操作状态后重试';
     }
     final parentCapability = capabilities
         .provider(parentProvider ?? 'unknown')

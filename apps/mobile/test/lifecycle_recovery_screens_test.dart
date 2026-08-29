@@ -35,7 +35,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
 
     final container = ProviderScope.containerOf(
       tester.element(find.byKey(const Key('session-detail-screen'))),

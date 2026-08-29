@@ -146,7 +146,7 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                   const SizedBox(height: 8),
                   const _BoundaryNote(
                     message:
-                        '此页面只显示 Relay 白名单元数据；消息正文、token 与完整路径不会显示。终止与恢复需要 owner 租约与 Provider 能力，分享暂不可用。',
+                        '此页面只显示 Relay 白名单元数据；消息正文、token 与完整路径不会显示。终止与恢复需要 owner 可操作状态与 Provider 能力，分享暂不可用。',
                   ),
                 ],
               ],

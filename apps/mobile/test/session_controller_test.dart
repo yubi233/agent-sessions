@@ -302,7 +302,7 @@ void main() {
       expect(created, isNotNull);
       expect(controller.selectedSession?.id, created!.id);
       expect(controller.timeline.single.kind, SessionTimelineKind.systemNotice);
-      expect(controller.composerBlockedReason(canWrite: true), '等待获取会话控制权');
+      expect(controller.composerBlockedReason(canWrite: true), '会话暂不可操作，请稍后重试');
 
       await controller.acquireSelectedLease(
         deviceId: _ownerDeviceId,
@@ -464,7 +464,7 @@ void main() {
         canWrite: true,
       );
 
-      expect(controller.errorMessage, '会话控制权已更新，请重新获取。');
+      expect(controller.errorMessage, '会话可操作状态已更新，请重试。');
       expect(controller.timeline.length, 1);
     });
 

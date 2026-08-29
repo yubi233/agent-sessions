@@ -241,7 +241,7 @@ void main() {
         findsNothing,
       );
       expect(find.text(sessionId), findsNothing);
-      expect(find.byTooltip('获取会话控制权'), findsNothing);
+      expect(find.byTooltip('暂不可操作，点按重试'), findsNothing);
       expect(find.byTooltip('发送消息'), findsNothing);
       expect(find.byTooltip('结束会话'), findsNothing);
     });

@@ -20,7 +20,7 @@ class _AcquireLeaseBlockingRelay extends FixtureRelayRepository {
     if (blockAcquire) {
       throw const RelayFailure(
         RelayFailureKind.forbidden,
-        '测试 Relay 拒绝授予会话控制权。',
+        '测试 Relay 拒绝授予会话可操作状态。',
       );
     }
     return super.acquireSessionLease(sessionId);
@@ -68,7 +68,7 @@ void main() {
     expect(find.textContaining('邮箱'), findsNothing);
     expect(find.textContaining('密码'), findsNothing);
     // 打开会话即自动获取单写者租约：composer 不再出现拦截提示，直接可发送。
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     expect(
       find.byKey(const Key('session-composer-blocked-reason')),
       findsNothing,
@@ -244,7 +244,7 @@ void main() {
       tester,
       find.byKey(const Key('session-quick-resume')),
     );
-    await _waitForVisible(tester, find.text('等待获取会话控制权'));
+    await _waitForVisible(tester, find.text('会话暂不可操作，请稍后重试'));
     expect(
       tester
           .widget<PopupMenuItem<String>>(
@@ -287,7 +287,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     await _tapVisible(
       tester,
       find.byKey(const Key('session-quick-menu-button')),
@@ -297,7 +297,7 @@ void main() {
       find.byKey(const Key('session-quick-resume')),
     );
     // 有 lease 后不再显示阻断原因。
-    expect(find.text('等待获取会话控制权'), findsNothing);
+    expect(find.text('会话暂不可操作，请稍后重试'), findsNothing);
     await _tapVisible(tester, find.byKey(const Key('session-quick-resume')));
 
     final snapshot = (await harness.relay.getSessionSnapshot(
@@ -435,7 +435,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     await _enterVisible(
       tester,
       find.byKey(const Key('session-composer-input')),
@@ -545,7 +545,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     await _enterVisible(
       tester,
       find.byKey(const Key('session-composer-input')),
@@ -628,7 +628,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
 
     const failedDraft = '这条提交应该保留在草稿里';
     await _enterVisible(
@@ -1793,7 +1793,7 @@ void main() {
         tester,
         find.byKey(const Key('session-acquire-lease-button')),
       );
-      await _waitForVisible(tester, find.text('已获得控制权'));
+      await _waitForVisible(tester, find.text('可操作'));
       await _enterVisible(
         tester,
         find.byKey(const Key('session-composer-input')),
@@ -1878,7 +1878,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
     await _enterVisible(
       tester,
       find.byKey(const Key('session-composer-input')),
@@ -2274,7 +2274,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('已获得控制权'));
+    await _waitForVisible(tester, find.text('可操作'));
 
     // 打开编辑对话框，修改目标文本并保存。
     await _waitForVisible(
@@ -2521,7 +2521,7 @@ Future<MobileAppHarness> _openWritableSession(
     tester,
     find.byKey(const Key('session-acquire-lease-button')),
   );
-  await _waitForVisible(tester, find.text('已获得控制权'));
+  await _waitForVisible(tester, find.text('可操作'));
   return harness;
 }
 

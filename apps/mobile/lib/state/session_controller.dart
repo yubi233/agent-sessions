@@ -567,7 +567,7 @@ class SessionController extends ChangeNotifier {
       () async {
       final lease = await _relay.acquireSessionLease(sessionId);
       if (lease.sessionId != sessionId || lease.epoch <= 0) {
-        throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了无效控制权。');
+        throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了无效可操作状态。');
       }
       // 后台/离线后才返回的旧 lease 不能重新解锁 composer；用户必须显式获取新的 fencing epoch。
       if (runtimeLeaseGeneration != _runtimeLeaseGeneration ||
@@ -760,7 +760,7 @@ class SessionController extends ChangeNotifier {
       if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
         throw const RelayFailure(
           RelayFailureKind.validation,
-          '会话控制权已失效，请重新获取。',
+          '会话可操作状态已变化，请重试。',
         );
       }
       final child = await _relay.forkSession(
@@ -954,7 +954,7 @@ class SessionController extends ChangeNotifier {
     }
     if (!canWrite) return '当前设备是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
-    if (requiresLease && !hasSelectedLease) return '等待获取会话控制权';
+    if (requiresLease && !hasSelectedLease) return '会话暂不可操作，请稍后重试';
     return null;
   }
 
@@ -1219,7 +1219,7 @@ class SessionController extends ChangeNotifier {
     }
     final lease = _selectedLease;
     if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
-      _setError('请先获取此会话的控制权。');
+      _setError('会话暂不可操作，请稍后重试。');
       return;
     }
 
@@ -1495,7 +1495,7 @@ class SessionController extends ChangeNotifier {
   String? composerBlockedReason({required bool canWrite}) {
     if (!canWrite) return '当前设备是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
-    if (!hasSelectedLease) return '等待获取会话控制权';
+    if (!hasSelectedLease) return '会话暂不可操作，请稍后重试';
     return null;
   }
 
@@ -1693,7 +1693,7 @@ class SessionController extends ChangeNotifier {
       if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
         throw const RelayFailure(
           RelayFailureKind.validation,
-          '会话控制权已失效，请重新获取。',
+          '会话可操作状态已变化，请重试。',
         );
       }
       final command = SessionCommandInput(
@@ -1927,7 +1927,7 @@ class SessionController extends ChangeNotifier {
   bool _ensureSelectedLease(String sessionId) {
     final lease = _selectedLease;
     if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
-      _setError('请先获取此会话的控制权。');
+      _setError('会话暂不可操作，请稍后重试。');
       return false;
     }
     return true;

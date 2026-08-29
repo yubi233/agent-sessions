@@ -122,7 +122,7 @@ void main() {
       );
       expect(resume.blockedReason, contains('未声明'));
       // 未获取 lease 时 stop 先被租约门控阻断。
-      expect(stop.blockedReason, '当前没有会话租约。');
+      expect(stop.blockedReason, '当前会话暂不可操作。');
       // 浏览/查看 Git 是只读索引，选中会话后不被 capability 阻断。
       final files = palette.results.firstWhere(
         (command) => command.action == PaletteControlAction.openFiles,

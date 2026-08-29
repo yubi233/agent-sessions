@@ -1184,7 +1184,7 @@ void main() {
   });
 
   group('MOBILE-V07 命令链路 HTTP 状态到用户错误的稳定映射', () {
-    test('409 lease 冲突映射为控制权已更新', () async {
+    test('409 lease 冲突映射为可操作状态已更新', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.method, 'POST');
         return _jsonResponse({'error': 'lease conflict'}, statusCode: 409);
@@ -1205,7 +1205,7 @@ void main() {
         throwsA(
           isA<RelayFailure>()
               .having((f) => f.kind, 'kind', RelayFailureKind.forbidden)
-              .having((f) => f.message, 'message', '会话控制权已更新，请重新获取。'),
+              .having((f) => f.message, 'message', '会话可操作状态已更新，请重试。'),
         ),
       );
     });

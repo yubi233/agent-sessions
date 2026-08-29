@@ -155,7 +155,7 @@ void main() {
       await _pumpInfoScreen(tester, relay, now);
 
       expect(find.text('终止会话'), findsOneWidget);
-      expect(find.text('当前没有会话租约。'), findsOneWidget);
+      expect(find.text('当前会话暂不可操作。'), findsOneWidget);
       expect(find.text('结束本机进程'), findsOneWidget);
       expect(find.text('恢复会话'), findsOneWidget);
       expect(find.text('当前设备是只读状态'), findsNWidgets(2));

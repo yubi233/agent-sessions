@@ -140,7 +140,7 @@ class CommandPaletteController extends ChangeNotifier {
       PaletteCommand(
         kind: PaletteCommandKind.control,
         title: '停止当前会话',
-        subtitle: '需要 abort capability 与租约',
+        subtitle: '需要 abort 能力且会话可操作',
         icon: Icons.stop_circle_outlined,
         action: PaletteControlAction.stop,
         blockedReason: _stopBlockedReason(),
@@ -198,7 +198,7 @@ class CommandPaletteController extends ChangeNotifier {
 
   String? _stopBlockedReason() {
     if (_sessionController.selectedSessionId == null) return '当前没有选中会话。';
-    if (_sessionController.hasSelectedLease == false) return '当前没有会话租约。';
+    if (_sessionController.hasSelectedLease == false) return '当前会话暂不可操作。';
     final declared = _sessionController.selectedProviderCapabilities.capability(
       'abort',
     );

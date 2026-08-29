@@ -960,11 +960,6 @@ class _SessionQuickMenu extends StatelessWidget {
       icon: _HappyProviderAvatar(provider: sessions.selectedSession?.provider),
       onSelected: (value) {
         switch (value) {
-          case 'lease':
-            sessions.acquireSelectedLease(
-              deviceId: deviceId,
-              canWrite: canWrite,
-            );
           case 'refresh':
             onRefresh?.call();
           case 'git':
@@ -1001,21 +996,6 @@ class _SessionQuickMenu extends StatelessWidget {
         }
       },
       itemBuilder: (context) => [
-        PopupMenuItem(
-          key: const Key('session-acquire-lease-button'),
-          value: 'lease',
-          enabled: canWrite && !sessions.isBusy,
-          child: ListTile(
-            leading: Icon(
-              sessions.hasSelectedLease
-                  ? Icons.lock_open_outlined
-                  : Icons.lock_outline,
-            ),
-            title: Text(sessions.hasSelectedLease ? '已获得控制权' : '获取会话控制权'),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-          ),
-        ),
         PopupMenuItem(
           key: const Key('session-refresh-button'),
           value: 'refresh',
@@ -1758,7 +1738,7 @@ class _DelegationNode extends StatelessWidget {
           if (delegation.canApproveOrReject) ...[
             const SizedBox(height: 3),
             Text(
-              approveBlocked ?? '请使用父会话控制权确认派发。',
+              approveBlocked ?? '请先在父会话中确认可操作后重试。',
               key: Key('delegation-blocked-${delegation.id}'),
               style: Theme.of(context).textTheme.labelMedium,
             ),
@@ -1818,7 +1798,7 @@ class _DelegationNode extends StatelessWidget {
             const SizedBox(height: 4),
             Row(
               children: [
-                const Expanded(child: Text('子会话使用独立控制权')),
+                const Expanded(child: Text('子会话使用独立可操作状态')),
                 IconButton(
                   key: Key('delegation-open-child-${delegation.id}'),
                   tooltip: '打开子会话',
@@ -4049,7 +4029,7 @@ class _SecurityControls extends StatelessWidget {
                 key: Key('owner-ready-state'),
                 leading: Icon(Icons.verified_user_outlined),
                 title: Text('Owner 设备已连接'),
-                subtitle: Text('此 Android 可获取会话控制权。'),
+                subtitle: Text('此 Android 可操作已连接会话。'),
               )
             : app.hasOwner
             ? const ListTile(
@@ -4365,8 +4345,8 @@ class _SessionStatusStrip extends StatelessWidget {
     final leaseText = !canWrite
         ? '只读'
         : hasLease
-        ? '已获得控制权'
-        : '未获取控制权';
+        ? '可操作'
+        : '暂不可操作';
     // v0.3/P1：Provider 连接态与版本只来自 capability 白名单；探测失败时展示 fail-closed 原因。
     final providerConnected = provider.available;
     final providerVersion = provider.version.trim();
@@ -4468,11 +4448,11 @@ class _SessionStatusStrip extends StatelessWidget {
             ),
             IconButton(
               key: const Key('session-acquire-lease-button'),
-              tooltip: leaseText,
+              tooltip: hasLease ? '会话可操作' : '暂不可操作，点按重试',
               visualDensity: VisualDensity.compact,
               onPressed: canWrite && !hasLease ? onAcquireLease : null,
               icon: Icon(
-                hasLease ? Icons.lock_open_outlined : Icons.lock_outline,
+                hasLease ? Icons.check_circle_outline : Icons.refresh,
                 size: 18,
               ),
             ),
