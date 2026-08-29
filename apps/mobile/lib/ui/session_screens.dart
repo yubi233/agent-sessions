@@ -514,7 +514,8 @@ class _SessionChatView extends StatelessWidget {
         ((pendingOutgoing ?? '').isNotEmpty);
     return SessionChatView(
       nodes: chatNodes,
-      running: sessions.isStreaming,
+      // 乐观回显挂出即视为进行中：状态行立刻出现，不等 daemon 事件回传。
+      running: sessions.isStreaming || (sessions.pendingOutgoingMessage != null),
       leading: _SessionRecoveryStrip(
         controller: recovery,
         sessionId: sessionId,
@@ -748,6 +749,17 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     final controller = ref.read(sessionControllerProvider);
     if (force || controller.selectedSessionId != widget.sessionId) {
       await controller.selectSession(widget.sessionId);
+    }
+    // 打开会话即静默获取单写者租约：正常路径用户不需要感知控制权存在；
+    // 失败不打断会话浏览（灰色芯片与 composer 拦截兜底），因此不上报错误。
+    if (controller.selectedSessionId == widget.sessionId &&
+        !controller.hasSelectedLease) {
+      final app = ref.read(appControllerProvider);
+      await controller.acquireSelectedLease(
+        deviceId: app.currentDevice?.id,
+        canWrite: app.canManageDevices,
+        reportFailure: false,
+      );
     }
     // delegation 只按当前 parent session 拉取，不能从 timeline 反推或复制 child 内容。
     await ref

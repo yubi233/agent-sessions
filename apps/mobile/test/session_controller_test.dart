@@ -62,6 +62,187 @@ void main() {
     expect(payload['message'], '你好');
     expect(payload['model'], 'opencode/big-pickle');
   });
+  group('MOBILE-V07 命令终态确认与乐观更新收口', () {
+    test('selectModel 命令执行端 failed 时浮出错误且不更新 controls', () async {
+      final relay = _FailingCommandRelay(clock: () => _now);
+      await _prepareOwner(relay);
+      final controller = SessionController(
+        relay: relay,
+        clock: () => _now,
+        random: _DeterministicRandom(),
+      );
+      await controller.initialize();
+      // codex 在 fixture 能力矩阵中声明 model_select；opencode 未声明会被
+      // controlBlockedReason 先行拦截，覆盖不到终态确认链路。
+      await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'codex',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+        autoStart: true,
+      );
+      // 让 _controls 携带本测试声明的模型目录后再校验 selectModel。
+      expect(await controller.refreshSelectedControls(), isNull);
+
+      await controller.selectModel(
+        model: 'fixture-model-b',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      // 受理（202）不算成功：执行端终态 failed 必须浮出错误且不应用乐观更新。
+      expect(controller.errorMessage, '操作未被会话执行端接受，请重试。');
+      expect(controller.controls.model, isNull);
+    });
+
+    test('selectModel 命令 succeeded 才应用乐观更新', () async {
+      final relay = _FailingCommandRelay(
+        clock: () => _now,
+        terminalStatus: 'succeeded',
+      );
+      await _prepareOwner(relay);
+      final controller = SessionController(
+        relay: relay,
+        clock: () => _now,
+        random: _DeterministicRandom(),
+      );
+      await controller.initialize();
+      await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'codex',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+        autoStart: true,
+      );
+      // 让 _controls 携带本测试声明的模型目录后再校验 selectModel。
+      final refreshError = await controller.refreshSelectedControls();
+      expect(refreshError, isNull);
+
+      await controller.selectModel(
+        model: 'fixture-model-b',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(controller.errorMessage, isNull);
+      expect(controller.controls.model, 'fixture-model-b');
+    });
+  });
+
+  test('MOBILE-V07 会话切换时乐观回显不跨会话泄漏', () async {
+    final relay = _DelayedEchoRelay(clock: () => _now);
+    await _prepareOwner(relay);
+    final controller = SessionController(
+      relay: relay,
+      clock: () => _now,
+      random: _DeterministicRandom(),
+    );
+    await controller.initialize();
+    // codex 在 fixture 能力矩阵声明完整能力；本测试聚焦回显的会话隔离而非
+    // provider 能力差异。
+    final sessionA = await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    final sessionB = await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    await controller.selectSession(sessionA!.id);
+    // 切换会话后写权需重新确认：先取回 lease 再发送。
+    await controller.acquireSelectedLease(
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+
+    const echoText = '跨会话回显文本';
+    relay.echoAfterCalls = 99;
+    relay.echoText = echoText;
+    final sending = controller.sendMessage(
+      message: echoText,
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(controller.pendingOutgoingMessage, echoText);
+
+    // 切到 B：A 的待确认回显不得泄漏到 B 的视图。
+    await controller.selectSession(sessionB!.id);
+    expect(controller.pendingOutgoingMessage, isNull);
+
+    // 切回 A：回显仍在，canonical 事件到达后清账。
+    await controller.selectSession(sessionA.id);
+    expect(controller.pendingOutgoingMessage, echoText);
+    relay.echoAfterCalls = 0;
+    await sending;
+    expect(controller.pendingOutgoingMessage, isNull);
+  });
+
+  test('MOBILE-V07 流式增量坍缩为单一生长气泡，completed 全文替换', () async {
+    final relay = _StreamingTurnRelay(clock: () => _now);
+    await _prepareOwner(relay);
+    final controller = SessionController(
+      relay: relay,
+      clock: () => _now,
+      random: _DeterministicRandom(),
+    );
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'opencode',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+
+    await controller.sendMessage(
+      message: '讲个笑话',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+
+    // completed_turn 空标记也属 assistantMessage，但投影层不渲染；只统计真实气泡。
+    final assistantNodes = controller.timeline
+        .where((event) =>
+            event.kind == SessionTimelineKind.assistantMessage &&
+            !event.completedTurn)
+        .toList();
+    // 三条流式增量被全文 completed 替换，最终只剩单一完整节点。
+    expect(assistantNodes.length, 1);
+    expect(assistantNodes.single.text, '完整回复文本');
+    expect(assistantNodes.single.isStreaming, isFalse);
+  });
+
+  test('MOBILE-V07 快照合并去重且按 sequence 排序', () async {
+    final relay = _OutOfOrderSnapshotRelay(clock: () => _now);
+    await _prepareOwner(relay);
+    final controller = SessionController(
+      relay: relay,
+      clock: () => _now,
+      random: _DeterministicRandom(),
+    );
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'opencode',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+
+    final sequences = controller.timeline.map((event) => event.sequence).toList();
+    expect(sequences, isNotEmpty);
+    final sorted = [...sequences]..sort();
+    expect(sequences, sorted);
+    expect(sequences.toSet().length, sequences.length);
+  });
+
 
   test('MOBILE-V07 发送后乐观回显用户气泡，canonical 事件到达后清账', () async {
     final relay = _DelayedEchoRelay(clock: () => _now);
@@ -495,6 +676,129 @@ class _DelayedEchoRelay extends FixtureRelayRepository {
         lastSequence: completedEvent.sequence,
       ),
       events: [...events, userEvent, completedEvent],
+    );
+  }
+}
+
+/// 回合内注入三条流式增量与一条全文 completed：验证流式合并契约。
+class _StreamingTurnRelay extends FixtureRelayRepository {
+  _StreamingTurnRelay({required super.clock});
+
+  @override
+  Future<SessionSnapshot> getSessionSnapshot(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    final snapshot = await super.getSessionSnapshot(
+      sessionId,
+      afterSequence: afterSequence,
+    );
+    RelaySessionEvent delta(int seq, String text) => RelaySessionEvent(
+      sequence: seq,
+      eventType: 'message.delta',
+      envelope: {
+        'fixture_payload': {
+          'kind': 'assistant_message',
+          'label': 'Assistant',
+          'text': text,
+          'streaming': true,
+        },
+      },
+    );
+    final base = snapshot.session.lastSequence;
+    final events = [
+      delta(base + 1, '完整'),
+      delta(base + 2, '完整回复'),
+      delta(base + 3, '完整回复文本'),
+      RelaySessionEvent(
+        sequence: base + 4,
+        eventType: 'message.completed',
+        envelope: {
+          'fixture_payload': {
+            'kind': 'assistant_message',
+            'label': 'Assistant',
+            'text': '完整回复文本',
+            'streaming': false,
+            'copy_text': '完整回复文本',
+          },
+        },
+      ),
+      RelaySessionEvent(
+        sequence: base + 5,
+        eventType: 'turn.completed',
+        envelope: const {
+          'fixture_payload': {
+            'kind': 'assistant_message',
+            'label': 'Assistant',
+            'completed_turn': true,
+          },
+        },
+      ),
+    ];
+    return SessionSnapshot(
+      session: snapshot.session.copyWith(
+        status: MobileSessionStatus.idle,
+        lastSequence: base + 5,
+      ),
+      events: events,
+    );
+  }
+}
+
+/// 返回含重复与乱序 sequence 的快照：验证合并层以 sequence 为唯一序。
+class _OutOfOrderSnapshotRelay extends FixtureRelayRepository {
+  _OutOfOrderSnapshotRelay({required super.clock});
+
+  @override
+  Future<SessionSnapshot> getSessionSnapshot(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    final snapshot = await super.getSessionSnapshot(
+      sessionId,
+      afterSequence: afterSequence,
+    );
+    RelaySessionEvent event(int seq) => RelaySessionEvent(
+      sequence: seq,
+      eventType: 'user.message',
+      envelope: const {
+        'fixture_payload': {
+          'kind': 'user_message',
+          'label': '你',
+          'text': '乱序事件 \$seq',
+          'streaming': false,
+        },
+      },
+    );
+    final base = snapshot.session.lastSequence;
+    return SessionSnapshot(
+      session: snapshot.session.copyWith(lastSequence: base + 2),
+      events: [event(base + 2), event(base + 1), event(base + 2)],
+    );
+  }
+}
+
+/// 命令终态可编程的 relay：验证控制面命令必须等执行端收口，失败要浮出错误。
+class _FailingCommandRelay extends FixtureRelayRepository {
+  _FailingCommandRelay({required super.clock, this.terminalStatus = 'failed'});
+
+  final String terminalStatus;
+
+  @override
+  Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
+    return SessionCommandReceipt(
+      id: commandId,
+      kind: '',
+      status: terminalStatus,
+      idempotencyKey: 'fixture-$commandId',
+    );
+  }
+
+  @override
+  Future<SessionControlState> getSessionControls(String sessionId) async {
+    // 与 fixture 会话目录对齐，让命令通过受理、拒绝集中到终态链路。
+    return SessionControlState.empty().copyWith(
+      models: const ['fixture-model-a', 'fixture-model-b'],
     );
   }
 }

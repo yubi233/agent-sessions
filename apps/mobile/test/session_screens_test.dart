@@ -1,6 +1,7 @@
 import 'package:agent_sessions_mobile/app/providers.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
+import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +10,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/app_harness.dart';
 import 'support/fixture_owner.dart';
 
+/// 模拟「自动获取租约被 Relay 拒绝」的 fail-closed 场景。
+/// 打开会话后仍应保持未持有控制权，resume/start 等写入口禁用并显示中文原因。
+class _AcquireLeaseBlockingRelay extends FixtureRelayRepository {
+  bool blockAcquire = true;
+
+  @override
+  Future<SessionLease> acquireSessionLease(String sessionId) async {
+    if (blockAcquire) {
+      throw const RelayFailure(
+        RelayFailureKind.forbidden,
+        '测试 Relay 拒绝授予会话控制权。',
+      );
+    }
+    return super.acquireSessionLease(sessionId);
+  }
+}
 void main() {
   testWidgets('MOBILE-02：owner 可完成新会话、lease、流式、确认、回答和停止', (tester) async {
     final harness = MobileAppHarness();
@@ -50,16 +67,12 @@ void main() {
     expect(find.byKey(const Key('session-model-seat-trigger')), findsOneWidget);
     expect(find.textContaining('邮箱'), findsNothing);
     expect(find.textContaining('密码'), findsNothing);
+    // 打开会话即自动获取单写者租约：composer 不再出现拦截提示，直接可发送。
+    await _waitForVisible(tester, find.text('已获得控制权'));
     expect(
       find.byKey(const Key('session-composer-blocked-reason')),
-      findsOneWidget,
+      findsNothing,
     );
-
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('session-acquire-lease-button')),
-    );
-    await _waitForVisible(tester, find.text('已获得控制权'));
     await _enterVisible(
       tester,
       find.byKey(const Key('session-composer-input')),
@@ -199,7 +212,8 @@ void main() {
   testWidgets('MOBILE-07：快捷菜单展示详情/恢复/文件/归档，capability 驱动禁用与本地归档可用', (
     tester,
   ) async {
-    final harness = MobileAppHarness();
+    final relay = _AcquireLeaseBlockingRelay();
+    final harness = MobileAppHarness(relay: relay);
     await tester.pumpWidget(harness.build());
     await _waitForVisible(
       tester,
@@ -267,6 +281,8 @@ void main() {
     await _tapAway(tester);
 
     // 获取 lease 后 resume 可点：提交 session.resume 命令并追加系统通知事件。
+    // 自动获取被上面的 fail-closed 拒绝后，这里放开拒绝开关以继续验证成功路径。
+    relay.blockAcquire = false;
     await _tapVisible(
       tester,
       find.byKey(const Key('session-acquire-lease-button')),

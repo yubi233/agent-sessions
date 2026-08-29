@@ -96,6 +96,9 @@ abstract interface class RelayRepository {
     SessionCommandInput input,
   );
 
+  /// 读取命令的最终收口状态；控制面命令的乐观更新必须经此确认。
+  Future<SessionCommandReceipt> getSessionCommand(String commandId);
+
   /// P2-F：读取真实 Relay 的 Daemon 安全观察投影。该接口只读且不返回原始密文 envelope。
   Future<DaemonSessionObservation> getSessionDaemonObservation(
     String sessionId, {

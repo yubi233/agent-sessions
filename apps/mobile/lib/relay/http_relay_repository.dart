@@ -104,6 +104,12 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
+    final response = await _authenticatedSend('GET', '/v1/commands/$commandId');
+    return SessionCommandReceipt.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
   Future<void> logout(AuthTokens tokens) async {
     await _send(
       'POST',

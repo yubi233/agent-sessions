@@ -1,10 +1,29 @@
 import 'package:agent_sessions_mobile/domain/delegation_models.dart';
+import 'package:agent_sessions_mobile/domain/models.dart';
+import 'package:agent_sessions_mobile/domain/session_models.dart';
+import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/app_harness.dart';
 
+/// 模拟「自动获取租约被 Relay 拒绝」的 fail-closed 场景。
+/// 打开会话后仍保持未持有控制权，派发入口显示中文原因且不创建节点。
+class _AcquireLeaseBlockingRelay extends FixtureRelayRepository {
+  bool blockAcquire = true;
+
+  @override
+  Future<SessionLease> acquireSessionLease(String sessionId) async {
+    if (blockAcquire) {
+      throw const RelayFailure(
+        RelayFailureKind.forbidden,
+        '测试 Relay 拒绝授予会话控制权。',
+      );
+    }
+    return super.acquireSessionLease(sessionId);
+  }
+}
 void main() {
   testWidgets('MOBILE-05 DELEG-06：批准后 parent 只显示摘要并可切入独立 child 会话', (
     tester,
@@ -234,7 +253,8 @@ void main() {
   });
 
   testWidgets('MOBILE-07：无 parent lease 时派发入口给出中文原因且不创建节点', (tester) async {
-    final harness = MobileAppHarness();
+    final relay = _AcquireLeaseBlockingRelay();
+    final harness = MobileAppHarness(relay: relay);
     await tester.pumpWidget(harness.build());
     await _registerOwner(tester, 'delegation-propose-blocked@fixture.test');
 

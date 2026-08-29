@@ -55,12 +55,14 @@ class SessionController extends ChangeNotifier {
   CapabilityMatrix _capabilities = CapabilityMatrix.empty;
   SessionControlState _controls = const SessionControlState.empty();
 
-  /// 已提交但 canonical user.message 事件尚未回传的出站文本。
-  /// 非空时 Chat 时间线尾部渲染乐观回显气泡；规范化事件合并后立即清账。
-  String? _pendingOutgoingMessage;
+  /// 已提交但 canonical user.message 事件尚未回传的出站文本，按会话隔离。
+  /// 非空时该会话的 Chat 时间线尾部渲染乐观回显气泡；规范化事件合并后立即清账，
+  /// 会话切换互不泄漏。
+  final Map<String, String> _pendingOutgoingBySession = <String, String>{};
 
-  /// 发送后尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
-  String? get pendingOutgoingMessage => _pendingOutgoingMessage;
+  /// 当前选中会话尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
+  String? get pendingOutgoingMessage =>
+      _selectedSessionId == null ? null : _pendingOutgoingBySession[_selectedSessionId!];
   SkillConfirmation? _skillConfirmation;
   List<AttachmentTransfer> _attachments = const [];
   List<AttachmentRejection> _attachmentRejections = const [];
@@ -551,6 +553,7 @@ class SessionController extends ChangeNotifier {
   Future<void> acquireSelectedLease({
     required String? deviceId,
     required bool canWrite,
+    bool reportFailure = true,
   }) async {
     final sessionId = _selectedSessionId;
     if (sessionId == null ||
@@ -558,7 +561,10 @@ class SessionController extends ChangeNotifier {
       return;
     }
     final runtimeLeaseGeneration = _runtimeLeaseGeneration;
-    await _runAction<void>('lease:$sessionId', () async {
+    await _runAction<void>(
+      'lease:$sessionId',
+      reportFailure: reportFailure,
+      () async {
       final lease = await _relay.acquireSessionLease(sessionId);
       if (lease.sessionId != sessionId || lease.epoch <= 0) {
         throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了无效控制权。');
@@ -692,7 +698,7 @@ class SessionController extends ChangeNotifier {
     // 可能命中付费订阅条目，所以发送时必须携带当前生效模型。
     final sessionModel = _controls.model ?? _controls.defaultModel ?? '';
     // 乐观回显：不等 daemon 事件回传，先在本地挂出待确认的用户气泡。
-    _pendingOutgoingMessage = trimmed;
+    _pendingOutgoingBySession[sessionId] = trimmed;
     notifyListeners();
     final accepted = await _submitCommand(
       sessionId: sessionId,
@@ -706,8 +712,8 @@ class SessionController extends ChangeNotifier {
         },
       },
     );
-    if (!accepted && _pendingOutgoingMessage == trimmed) {
-      _pendingOutgoingMessage = null;
+    if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
+      _pendingOutgoingBySession.remove(sessionId);
       notifyListeners();
     }
     // 发送成功后清除草稿，避免页面重建时把已发送内容重新填回输入框。
@@ -1650,6 +1656,29 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// 轮询命令终态。succeeded 返回 true；failed/rejected/cancelled/expired 返回
+  /// false；状态查询失败或超时返回 true，避免确认链路故障阻塞既有受理语义。
+  Future<bool> _awaitCommandTerminal(String commandId) async {
+    for (var attempt = 0; attempt < 24; attempt += 1) {
+      try {
+        final receipt = await _relay.getSessionCommand(commandId);
+        switch (receipt.status) {
+          case 'succeeded':
+            return true;
+          case 'failed':
+          case 'rejected':
+          case 'cancelled':
+          case 'expired':
+            return false;
+        }
+      } on RelayFailure {
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return true;
+  }
+
   Future<bool> _submitCommand({
     required String sessionId,
     required String operation,
@@ -1674,8 +1703,20 @@ class SessionController extends ChangeNotifier {
         deviceId: deviceId,
         ciphertext: ciphertext,
       );
-      await _relay.submitSessionCommand(sessionId, command);
-      onAccepted?.call();
+      final receipt = await _relay.submitSessionCommand(sessionId, command);
+      if (onAccepted != null) {
+        // 执行端异步收口命令：受理（202）不代表成功。带乐观更新面的命令必须等
+        // 终态确认，failed 视为失败浮出错误；确认链路不可用时退回受理即确认的
+        // 旧行为，不放大故障。
+        final confirmed = await _awaitCommandTerminal(receipt.id);
+        if (!confirmed) {
+          throw const RelayFailure(
+            RelayFailureKind.protocol,
+            '操作未被会话执行端接受，请重试。',
+          );
+        }
+        onAccepted();
+      }
       // 提交后模型需要数秒才产出事件；首次拉取时 message.completed 多半尚未落库。
       // 每一批都合并，直到明确的 completed_turn 或非 streaming 状态到达，
       // 否则只合并第一批会把回复显示出来却遗留“生成中”状态。
@@ -1732,10 +1773,34 @@ class SessionController extends ChangeNotifier {
     return events.any((event) => event.completedTurn);
   }
 
+  /// 流式合并：连续的 assistant 流式增量坍缩为单个生长节点；非流式的
+  /// message.completed 全文替换其前的流式节点，避免"生长气泡 + 完整气泡"并排。
+  /// completed_turn 终态标记不参与替换（投影层本就不渲染空文本标记）。
+  List<SessionTimelineEvent> _coalesceStreaming(List<SessionTimelineEvent> events) {
+    final out = <SessionTimelineEvent>[];
+    for (final event in events) {
+      final last = out.isEmpty ? null : out.last;
+      final replacesStreaming = last != null &&
+          last.kind == SessionTimelineKind.assistantMessage &&
+          last.isStreaming &&
+          event.kind == SessionTimelineKind.assistantMessage &&
+          !event.completedTurn;
+      if (replacesStreaming) {
+        out[out.length - 1] = event;
+        continue;
+      }
+      out.add(event);
+    }
+    return out;
+  }
+
   void _mergeSnapshot(SessionSnapshot snapshot, {bool appendTimeline = false}) {
-    final incoming = snapshot.events
-        .map(SessionTimelineEvent.fromRelayEvent)
-        .toList(growable: false);
+    // 以 sequence 为唯一序：重复投递去重、乱序排序，replace 与 append 两条路径同规。
+    final incoming = <int, SessionTimelineEvent>{
+      for (final event in snapshot.events)
+        event.sequence: SessionTimelineEvent.fromRelayEvent(event),
+    }.values.toList()
+      ..sort((left, right) => left.sequence.compareTo(right.sequence));
     final session =
         incoming.any((event) => event.completedTurn) &&
             snapshot.session.status == MobileSessionStatus.streaming
@@ -1754,8 +1819,9 @@ class SessionController extends ChangeNotifier {
     if (!appendTimeline) {
       _timelineWindows[snapshot.session.id] = List.unmodifiable(incoming);
       if (_selectedSessionId == snapshot.session.id) {
-        final start = incoming.length > 50 ? incoming.length - 50 : 0;
-        _timeline = List.unmodifiable(incoming.sublist(start));
+        final coalesced = _coalesceStreaming(incoming);
+        final start = coalesced.length > 50 ? coalesced.length - 50 : 0;
+        _timeline = List.unmodifiable(coalesced.sublist(start));
       }
       return;
     }
@@ -1776,17 +1842,17 @@ class SessionController extends ChangeNotifier {
             for (final event in incoming) event.sequence: event,
           }.values.toList()
           ..sort((left, right) => left.sequence.compareTo(right.sequence));
-    _timeline = List<SessionTimelineEvent>.unmodifiable(merged);
-    // 规范化 user.message 已合并进时间线时，乐观回显完成使命，立即清账
+    _timeline = List.unmodifiable(_coalesceStreaming(merged));
+    // 规范化 user.message 已合并进时间线时，该会话的乐观回显完成使命，立即清账
     // 避免同一条消息渲染两个气泡。
-    final pending = _pendingOutgoingMessage;
+    final pending = _pendingOutgoingBySession[snapshot.session.id];
     if (pending != null &&
         merged.any(
           (event) =>
               event.kind == SessionTimelineKind.userMessage &&
               event.text == pending,
         )) {
-      _pendingOutgoingMessage = null;
+      _pendingOutgoingBySession.remove(snapshot.session.id);
     }
   }
 
@@ -1877,8 +1943,9 @@ class SessionController extends ChangeNotifier {
 
   Future<T?> _runAction<T>(
     String actionKey,
-    Future<T> Function() action,
-  ) async {
+    Future<T> Function() action, {
+    bool reportFailure = true,
+  }) async {
     if (_pendingActionKeys.contains(actionKey)) return null;
     _errorMessage = null;
     _pendingActionKeys.add(actionKey);
@@ -1886,10 +1953,10 @@ class SessionController extends ChangeNotifier {
     try {
       return await action();
     } on RelayFailure catch (failure) {
-      _errorMessage = failure.message;
+      if (reportFailure) _errorMessage = failure.message;
       return null;
     } catch (_) {
-      _errorMessage = '操作未完成，请稍后重试。';
+      if (reportFailure) _errorMessage = '操作未完成，请稍后重试。';
       return null;
     } finally {
       _pendingActionKeys.remove(actionKey);

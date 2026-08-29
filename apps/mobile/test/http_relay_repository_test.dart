@@ -1183,6 +1183,53 @@ void main() {
     });
   });
 
+  group('MOBILE-V07 命令链路 HTTP 状态到用户错误的稳定映射', () {
+    test('409 lease 冲突映射为控制权已更新', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.method, 'POST');
+        return _jsonResponse({'error': 'lease conflict'}, statusCode: 409);
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      await expectLater(
+        repository.submitSessionCommand(
+          'session_1',
+          const SessionCommandInput(
+            kind: SessionCommandKind.send,
+            idempotencyKey: 'idem-409',
+            leaseEpoch: 7,
+            deviceId: 'android-owner-fixture',
+            ciphertext: {'fixture_payload': {'message': 'hi'}},
+          ),
+        ),
+        throwsA(
+          isA<RelayFailure>()
+              .having((f) => f.kind, 'kind', RelayFailureKind.forbidden)
+              .having((f) => f.message, 'message', '会话控制权已更新，请重新获取。'),
+        ),
+      );
+    });
+
+    test('403 scope 拒绝映射为权限提示且不重试', () async {
+      var calls = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        calls += 1;
+        return _jsonResponse({'error': 'scope denied'}, statusCode: 403);
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      await expectLater(
+        repository.listDevices(),
+        throwsA(
+          isA<RelayFailure>()
+              .having((f) => f.kind, 'kind', RelayFailureKind.forbidden)
+              .having((f) => f.message, 'message', '当前设备没有执行此操作的权限。'),
+        ),
+      );
+      expect(calls, 1);
+    });
+  });
+
   group('MOBILE-01 owner access token 过期的 401 自动刷新重放', () {
     test('首个请求 401 后用 refresh token 换新并重放，新令牌写回存储', () async {
       final calls = <RequestOptions>[];

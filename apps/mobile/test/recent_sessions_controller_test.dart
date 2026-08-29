@@ -472,6 +472,10 @@ class _ListOverridingRelay implements RelayRepository {
   ) => _delegate.submitSessionCommand(sessionId, input);
 
   @override
+  Future<SessionCommandReceipt> getSessionCommand(String commandId) =>
+      _delegate.getSessionCommand(commandId);
+
+  @override
   Future<List<SessionDelegation>> listSessionDelegations(
     String parentSessionId,
   ) => _delegate.listSessionDelegations(parentSessionId);

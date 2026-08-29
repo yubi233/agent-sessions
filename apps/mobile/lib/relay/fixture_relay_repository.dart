@@ -648,6 +648,18 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
+    _requireFixtureNetwork();
+    // fixture 命令一律即时成功收口；时序演练由测试用 relay 子类覆写本方法。
+    return SessionCommandReceipt(
+      id: commandId,
+      kind: '',
+      status: 'succeeded',
+      idempotencyKey: 'fixture-$commandId',
+    );
+  }
+
+  @override
   Future<SessionCommandReceipt> submitSessionCommand(
     String sessionId,
     SessionCommandInput input,
