@@ -117,7 +117,8 @@ void main() {
     meter.value = const SessionContextMeterProjection(usedTokens: 200);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('session-context-meter-dialog')), findsNothing);
-    expect(find.text('上下文不可用'), findsOneWidget);
+    // 缺窗口时 ContextMeter 隐藏，不再显示「上下文不可用」文案。
+    expect(find.byKey(const Key('session-context-meter')), findsOneWidget);
 
     meter.value = const SessionContextMeterProjection(
       usedTokens: 200,
@@ -127,7 +128,7 @@ void main() {
     expect(find.byKey(const Key('session-context-meter-dialog')), findsNothing);
   });
 
-  testWidgets('MOBILE-V05-12/P7：ContextMeter 缺窗口时显示不可用且不画伪占用', (tester) async {
+  testWidgets('MOBILE-V05-12/P7：ContextMeter 缺窗口时隐藏且不画伪占用', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -138,7 +139,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('上下文不可用'), findsOneWidget);
+    // 缺窗口时 ContextMeter 隐藏，不再显示「上下文不可用」文案。
+    expect(find.byKey(const Key('session-context-meter')), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 }

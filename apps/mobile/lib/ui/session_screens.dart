@@ -29,8 +29,6 @@ import 'session/trajectory/session_trajectory_view.dart';
 import 'session/composer/session_goal_dock.dart';
 import 'session/composer/session_queue_dock.dart';
 import 'session/composer/session_model_seat.dart';
-import 'session/composer/session_context_meter.dart';
-import 'session/composer/session_stats_line.dart';
 
 import 'session/composer/session_composer_chain.dart';
 import 'session/composer/session_todo_dock.dart';
@@ -3203,18 +3201,6 @@ class _SessionComposerState extends State<_SessionComposer> {
               deviceId: widget.deviceId,
             ),
             const SizedBox(height: 5),
-            // v0.5/P7：StatsLine / ContextMeter 只读投影，缺字段显示不可用。
-            SessionStatsLine(
-              stats: SessionStatsLineProjection.fromUsage(
-                widget.sessions.controls.usage,
-              ),
-            ),
-            SessionContextMeter(
-              meter: SessionContextMeterProjection.fromUsage(
-                widget.sessions.controls.usage,
-              ),
-            ),
-            const SizedBox(height: 5),
             _ComposerControlStrip(
               sessions: widget.sessions,
               canWrite: widget.canWrite,
@@ -4812,6 +4798,7 @@ class _HappyComposerMetaRow extends StatelessWidget {
         canWrite: canWrite,
       ),
       busy: sessions.isBusy,
+      usage: controls.usage,
       onRefresh: () async {
         final error = await sessions.refreshSelectedControls();
         final refreshed = sessions.controls;

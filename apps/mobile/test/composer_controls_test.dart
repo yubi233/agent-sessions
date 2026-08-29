@@ -15,7 +15,7 @@ void main() {
     await _registerOwner(tester, 'composer-controls@fixture.test');
     await _createAndAcquireLease(tester);
 
-    // Composer 只保留一个单行模型/effort 状态入口，usage 仍独立展示。
+    // Composer 只保留一个单行模型/effort 状态入口。
     await _waitForVisible(
       tester,
       find.byKey(const Key('happy-session-model-row')),
@@ -24,10 +24,6 @@ void main() {
       tester,
       find.byKey(const Key('session-model-seat-trigger')),
     );
-    await _waitForVisible(tester, find.byKey(const Key('session-stats-line')));
-    // v0.5/P7：usage 只展示脱敏计数，不包含 prompt 或回复正文。
-    expect(find.textContaining('输入 12.5k'), findsOneWidget);
-    expect(find.textContaining('上下文 92%'), findsOneWidget);
     expect(find.textContaining('fixture-model-a'), findsWidgets);
     expect(find.byKey(const Key('composer-model-select')), findsNothing);
     expect(find.byKey(const Key('composer-effort-select')), findsNothing);
@@ -448,22 +444,29 @@ void main() {
     expect(harness.relay.submittedCommandCount, 0);
   });
 
-  testWidgets('MOBILE-12：usage 展示 cache 计数并在 context 超阈值时给出警告', (tester) async {
+  testWidgets('MOBILE-12：usage 在模型设置弹窗内展示 cache 计数与上下文占用', (tester) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await _registerOwner(tester, 'usage-depth@fixture.test');
     await _createAndAcquireLease(tester);
 
-    // v0.5/P7：StatsLine 合并展示 cache 计数；ContextMeter 显示上下文压力。
-    await _waitForVisible(tester, find.byKey(const Key('session-stats-line')));
-    expect(find.textContaining('缓存 61.8k'), findsOneWidget);
+    // v0.5/P7：用量统计已移入模型设置弹窗；点击 info 按钮打开弹窗。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-seat-details')),
+    );
     await _waitForVisible(
       tester,
-      find.byKey(const Key('session-context-meter')),
+      find.byKey(const Key('session-model-details-dialog')),
     );
-    expect(find.textContaining('上下文 92%'), findsOneWidget);
+    expect(find.text('用量统计'), findsOneWidget);
     // 不渲染 prompt 或回复正文。
     expect(find.textContaining('提示词'), findsNothing);
+    // 关闭弹窗。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-details-close')),
+    );
   });
 
   testWidgets('MOBILE-V05-17/P5-E5：已知 slash command 带图片整批拒绝并保留草稿与附件', (

@@ -95,16 +95,7 @@ class _SessionContextMeterState extends State<SessionContextMeter> {
     final used = widget.meter.usedTokens;
     final window = widget.meter.windowTokens;
     if (used == null || window == null || window <= 0 || ratio == null) {
-      return Padding(
-        key: const Key('session-context-meter'),
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Text(
-          '上下文不可用',
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      );
+      return const SizedBox.shrink(key: Key('session-context-meter'));
     }
     return Padding(
       key: const Key('session-context-meter'),

@@ -54,6 +54,7 @@ class SessionModelSeat extends StatefulWidget {
       availability: CapabilityAvailability.unsupported,
     ),
     this.busy = false,
+    this.usage,
     super.key,
   });
 
@@ -66,6 +67,7 @@ class SessionModelSeat extends StatefulWidget {
   final String? modelBlockedReason;
   final String? effortBlockedReason;
   final bool busy;
+  final SessionUsageSummary? usage;
   final Future<SessionModelCatalogRefresh> Function() onRefresh;
   final Future<String?> Function(String model) onSelectModel;
   final Future<String?> Function(String effort) onSelectEffort;
@@ -92,7 +94,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
 
   String get _displayEffort {
     final effort = widget.catalog.effort?.trim();
-    return effort == null || effort.isEmpty ? '推理等级不可用' : effort;
+    return effort == null || effort.isEmpty ? '—' : effort;
   }
 
   String get _pickerHint {
@@ -131,6 +133,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
   }
 
   Future<void> _openDetails() async {
+    final usage = widget.usage;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -163,11 +166,13 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                   label: '模型',
                   value: _displayModel,
                 ),
-                _ModelDetailRow(
-                  key: const Key('session-model-details-effort'),
-                  label: '推理等级',
-                  value: _displayEffort,
-                ),
+                if (widget.catalog.effort != null &&
+                    widget.catalog.effort!.isNotEmpty)
+                  _ModelDetailRow(
+                    key: const Key('session-model-details-effort'),
+                    label: '推理等级',
+                    value: widget.catalog.effort!,
+                  ),
                 _ModelDetailRow(
                   key: const Key('session-model-details-catalog'),
                   label: '目录',
@@ -191,6 +196,15 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                     widget.effortBlockedReason,
                   ),
                 ),
+                if (usage != null) ...[
+                  const Divider(height: 20),
+                  Text(
+                    '用量统计',
+                    style: Theme.of(dialogContext).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  _UsageStatsSection(usage: usage),
+                ],
               ],
             ),
           ),
@@ -679,4 +693,101 @@ IconData _providerIcon(String? provider) {
     'dsh' => Icons.hub_outlined,
     _ => Icons.smart_toy_outlined,
   };
+}
+
+/// 模型设置弹窗内的用量统计区块：token 计数、上下文占用。
+class _UsageStatsSection extends StatelessWidget {
+  const _UsageStatsSection({required this.usage});
+
+  final SessionUsageSummary usage;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final input = usage.inputTokens;
+    final output = usage.outputTokens;
+    final cache = usage.cacheReadTokens + usage.cacheCreationTokens;
+    final ctx = usage.contextTokens;
+    final window = usage.contextWindowTokens;
+    final ratio = usage.contextRatio;
+    final items = <Widget>[];
+    if (input > 0) {
+      items.add(_UsageStatChip(
+        label: '输入 ${SessionUsageSummary.compactForDisplay(input)}',
+      ));
+    }
+    if (output > 0) {
+      items.add(_UsageStatChip(
+        label: '输出 ${SessionUsageSummary.compactForDisplay(output)}',
+      ));
+    }
+    if (cache > 0) {
+      items.add(_UsageStatChip(
+        label: '缓存 ${SessionUsageSummary.compactForDisplay(cache)}',
+      ));
+    }
+    if (items.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          '暂无用量数据',
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(spacing: 8, runSpacing: 4, children: items),
+        if (window > 0) ...[
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: (ratio ?? 0).clamp(0.0, 1.0),
+                    minHeight: 8,
+                    backgroundColor:
+                        theme.colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '上下文 ${ratio != null ? '${(ratio * 100).toStringAsFixed(0)}%' : SessionUsageSummary.compactForDisplay(ctx)}'
+                ' / ${SessionUsageSummary.compactForDisplay(window)}',
+                style: theme.textTheme.labelSmall,
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _UsageStatChip extends StatelessWidget {
+  const _UsageStatChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(label, style: Theme.of(context).textTheme.labelSmall),
+    );
+  }
 }
