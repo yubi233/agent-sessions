@@ -1,41 +1,72 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-/// 模型 seat 的 pane；root 只负责选择进入模型目录或 effort 目录。
-enum _SessionModelPane { root, model, effort }
+import '../../../domain/control_models.dart';
+import '../../app_theme.dart';
 
-enum _SessionModelCatalogStatus { idle, loading, ready, error }
-
-/// v0.5/P5-E5：会话级模型/effort seat。
-///
-/// 该组件只消费 Host 投影的目录和当前值，所有选择都通过上层注入的
-/// `SessionController` 回调提交。每次打开都会刷新目录；加载失败停留在菜单内，
-/// 选择失败显示 notice 并保留当前 pane，避免把本地选中态伪装成 Host 已消费。
-class SessionModelSeat extends StatefulWidget {
-  const SessionModelSeat({
+/// Host 投影的模型与推理等级目录。目录只包含可展示、可选择的安全标签。
+@immutable
+class SessionModelCatalog {
+  const SessionModelCatalog({
     required this.model,
     required this.effort,
     required this.models,
     required this.efforts,
-    required this.modelBlockedReason,
-    required this.effortBlockedReason,
-    required this.onRefresh,
-    required this.onSelectModel,
-    required this.onSelectEffort,
-    this.busy = false,
-    super.key,
   });
 
   final String? model;
   final String? effort;
   final List<String> models;
   final List<String> efforts;
+}
+
+/// 目录刷新结果。刷新失败时仍带回当前安全投影，避免把旧目录误画成空目录。
+@immutable
+class SessionModelCatalogRefresh {
+  const SessionModelCatalogRefresh({required this.catalog, this.error});
+
+  final SessionModelCatalog catalog;
+  final String? error;
+}
+
+/// v0.5/P5-E5：会话级模型与推理等级入口。
+///
+/// Composer 只保留一个固定高度的单行摘要。点击摘要在同一底部弹层中选择模型和
+/// 推理等级；详情按钮只展示 display-safe 投影，不读取 Provider 正文或密文。
+class SessionModelSeat extends StatefulWidget {
+  const SessionModelSeat({
+    required this.catalog,
+    required this.modelBlockedReason,
+    required this.effortBlockedReason,
+    required this.onRefresh,
+    required this.onSelectModel,
+    required this.onSelectEffort,
+    this.provider,
+    this.providerVersion,
+    this.providerAvailable = false,
+    this.modelCapability = const CapabilityEntry(
+      name: 'model_select',
+      availability: CapabilityAvailability.unsupported,
+    ),
+    this.effortCapability = const CapabilityEntry(
+      name: 'effort_select',
+      availability: CapabilityAvailability.unsupported,
+    ),
+    this.busy = false,
+    super.key,
+  });
+
+  final String? provider;
+  final String? providerVersion;
+  final bool providerAvailable;
+  final SessionModelCatalog catalog;
+  final CapabilityEntry modelCapability;
+  final CapabilityEntry effortCapability;
   final String? modelBlockedReason;
   final String? effortBlockedReason;
   final bool busy;
-  final Future<String?> Function() onRefresh;
+  final Future<SessionModelCatalogRefresh> Function() onRefresh;
   final Future<String?> Function(String model) onSelectModel;
   final Future<String?> Function(String effort) onSelectEffort;
 
@@ -44,386 +75,608 @@ class SessionModelSeat extends StatefulWidget {
 }
 
 class _SessionModelSeatState extends State<SessionModelSeat> {
-  _SessionModelPane _pane = _SessionModelPane.root;
-  _SessionModelCatalogStatus _status = _SessionModelCatalogStatus.idle;
-  String? _catalogError;
-  String? _selectionNotice;
-  bool _selectionBusy = false;
-  bool _menuOpen = false;
-  final _menuFocusNode = FocusNode(debugLabel: 'session-model-menu');
-
-  @override
-  void dispose() {
-    _menuFocusNode.dispose();
-    super.dispose();
-  }
+  final _triggerFocusNode = FocusNode(debugLabel: 'session-model-seat-trigger');
 
   bool get _modelDisabled => widget.busy || widget.modelBlockedReason != null;
   bool get _effortDisabled => widget.busy || widget.effortBlockedReason != null;
+  bool get _canOpenPicker =>
+      widget.providerAvailable && (!_modelDisabled || !_effortDisabled);
 
-  void _open(_SessionModelPane pane) {
-    if ((pane == _SessionModelPane.model && _modelDisabled) ||
-        (pane == _SessionModelPane.effort && _effortDisabled)) {
-      return;
-    }
-    setState(() {
-      _menuOpen = true;
-      _pane = pane;
-      _status = _SessionModelCatalogStatus.loading;
-      _catalogError = null;
-      _selectionNotice = null;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _menuFocusNode.requestFocus();
-    });
-    unawaited(_reloadCatalog());
+  String get _displayModel {
+    final model = widget.catalog.model?.trim();
+    if (model != null && model.isNotEmpty) return model;
+    final provider = widget.provider?.trim();
+    if (provider != null && provider.isNotEmpty) return provider;
+    return '模型不可用';
   }
 
-  void _close() {
-    setState(() {
-      _menuOpen = false;
-      _pane = _SessionModelPane.root;
-      _catalogError = null;
-      _selectionNotice = null;
-    });
+  String get _displayEffort {
+    final effort = widget.catalog.effort?.trim();
+    return effort == null || effort.isEmpty ? '推理等级不可用' : effort;
   }
 
-  Future<void> _reloadCatalog() async {
-    final error = await widget.onRefresh();
-    if (!mounted) return;
-    setState(() {
-      _status = error == null
-          ? _SessionModelCatalogStatus.ready
-          : _SessionModelCatalogStatus.error;
-      _catalogError = error;
-      if (error != null) _selectionNotice = null;
-    });
-  }
-
-  KeyEventResult _handleMenuKey(FocusNode node, KeyEvent event) {
-    if (event is KeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.escape) {
-      if (_pane != _SessionModelPane.root) {
-        setState(() {
-          _pane = _SessionModelPane.root;
-          _selectionNotice = null;
-        });
-      } else {
-        _close();
-      }
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
-  }
-
-  Future<void> _chooseModel(String model) async {
-    if (_selectionBusy) return;
-    if (model == widget.model) {
-      _close();
-      return;
-    }
-    setState(() {
-      _selectionBusy = true;
-      _selectionNotice = null;
-    });
-    final error = await widget.onSelectModel(model);
-    if (!mounted) return;
-    setState(() {
-      _selectionBusy = false;
-      _selectionNotice = error;
-    });
-    if (error == null) _close();
-  }
-
-  Future<void> _chooseEffort(String effort) async {
-    if (_selectionBusy) return;
-    if (effort == widget.effort) {
-      _close();
-      return;
-    }
-    setState(() {
-      _selectionBusy = true;
-      _selectionNotice = null;
-    });
-    final error = await widget.onSelectEffort(effort);
-    if (!mounted) return;
-    setState(() {
-      _selectionBusy = false;
-      _selectionNotice = error;
-    });
-    if (error == null) _close();
+  String get _pickerHint {
+    if (!widget.providerAvailable) return 'Provider 当前不可用。';
+    if (_canOpenPicker) return '选择模型和推理等级';
+    return widget.modelBlockedReason ??
+        widget.effortBlockedReason ??
+        '模型和推理等级当前不可用';
   }
 
   @override
-  Widget build(BuildContext context) {
-    final modelReason = widget.modelBlockedReason;
-    final effortReason = widget.effortBlockedReason;
-    return Semantics(
-      container: true,
-      label: '模型与 effort seat',
-      hint: modelReason ?? effortReason,
-      child: Column(
-        key: const Key('session-model-seat'),
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Tooltip(
-                  message: modelReason ?? '打开模型目录',
-                  child: OutlinedButton.icon(
-                    key: const Key('composer-model-select'),
-                    onPressed: _modelDisabled
-                        ? null
-                        : () => _open(_SessionModelPane.root),
-                    icon: const Icon(Icons.smart_toy_outlined, size: 17),
-                    label: Text(widget.model ?? '选择模型'),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Tooltip(
-                  message: effortReason ?? '打开 effort 目录',
-                  child: OutlinedButton.icon(
-                    key: const Key('composer-effort-select'),
-                    onPressed: _effortDisabled
-                        ? null
-                        : () => _open(_SessionModelPane.root),
-                    icon: const Icon(Icons.tune_outlined, size: 17),
-                    label: Text(widget.effort ?? '选择 effort'),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (modelReason != null || effortReason != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                modelReason ?? effortReason!,
-                key: const Key('session-model-seat-blocked'),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.error,
-                ),
-              ),
-            ),
-          if (_menuOpen) _buildMenu(context),
-        ],
-      ),
-    );
+  void dispose() {
+    _triggerFocusNode.dispose();
+    super.dispose();
   }
 
-  Widget _buildMenu(BuildContext context) {
-    final theme = Theme.of(context);
-    return Focus(
-      focusNode: _menuFocusNode,
-      onKeyEvent: _handleMenuKey,
-      child: FocusTraversalGroup(
-        child: Container(
-          key: const Key('session-model-menu'),
-          margin: const EdgeInsets.only(top: 6),
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHigh,
-            border: Border.all(color: theme.dividerColor),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Material(
-            color: Colors.transparent,
+  Future<void> _openPicker() async {
+    if (!_canOpenPicker) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => _SessionModelPickerSheet(
+        catalog: widget.catalog,
+        modelEnabled: !_modelDisabled,
+        effortEnabled: !_effortDisabled,
+        modelBlockedReason: widget.modelBlockedReason,
+        effortBlockedReason: widget.effortBlockedReason,
+        onRefresh: widget.onRefresh,
+        onSelectModel: widget.onSelectModel,
+        onSelectEffort: widget.onSelectEffort,
+      ),
+    );
+    if (mounted && _canOpenPicker) _triggerFocusNode.requestFocus();
+  }
+
+  Future<void> _openDetails() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('session-model-details-dialog'),
+        title: const Text('模型设置'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: SingleChildScrollView(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _buildMenuHeader(context),
-                if (_catalogError != null) _buildCatalogError(context),
-                if (_selectionNotice != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Text(
-                      _selectionNotice!,
-                      key: const Key('session-model-selection-notice'),
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.error,
-                      ),
-                    ),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-provider'),
+                  label: 'Provider',
+                  value: _providerLabel,
+                ),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-version'),
+                  label: '版本',
+                  value: _versionLabel,
+                ),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-availability'),
+                  label: '状态',
+                  value: widget.providerAvailable ? '可用' : '不可用',
+                ),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-model'),
+                  label: '模型',
+                  value: _displayModel,
+                ),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-effort'),
+                  label: '推理等级',
+                  value: _displayEffort,
+                ),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-catalog'),
+                  label: '目录',
+                  value:
+                      '模型 ${widget.catalog.models.length} 项，推理等级 ${widget.catalog.efforts.length} 项',
+                ),
+                const Divider(height: 20),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-model-capability'),
+                  label: '模型切换',
+                  value: _capabilityDescription(
+                    widget.modelCapability,
+                    widget.modelBlockedReason,
                   ),
-                if (_status == _SessionModelCatalogStatus.loading)
-                  const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        SizedBox(width: 8),
-                        Text('正在刷新模型目录…'),
-                      ],
-                    ),
-                  )
-                else
-                  _buildPane(context),
+                ),
+                _ModelDetailRow(
+                  key: const Key('session-model-details-effort-capability'),
+                  label: '推理等级',
+                  value: _capabilityDescription(
+                    widget.effortCapability,
+                    widget.effortBlockedReason,
+                  ),
+                ),
               ],
             ),
           ),
         ),
+        actions: [
+          TextButton(
+            key: const Key('session-model-details-close'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+    if (mounted) _triggerFocusNode.requestFocus();
+  }
+
+  String get _providerLabel {
+    final provider = widget.provider?.trim();
+    return provider == null || provider.isEmpty ? '不可用' : provider;
+  }
+
+  String get _versionLabel {
+    final version = widget.providerVersion?.trim();
+    return version == null || version.isEmpty ? '未提供' : version;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      key: const Key('session-model-seat'),
+      height: 32,
+      child: Row(
+        children: [
+          Icon(
+            Icons.account_tree_outlined,
+            size: 14,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 4),
+          const SizedBox(
+            width: 36,
+            child: Text('main', maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Tooltip(
+              message: _pickerHint,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  key: const Key('session-model-seat-trigger'),
+                  focusNode: _triggerFocusNode,
+                  canRequestFocus: _canOpenPicker,
+                  borderRadius: BorderRadius.circular(AppRadius.small),
+                  onTap: _canOpenPicker ? _openPicker : null,
+                  child: Semantics(
+                    button: true,
+                    enabled: _canOpenPicker,
+                    label: '模型 $_displayModel，推理等级 $_displayEffort',
+                    hint: _pickerHint,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _providerIcon(widget.provider),
+                            size: 14,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            flex: 3,
+                            child: Text(
+                              _displayModel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.end,
+                              style: theme.textTheme.labelSmall,
+                            ),
+                          ),
+                          Text(
+                            ' / ',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          Flexible(
+                            flex: 2,
+                            child: Text(
+                              _displayEffort,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall,
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(
+                            Icons.expand_more,
+                            size: 16,
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Tooltip(
+            message: '查看模型设置详情',
+            child: IconButton(
+              key: const Key('session-model-seat-details'),
+              tooltip: '查看模型设置详情',
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              onPressed: _openDetails,
+              icon: const Icon(Icons.info_outline, size: 17),
+            ),
+          ),
+        ],
       ),
     );
   }
+}
 
-  Widget _buildMenuHeader(BuildContext context) {
-    final title = switch (_pane) {
-      _SessionModelPane.root => '模型 seat',
-      _SessionModelPane.model => '选择模型',
-      _SessionModelPane.effort => '选择 effort',
-    };
-    return Row(
+class _SessionModelPickerSheet extends StatefulWidget {
+  const _SessionModelPickerSheet({
+    required this.catalog,
+    required this.modelEnabled,
+    required this.effortEnabled,
+    required this.modelBlockedReason,
+    required this.effortBlockedReason,
+    required this.onRefresh,
+    required this.onSelectModel,
+    required this.onSelectEffort,
+  });
+
+  final SessionModelCatalog catalog;
+  final bool modelEnabled;
+  final bool effortEnabled;
+  final String? modelBlockedReason;
+  final String? effortBlockedReason;
+  final Future<SessionModelCatalogRefresh> Function() onRefresh;
+  final Future<String?> Function(String model) onSelectModel;
+  final Future<String?> Function(String effort) onSelectEffort;
+
+  @override
+  State<_SessionModelPickerSheet> createState() =>
+      _SessionModelPickerSheetState();
+}
+
+class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
+  late SessionModelCatalog _catalog;
+  bool _loading = true;
+  bool _selectionBusy = false;
+  String? _catalogError;
+  String? _selectionError;
+
+  @override
+  void initState() {
+    super.initState();
+    _catalog = widget.catalog;
+    // The sheet mounts during the route transition. Defer the controller refresh
+    // until the first frame so Riverpod listeners are not notified during build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_reload());
+    });
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _catalogError = null;
+      _selectionError = null;
+    });
+    try {
+      final refresh = await widget.onRefresh();
+      if (!mounted) return;
+      setState(() {
+        _catalog = refresh.catalog;
+        _catalogError = refresh.error;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _catalogError = '模型目录暂时不可用，请重试。';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _selectModel(String model) async {
+    if (_selectionBusy || !widget.modelEnabled) return;
+    if (model == _catalog.model) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _selectionBusy = true;
+      _selectionError = null;
+    });
+    final error = await widget.onSelectModel(model);
+    if (!mounted) return;
+    if (error == null) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _selectionBusy = false;
+      _selectionError = error;
+    });
+  }
+
+  Future<void> _selectEffort(String effort) async {
+    if (_selectionBusy || !widget.effortEnabled) return;
+    if (effort == _catalog.effort) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _selectionBusy = true;
+      _selectionError = null;
+    });
+    final error = await widget.onSelectEffort(effort);
+    if (!mounted) return;
+    if (error == null) {
+      Navigator.of(context).pop();
+      return;
+    }
+    setState(() {
+      _selectionBusy = false;
+      _selectionError = error;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return FractionallySizedBox(
+      heightFactor: 0.7,
+      child: Material(
+        key: const Key('session-model-selection-sheet'),
+        color: theme.colorScheme.surface,
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(AppRadius.card),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            Container(
+              width: 32,
+              height: 4,
+              margin: const EdgeInsets.only(top: 8, bottom: 6),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.onSurfaceVariant.withValues(
+                  alpha: 0.4,
+                ),
+                borderRadius: BorderRadius.circular(AppRadius.small),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('模型与推理等级', style: theme.textTheme.titleSmall),
+                  ),
+                  IconButton(
+                    key: const Key('session-model-selection-close'),
+                    tooltip: '关闭模型选择',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close, size: 20),
+                  ),
+                ],
+              ),
+            ),
+            if (_loading)
+              const LinearProgressIndicator(
+                key: Key('session-model-selection-loading'),
+                minHeight: 2,
+              ),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
+                children: [
+                  if (_catalogError != null)
+                    _CatalogNotice(
+                      key: const Key('session-model-selection-catalog-error'),
+                      message: _catalogError!,
+                      actionLabel: '重试',
+                      onAction: _selectionBusy
+                          ? null
+                          : () => unawaited(_reload()),
+                    ),
+                  if (_selectionError != null)
+                    _CatalogNotice(
+                      key: const Key('session-model-selection-error'),
+                      message: _selectionError!,
+                    ),
+                  _PickerSection(
+                    key: const Key('session-model-selection-model-section'),
+                    title: '模型',
+                    options: _catalog.models,
+                    selected: _catalog.model,
+                    optionPrefix: 'session-model-option-',
+                    enabled: widget.modelEnabled,
+                    disabledReason: widget.modelBlockedReason,
+                    selectionBusy: _selectionBusy,
+                    emptyKey: const Key('session-model-empty'),
+                    onSelect: _selectModel,
+                  ),
+                  const Divider(height: 20),
+                  _PickerSection(
+                    key: const Key('session-model-selection-effort-section'),
+                    title: '推理等级',
+                    options: _catalog.efforts,
+                    selected: _catalog.effort,
+                    optionPrefix: 'session-effort-option-',
+                    enabled: widget.effortEnabled,
+                    disabledReason: widget.effortBlockedReason,
+                    selectionBusy: _selectionBusy,
+                    emptyKey: const Key('session-effort-empty'),
+                    onSelect: _selectEffort,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PickerSection extends StatelessWidget {
+  const _PickerSection({
+    required this.title,
+    required this.options,
+    required this.selected,
+    required this.optionPrefix,
+    required this.enabled,
+    required this.disabledReason,
+    required this.selectionBusy,
+    required this.emptyKey,
+    required this.onSelect,
+    super.key,
+  });
+
+  final String title;
+  final List<String> options;
+  final String? selected;
+  final String optionPrefix;
+  final bool enabled;
+  final String? disabledReason;
+  final bool selectionBusy;
+  final Key emptyKey;
+  final Future<void> Function(String value) onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_pane != _SessionModelPane.root)
-          IconButton(
-            key: const Key('session-model-menu-back'),
-            tooltip: '返回模型 seat',
-            onPressed: () => setState(() {
-              _pane = _SessionModelPane.root;
-              _selectionNotice = null;
-            }),
-            icon: const Icon(Icons.arrow_back, size: 18),
-          ),
-        Expanded(
-          child: Text(
-            title,
-            key: Key('session-model-menu-title-${_pane.name}'),
-            style: Theme.of(context).textTheme.labelLarge,
-          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+          child: Text(title, style: theme.textTheme.labelLarge),
         ),
-        IconButton(
-          key: const Key('session-model-menu-close'),
-          tooltip: '关闭模型 seat',
-          onPressed: _close,
-          icon: const Icon(Icons.close, size: 18),
-        ),
+        if (!enabled)
+          Padding(
+            key: Key(
+              'session-model-selection-${title == '模型' ? 'model' : 'effort'}-blocked',
+            ),
+            padding: const EdgeInsets.all(8),
+            child: Text(
+              disabledReason ?? '$title 当前不可用。',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          )
+        else if (options.isEmpty)
+          Padding(
+            key: emptyKey,
+            padding: const EdgeInsets.all(8),
+            child: const Text('当前目录为空，Host 尚未提供可用选项。'),
+          )
+        else
+          for (final option in options)
+            ListTile(
+              key: Key('$optionPrefix$option'),
+              dense: true,
+              enabled: !selectionBusy,
+              leading: Icon(
+                option == selected ? Icons.check_circle : Icons.circle_outlined,
+                size: 18,
+              ),
+              title: Text(option, maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () => unawaited(onSelect(option)),
+            ),
       ],
     );
   }
+}
 
-  Widget _buildCatalogError(BuildContext context) => Container(
-    key: const Key('session-model-menu-error'),
-    margin: const EdgeInsets.only(bottom: 6),
+class _CatalogNotice extends StatelessWidget {
+  const _CatalogNotice({
+    required this.message,
+    this.actionLabel,
+    this.onAction,
+    super.key,
+  });
+
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(bottom: 8),
     padding: const EdgeInsets.all(8),
     color: Theme.of(context).colorScheme.errorContainer,
     child: Row(
       children: [
-        Expanded(child: Text(_catalogError!)),
-        TextButton(
-          key: const Key('session-model-menu-retry'),
-          onPressed: _selectionBusy ? null : () => unawaited(_reloadCatalog()),
-          child: const Text('重试'),
+        Expanded(child: Text(message)),
+        if (actionLabel != null)
+          TextButton(onPressed: onAction, child: Text(actionLabel!)),
+      ],
+    ),
+  );
+}
+
+class _ModelDetailRow extends StatelessWidget {
+  const _ModelDetailRow({required this.label, required this.value, super.key});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 72,
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(value, maxLines: 3, overflow: TextOverflow.ellipsis),
         ),
       ],
     ),
   );
+}
 
-  Widget _buildPane(BuildContext context) {
-    switch (_pane) {
-      case _SessionModelPane.root:
-        return Column(
-          key: const Key('session-model-pane-root'),
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 空目录也要可进入对应 pane，展示“Host 尚未提供可用选项”的空态；
-            // 只有 capability/busy 锁定才禁用整行。
-            _menuRow(
-              key: const Key('session-model-menu-model'),
-              title: '模型',
-              value: widget.model,
-              enabled: !_modelDisabled,
-              onTap: () => setState(() => _pane = _SessionModelPane.model),
-            ),
-            _menuRow(
-              key: const Key('session-model-menu-effort'),
-              title: 'effort',
-              value: widget.effort,
-              enabled: !_effortDisabled,
-              onTap: () => setState(() => _pane = _SessionModelPane.effort),
-            ),
-          ],
-        );
-      case _SessionModelPane.model:
-        return _buildOptions(
-          key: const Key('session-model-pane-model'),
-          emptyKey: const Key('session-model-empty'),
-          options: widget.models,
-          selected: widget.model,
-          optionPrefix: 'session-model-option-',
-          onChoose: _chooseModel,
-        );
-      case _SessionModelPane.effort:
-        return _buildOptions(
-          key: const Key('session-model-pane-effort'),
-          emptyKey: const Key('session-effort-empty'),
-          options: widget.efforts,
-          selected: widget.effort,
-          optionPrefix: 'session-effort-option-',
-          onChoose: _chooseEffort,
-        );
-    }
+String _capabilityDescription(
+  CapabilityEntry capability,
+  String? blockedReason,
+) {
+  final reason = blockedReason?.trim();
+  if (reason != null && reason.isNotEmpty) {
+    return '${capability.availability.label} · $reason';
   }
-
-  Widget _menuRow({
-    required Key key,
-    required String title,
-    required String? value,
-    required bool enabled,
-    required VoidCallback onTap,
-  }) => ListTile(
-    key: key,
-    dense: true,
-    enabled: enabled,
-    title: Text(title),
-    trailing: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(value ?? '不可用'),
-        const SizedBox(width: 4),
-        const Icon(Icons.chevron_right, size: 18),
-      ],
-    ),
-    onTap: enabled ? onTap : null,
-  );
-
-  Widget _buildOptions({
-    required Key key,
-    required Key emptyKey,
-    required List<String> options,
-    required String? selected,
-    required String optionPrefix,
-    required Future<void> Function(String value) onChoose,
-  }) {
-    if (options.isEmpty) {
-      return Padding(
-        key: emptyKey,
-        padding: const EdgeInsets.all(10),
-        child: const Text('当前目录为空，Host 尚未提供可用选项。'),
-      );
-    }
-    return Column(
-      key: key,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        for (final option in options)
-          ListTile(
-            key: Key('$optionPrefix$option'),
-            dense: true,
-            enabled: !_selectionBusy,
-            leading: Icon(
-              option == selected ? Icons.check : Icons.circle_outlined,
-              size: 18,
-            ),
-            title: Text(option),
-            onTap: () => unawaited(onChoose(option)),
-          ),
-      ],
-    );
+  final declaredReason = capability.reason?.trim();
+  if (declaredReason != null && declaredReason.isNotEmpty) {
+    return '${capability.availability.label} · $declaredReason';
   }
+  return capability.availability.label;
+}
+
+IconData _providerIcon(String? provider) {
+  return switch (provider?.toLowerCase()) {
+    'codex' => Icons.auto_awesome,
+    'claude' => Icons.psychology_outlined,
+    'opencode' => Icons.terminal_outlined,
+    'dsh' => Icons.hub_outlined,
+    _ => Icons.smart_toy_outlined,
+  };
 }

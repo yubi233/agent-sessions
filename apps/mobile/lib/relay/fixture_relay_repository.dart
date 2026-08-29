@@ -43,6 +43,17 @@ class FixtureRelayRepository implements RelayRepository {
   /// 仅供 deterministic fixture 控制器注入时钟；生产 Relay 不暴露该能力。
   DateTime fixtureNow() => _clock();
 
+  /// 视觉/测试专用：改写会话的最后活动时间，模拟历史会话的休眠衰减与排序。
+  /// 真实 Relay 的 last_activity 只由状态/事件写入推导，不提供改写入口。
+  void seedSessionActivity({
+    required String sessionId,
+    required DateTime lastActivityAt,
+  }) {
+    final state = _sessions[sessionId];
+    if (state == null) return;
+    state.session = state.session.copyWith(lastActivityAt: lastActivityAt);
+  }
+
   /// v0.3/P1：置为 true 模拟「Provider 探测失败」——能力矩阵 available=false 且带中文原因，
   /// 用于验证状态条 fail-closed 展示（MOBILE-13）。
   bool providersUnavailable = false;
@@ -328,11 +339,26 @@ class FixtureRelayRepository implements RelayRepository {
   @override
   Future<List<MobileSession>> listSessions() async {
     _requireFixtureNetwork();
-    final sessions = _sessions.values.map((state) => state.session).toList();
+    final sessions = _sessions.values
+        .map((state) => state.session)
+        .where((session) => session.archivedAt == null)
+        .toList();
+    sessions.sort(MobileSession.compareByLastActivity);
+    return List<MobileSession>.unmodifiable(sessions);
+  }
+
+  @override
+  Future<List<MobileSession>> listArchivedSessions() async {
+    _requireFixtureNetwork();
+    final sessions = _sessions.values
+        .map((state) => state.session)
+        .where((session) => session.archivedAt != null)
+        .toList();
     sessions.sort((left, right) {
-      final leftTime = left.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final leftTime =
+          left.archivedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
       final rightTime =
-          right.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          right.archivedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
       return rightTime.compareTo(leftTime);
     });
     return List<MobileSession>.unmodifiable(sessions);
@@ -423,6 +449,7 @@ class FixtureRelayRepository implements RelayRepository {
       projectName: 'Fixture Project',
       workspaceName: input.workspaceId.trim(),
       updatedAt: _clock(),
+      lastActivityAt: _clock(),
       agentPresetId: input.agentPresetId?.trim(),
     );
     _workspaces.putIfAbsent(
@@ -478,6 +505,7 @@ class FixtureRelayRepository implements RelayRepository {
       projectName: parent.session.projectName,
       workspaceName: parent.session.workspaceName,
       updatedAt: _clock(),
+      lastActivityAt: _clock(),
       parentSessionId: parent.session.id,
       forkedFromMessageId: input.messageId,
       agentPresetId: parent.session.agentPresetId,
@@ -511,6 +539,26 @@ class FixtureRelayRepository implements RelayRepository {
     _sessions[id] = childState;
     _forkIdsByParentKey[forkKey] = id;
     return childState.session;
+  }
+
+  @override
+  Future<MobileSession> archiveSession(String sessionId) async {
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final state = _sessionState(sessionId);
+    if (state.session.archivedAt != null) return state.session;
+    state.session = state.session.copyWith(archivedAt: _clock());
+    return state.session;
+  }
+
+  @override
+  Future<MobileSession> unarchiveSession(String sessionId) async {
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final state = _sessionState(sessionId);
+    if (state.session.archivedAt == null) return state.session;
+    state.session = state.session.copyWith(clearArchivedAt: true);
+    return state.session;
   }
 
   @override
@@ -1782,14 +1830,22 @@ class _FixtureSessionState {
         envelope: {'fixture_payload': payload},
       ),
     );
-    session = session.copyWith(lastSequence: sequence, updatedAt: now);
+    session = session.copyWith(
+      lastSequence: sequence,
+      updatedAt: now,
+      lastActivityAt: now,
+    );
   }
 
   void updateSession({
     required MobileSessionStatus status,
     required DateTime now,
   }) {
-    session = session.copyWith(status: status, updatedAt: now);
+    session = session.copyWith(
+      status: status,
+      updatedAt: now,
+      lastActivityAt: now,
+    );
   }
 }
 

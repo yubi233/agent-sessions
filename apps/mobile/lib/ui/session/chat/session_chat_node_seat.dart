@@ -115,9 +115,9 @@ class _ChatBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final background = user
-        ? const Color(0xffffefb0)
+        ? scheme.primaryContainer
         : scheme.surfaceContainerHigh;
-    final foreground = user ? const Color(0xff1d1d1f) : scheme.onSurface;
+    final foreground = user ? scheme.onPrimaryContainer : scheme.onSurface;
     return Align(
       alignment: user ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
@@ -132,7 +132,17 @@ class _ChatBubble extends StatelessWidget {
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: background,
-                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: user
+                      ? scheme.primary.withValues(alpha: 0.22)
+                      : scheme.outlineVariant,
+                ),
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(12),
+                  topRight: const Radius.circular(12),
+                  bottomLeft: Radius.circular(user ? 12 : 4),
+                  bottomRight: Radius.circular(user ? 4 : 12),
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,

@@ -175,8 +175,8 @@ class SessionRecoveryController extends ChangeNotifier {
       _phase = SessionRecoveryPhase.recovered;
       _recoveryPending = false;
       _message = recovery.addedEventCount == 0
-          ? '会话已恢复，没有遗漏事件。'
-          : '会话已补齐 ${recovery.addedEventCount} 条新事件。';
+          ? '会话已同步，没有遗漏事件。'
+          : '已同步 ${recovery.addedEventCount} 条新事件。';
       if (recovery.addedEventCount > 0) {
         _noticeSequence += 1;
         final notice = InAppRecoveryNotice(

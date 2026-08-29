@@ -175,6 +175,9 @@ abstract final class AppTheme {
           onTertiary: const Color(0xff1d1d1f),
           surface: surface,
           onSurface: primaryText,
+          surfaceContainerLowest: canvas,
+          surfaceContainerLow: surface,
+          surfaceContainer: surface,
           surfaceContainerHigh: surfaceRaised,
           surfaceContainerHighest: surfaceRaised,
           outline: border,
@@ -263,6 +266,13 @@ abstract final class AppTheme {
         surfaceTintColor: Colors.transparent,
         centerTitle: true,
         toolbarHeight: 60,
+      ),
+      cardTheme: CardThemeData(
+        color: surface,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        surfaceTintColor: Colors.transparent,
+        shape: shape,
       ),
       dividerTheme: DividerThemeData(color: border, space: 1, thickness: 1),
       inputDecorationTheme: InputDecorationTheme(

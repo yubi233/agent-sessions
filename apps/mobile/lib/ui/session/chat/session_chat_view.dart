@@ -343,8 +343,12 @@ class _FileOpenStatus extends StatelessWidget {
   final String path;
 
   @override
-  Widget build(BuildContext context) => Card(
+  Widget build(BuildContext context) => Container(
     key: const Key('session-file-open-busy'),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(8),
+    ),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(

@@ -17,14 +17,20 @@ class HttpRelayRepository implements RelayRepository {
   HttpRelayRepository({
     required Dio dio,
     required Future<AuthTokens?> Function() readTokens,
+    Future<void> Function(AuthTokens tokens)? writeTokens,
     DateTime Function()? clock,
-  }) : this._(dio, readTokens, clock ?? DateTime.now);
+  }) : this._(dio, readTokens, clock ?? DateTime.now, writeTokens);
 
-  HttpRelayRepository._(this._dio, this._readTokens, this._clock);
+  HttpRelayRepository._(this._dio, this._readTokens, this._clock, this._writeTokens);
 
   final Dio _dio;
   final Future<AuthTokens?> Function() _readTokens;
   final DateTime Function() _clock;
+  final Future<void> Function(AuthTokens tokens)? _writeTokens;
+
+  /// 并发的多个 401 共享同一次在途刷新：refresh token 是旋转的单次凭证，
+  /// 重复使用会触发 Relay 的 reuse 撤销，把整个令牌族作废。
+  Future<AuthTokens?>? _refreshInFlight;
 
   @override
   Future<DeviceBootstrapResult> bootstrapDevice(
@@ -250,6 +256,18 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<List<MobileSession>> listArchivedSessions() async {
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/sessions?archived=true',
+    );
+    return _asList(
+      response.data,
+      wrappedKey: 'sessions',
+    ).map(MobileSession.fromRelayJson).toList(growable: false);
+  }
+
+  @override
   Future<List<MobileWorkspace>> listWorkspaces() async {
     final response = await _authenticatedSend('GET', '/v1/workspaces');
     return _asList(
@@ -349,6 +367,30 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<MobileSession> archiveSession(String sessionId) async {
+    if (sessionId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '会话标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/sessions/$sessionId/archive',
+    );
+    return MobileSession.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<MobileSession> unarchiveSession(String sessionId) async {
+    if (sessionId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '会话标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/sessions/$sessionId/unarchive',
+    );
+    return MobileSession.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
@@ -410,7 +452,8 @@ class HttpRelayRepository implements RelayRepository {
     String sessionId,
     Map<String, dynamic>? ciphertext,
   ) {
-    final inner = (ciphertext?['fixture_payload'] as Map<String, dynamic>?) ??
+    final inner =
+        (ciphertext?['fixture_payload'] as Map<String, dynamic>?) ??
         const <String, dynamic>{};
     return <String, dynamic>{
       'session_id': sessionId,
@@ -683,12 +726,41 @@ class HttpRelayRepository implements RelayRepository {
     );
   }
 
+  /// owner access token 只有 15 分钟 TTL；App 长时间闲置后的首个请求会撞 401。
+  /// 用 refresh token 换新并重放一次；刷新失败才按未授权收敛，交给会话恢复流程。
+  Future<AuthTokens?> _refreshTokensOnce() {
+    final existing = _refreshInFlight;
+    if (existing != null) {
+      return existing;
+    }
+    final task = _refreshStoredTokens();
+    _refreshInFlight = task;
+    return task.whenComplete(() => _refreshInFlight = null);
+  }
+
+  Future<AuthTokens?> _refreshStoredTokens() async {
+    final stored = await _readTokens();
+    if (stored == null) {
+      return null;
+    }
+    try {
+      final refreshed = await refresh(stored.refreshToken);
+      // 新 token（含旋转后的 refresh token）必须立刻持久化，否则下一次刷新
+      // 会携带已被轮换的旧 refresh token，触发 reuse 撤销。
+      await _writeTokens?.call(refreshed);
+      return refreshed;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<Response<dynamic>> _send(
     String method,
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
     String? accessToken,
+    bool allowAuthRefresh = true,
   }) async {
     try {
       return await _dio.request<dynamic>(
@@ -704,6 +776,19 @@ class HttpRelayRepository implements RelayRepository {
       );
     } on DioException catch (error) {
       final status = error.response?.statusCode;
+      if (status == 401 && accessToken != null && allowAuthRefresh) {
+        final refreshed = await _refreshTokensOnce();
+        if (refreshed != null) {
+          return _send(
+            method,
+            path,
+            data: data,
+            queryParameters: queryParameters,
+            accessToken: refreshed.accessToken,
+            allowAuthRefresh: false,
+          );
+        }
+      }
       throw switch (status) {
         401 => const RelayFailure(
           RelayFailureKind.unauthorized,

@@ -43,10 +43,12 @@ class MobileSession {
     this.projectName,
     this.workspaceName,
     this.updatedAt,
+    this.lastActivityAt,
     this.parentSessionId,
     this.forkedFromMessageId,
     this.agentPresetId,
     this.subagentReadOnlyReason,
+    this.archivedAt,
   });
 
   factory MobileSession.fromRelayJson(Map<String, dynamic> json) =>
@@ -63,12 +65,16 @@ class MobileSession {
         projectName: _nullableString(json['project_name']),
         workspaceName: _nullableString(json['workspace_name']),
         updatedAt: _nullableDateTime(json['updated_at']),
+        lastActivityAt: _nullableDateTimeFromMillis(
+          json['last_activity_at_unix_ms'],
+        ),
         parentSessionId: _nullableString(json['parent_session_id']),
         forkedFromMessageId: _nullableString(json['forked_from_message_id']),
         agentPresetId: _nullableString(json['agent_preset_id']),
         subagentReadOnlyReason: _nullableString(
           json['subagent_read_only_reason'],
         ),
+        archivedAt: _nullableDateTimeFromMillis(json['archived_at_unix_ms']),
       );
 
   final String id;
@@ -82,12 +88,22 @@ class MobileSession {
   final String? workspaceName;
   final DateTime? updatedAt;
 
+  /// Relay 最后一次状态/事件写入的活动时间（`last_activity_at_unix_ms`）。
+  /// 「最后消息时间」展示、列表排序与 idle 休眠衰减都只消费它；null 表示
+  /// 旧数据未知，排序沉底、展示按休眠处理。
+  final DateTime? lastActivityAt;
+
   /// Optional display projections. Production Relay may omit them; the UI must
   /// then keep the related header/composer seats unavailable.
   final String? parentSessionId;
   final String? forkedFromMessageId;
   final String? agentPresetId;
   final String? subagentReadOnlyReason;
+
+  /// 归档时间；非 null 表示该会话已从默认列表隐藏，但数据和事件仍保留。
+  final DateTime? archivedAt;
+
+  bool get isArchived => archivedAt != null;
 
   String get title => displayName?.trim().isNotEmpty == true
       ? displayName!.trim()
@@ -97,6 +113,34 @@ class MobileSession {
       ? workspaceName!.trim()
       : workspaceId;
 
+  /// 最近活动时间戳：优先 Relay last_activity，退到本地 updatedAt；都缺失按 0。
+  int get _activityEpochMS =>
+      (lastActivityAt ?? updatedAt)?.millisecondsSinceEpoch ?? 0;
+
+  /// idle 会话在最后活动超过 10 分钟后视为「休眠」：本地开发里历史 idle 会话
+  /// 几乎永远存在，不能把「完成且陈旧」继续当作在线。活动时间未知（旧数据/
+  /// 旧 Relay）同样视为休眠——「在线」只能由确凿的新近活动支撑。
+  static const dormantAfter = Duration(minutes: 10);
+
+  bool isDormant({DateTime? now}) {
+    if (status != MobileSessionStatus.idle) return false;
+    final last = lastActivityAt ?? updatedAt;
+    if (last == null) return true;
+    return (now ?? DateTime.now()).difference(last).abs() > dormantAfter;
+  }
+
+  /// 稳定排序：最后活动时间降序（未知沉底）；同时间按 lastSequence 降序，再按 id
+  /// 字典序，避免刷新跳项。会话列表与最近会话页共用。
+  static int compareByLastActivity(MobileSession left, MobileSession right) {
+    final leftMS = left._activityEpochMS;
+    final rightMS = right._activityEpochMS;
+    if (leftMS != rightMS) return rightMS.compareTo(leftMS);
+    if (left.lastSequence != right.lastSequence) {
+      return right.lastSequence.compareTo(left.lastSequence);
+    }
+    return left.id.compareTo(right.id);
+  }
+
   MobileSession copyWith({
     MobileSessionStatus? status,
     int? lastSequence,
@@ -105,10 +149,13 @@ class MobileSession {
     String? projectName,
     String? workspaceName,
     DateTime? updatedAt,
+    DateTime? lastActivityAt,
     String? parentSessionId,
     String? forkedFromMessageId,
     String? agentPresetId,
     String? subagentReadOnlyReason,
+    DateTime? archivedAt,
+    bool clearArchivedAt = false,
   }) => MobileSession(
     id: id,
     workspaceId: workspaceId,
@@ -120,11 +167,13 @@ class MobileSession {
     projectName: projectName ?? this.projectName,
     workspaceName: workspaceName ?? this.workspaceName,
     updatedAt: updatedAt ?? this.updatedAt,
+    lastActivityAt: lastActivityAt ?? this.lastActivityAt,
     parentSessionId: parentSessionId ?? this.parentSessionId,
     forkedFromMessageId: forkedFromMessageId ?? this.forkedFromMessageId,
     agentPresetId: agentPresetId ?? this.agentPresetId,
     subagentReadOnlyReason:
         subagentReadOnlyReason ?? this.subagentReadOnlyReason,
+    archivedAt: clearArchivedAt ? null : (archivedAt ?? this.archivedAt),
   );
 }
 

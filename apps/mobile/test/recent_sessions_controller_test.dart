@@ -196,6 +196,120 @@ void main() {
       expect(firstLoad.isEmpty, isTrue);
     });
   });
+
+  group('MOBILE-V06-ARCHIVE 已归档视图与恢复入口', () {
+    test('默认列表隐藏归档会话；归档视图可见并可 unarchive 恢复', () async {
+      final relay = FixtureRelayRepository(clock: () => now);
+      await bootstrapFixtureOwner(relay);
+      final kept = await relay.createSession(_sessionInput('workspace-keep'));
+      final archived = await relay.createSession(
+        _sessionInput('workspace-archived'),
+      );
+      await relay.archiveSession(archived.id);
+
+      final controller = RecentSessionsController(relay: relay);
+      await controller.initialize();
+
+      // 默认列表只含未归档会话。
+      expect(controller.isArchivedView, isFalse);
+      expect(controller.sessions.map((session) => session.id), [kept.id]);
+
+      // 切换到归档视图：只含已归档会话。
+      await controller.switchView(RecentSessionsView.archived);
+      expect(controller.isArchivedView, isTrue);
+      expect(controller.phase, RecentSessionsPhase.ready);
+      expect(controller.sessions.map((session) => session.id), [archived.id]);
+
+      // unarchive 从归档视图移除，会话回到默认列表。
+      expect(await controller.unarchiveSession(archived.id), isTrue);
+      expect(controller.sessions, isEmpty);
+      await controller.switchView(RecentSessionsView.recent);
+      expect(controller.sessions.map((session) => session.id).toList(), [
+        kept.id,
+        archived.id,
+      ]);
+    });
+  });
+
+  group('MOBILE-V06-ACTIVITY 最后活动时间排序与休眠衰减', () {
+    final base = DateTime.utc(2026, 8, 28, 10);
+
+    MobileSession sessionWithActivity(
+      String id, {
+      DateTime? lastActivityAt,
+      String status = 'idle',
+      int lastSequence = 1,
+    }) => MobileSession.fromRelayJson({
+      'id': id,
+      'workspace_id': 'ws',
+      'status': status,
+      'provider': 'opencode',
+      'last_seq': lastSequence,
+      if (lastActivityAt != null)
+        'last_activity_at_unix_ms': lastActivityAt.millisecondsSinceEpoch,
+    });
+
+    test('fromRelayJson 解析 last_activity_at_unix_ms', () {
+      final session = sessionWithActivity('s', lastActivityAt: base);
+      expect(session.lastActivityAt, base);
+      expect(sessionWithActivity('s').lastActivityAt, isNull);
+    });
+
+    test('排序按最后活动时间降序；未知活动时间沉底，last_seq 不能反超', () {
+      final fresh = sessionWithActivity(
+        'sess-fresh',
+        lastActivityAt: base,
+        lastSequence: 1,
+      );
+      final stale = sessionWithActivity(
+        'sess-stale',
+        lastActivityAt: base.subtract(const Duration(hours: 2)),
+        lastSequence: 99,
+      );
+      final unknown = sessionWithActivity('sess-unknown', lastSequence: 42);
+      final sorted = [unknown, stale, fresh]
+        ..sort(MobileSession.compareByLastActivity);
+      expect(sorted.map((session) => session.id).toList(), [
+        'sess-fresh',
+        'sess-stale',
+        'sess-unknown',
+      ]);
+    });
+
+    test('idle 超过 10 分钟或活动未知即休眠；非 idle 不衰减', () {
+      expect(
+        sessionWithActivity(
+          's',
+          lastActivityAt: base.subtract(const Duration(minutes: 5)),
+        ).isDormant(now: base),
+        isFalse,
+      );
+      expect(
+        sessionWithActivity(
+          's',
+          lastActivityAt: base.subtract(const Duration(minutes: 11)),
+        ).isDormant(now: base),
+        isTrue,
+      );
+      expect(sessionWithActivity('s').isDormant(now: base), isTrue);
+      expect(
+        sessionWithActivity(
+          's',
+          lastActivityAt: base.subtract(const Duration(hours: 9)),
+          status: 'streaming',
+        ).isDormant(now: base),
+        isFalse,
+      );
+      expect(
+        sessionWithActivity(
+          's',
+          lastActivityAt: base.subtract(const Duration(hours: 9)),
+          status: 'stopped',
+        ).isDormant(now: base),
+        isFalse,
+      );
+    });
+  });
 }
 
 MobileSession _session(
@@ -229,6 +343,10 @@ class _ListOverridingRelay implements RelayRepository {
   List<MobileSession> Function()? listOverride;
 
   @override
+  Future<List<MobileSession>> listArchivedSessions() =>
+      _delegate.listArchivedSessions();
+
+  @override
   Future<UsageSummary> getUsageSummary({int days = 30}) =>
       _delegate.getUsageSummary(days: days);
 
@@ -246,6 +364,15 @@ class _ListOverridingRelay implements RelayRepository {
   @override
   Future<MobileWorkspace> createWorkspace(CreateMobileWorkspaceInput input) =>
       _delegate.createWorkspace(input);
+
+  @override
+  Future<WorkspaceCreateState> createWorkspaceWithFolder(
+    CreateMobileWorkspaceWithFolderInput input,
+  ) => _delegate.createWorkspaceWithFolder(input);
+
+  @override
+  Future<WorkspaceCreateState> getWorkspaceCreateState(String commandId) =>
+      _delegate.getWorkspaceCreateState(commandId);
 
   @override
   Future<AuthTokens> register(LoginCredentials credentials) =>
@@ -310,6 +437,14 @@ class _ListOverridingRelay implements RelayRepository {
   @override
   Future<MobileSession> forkSession(String sessionId, SessionForkInput input) =>
       _delegate.forkSession(sessionId, input);
+
+  @override
+  Future<MobileSession> archiveSession(String sessionId) =>
+      _delegate.archiveSession(sessionId);
+
+  @override
+  Future<MobileSession> unarchiveSession(String sessionId) =>
+      _delegate.unarchiveSession(sessionId);
 
   @override
   Future<SessionSnapshot> getSessionSnapshot(

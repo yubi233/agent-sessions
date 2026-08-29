@@ -47,6 +47,7 @@ void main() {
     expect(find.text('No messages yet'), findsOneWidget);
     expect(find.text('输入消息...'), findsOneWidget);
     expect(find.byKey(const Key('happy-session-model-row')), findsOneWidget);
+    expect(find.byKey(const Key('session-model-seat-trigger')), findsOneWidget);
     expect(find.textContaining('邮箱'), findsNothing);
     expect(find.textContaining('密码'), findsNothing);
     expect(
@@ -195,7 +196,9 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-07：快捷菜单展示详情/恢复/文件/归档，capability 驱动禁用', (tester) async {
+  testWidgets('MOBILE-07：快捷菜单展示详情/恢复/文件/归档，capability 驱动禁用与本地归档可用', (
+    tester,
+  ) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await _waitForVisible(
@@ -236,9 +239,17 @@ void main() {
           .enabled,
       isFalse,
     );
-    // fork/archive 未声明能力：入口禁用并说明原因。
+    // fork 仍按 Provider capability fail-closed；归档是本地元数据操作，不依赖 Provider。
     await _waitForVisible(tester, find.text('Provider 未声明 fork 能力'));
-    await _waitForVisible(tester, find.text('Provider 未声明归档能力'));
+    await _waitForVisible(tester, find.text('从列表隐藏，数据仍保留'));
+    expect(
+      tester
+          .widget<PopupMenuItem<String>>(
+            find.byKey(const Key('session-quick-archive')),
+          )
+          .enabled,
+      isTrue,
+    );
     // 关闭菜单（点遮罩并多帧推进）。
     await _tapAway(tester);
 
@@ -2401,7 +2412,9 @@ void main() {
     );
     expect(clipboardValues, [sessionId, 'codex']);
   });
-  testWidgets('ADPT-DSH-11/P3：新建会话页展示 DeepSeek Harness 且 fixture 下可创建 dsh 会话', (tester) async {
+  testWidgets('ADPT-DSH-11/P3：新建会话页展示 DeepSeek Harness 且 fixture 下可创建 dsh 会话', (
+    tester,
+  ) async {
     final harness = MobileAppHarness();
     await tester.pumpWidget(harness.build());
     await _waitForVisible(

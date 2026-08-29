@@ -18,11 +18,20 @@ void main() {
       expect(fixture!.scenario, LocalVisualScenario.sessionList);
       expect(fixture.sessionId, isNotNull);
       final sessions = await fixture.relay.listSessions();
-      expect(sessions, hasLength(2));
+      expect(sessions, hasLength(3));
       expect(
         sessions.any(
           (session) => session.status == MobileSessionStatus.streaming,
         ),
+        isTrue,
+      );
+      // 列表按最后活动时间排序：刚刚活跃的流式主会话在最前，两个休眠会话按
+      // 陈旧度（2 小时前、3 天前）依次沉底。
+      expect(sessions.first.status, MobileSessionStatus.streaming);
+      expect(sessions[1].isDormant(), isTrue);
+      expect(sessions[2].isDormant(), isTrue);
+      expect(
+        sessions[1].lastActivityAt!.isAfter(sessions[2].lastActivityAt!),
         isTrue,
       );
       expect(

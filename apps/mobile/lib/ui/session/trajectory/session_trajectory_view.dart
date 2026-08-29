@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../../../domain/session_projection_models.dart';
 import '../../../state/session_view_controller.dart';
+import '../../app_theme.dart';
 
 class SessionTrajectoryView extends StatefulWidget {
   const SessionTrajectoryView({
@@ -709,13 +710,11 @@ class _TrajectoryTimelineState extends State<_TrajectoryTimeline> {
                 child: Container(
                   height: 36,
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest.withValues(
-                      alpha: 0.45,
-                    ),
-                    borderRadius: BorderRadius.circular(6),
+                    color: theme.colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(AppRadius.card),
                   ),
                   child: ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(AppRadius.card),
                     child: Stack(
                       children: [
                         if (widget.rangeActive)

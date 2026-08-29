@@ -54,6 +54,13 @@ class SessionController extends ChangeNotifier {
   SessionLease? _selectedLease;
   CapabilityMatrix _capabilities = CapabilityMatrix.empty;
   SessionControlState _controls = const SessionControlState.empty();
+
+  /// 已提交但 canonical user.message 事件尚未回传的出站文本。
+  /// 非空时 Chat 时间线尾部渲染乐观回显气泡；规范化事件合并后立即清账。
+  String? _pendingOutgoingMessage;
+
+  /// 发送后尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
+  String? get pendingOutgoingMessage => _pendingOutgoingMessage;
   SkillConfirmation? _skillConfirmation;
   List<AttachmentTransfer> _attachments = const [];
   List<AttachmentRejection> _attachmentRejections = const [];
@@ -162,7 +169,9 @@ class SessionController extends ChangeNotifier {
     _phase = SessionListPhase.loading;
     notifyListeners();
     try {
-      _sessions = await _relay.listSessions();
+      final loaded = await _relay.listSessions();
+      // 按最后活动时间稳定排序（服务端同样排序，这里兜底合并/刷新路径）。
+      _sessions = [...loaded]..sort(MobileSession.compareByLastActivity);
       _phase = SessionListPhase.ready;
       if (_selectedSessionId != null &&
           _sessionById(_selectedSessionId) == null) {
@@ -478,6 +487,44 @@ class SessionController extends ChangeNotifier {
   Future<void> selectSession(String sessionId) =>
       _loadSelectedSession(sessionId);
 
+  /// 归档当前会话：数据保留，仅从默认列表隐藏。
+  Future<bool> archiveSelectedSession({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null ||
+        !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
+      return false;
+    }
+    final archived = await _runAction<MobileSession?>(
+      'archive-session:$sessionId',
+      () => _relay.archiveSession(sessionId),
+    );
+    if (archived == null) return false;
+    await refreshSessions();
+    return _sessionById(sessionId) == null;
+  }
+
+  /// 取消归档当前会话；仅用于已归档会话列表的恢复入口。
+  Future<bool> unarchiveSelectedSession({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null ||
+        !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
+      return false;
+    }
+    final restored = await _runAction<MobileSession?>(
+      'unarchive-session:$sessionId',
+      () => _relay.unarchiveSession(sessionId),
+    );
+    if (restored == null) return false;
+    await refreshSessions();
+    return _sessionById(sessionId) != null;
+  }
+
   Future<void> loadOlderHistory() async {
     final sessionId = _selectedSessionId;
     if (sessionId == null || _historyLoading) return;
@@ -641,15 +688,28 @@ class SessionController extends ChangeNotifier {
     // 同一条待发送内容重试复用幂等键；成功后的新输入会生成新的 action key。
     final operation =
         'send:$sessionId:${selectedSession?.lastSequence ?? 0}:$trimmed';
-    await _submitCommand(
+    // 与模型选择器同源：空模型会让 opencode 服务端回退到它的配置默认，
+    // 可能命中付费订阅条目，所以发送时必须携带当前生效模型。
+    final sessionModel = _controls.model ?? _controls.defaultModel ?? '';
+    // 乐观回显：不等 daemon 事件回传，先在本地挂出待确认的用户气泡。
+    _pendingOutgoingMessage = trimmed;
+    notifyListeners();
+    final accepted = await _submitCommand(
       sessionId: sessionId,
       operation: operation,
       kind: SessionCommandKind.send,
       deviceId: deviceId!,
       ciphertext: {
-        'fixture_payload': {'message': trimmed},
+        'fixture_payload': {
+          'message': trimmed,
+          if (sessionModel.isNotEmpty) 'model': sessionModel,
+        },
       },
     );
+    if (!accepted && _pendingOutgoingMessage == trimmed) {
+      _pendingOutgoingMessage = null;
+      notifyListeners();
+    }
     // 发送成功后清除草稿，避免页面重建时把已发送内容重新填回输入框。
     clearComposerDraft(sessionId);
   }
@@ -1313,7 +1373,10 @@ class SessionController extends ChangeNotifier {
       return;
     }
     final controls = _controls;
-    if (!controls.models.contains(model)) {
+    final declaredModels = controls.models.isNotEmpty
+        ? controls.models
+        : selectedProviderCapabilities.optionsFor('model_select');
+    if (!declaredModels.contains(model)) {
       _setError('目标模型不在当前目录中。');
       return;
     }
@@ -1613,21 +1676,75 @@ class SessionController extends ChangeNotifier {
       );
       await _relay.submitSessionCommand(sessionId, command);
       onAccepted?.call();
-      final snapshot = await _relay.getSessionSnapshot(sessionId);
-      if (_selectedSessionId == sessionId) _mergeSnapshot(snapshot);
+      // 提交后模型需要数秒才产出事件；首次拉取时 message.completed 多半尚未落库。
+      // 每一批都合并，直到明确的 completed_turn 或非 streaming 状态到达，
+      // 否则只合并第一批会把回复显示出来却遗留“生成中”状态。
+      var latest = await _relay.getSessionSnapshot(sessionId);
+      if (_selectedSessionId == sessionId) _mergeSnapshot(latest);
+      var completed = _snapshotCompletesTurn(latest);
+      if (kind == SessionCommandKind.send && !completed) {
+        const attempts = 30;
+        for (var i = 0; i < attempts; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          latest = await _relay.getSessionSnapshot(
+            sessionId,
+            afterSequence: latest.session.lastSequence,
+          );
+          if (_selectedSessionId == sessionId && latest.events.isNotEmpty) {
+            _mergeSnapshot(latest, appendTimeline: true);
+          }
+          completed = _snapshotCompletesTurn(latest);
+          if (completed) break;
+        }
+      }
+      if (kind == SessionCommandKind.send && completed) {
+        try {
+          final controls = await _relay.getSessionControls(sessionId);
+          if (_selectedSessionId == sessionId) {
+            _controls = controls;
+            notifyListeners();
+          }
+        } catch (_) {
+          // A usage projection can lag the event upload. The next snapshot/recovery
+          // will retry controls without turning a successful send into an error.
+        }
+      }
       return true;
     });
     return accepted == true;
   }
 
+  bool _snapshotCompletesTurn(SessionSnapshot snapshot) {
+    if (snapshot.session.status != MobileSessionStatus.streaming) return true;
+    final events = snapshot.events
+        .map(SessionTimelineEvent.fromRelayEvent)
+        .toList(growable: false);
+    // Fixture turns deliberately pause at permission/question waits. They are
+    // no longer generating from the user's perspective, so do not hold the
+    // command poll open while preserving the pending interaction UI.
+    if (events.any(
+      (event) =>
+          (event.permission != null && event.permission!.resolved != true) ||
+          (event.question != null && event.question!.resolved != true),
+    )) {
+      return true;
+    }
+    return events.any((event) => event.completedTurn);
+  }
+
   void _mergeSnapshot(SessionSnapshot snapshot, {bool appendTimeline = false}) {
-    _sessions = [
-      snapshot.session,
-      ..._sessions.where((item) => item.id != snapshot.session.id),
-    ];
     final incoming = snapshot.events
         .map(SessionTimelineEvent.fromRelayEvent)
         .toList(growable: false);
+    final session =
+        incoming.any((event) => event.completedTurn) &&
+            snapshot.session.status == MobileSessionStatus.streaming
+        ? snapshot.session.copyWith(status: MobileSessionStatus.idle)
+        : snapshot.session;
+    _sessions = [
+      session,
+      ..._sessions.where((item) => item.id != snapshot.session.id),
+    ];
     final priorCursor = _cursorFor(snapshot.session.id);
     final highestIncoming = incoming.fold<int>(
       priorCursor,
@@ -1660,6 +1777,17 @@ class SessionController extends ChangeNotifier {
           }.values.toList()
           ..sort((left, right) => left.sequence.compareTo(right.sequence));
     _timeline = List<SessionTimelineEvent>.unmodifiable(merged);
+    // 规范化 user.message 已合并进时间线时，乐观回显完成使命，立即清账
+    // 避免同一条消息渲染两个气泡。
+    final pending = _pendingOutgoingMessage;
+    if (pending != null &&
+        merged.any(
+          (event) =>
+              event.kind == SessionTimelineKind.userMessage &&
+              event.text == pending,
+        )) {
+      _pendingOutgoingMessage = null;
+    }
   }
 
   int _cursorFor(String? sessionId) {

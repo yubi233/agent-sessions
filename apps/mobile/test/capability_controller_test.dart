@@ -10,6 +10,61 @@ import 'support/fixture_owner.dart';
 
 void main() {
   group('MOBILE-03 MODE-01..03 capability 控制状态机', () {
+    test('V07-02：模型目录与默认值只接受 Host 明确声明的安全选项', () {
+      final parsed = CapabilityMatrix.fromRelayJson({
+        'providers': [
+          {
+            'kind': 'opencode',
+            'version': '1.17.13',
+            'available': true,
+            'capabilities': [
+              {
+                'name': 'model_select',
+                'status': 'native',
+                'options': ['opencode/big-pickle', 'opencode/mimo-v2.5-free'],
+                'default': 'opencode/big-pickle',
+              },
+            ],
+          },
+        ],
+      });
+      final capability = parsed.provider('opencode').capability('model_select');
+      expect(capability.options, [
+        'opencode/big-pickle',
+        'opencode/mimo-v2.5-free',
+      ]);
+      expect(capability.defaultOption, 'opencode/big-pickle');
+      expect(
+        parsed.provider('opencode').defaultOptionFor('model_select'),
+        'opencode/big-pickle',
+      );
+
+      final invalidDefault = CapabilityMatrix.fromRelayJson({
+        'providers': [
+          {
+            'kind': 'opencode',
+            'version': '1.17.13',
+            'available': true,
+            'capabilities': [
+              {
+                'name': 'model_select',
+                'status': 'native',
+                'options': ['opencode/big-pickle'],
+                'default': 'paid/provider-model',
+              },
+            ],
+          },
+        ],
+      });
+      expect(
+        invalidDefault
+            .provider('opencode')
+            .capability('model_select')
+            .defaultOption,
+        isNull,
+      );
+    });
+
     test('未知 capability 状态和能力读取失败均 fail-closed', () async {
       final parsed = CapabilityMatrix.fromRelayJson({
         'providers': [

@@ -149,9 +149,9 @@ class _SessionViewTab extends StatelessWidget {
               // tab 标签挂 labelLarge 角色（15/w600），不再继承环境正文字号。
               child: Text(
                 label,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: color,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: color),
               ),
             ),
             AnimatedContainer(

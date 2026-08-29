@@ -50,6 +50,9 @@ abstract interface class RelayRepository {
   /// 会话列表只返回 Relay 白名单元数据；标题等展示字段只能来自已解密缓存或 deterministic fixture。
   Future<List<MobileSession>> listSessions();
 
+  /// 已归档会话列表；归档读取不触发对账/自动归档 sweep。
+  Future<List<MobileSession>> listArchivedSessions();
+
   /// Workspace list is metadata-only; canonical host roots are intentionally
   /// absent from the response.
   Future<List<MobileWorkspace>> listWorkspaces();
@@ -71,6 +74,12 @@ abstract interface class RelayRepository {
   /// 从已完成 assistant 消息创建 child session。Relay 只返回白名单 lineage 元数据，
   /// 不复制正文、不启动 Provider。
   Future<MobileSession> forkSession(String sessionId, SessionForkInput input);
+
+  /// 归档会话：Relay 本地元数据操作，数据与事件全部保留，仅从默认列表隐藏。
+  Future<MobileSession> archiveSession(String sessionId);
+
+  /// 取消归档，将会话恢复到默认列表。
+  Future<MobileSession> unarchiveSession(String sessionId);
 
   /// 快照保留 Relay 的原始加密 envelope，解密与展示映射由客户端安全边界负责。
   Future<SessionSnapshot> getSessionSnapshot(

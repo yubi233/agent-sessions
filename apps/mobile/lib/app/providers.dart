@@ -82,6 +82,8 @@ final relayRepositoryProvider = Provider<RelayRepository>((ref) {
       ),
     ),
     readTokens: () => ref.read(secureTokenStoreProvider).read(),
+    // 401 自动刷新会把旋转后的 refresh token 写回安全存储，防止 reuse 撤销整族令牌。
+    writeTokens: (tokens) => ref.read(secureTokenStoreProvider).write(tokens),
   );
 });
 

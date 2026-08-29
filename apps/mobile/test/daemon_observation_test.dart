@@ -80,6 +80,7 @@ void main() {
           {
             'event_seq': 1,
             'event_type': 'future.event',
+            'terminal_status': 'future_terminal_status',
             'envelope': {
               'state': 'verified',
               'algorithm': 'future-crypto',
@@ -110,8 +111,35 @@ void main() {
         DaemonObservationEventType.unknown,
       );
       expect(
+        observation.events.single.terminalStatus,
+        DaemonObservationTerminalStatus.unknown,
+      );
+      expect(
         observation.events.single.envelope.state,
         CipherEnvelopeState.opaque,
+      );
+    });
+
+    test('turn.completed 与 terminal_status 映射为安全终态投影', () {
+      final idle = DaemonCipherEventObservation.fromRelayJson({
+        'event_seq': 1,
+        'event_type': 'turn.completed',
+        'terminal_status': 'idle',
+        'envelope': {'state': 'opaque'},
+      });
+      final stopped = DaemonCipherEventObservation.fromRelayJson({
+        'event_seq': 2,
+        'event_type': 'turn.completed',
+        'terminal_status': 'stopped',
+        'envelope': {'state': 'opaque'},
+      });
+
+      expect(idle.eventType, DaemonObservationEventType.turnCompleted);
+      expect(idle.terminalStatus, DaemonObservationTerminalStatus.idle);
+      expect(stopped.terminalStatus, DaemonObservationTerminalStatus.stopped);
+      expect(
+        DaemonObservationEventType.fromWire('user.message'),
+        DaemonObservationEventType.userMessage,
       );
     });
 

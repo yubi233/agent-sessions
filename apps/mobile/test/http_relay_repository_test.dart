@@ -1182,6 +1182,90 @@ void main() {
       );
     });
   });
+
+  group('MOBILE-01 owner access token 过期的 401 自动刷新重放', () {
+    test('首个请求 401 后用 refresh token 换新并重放，新令牌写回存储', () async {
+      final calls = <RequestOptions>[];
+      final written = <AuthTokens>[];
+      var stored = AuthTokens(
+        accessToken: 'access-stale',
+        refreshToken: 'refresh-live',
+        expiresAt: DateTime.utc(2026, 8, 14),
+        deviceId: 'dev_owner',
+      );
+      final adapter = _FixtureHttpAdapter((options) {
+        calls.add(options);
+        if (options.path == '/v1/auth/refresh') {
+          expect(options.data, {'refresh_token': 'refresh-live'});
+          return _jsonResponse({
+            'account_id': 'acct_1',
+            'device_id': 'dev_owner',
+            'access_token': 'access-fresh',
+            'refresh_token': 'refresh-rotated',
+            'expires_in': 900,
+          });
+        }
+        final authorization = options.headers['Authorization'];
+        if (authorization == 'Bearer access-stale') {
+          return _jsonResponse({'error': 'unauthenticated'}, statusCode: 401);
+        }
+        expect(authorization, 'Bearer access-fresh');
+        return _jsonResponse({'devices': []});
+      });
+      final repository = _refreshableRepository(
+        adapter,
+        readTokens: () async => stored,
+        writeTokens: (tokens) async {
+          written.add(tokens);
+          stored = tokens;
+        },
+      );
+
+      final devices = await repository.listDevices();
+
+      expect(devices, isEmpty);
+      expect(
+        calls.map((call) => call.path).toList(),
+        ['/v1/devices', '/v1/auth/refresh', '/v1/devices'],
+      );
+      expect(written.single.accessToken, 'access-fresh');
+      expect(written.single.refreshToken, 'refresh-rotated');
+      // 存储已被更新：后续请求不会携带被轮换的旧 refresh token。
+      expect(stored.refreshToken, 'refresh-rotated');
+    });
+
+    test('刷新也失败时保持未授权语义，且刷新只发生一次', () async {
+      var refreshCalls = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        if (options.path == '/v1/auth/refresh') {
+          refreshCalls += 1;
+          return _jsonResponse({'error': 'token reused'}, statusCode: 401);
+        }
+        return _jsonResponse({'error': 'unauthenticated'}, statusCode: 401);
+      });
+      final repository = _refreshableRepository(
+        adapter,
+        readTokens: () async => AuthTokens(
+          accessToken: 'access-stale',
+          refreshToken: 'refresh-dead',
+          expiresAt: DateTime.utc(2026, 8, 14),
+        ),
+        writeTokens: (_) async {},
+      );
+
+      await expectLater(
+        repository.listDevices(),
+        throwsA(
+          isA<RelayFailure>().having(
+            (failure) => failure.kind,
+            'kind',
+            RelayFailureKind.unauthorized,
+          ),
+        ),
+      );
+      expect(refreshCalls, 1);
+    });
+  });
 }
 
 RecoveryCodeInput _recoveryInput() => const RecoveryCodeInput(
@@ -1200,6 +1284,21 @@ HttpRelayRepository _repository(_FixtureHttpAdapter adapter) {
   return HttpRelayRepository(
     dio: dio,
     readTokens: () async => null,
+    clock: () => DateTime.utc(2026, 8, 14),
+  );
+}
+
+HttpRelayRepository _refreshableRepository(
+  _FixtureHttpAdapter adapter, {
+  required Future<AuthTokens?> Function() readTokens,
+  required Future<void> Function(AuthTokens tokens) writeTokens,
+}) {
+  final dio = Dio(BaseOptions(baseUrl: 'http://relay.fixture'));
+  dio.httpClientAdapter = adapter;
+  return HttpRelayRepository(
+    dio: dio,
+    readTokens: readTokens,
+    writeTokens: writeTokens,
     clock: () => DateTime.utc(2026, 8, 14),
   );
 }

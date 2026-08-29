@@ -337,26 +337,50 @@ class LocalVisualFixture {
         },
       ),
     );
-    await relay.submitSessionCommand(
-      primary.id,
-      SessionCommandInput(
-        kind: SessionCommandKind.send,
-        idempotencyKey: 'visual-${scenario.name}-primary-message',
-        leaseEpoch: lease.epoch,
-        deviceId: ownerDeviceId,
-        ciphertext: const {
-          'fixture_payload': {'message': '请展示本地 fixture 会话的控制状态。'},
-        },
-      ),
-    );
+    // Composer 控件场景必须保持在 idle：fixture send 会故意生成 Question/Approval
+    // 接管面板，导致目标控制条被遮挡，无法提供有效的可见验收证据。
+    if (scenario != LocalVisualScenario.sessionComposerControls) {
+      await relay.submitSessionCommand(
+        primary.id,
+        SessionCommandInput(
+          kind: SessionCommandKind.send,
+          idempotencyKey: 'visual-${scenario.name}-primary-message',
+          leaseEpoch: lease.epoch,
+          deviceId: ownerDeviceId,
+          ciphertext: const {
+            'fixture_payload': {'message': '请展示本地 fixture 会话的控制状态。'},
+          },
+        ),
+      );
+    }
 
     if (scenario == LocalVisualScenario.sessionList) {
-      await relay.createSession(
+      // 列表场景覆盖三种衰减形态：刚刚活跃（在线·刚刚）、2 小时前与 3 天前
+      // （休眠），同时验证列表按最后活动时间排序——新活动在前、陈旧沉底。
+      final dormantHours = await relay.createSession(
         CreateMobileSessionInput(
           workspaceId: 'fixture-review-workspace',
           provider: 'claude',
           deviceId: ownerDeviceId,
         ),
+      );
+      final dormantDays = await relay.createSession(
+        CreateMobileSessionInput(
+          workspaceId: 'fixture-archive-workspace',
+          provider: 'dsh',
+          deviceId: ownerDeviceId,
+        ),
+      );
+      // 视觉 fixture 的时钟是固定的（保证帧确定性）；衰减基准必须用同一时钟，
+      // 否则注入的活动时间会与主会话的固定时间线排序错乱。
+      final now = relay.fixtureNow();
+      relay.seedSessionActivity(
+        sessionId: dormantHours.id,
+        lastActivityAt: now.subtract(const Duration(hours: 2)),
+      );
+      relay.seedSessionActivity(
+        sessionId: dormantDays.id,
+        lastActivityAt: now.subtract(const Duration(days: 3)),
       );
     }
     // 三个 P5 场景都复用真实 fixture repository 的 parent lease 与决策链路，

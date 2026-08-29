@@ -42,7 +42,7 @@ class SessionConversationRoot extends StatelessWidget {
                       child: ConstrainedBox(
                         // v0.5/P1：composer seat 是 sticky 边界；pending 面板或附件增高时只在 seat 内滚动，
                         // 不能把 conversation view 挤到负高度或触发 RenderFlex overflow。
-                        constraints: const BoxConstraints(maxHeight: 240),
+                        constraints: const BoxConstraints(maxHeight: 300),
                         child: SingleChildScrollView(
                           primary: false,
                           child: composer,

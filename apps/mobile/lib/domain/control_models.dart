@@ -26,6 +26,8 @@ class CapabilityEntry {
     required this.name,
     required this.availability,
     this.reason,
+    this.options = const [],
+    this.defaultOption,
   });
 
   factory CapabilityEntry.fromRelayJson(Map<String, dynamic> json) {
@@ -35,6 +37,20 @@ class CapabilityEntry {
     }
     final availability = CapabilityAvailability.fromWire(json['status']);
     final rawReason = json['reason'];
+    final rawOptions = json['options'];
+    final options = rawOptions is List
+        ? rawOptions
+              .whereType<String>()
+              .map((item) => item.trim())
+              .where((item) => item.isNotEmpty)
+              .toSet()
+              .toList(growable: false)
+        : const <String>[];
+    final rawDefault = json['default'];
+    final defaultOption =
+        rawDefault is String && options.contains(rawDefault.trim())
+        ? rawDefault.trim()
+        : null;
     return CapabilityEntry(
       name: name.trim(),
       availability: availability,
@@ -45,12 +61,20 @@ class CapabilityEntry {
                 json['status'] != 'unsupported'
           ? 'Provider 返回了未知能力状态。'
           : null,
+      options: options,
+      defaultOption: defaultOption,
     );
   }
 
   final String name;
   final CapabilityAvailability availability;
   final String? reason;
+
+  /// Host 提供的安全选项目录；客户端不得按 Provider 名称自行补全。
+  final List<String> options;
+
+  /// 只有同时存在于 [options] 中的默认值才被接受。
+  final String? defaultOption;
 
   bool get isSupported => availability != CapabilityAvailability.unsupported;
 }
@@ -124,6 +148,13 @@ class ProviderCapabilityProfile {
       reason: 'Provider 未声明此能力。',
     );
   }
+
+  /// 返回 Host 为指定能力声明的默认选项；缺失或不在目录中时返回 null。
+  String? defaultOptionFor(String name) => capability(name).defaultOption;
+
+  /// 返回 Host 声明的安全选项目录副本，防止调用方修改 capability 快照。
+  List<String> optionsFor(String name) =>
+      List<String>.unmodifiable(capability(name).options);
 }
 
 /// CapabilityMatrix 是 GET /v1/capabilities 的客户端投影。
@@ -415,6 +446,7 @@ class SessionControlState {
   const SessionControlState({
     required this.model,
     required this.effort,
+    this.defaultModel,
     this.plan,
     this.goal,
     this.todos = const [],
@@ -432,6 +464,7 @@ class SessionControlState {
   const SessionControlState.empty()
     : model = null,
       effort = null,
+      defaultModel = null,
       plan = null,
       goal = null,
       todos = const [],
@@ -447,6 +480,7 @@ class SessionControlState {
     final rawUsage = json['usage'];
     return SessionControlState(
       model: _nullableControlString(json['model']),
+      defaultModel: _nullableControlString(json['default_model']),
       effort: _nullableControlString(json['effort']),
       models: _stringListFromControlJson(json['models']),
       efforts: _stringListFromControlJson(json['efforts']),
@@ -464,6 +498,9 @@ class SessionControlState {
 
   final String? model;
   final String? effort;
+
+  /// Relay/Host 明确声明的默认模型；缺失时保持 null，不做名称猜测。
+  final String? defaultModel;
   final SessionPlanSummary? plan;
   final SessionGoalSummary? goal;
   final List<SessionTodoItem> todos;
@@ -478,6 +515,7 @@ class SessionControlState {
   SessionControlState copyWith({
     String? model,
     String? effort,
+    String? defaultModel,
     SessionPlanSummary? plan,
     SessionGoalSummary? goal,
     bool clearGoal = false,
@@ -492,6 +530,7 @@ class SessionControlState {
   }) => SessionControlState(
     model: model ?? this.model,
     effort: effort ?? this.effort,
+    defaultModel: defaultModel ?? this.defaultModel,
     plan: plan ?? this.plan,
     goal: clearGoal ? null : goal ?? this.goal,
     todos: todos ?? this.todos,

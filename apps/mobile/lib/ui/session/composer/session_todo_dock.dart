@@ -41,11 +41,9 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
       key: const Key('session-todo-dock'),
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.45,
-        ),
+        color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -53,7 +51,7 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
         children: [
           InkWell(
             key: const Key('session-todo-dock-toggle'),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(8),
             onTap: () => setState(() => _collapsed = !_collapsed),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),

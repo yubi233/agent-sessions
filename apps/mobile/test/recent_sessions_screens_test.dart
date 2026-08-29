@@ -243,6 +243,63 @@ void main() {
         findsOneWidget,
       );
     });
+
+    testWidgets('已归档视图：切换入口可见归档会话并可取消归档恢复', (tester) async {
+      await _usePhoneSurface(tester);
+      final now = DateTime.now();
+      final relay = await _fixtureWithSessions(now);
+      // 归档其中两个会话，默认列表只剩 003。
+      await relay.archiveSession('session-fixture-001');
+      await relay.archiveSession('session-fixture-002');
+      final controller = RecentSessionsController(relay: relay);
+      await controller.initialize();
+
+      await tester.pumpWidget(
+        _buildRecentSessionsApp(relay: relay, controller: controller),
+      );
+      await tester.pumpAndSettle();
+
+      // 默认列表只剩未归档的 003。
+      expect(
+        find.byKey(const Key('recent-session-session-fixture-003')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('recent-session-session-fixture-001')), findsNothing);
+
+      // 切换到已归档视图：两个归档会话可见，tile 展示归档时间与恢复按钮。
+      await tester.tap(find.byKey(const Key('recent-sessions-view-toggle')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('已归档'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('已归档会话保留全部数据，可随时恢复到默认列表。'), findsOneWidget);
+      expect(
+        find.byKey(const Key('recent-session-session-fixture-001')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('归档于'), findsNWidgets(2));
+      expect(
+        find.byKey(const Key('recent-session-unarchive-session-fixture-001')),
+        findsOneWidget,
+      );
+
+      // 取消归档：tile 从归档视图移除，会话回到默认视图。
+      await tester.tap(
+        find.byKey(const Key('recent-session-unarchive-session-fixture-001')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('recent-session-session-fixture-001')),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('最近'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('recent-session-session-fixture-001')),
+        findsOneWidget,
+      );
+    });
   });
 }
 

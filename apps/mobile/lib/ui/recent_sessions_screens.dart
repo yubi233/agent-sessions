@@ -104,7 +104,23 @@ class _RecentSessionsBody extends StatelessWidget {
       key: const Key('recent-sessions-list'),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
-        const _RecentHeader(),
+        SegmentedButton<RecentSessionsView>(
+          key: const Key('recent-sessions-view-toggle'),
+          segments: const [
+            ButtonSegment(value: RecentSessionsView.recent, label: Text('最近')),
+            ButtonSegment(
+              value: RecentSessionsView.archived,
+              icon: Icon(Icons.archive_outlined, size: 18),
+              label: Text('已归档'),
+            ),
+          ],
+          selected: {controller.view},
+          showSelectedIcon: false,
+          onSelectionChanged: (selection) =>
+              unawaited(controller.switchView(selection.first)),
+        ),
+        const SizedBox(height: 8),
+        _RecentHeader(archived: controller.isArchivedView),
         const SizedBox(height: 8),
         if (controller.errorMessage != null) ...[
           _RecentInlineError(
@@ -114,27 +130,100 @@ class _RecentSessionsBody extends StatelessWidget {
           const SizedBox(height: 8),
         ],
         if (sessions.isEmpty)
-          const _RecentEmptyState()
+          _RecentEmptyState(archived: controller.isArchivedView)
         else
           for (final session in sessions)
-            _RecentSessionTile(
-              session: session,
-              onTap: () => context.push('/sessions/${session.id}'),
-            ),
+            if (controller.isArchivedView)
+              _ArchivedSessionTile(
+                key: ValueKey('archived-${session.id}'),
+                session: session,
+                onTap: () => context.push('/sessions/${session.id}'),
+                onUnarchive: () => controller.unarchiveSession(session.id),
+              )
+            else
+              _RecentSessionTile(
+                session: session,
+                onTap: () => context.push('/sessions/${session.id}'),
+              ),
       ],
     );
   }
 }
 
 class _RecentHeader extends StatelessWidget {
-  const _RecentHeader();
+  const _RecentHeader({required this.archived});
+
+  final bool archived;
 
   @override
   Widget build(BuildContext context) => Text(
-    '按最近更新时间排序的会话。',
+    archived ? '已归档会话保留全部数据，可随时恢复到默认列表。' : '按最近更新时间排序的会话。',
     key: const Key('recent-sessions-header'),
     style: Theme.of(context).textTheme.bodyMedium,
   );
+}
+
+class _ArchivedSessionTile extends StatelessWidget {
+  const _ArchivedSessionTile({
+    super.key,
+    required this.session,
+    required this.onTap,
+    required this.onUnarchive,
+  });
+
+  final MobileSession session;
+  final VoidCallback onTap;
+  final Future<bool> Function() onUnarchive;
+
+  @override
+  Widget build(BuildContext context) {
+    final presentation = _statusPresentation(context, session.status);
+    return ListTile(
+      key: Key('recent-session-${session.id}'),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+      leading: CircleAvatar(radius: 18, child: Icon(presentation.icon, size: 20)),
+      title: Text(
+        session.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        '${session.provider} · 归档于 ${_updatedLabel(session.archivedAt)}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            key: Key('recent-session-unarchive-${session.id}'),
+            tooltip: '取消归档',
+            icon: const Icon(Icons.unarchive_outlined),
+            onPressed: () async {
+              final restored = await onUnarchive();
+              if (!context.mounted || !restored) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('${session.title} 已恢复到默认列表')),
+              );
+            },
+          ),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
+      onTap: onTap,
+    );
+  }
+
+  String _updatedLabel(DateTime? updatedAt) {
+    if (updatedAt == null) return '时间未知';
+    final local = updatedAt.toLocal();
+    final now = DateTime.now();
+    final difference = now.difference(local);
+    if (difference.inMinutes < 1) return '刚刚';
+    if (difference.inHours < 1) return '${difference.inMinutes} 分钟前';
+    if (difference.inDays < 1) return '${difference.inHours} 小时前';
+    return '${difference.inDays} 天前';
+  }
 }
 
 class _RecentSessionTile extends StatelessWidget {
@@ -234,7 +323,9 @@ class _StatusPresentation {
 }
 
 class _RecentEmptyState extends StatelessWidget {
-  const _RecentEmptyState();
+  const _RecentEmptyState({required this.archived});
+
+  final bool archived;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -244,12 +335,15 @@ class _RecentEmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.history, size: 32),
+          Icon(archived ? Icons.archive_outlined : Icons.history, size: 32),
           const SizedBox(height: 12),
-          Text('还没有会话', style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            archived ? '暂无已归档会话' : '还没有会话',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 4),
           Text(
-            '创建会话后，最近会话会显示在这里。',
+            archived ? '归档的会话会显示在这里，可随时恢复。' : '创建会话后，最近会话会显示在这里。',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium,
           ),

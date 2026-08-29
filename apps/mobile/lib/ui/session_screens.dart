@@ -405,6 +405,30 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
     );
   }
 
+  Future<void> _createWorkspaceByName(
+    AppController app,
+    SessionController sessions,
+  ) async {
+    // 名称按钮与会话创建共用 Form 校验；先在输入层阻断路径字符，避免无效值
+    // 进入异步命令队列后才显示错误，也保证 widget 回归能观察到 fail-closed 状态。
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final name = _workspaceNameController.text.trim();
+    if (name.isEmpty) {
+      setState(() {});
+      return;
+    }
+    final workspace = await sessions.createWorkspaceWithName(
+      name: name,
+      deviceId: app.currentDevice?.id,
+      canWrite: app.canManageDevices,
+    );
+    if (!mounted || workspace == null) return;
+    setState(() {
+      _workspaceController.text = workspace.id;
+      _workspaceNameController.clear();
+    });
+  }
+
   Future<void> _create(AppController app, SessionController sessions) async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final session = await sessions.createSession(
@@ -462,16 +486,34 @@ class _SessionChatView extends StatelessWidget {
       timeline: sessions.timeline,
       controls: sessions.controls,
     );
+    // 乐观回显：canonical user.message 回传前，先把待确认的出站文本挂在时间线尾部，
+    // 让发送的内容立刻可见；规范化事件合并后由 controller 清账，本节点随之消失。
+    final pendingOutgoing = sessions.pendingOutgoingMessage;
+    final chatNodes = [
+      ...projection.chatNodes,
+      if ((pendingOutgoing ?? '').isNotEmpty)
+        ConversationNode(
+          key: 'session-chat-pending-user',
+          kind: ConversationNodeKind.user,
+          sequence: 0x7fffffff,
+          label: '你',
+          text: pendingOutgoing,
+          copyText: pendingOutgoing,
+          isStreaming: true,
+        ),
+    ];
     // v0.5/P2：Chat 只消费 projection nodes；permission/question pending 已被投影层排除，
     // 后续由 composer chain 接管，避免消息流和 composer 双重渲染同一交互。
-    final hasConversationContent = projection.chatNodes.any(
-      (node) =>
-          node.kind == ConversationNodeKind.user ||
-          node.kind == ConversationNodeKind.assistant ||
-          node.kind == ConversationNodeKind.reasoning,
-    );
+    final hasConversationContent =
+        chatNodes.any(
+          (node) =>
+              node.kind == ConversationNodeKind.user ||
+              node.kind == ConversationNodeKind.assistant ||
+              node.kind == ConversationNodeKind.reasoning,
+        ) ||
+        ((pendingOutgoing ?? '').isNotEmpty);
     return SessionChatView(
-      nodes: projection.chatNodes,
+      nodes: chatNodes,
       running: sessions.isStreaming,
       leading: _SessionRecoveryStrip(
         controller: recovery,
@@ -591,6 +633,7 @@ class _ConversationEmptyHero extends StatelessWidget {
           deviceId: deviceId,
           directoryFlow: directoryFlow,
           markMissingAsDeleted: true,
+          label: '选择工作区开始会话',
           onPick: (workspaceId) async {
             final opened = await sessions.openWorkspace(
               workspaceId: workspaceId,
@@ -933,6 +976,13 @@ class _SessionQuickMenu extends StatelessWidget {
             );
           case 'kill':
             _confirmKill(context, sessions);
+          case 'archive':
+            _confirmArchive(
+              context,
+              sessions,
+              canWrite: canWrite,
+              deviceId: deviceId,
+            );
           case 'files':
             // 文件浏览是只读页面，与 Git 入口一样不依赖 lease。
             context.push('/sessions/${sessions.selectedSessionId}/files');
@@ -1116,12 +1166,12 @@ class _SessionQuickMenu extends StatelessWidget {
         PopupMenuItem(
           key: Key('session-quick-archive'),
           value: 'archive',
-          enabled: false,
+          enabled: canWrite && !sessions.isBusy,
           child: ListTile(
             leading: Icon(Icons.archive_outlined),
             title: Text('归档会话'),
             subtitle: Text(
-              'Provider 未声明归档能力',
+              '从列表隐藏，数据仍保留',
               style: Theme.of(context).textTheme.labelSmall,
             ),
             dense: true,
@@ -1162,6 +1212,38 @@ class _SessionQuickMenu extends StatelessWidget {
     }
   }
 
+  Future<void> _confirmArchive(
+    BuildContext context,
+    SessionController sessions, {
+    required bool canWrite,
+    required String? deviceId,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('归档会话？'),
+        content: const Text('会话会从列表隐藏，但消息、事件和附件数据都会保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('session-archive-confirm'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('归档'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await sessions.archiveSelectedSession(
+        deviceId: deviceId,
+        canWrite: canWrite,
+      );
+    }
+  }
+
   /// 详情底表只展示 Relay 白名单元数据，不读取、不展示密文正文。
   void _showDetailsSheet(BuildContext context, SessionController sessions) {
     final session = sessions.selectedSession;
@@ -1184,7 +1266,13 @@ class _SessionQuickMenu extends StatelessWidget {
               _DetailRow(label: '工作区', value: session.workspaceLabel),
               _DetailRow(
                 label: '状态',
-                value: _sessionStatusPresentation(session.status).label,
+                value: _sessionStatusPresentation(session).label,
+              ),
+              _DetailRow(
+                label: '最后活动',
+                value: _relativeTime(
+                  session.lastActivityAt ?? session.updatedAt,
+                ),
               ),
               _DetailRow(label: '事件序号', value: '${session.lastSequence}'),
               const SizedBox(height: 12),
@@ -1777,7 +1865,7 @@ ButtonStyle _delegationActionStyle(BuildContext context) {
 }
 
 /// P3 控制面保持为紧凑、可扫描的 Happy 风格状态条；所有可执行图标都受 capability + role + lease 同一门控。
-class _SessionControlPanel extends StatelessWidget {
+class _SessionControlPanel extends StatefulWidget {
   const _SessionControlPanel({
     required this.sessions,
     required this.canWrite,
@@ -1789,7 +1877,17 @@ class _SessionControlPanel extends StatelessWidget {
   final String? deviceId;
 
   @override
+  State<_SessionControlPanel> createState() => _SessionControlPanelState();
+}
+
+class _SessionControlPanelState extends State<_SessionControlPanel> {
+  bool _collapsed = true;
+
+  @override
   Widget build(BuildContext context) {
+    final sessions = widget.sessions;
+    final canWrite = widget.canWrite;
+    final deviceId = widget.deviceId;
     final provider = sessions.selectedProviderCapabilities;
     final controls = sessions.controls;
     final plan = controls.plan;
@@ -1807,158 +1905,184 @@ class _SessionControlPanel extends StatelessWidget {
       'invoke_skill',
       canWrite: canWrite,
     );
+    final summaryRow = Row(
+      children: [
+        const Icon(Icons.tune_outlined, size: 17),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            provider.kind,
+            key: const Key('session-capability-provider'),
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+        ),
+        Flexible(
+          child: Text(
+            controls.model ?? '等待模型事件',
+            key: const Key('session-control-model'),
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          controls.effort ?? '--',
+          key: const Key('session-control-effort'),
+          style: Theme.of(context).textTheme.labelMedium,
+        ),
+        const SizedBox(width: 2),
+        IconButton(
+          key: const Key('session-capability-toggle'),
+          tooltip: _collapsed ? '展开能力面板' : '折叠能力面板',
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+          onPressed: () => setState(() => _collapsed = !_collapsed),
+          icon: Icon(
+            _collapsed ? Icons.expand_more : Icons.expand_less,
+            size: 18,
+          ),
+        ),
+      ],
+    );
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        Wrap(
+          key: const Key('session-capability-states'),
+          spacing: 10,
+          runSpacing: 5,
+          children: [
+            for (final name in const [
+              'model_select',
+              'effort_select',
+              'plan',
+              'goal',
+              'invoke_skill',
+              'attachments',
+            ])
+              _CapabilityStateLabel(entry: provider.capability(name)),
+          ],
+        ),
+        const Divider(height: 17),
+        _ControlSummaryRow(
+          key: const Key('session-plan-summary'),
+          icon: Icons.account_tree_outlined,
+          title: plan?.title ?? 'Plan',
+          subtitle: plan == null
+              ? '等待已解密 Plan 事件'
+              : '${plan.phase.label} · ${plan.summary}',
+          action: IconButton(
+            key: const Key('session-plan-approve-button'),
+            tooltip: '确认 Plan',
+            onPressed:
+                plan?.phase == PlanPhase.awaitingApproval &&
+                    planBlocked == null &&
+                    !sessions.isBusy
+                ? () => sessions.approvePlan(
+                    deviceId: deviceId,
+                    canWrite: canWrite,
+                  )
+                : null,
+            icon: const Icon(Icons.check_circle_outline),
+          ),
+        ),
+        const SizedBox(height: 3),
+        _ControlSummaryRow(
+          key: const Key('session-goal-summary'),
+          icon: Icons.flag_outlined,
+          title: goal?.title ?? 'Goal',
+          subtitle: goal == null
+              ? '等待已解密 Goal 事件'
+              : '${goal.phase.label} · ${goal.progressLabel}',
+          action: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                key: const Key('session-goal-edit-button'),
+                tooltip: '编辑目标',
+                onPressed:
+                    goal != null && goalBlocked == null && !sessions.isBusy
+                    ? () => _showGoalEditDialog(
+                        context,
+                        sessions,
+                        goal.title,
+                        deviceId: deviceId,
+                        canWrite: canWrite,
+                      )
+                    : null,
+                icon: const Icon(Icons.edit_outlined, size: 20),
+              ),
+              IconButton(
+                key: const Key('session-goal-toggle-button'),
+                tooltip: goal?.phase == GoalPhase.active
+                    ? '暂停 Goal'
+                    : '恢复 Goal',
+                onPressed:
+                    goal != null &&
+                        goal.phase != GoalPhase.completed &&
+                        goalBlocked == null &&
+                        !sessions.isBusy
+                    ? () => sessions.toggleGoal(
+                        deviceId: deviceId,
+                        canWrite: canWrite,
+                      )
+                    : null,
+                icon: Icon(
+                  goal?.phase == GoalPhase.active
+                      ? Icons.pause_circle_outline
+                      : Icons.play_circle_outline,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (skill.isNotEmpty) ...[
+          const SizedBox(height: 3),
+          _ControlSummaryRow(
+            key: const Key('session-skill-summary'),
+            icon: Icons.security_outlined,
+            title: skill.first.title,
+            subtitle:
+                '${skill.first.risk.label} Skill · ${skill.first.summary}',
+            action: IconButton(
+              key: const Key('session-skill-open-button'),
+              tooltip: '确认高风险 Skill',
+              onPressed: skillBlocked == null && !sessions.isBusy
+                  ? () => sessions.requestSkillConfirmation(
+                      skill.first,
+                      canWrite: canWrite,
+                    )
+                  : null,
+              icon: const Icon(Icons.warning_amber_outlined),
+            ),
+          ),
+        ],
+      ],
+    );
+    final panelContent = _collapsed
+        ? ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 40),
+            child: SingleChildScrollView(
+              primary: false,
+              child: Column(children: [summaryRow, details]),
+            ),
+          )
+        : Column(children: [summaryRow, details]);
     return Container(
       key: const Key('session-capability-panel'),
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+      padding: const EdgeInsets.fromLTRB(12, 6, 8, 4),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        color: Theme.of(context).colorScheme.surfaceContainerHigh,
+        border: Border.all(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.8),
+        ),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.tune_outlined, size: 17),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Text(
-                  provider.kind,
-                  key: const Key('session-capability-provider'),
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
-              ),
-              Text(
-                controls.model ?? '等待模型事件',
-                key: const Key('session-control-model'),
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                controls.effort ?? '--',
-                key: const Key('session-control-effort'),
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            key: const Key('session-capability-states'),
-            spacing: 10,
-            runSpacing: 5,
-            children: [
-              for (final name in const [
-                'model_select',
-                'effort_select',
-                'plan',
-                'goal',
-                'invoke_skill',
-                'attachments',
-              ])
-                _CapabilityStateLabel(entry: provider.capability(name)),
-            ],
-          ),
-          const Divider(height: 17),
-          _ControlSummaryRow(
-            key: const Key('session-plan-summary'),
-            icon: Icons.account_tree_outlined,
-            title: plan?.title ?? 'Plan',
-            subtitle: plan == null
-                ? '等待已解密 Plan 事件'
-                : '${plan.phase.label} · ${plan.summary}',
-            action: IconButton(
-              key: const Key('session-plan-approve-button'),
-              tooltip: '确认 Plan',
-              onPressed:
-                  plan?.phase == PlanPhase.awaitingApproval &&
-                      planBlocked == null &&
-                      !sessions.isBusy
-                  ? () => sessions.approvePlan(
-                      deviceId: deviceId,
-                      canWrite: canWrite,
-                    )
-                  : null,
-              icon: const Icon(Icons.check_circle_outline),
-            ),
-          ),
-          const SizedBox(height: 3),
-          _ControlSummaryRow(
-            key: const Key('session-goal-summary'),
-            icon: Icons.flag_outlined,
-            title: goal?.title ?? 'Goal',
-            subtitle: goal == null
-                ? '等待已解密 Goal 事件'
-                : '${goal.phase.label} · ${goal.progressLabel}',
-            action: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // v0.3/P0：goal 文本编辑（Happy AgentGoalBar 对齐）。
-                IconButton(
-                  key: const Key('session-goal-edit-button'),
-                  tooltip: '编辑目标',
-                  onPressed:
-                      goal != null && goalBlocked == null && !sessions.isBusy
-                      ? () => _showGoalEditDialog(
-                          context,
-                          sessions,
-                          goal.title,
-                          deviceId: deviceId,
-                          canWrite: canWrite,
-                        )
-                      : null,
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                ),
-                IconButton(
-                  key: const Key('session-goal-toggle-button'),
-                  tooltip: goal?.phase == GoalPhase.active
-                      ? '暂停 Goal'
-                      : '恢复 Goal',
-                  onPressed:
-                      goal != null &&
-                          goal.phase != GoalPhase.completed &&
-                          goalBlocked == null &&
-                          !sessions.isBusy
-                      ? () => sessions.toggleGoal(
-                          deviceId: deviceId,
-                          canWrite: canWrite,
-                        )
-                      : null,
-                  icon: Icon(
-                    goal?.phase == GoalPhase.active
-                        ? Icons.pause_circle_outline
-                        : Icons.play_circle_outline,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (skill.isNotEmpty) ...[
-            const SizedBox(height: 3),
-            _ControlSummaryRow(
-              key: const Key('session-skill-summary'),
-              icon: Icons.security_outlined,
-              title: skill.first.title,
-              subtitle:
-                  '${skill.first.risk.label} Skill · ${skill.first.summary}',
-              action: IconButton(
-                key: const Key('session-skill-open-button'),
-                tooltip: '确认高风险 Skill',
-                onPressed: skillBlocked == null && !sessions.isBusy
-                    ? () => sessions.requestSkillConfirmation(
-                        skill.first,
-                        canWrite: canWrite,
-                      )
-                    : null,
-                icon: const Icon(Icons.warning_amber_outlined),
-              ),
-            ),
-          ],
-        ],
-      ),
+      child: panelContent,
     );
   }
 }
@@ -2825,7 +2949,7 @@ class _SessionComposerState extends State<_SessionComposer> {
       top: false,
       child: Container(
         key: const Key('session-composer'),
-        padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
         ),
@@ -3081,7 +3205,11 @@ class _SessionComposerState extends State<_SessionComposer> {
               ),
             ),
             const SizedBox(height: 5),
-            _HappyComposerMetaRow(sessions: widget.sessions),
+            _HappyComposerMetaRow(
+              sessions: widget.sessions,
+              canWrite: widget.canWrite,
+              deviceId: widget.deviceId,
+            ),
             const SizedBox(height: 5),
             // v0.5/P7：StatsLine / ContextMeter 只读投影，缺字段显示不可用。
             SessionStatsLine(
@@ -3483,8 +3611,8 @@ Future<void> _confirmDangerPermission(
   }
 }
 
-/// v0.2/P3：composer 控制条：模型/effort 选择器与脱敏 usage 计数。
-/// 所有入口按 capability fail-closed；无 capability 时禁用并展示中文原因。
+/// v0.2/P3：模型与推理等级由 Composer 单行状态入口承载；此处只保留权限模式。
+/// 所有写入口继续按 capability、设备角色和 lease fail-closed。
 class _ComposerControlStrip extends StatelessWidget {
   const _ComposerControlStrip({
     required this.sessions,
@@ -3499,119 +3627,64 @@ class _ComposerControlStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controls = sessions.controls;
-    final modelBlocked = sessions.controlBlockedReason(
-      'model_select',
-      canWrite: canWrite,
-    );
-    final effortBlocked = sessions.controlBlockedReason(
-      'effort_select',
-      canWrite: canWrite,
-    );
+    final permissionCapability = sessions.selectedProviderCapabilities
+        .capability('permission_mode');
+    final shouldShow =
+        controls.availablePermissionModes.isNotEmpty ||
+        permissionCapability.isSupported;
+    if (!shouldShow) return const SizedBox.shrink();
     final permissionModeBlocked = sessions.controlBlockedReason(
       'permission_mode',
       canWrite: canWrite,
     );
-    final usageSupported = sessions.selectedProviderCapabilities
-        .capability('usage')
-        .isSupported;
-    // 四种能力都不可用时整条控制条隐藏，避免无意义的禁用控件占满输入区。
-    final hasContent =
-        controls.models.isNotEmpty ||
-        controls.efforts.isNotEmpty ||
-        controls.availablePermissionModes.isNotEmpty ||
-        controls.usage != null ||
-        usageSupported;
-    if (!hasContent) return const SizedBox.shrink();
-
     return Padding(
+      key: const Key('composer-control-strip'),
       padding: const EdgeInsets.only(bottom: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SessionModelSeat(
-            key: const Key('composer-control-strip'),
-            model: controls.model,
-            effort: controls.effort,
-            models: controls.models,
-            efforts: controls.efforts,
-            modelBlockedReason: modelBlocked,
-            effortBlockedReason: effortBlocked,
-            busy: sessions.isBusy,
-            onRefresh: sessions.refreshSelectedControls,
-            onSelectModel: (model) async {
-              await sessions.selectModel(
-                model: model,
-                deviceId: deviceId,
-                canWrite: canWrite,
-              );
-              return sessions.errorMessage;
-            },
-            onSelectEffort: (effort) async {
-              await sessions.selectEffort(
-                effort: effort,
-                deviceId: deviceId,
-                canWrite: canWrite,
-              );
-              return sessions.errorMessage;
-            },
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 190),
+        child: DropdownButtonFormField<String>(
+          key: const Key('composer-permission-mode-select'),
+          initialValue: controls.permissionMode,
+          isDense: true,
+          isExpanded: true,
+          decoration: InputDecoration(
+            labelText: '权限',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 8,
+            ),
           ),
-          const SizedBox(height: 6),
-          Wrap(
-            key: const Key('composer-control-strip-row2'),
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              SizedBox(
-                width: 190,
-                child: DropdownButtonFormField<String>(
-                  key: const Key('composer-permission-mode-select'),
-                  initialValue: controls.permissionMode,
-                  isDense: true,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText: '权限',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                  ),
-                  items: [
-                    for (final mode in controls.availablePermissionModes)
-                      DropdownMenuItem(value: mode, child: Text(mode)),
-                  ],
-                  onChanged:
-                      permissionModeBlocked == null &&
-                          controls.availablePermissionModes.isNotEmpty
-                      ? (value) {
-                          if (value == null) return;
-                          // v0.5/P5：danger-full-access 必须先弹风险确认，
-                          // 勾选确认前不可提交；取消/遮罩/Escape 不提交；
-                          // custom 预设不作为可点菜单项渲染（不在 available 列表）。
-                          if (value == 'danger-full-access') {
-                            _confirmDangerPermission(
-                              context,
-                              sessions: sessions,
-                              deviceId: deviceId,
-                              canWrite: canWrite,
-                            );
-                            return;
-                          }
-                          sessions.selectPermissionMode(
-                            mode: value,
-                            deviceId: deviceId,
-                            canWrite: canWrite,
-                          );
-                        }
-                      : null,
-                ),
-              ),
-            ],
-          ),
-        ],
+          items: [
+            for (final mode in controls.availablePermissionModes)
+              DropdownMenuItem(value: mode, child: Text(mode)),
+          ],
+          onChanged:
+              permissionModeBlocked == null &&
+                  controls.availablePermissionModes.isNotEmpty
+              ? (value) {
+                  if (value == null) return;
+                  // v0.5/P5：danger-full-access 必须先弹风险确认，
+                  // 勾选确认前不可提交；取消/遮罩/Escape 不提交；
+                  // custom 预设不作为可点菜单项渲染（不在 available 列表）。
+                  if (value == 'danger-full-access') {
+                    _confirmDangerPermission(
+                      context,
+                      sessions: sessions,
+                      deviceId: deviceId,
+                      canWrite: canWrite,
+                    );
+                    return;
+                  }
+                  sessions.selectPermissionMode(
+                    mode: value,
+                    deviceId: deviceId,
+                    canWrite: canWrite,
+                  );
+                }
+              : null,
+        ),
       ),
     );
   }
@@ -4050,37 +4123,40 @@ class _SessionListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = _sessionStatusPresentation(session.status);
+    final status = _sessionStatusPresentation(session);
     final statusColor = _sessionStatusColor(context, status.tone);
+    final theme = Theme.of(context);
     return Container(
       key: Key('session-row-${session.id}'),
       margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
         color: selected
-            ? Theme.of(context).colorScheme.surfaceContainerHighest
-            : Theme.of(context).colorScheme.surfaceContainer,
+            ? theme.colorScheme.surfaceContainerHigh
+            : theme.colorScheme.surface,
         border: Border.all(
-          color: selected
-              ? Theme.of(context).colorScheme.secondary
-              : Theme.of(context).dividerColor,
+          color: selected ? theme.colorScheme.primary : theme.dividerColor,
         ),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
               Container(
-                width: 38,
-                height: 38,
+                width: AppSizes.avatarMedium,
+                height: AppSizes.avatarMedium,
                 decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(8),
+                  color: theme.colorScheme.secondaryContainer,
+                  shape: BoxShape.circle,
                 ),
-                child: Icon(status.icon, color: statusColor),
+                child: Icon(
+                  _sessionProviderIcon(session.provider),
+                  size: 18,
+                  color: theme.colorScheme.onSecondaryContainer,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -4094,13 +4170,15 @@ class _SessionListItem extends StatelessWidget {
                             session.title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleMedium,
+                            style: theme.textTheme.titleMedium,
                           ),
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          _relativeTime(session.updatedAt),
-                          style: Theme.of(context).textTheme.labelMedium,
+                          _relativeTime(
+                            session.lastActivityAt ?? session.updatedAt,
+                          ),
+                          style: theme.textTheme.labelMedium,
                         ),
                       ],
                     ),
@@ -4109,7 +4187,7 @@ class _SessionListItem extends StatelessWidget {
                       session.workspaceLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium,
+                      style: theme.textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 6),
                     Row(
@@ -4125,15 +4203,21 @@ class _SessionListItem extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          status.label,
-                          style: Theme.of(
-                            context,
-                          ).textTheme.labelMedium?.copyWith(color: statusColor),
+                          _sessionStatusLineText(session),
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: statusColor,
+                          ),
                         ),
                       ],
                     ),
                   ],
                 ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ],
           ),
@@ -4203,8 +4287,7 @@ class _SessionEmptyStateState extends State<_SessionEmptyState> {
               directoryFlow: widget.fixtureMode
                   ? showFixtureWorkspaceDirectoryFlow
                   : null,
-              label: '开始会话的工作区',
-              asComposerInput: true,
+              label: '选择工作区开始会话',
               onPick: (workspaceId) async {
                 final opened = await widget.sessions.openWorkspace(
                   workspaceId: workspaceId,
@@ -4265,7 +4348,7 @@ class _SessionStatusStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = _sessionStatusPresentation(session?.status);
+    final status = _sessionStatusPresentation(session);
     final statusColor = _sessionStatusColor(context, status.tone);
     final leaseText = !canWrite
         ? '只读'
@@ -4291,76 +4374,98 @@ class _SessionStatusStrip extends StatelessWidget {
     return Container(
       key: const Key('session-status-strip'),
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: EdgeInsets.zero,
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(color: Theme.of(context).dividerColor),
         ),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: AppSizes.statusDot,
-            height: AppSizes.statusDot,
-            decoration: BoxDecoration(
-              color: statusColor,
-              shape: BoxShape.circle,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+        child: Row(
+          children: [
+            Container(
+              width: AppSizes.statusDot,
+              height: AppSizes.statusDot,
+              decoration: BoxDecoration(
+                color: statusColor,
+                shape: BoxShape.circle,
+              ),
             ),
-          ),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              status.label,
-              style: Theme.of(context).textTheme.labelMedium,
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                status.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
             ),
-          ),
-          // provider chip 与 lease 文本不约束宽度时，长版本串会撑爆状态条：
-          // 包 Flexible（loose）让 ellipsis 在空间不足时生效，空间充裕时仍按内容宽。
-          Flexible(
-            child: Tooltip(
-              message: providerTooltip,
-              child: Container(
-                key: const Key('session-provider-version-chip'),
-                margin: const EdgeInsets.only(right: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: providerConnected
-                      ? Theme.of(context).colorScheme.surfaceContainerHighest
-                      : Theme.of(context).colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  providerLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            Flexible(
+              fit: FlexFit.loose,
+              child: Tooltip(
+                message: providerTooltip,
+                child: Container(
+                  key: const Key('session-provider-version-chip'),
+                  constraints: const BoxConstraints(maxWidth: 142),
+                  margin: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
                     color: providerConnected
-                        ? null
-                        : Theme.of(context).colorScheme.error,
+                        ? Theme.of(context).colorScheme.surfaceContainerHigh
+                        : Theme.of(context).colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(AppRadius.small),
+                  ),
+                  child: Text(
+                    providerLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: providerConnected
+                          ? null
+                          : Theme.of(context).colorScheme.error,
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          Flexible(
-            child: Text(
-              leaseText,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelMedium,
+            Flexible(
+              fit: FlexFit.loose,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 108),
+                margin: const EdgeInsets.only(right: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                decoration: BoxDecoration(
+                  color: hasLease
+                      ? context.appColors.success.withValues(alpha: 0.14)
+                      : Theme.of(context).colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(AppRadius.small),
+                ),
+                child: Text(
+                  leaseText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: hasLease ? context.appColors.success : null,
+                  ),
+                ),
+              ),
             ),
-          ),
-          IconButton(
-            key: const Key('session-acquire-lease-button'),
-            tooltip: leaseText,
-            visualDensity: VisualDensity.compact,
-            onPressed: canWrite && !hasLease ? onAcquireLease : null,
-            icon: Icon(
-              hasLease ? Icons.lock_open_outlined : Icons.lock_outline,
-              size: 18,
+            IconButton(
+              key: const Key('session-acquire-lease-button'),
+              tooltip: leaseText,
+              visualDensity: VisualDensity.compact,
+              onPressed: canWrite && !hasLease ? onAcquireLease : null,
+              icon: Icon(
+                hasLease ? Icons.lock_open_outlined : Icons.lock_outline,
+                size: 18,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -4478,7 +4583,7 @@ _RecoveryPresentation _recoveryPresentation(
     color: Theme.of(context).colorScheme.secondary,
   ),
   SessionRecoveryPhase.recovered => _RecoveryPresentation(
-    label: '恢复完成',
+    label: '已同步',
     icon: Icons.cloud_done_outlined,
     color: context.appColors.success,
   ),
@@ -4669,31 +4774,86 @@ class _HappyProviderAvatar extends StatelessWidget {
 }
 
 class _HappyComposerMetaRow extends StatelessWidget {
-  const _HappyComposerMetaRow({required this.sessions});
+  const _HappyComposerMetaRow({
+    required this.sessions,
+    required this.canWrite,
+    required this.deviceId,
+  });
 
   final SessionController sessions;
+  final bool canWrite;
+  final String? deviceId;
 
   @override
   Widget build(BuildContext context) {
     final controls = sessions.controls;
-    final model =
-        controls.model ?? sessions.selectedSession?.provider ?? 'gpt-5.5';
-    final effort = controls.effort ?? 'Medium';
-    return Row(
+    final capabilities = sessions.selectedProviderCapabilities;
+    final modelCapability = capabilities.capability('model_select');
+    // 新会话刚启动时 usage 投影可能尚未落库；此时只采用 Host 在能力矩阵中
+    // 明确声明且属于目录的默认项，不根据 Provider 名称猜测付费模型。
+    final modelOptions = controls.models.isNotEmpty
+        ? controls.models
+        : modelCapability.options;
+    final selectedModel =
+        controls.model ??
+        controls.defaultModel ??
+        modelCapability.defaultOption;
+    return SessionModelSeat(
       key: const Key('happy-session-model-row'),
-      children: [
-        Icon(
-          Icons.account_tree_outlined,
-          size: 14,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-        const SizedBox(width: 4),
-        Text('main', style: Theme.of(context).textTheme.labelSmall),
-        const Spacer(),
-        Text(model, style: Theme.of(context).textTheme.labelSmall),
-        const SizedBox(width: 12),
-        Text(effort, style: Theme.of(context).textTheme.labelSmall),
-      ],
+      provider: sessions.selectedSession?.provider,
+      providerVersion: capabilities.version,
+      providerAvailable: capabilities.available,
+      catalog: SessionModelCatalog(
+        model: selectedModel,
+        effort: controls.effort,
+        models: modelOptions,
+        efforts: controls.efforts,
+      ),
+      modelCapability: modelCapability,
+      effortCapability: capabilities.capability('effort_select'),
+      modelBlockedReason: sessions.controlBlockedReason(
+        'model_select',
+        canWrite: canWrite,
+      ),
+      effortBlockedReason: sessions.controlBlockedReason(
+        'effort_select',
+        canWrite: canWrite,
+      ),
+      busy: sessions.isBusy,
+      onRefresh: () async {
+        final error = await sessions.refreshSelectedControls();
+        final refreshed = sessions.controls;
+        return SessionModelCatalogRefresh(
+          catalog: SessionModelCatalog(
+            model:
+                refreshed.model ??
+                refreshed.defaultModel ??
+                modelCapability.defaultOption,
+            effort: refreshed.effort,
+            models: refreshed.models.isNotEmpty
+                ? refreshed.models
+                : modelCapability.options,
+            efforts: refreshed.efforts,
+          ),
+          error: error,
+        );
+      },
+      onSelectModel: (model) async {
+        await sessions.selectModel(
+          model: model,
+          deviceId: deviceId,
+          canWrite: canWrite,
+        );
+        return sessions.errorMessage;
+      },
+      onSelectEffort: (effort) async {
+        await sessions.selectEffort(
+          effort: effort,
+          deviceId: deviceId,
+          canWrite: canWrite,
+        );
+        return sessions.errorMessage;
+      },
     );
   }
 }
@@ -4721,45 +4881,65 @@ Color _sessionStatusColor(BuildContext context, _SessionStatusTone tone) =>
       _SessionStatusTone.success => context.appColors.success,
     };
 
-_SessionStatusPresentation _sessionStatusPresentation(
-  MobileSessionStatus? status,
-) => switch (status) {
-  MobileSessionStatus.streaming => const _SessionStatusPresentation(
-    label: '生成中',
-    tone: _SessionStatusTone.info,
-    icon: Icons.auto_awesome_outlined,
-  ),
-  MobileSessionStatus.waitingPermission => const _SessionStatusPresentation(
-    label: '等待确认',
-    tone: _SessionStatusTone.warning,
-    icon: Icons.shield_outlined,
-  ),
-  MobileSessionStatus.waitingQuestion => const _SessionStatusPresentation(
-    label: '等待回答',
-    tone: _SessionStatusTone.warning,
-    icon: Icons.help_outline,
-  ),
-  MobileSessionStatus.stopped => const _SessionStatusPresentation(
-    label: '已停止',
-    tone: _SessionStatusTone.neutral,
-    icon: Icons.stop_circle_outlined,
-  ),
-  MobileSessionStatus.errored => const _SessionStatusPresentation(
-    label: '出现错误',
-    tone: _SessionStatusTone.error,
-    icon: Icons.error_outline,
-  ),
-  MobileSessionStatus.offline => const _SessionStatusPresentation(
-    label: '离线',
-    tone: _SessionStatusTone.neutral,
-    icon: Icons.cloud_off_outlined,
-  ),
-  _ => const _SessionStatusPresentation(
-    label: '在线',
-    tone: _SessionStatusTone.success,
-    icon: Icons.forum_outlined,
-  ),
-};
+/// 会话卡片状态行文本：休眠会话在标签后展示最后活跃相对时间；活动时间未知
+/// （旧数据）显示「较早」，避免一排没有时间信息的休眠行无法排序感知。
+String _sessionStatusLineText(MobileSession session) {
+  if (session.status == MobileSessionStatus.idle && session.isDormant()) {
+    final time = _relativeTime(session.lastActivityAt ?? session.updatedAt);
+    return time.isEmpty ? '休眠 · 较早' : '休眠 · $time';
+  }
+  return _sessionStatusPresentation(session).label;
+}
+
+/// idle 会话按 [MobileSession.isDormant] 衰减为「休眠」（判定规则见模型层）；
+/// 其余状态保持原有语义，stopped/errored 不随时间改写。
+_SessionStatusPresentation _sessionStatusPresentation(MobileSession? session) {
+  final status = session?.status;
+  if (status == MobileSessionStatus.idle && (session?.isDormant() ?? false)) {
+    return const _SessionStatusPresentation(
+      label: '休眠',
+      tone: _SessionStatusTone.neutral,
+      icon: Icons.bedtime_outlined,
+    );
+  }
+  return switch (status) {
+    MobileSessionStatus.streaming => const _SessionStatusPresentation(
+      label: '生成中',
+      tone: _SessionStatusTone.info,
+      icon: Icons.auto_awesome_outlined,
+    ),
+    MobileSessionStatus.waitingPermission => const _SessionStatusPresentation(
+      label: '等待确认',
+      tone: _SessionStatusTone.warning,
+      icon: Icons.shield_outlined,
+    ),
+    MobileSessionStatus.waitingQuestion => const _SessionStatusPresentation(
+      label: '等待回答',
+      tone: _SessionStatusTone.warning,
+      icon: Icons.help_outline,
+    ),
+    MobileSessionStatus.stopped => const _SessionStatusPresentation(
+      label: '已停止',
+      tone: _SessionStatusTone.neutral,
+      icon: Icons.stop_circle_outlined,
+    ),
+    MobileSessionStatus.errored => const _SessionStatusPresentation(
+      label: '出现错误',
+      tone: _SessionStatusTone.error,
+      icon: Icons.error_outline,
+    ),
+    MobileSessionStatus.offline => const _SessionStatusPresentation(
+      label: '离线',
+      tone: _SessionStatusTone.neutral,
+      icon: Icons.cloud_off_outlined,
+    ),
+    _ => const _SessionStatusPresentation(
+      label: '在线',
+      tone: _SessionStatusTone.success,
+      icon: Icons.forum_outlined,
+    ),
+  };
+}
 
 String _relativeTime(DateTime? value) {
   if (value == null) return '';
@@ -4769,3 +4949,12 @@ String _relativeTime(DateTime? value) {
   if (difference.inDays < 1) return '${difference.inHours} 小时';
   return '${difference.inDays} 天';
 }
+
+IconData _sessionProviderIcon(String provider) =>
+    switch (provider.toLowerCase()) {
+      'codex' => Icons.auto_awesome,
+      'claude' => Icons.psychology_outlined,
+      'opencode' => Icons.terminal_outlined,
+      'dsh' => Icons.hub_outlined,
+      _ => Icons.smart_toy_outlined,
+    };

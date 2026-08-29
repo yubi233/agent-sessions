@@ -112,8 +112,9 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(10, 8, 6, 6),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(10),
+        color: theme.colorScheme.surface,
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         children: [

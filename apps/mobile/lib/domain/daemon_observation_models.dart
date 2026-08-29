@@ -181,8 +181,10 @@ class DaemonCommandObservation {
 enum DaemonObservationEventType {
   sessionLifecycle('session.lifecycle', '会话生命周期'),
   turnStarted('turn.started', '回合已开始'),
+  userMessage('user.message', '用户消息'),
   messageDelta('message.delta', '消息事件'),
   messageCompleted('message.completed', '消息已完成'),
+  turnCompleted('turn.completed', '回合已结束'),
   toolCall('tool.call', '工具调用'),
   toolResult('tool.result', '工具结果'),
   usageUpdated('usage.updated', '用量已更新'),
@@ -200,6 +202,24 @@ enum DaemonObservationEventType {
       DaemonObservationEventType.values.firstWhere(
         (item) => item.wireValue == value,
         orElse: () => DaemonObservationEventType.unknown,
+      );
+}
+
+/// turn.completed 的非敏感终态投影。Provider 的 stop_reason 仍只存在密文 envelope。
+enum DaemonObservationTerminalStatus {
+  idle('idle', '空闲'),
+  stopped('stopped', '已停止'),
+  unknown('', '状态未确认');
+
+  const DaemonObservationTerminalStatus(this.wireValue, this.label);
+
+  final String wireValue;
+  final String label;
+
+  static DaemonObservationTerminalStatus fromWire(String value) =>
+      DaemonObservationTerminalStatus.values.firstWhere(
+        (item) => item.wireValue == value,
+        orElse: () => DaemonObservationTerminalStatus.unknown,
       );
 }
 
@@ -237,6 +257,7 @@ class DaemonCipherEventObservation {
     required this.sequence,
     required this.eventType,
     required this.envelope,
+    this.terminalStatus,
   });
 
   factory DaemonCipherEventObservation.fromRelayJson(
@@ -244,10 +265,12 @@ class DaemonCipherEventObservation {
   ) {
     final rawSequence = json['event_seq'];
     final rawType = json['event_type'];
+    final rawTerminalStatus = json['terminal_status'];
     final rawEnvelope = json['envelope'];
     if (rawSequence is! num ||
         rawSequence.toInt() < 1 ||
         rawType is! String ||
+        (rawTerminalStatus != null && rawTerminalStatus is! String) ||
         rawEnvelope is! Map) {
       throw const RelayFailure(
         RelayFailureKind.protocol,
@@ -257,6 +280,9 @@ class DaemonCipherEventObservation {
     return DaemonCipherEventObservation(
       sequence: rawSequence.toInt(),
       eventType: DaemonObservationEventType.fromWire(rawType),
+      terminalStatus: rawTerminalStatus is String
+          ? DaemonObservationTerminalStatus.fromWire(rawTerminalStatus)
+          : null,
       envelope: CipherEnvelopeMetadata.fromRelayJson(
         Map<String, dynamic>.from(rawEnvelope),
       ),
@@ -265,6 +291,7 @@ class DaemonCipherEventObservation {
 
   final int sequence;
   final DaemonObservationEventType eventType;
+  final DaemonObservationTerminalStatus? terminalStatus;
   final CipherEnvelopeMetadata envelope;
 }
 

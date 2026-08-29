@@ -147,11 +147,9 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(
-          alpha: 0.55,
-        ),
+        color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

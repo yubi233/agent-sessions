@@ -15,38 +15,31 @@ void main() {
     await _registerOwner(tester, 'composer-controls@fixture.test');
     await _createAndAcquireLease(tester);
 
-    // 控制条出现：模型/effort named seats + usage 计数。
+    // Composer 只保留一个单行模型/effort 状态入口，usage 仍独立展示。
     await _waitForVisible(
       tester,
-      find.byKey(const Key('composer-control-strip')),
+      find.byKey(const Key('happy-session-model-row')),
     );
     await _waitForVisible(
       tester,
-      find.byKey(const Key('composer-model-select')),
-    );
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('composer-effort-select')),
+      find.byKey(const Key('session-model-seat-trigger')),
     );
     await _waitForVisible(tester, find.byKey(const Key('session-stats-line')));
     // v0.5/P7：usage 只展示脱敏计数，不包含 prompt 或回复正文。
     expect(find.textContaining('输入 12.5k'), findsOneWidget);
     expect(find.textContaining('上下文 92%'), findsOneWidget);
     expect(find.textContaining('fixture-model-a'), findsWidgets);
+    expect(find.byKey(const Key('composer-model-select')), findsNothing);
+    expect(find.byKey(const Key('composer-effort-select')), findsNothing);
 
-    // 切换模型：打开两层 model seat，先进入模型 pane 再提交 session.model_select 命令。
-    await _tapVisible(tester, find.byKey(const Key('composer-model-select')));
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('session-model-menu-model')),
-    );
+    // 模型与 effort 在同一个底部弹层中切换。
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-model-menu-model')),
+      find.byKey(const Key('session-model-seat-trigger')),
     );
     await _waitForVisible(
       tester,
-      find.byKey(const Key('session-model-option-fixture-model-b')),
+      find.byKey(const Key('session-model-selection-sheet')),
     );
     await _tapVisible(
       tester,
@@ -63,19 +56,13 @@ void main() {
       isTrue,
     );
 
-    // 切换 effort：打开两层 model seat，进入 effort pane。
-    await _tapVisible(tester, find.byKey(const Key('composer-effort-select')));
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('session-model-menu-effort')),
-    );
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-model-menu-effort')),
+      find.byKey(const Key('session-model-seat-trigger')),
     );
     await _waitForVisible(
       tester,
-      find.byKey(const Key('session-effort-option-中')),
+      find.byKey(const Key('session-model-selection-sheet')),
     );
     await _tapVisible(tester, find.byKey(const Key('session-effort-option-中')));
     await _waitForVisible(tester, find.textContaining('已切换 effort'));
@@ -149,20 +136,16 @@ void main() {
     await _registerOwner(tester, 'composer-blocked@fixture.test');
     await _createAndAcquireLease(tester, provider: 'opencode');
 
-    // opencode fixture 未声明 model_select/effort_select：控制条仍显示（说明原因）但不可交互。
+    // opencode fixture 未声明 model_select/effort_select：状态入口保留说明但不可交互。
     await _waitForVisible(
       tester,
-      find.byKey(const Key('composer-control-strip')),
+      find.byKey(const Key('happy-session-model-row')),
     );
-    final modelSeat = tester.widget<OutlinedButton>(
-      find.byKey(const Key('composer-model-select')),
+    final trigger = tester.widget<InkWell>(
+      find.byKey(const Key('session-model-seat-trigger')),
     );
-    expect(modelSeat.onPressed, isNull);
-    final effortSeat = tester.widget<OutlinedButton>(
-      find.byKey(const Key('composer-effort-select')),
-    );
-    expect(effortSeat.onPressed, isNull);
-    expect(find.byKey(const Key('session-model-seat-blocked')), findsOneWidget);
+    expect(trigger.onTap, isNull);
+    expect(trigger.canRequestFocus, isFalse);
     expect(harness.relay.submittedCommandCount, 0);
   });
 
