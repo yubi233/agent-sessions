@@ -153,6 +153,14 @@ type ModelOverrideHandle interface {
 	SetModel(model string)
 }
 
+// EffortOverrideHandle 支持运行期更新会话推理档位（session.effort_select /
+// session.send 的随行 effort）。由具备推理档位路由能力的 adapter 实现；
+// daemon 按可选接口断言，不强制。
+type EffortOverrideHandle interface {
+	Handle
+	SetEffort(effort string)
+}
+
 // ForceKillHandle 只由明确拥有本机 Provider 进程树的 Handle 实现。它和 Abort 的语义不同：
 // Abort 只取消当前 turn；ForceKill 必须在返回前启动受控进程树的终止流程。共享 HTTP 服务、
 // 远端 Provider 或无法证明所有权的 Adapter 不得实现此接口。

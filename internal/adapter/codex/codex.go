@@ -213,6 +213,7 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	}
 	h := a.newHandle(resp.Thread.ID)
 	h.setModel(req.Model)
+	h.setEffort(req.Effort)
 	if req.Prompt != "" {
 		turnID, err := h.startTurnFor(ctx, client, req.Prompt)
 		if err != nil {

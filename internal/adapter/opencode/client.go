@@ -441,7 +441,8 @@ func (c *Client) GetMessages(ctx context.Context, id string, limit int) ([]Messa
 // PromptAsync 异步发送一条消息（POST /session/{id}/prompt_async）。204 表示已受理。
 // model 为空时使用服务端默认模型；显式模型必须是服务端已配置的 provider/model。
 // 服务端要求 model 为 {providerID, modelID} 对象，因此把 "provider/model" 拆开透传。
-func (c *Client) PromptAsync(ctx context.Context, id string, parts []Part, model string) error {
+// variant 对应模型目录 variants 的键（例如 high/low），空值表示不覆盖推理档位。
+func (c *Client) PromptAsync(ctx context.Context, id string, parts []Part, model string, variant string) error {
 	body := map[string]any{"parts": parts}
 	if model != "" {
 		providerID, modelID, ok := strings.Cut(model, "/")
@@ -449,6 +450,9 @@ func (c *Client) PromptAsync(ctx context.Context, id string, parts []Part, model
 			return fmt.Errorf("模型必须使用 provider/model 格式: %q", model)
 		}
 		body["model"] = map[string]string{"providerID": providerID, "modelID": modelID}
+	}
+	if variant = strings.TrimSpace(variant); variant != "" {
+		body["variant"] = variant
 	}
 	resp, err := c.do(ctx, http.MethodPost, "/session/"+url.PathEscape(id)+"/prompt_async", body)
 	if err != nil {

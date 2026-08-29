@@ -143,8 +143,8 @@ func TestEventEncoderForRunLocalDevPlaintext(t *testing.T) {
 		t.Fatalf("local dev encoder: %v", err)
 	}
 	defer destroy()
-	if _, ok := encoder.(daemon.LocalDevEventEncoder); !ok {
-		t.Fatalf("encoder type = %T, want daemon.LocalDevEventEncoder", encoder)
+	if _, ok := encoder.(*daemon.LocalDevEventEncoder); !ok {
+		t.Fatalf("encoder type = %T, want *daemon.LocalDevEventEncoder", encoder)
 	}
 
 	conflict := func(key string) string {

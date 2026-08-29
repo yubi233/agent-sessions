@@ -33,6 +33,8 @@ type fixtureSession struct {
 	messages int
 	// 最近一次 prompt_async 收到的 model（验证透传）。
 	lastModel string
+	// 最近一次 prompt_async 收到的 variant（验证 effort 透传）。
+	lastVariant string
 }
 
 // newFixtureServer 构造 fixture server；authRequired 为 true 时校验 Basic Auth。
@@ -168,14 +170,16 @@ func (f *fixtureServer) handlePromptAsync(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	// 记录消息数与模型透传（Resume 判断上下文用）。
+	// 记录消息数、模型与推理档位透传（Resume 判断上下文用）。
 	var body struct {
-		Model map[string]string `json:"model"`
+		Model   map[string]string `json:"model"`
+		Variant string            `json:"variant"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	s.messages++
 	s.lastModel = body.Model["providerID"] + "/" + body.Model["modelID"]
+	s.lastVariant = body.Variant
 	f.sessions[id] = s
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
@@ -549,6 +553,40 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 	// Abort 命中 /abort。
 	if err := h.Abort(context.Background()); err != nil {
 		t.Fatalf("abort: %v", err)
+	}
+}
+
+// prompt_async 必须同时透传 model 与 variant；Start 初始消息和 Send 都按当前 effort 发送。
+func TestPromptAsyncTransmitsEffortVariant(t *testing.T) {
+	f := newFixtureServer(t, true)
+	c := newFixtureClient(t, f)
+	a := NewWithClient(c)
+	h, err := a.Start(context.Background(), adapter.StartRequest{
+		WorkspaceRoot: "/tmp/ws", Provider: "opencode",
+		Model: "opencode/big-pickle", Effort: "high", Prompt: "初始消息",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer h.Dispose(context.Background())
+	sid := h.(*handle).sessionID
+
+	f.mu.Lock()
+	startVariant := f.sessions[sid].lastVariant
+	f.mu.Unlock()
+	if startVariant != "high" {
+		t.Fatalf("start variant = %q, want high", startVariant)
+	}
+
+	h.(*handle).SetEffort("low")
+	if err := h.Send(context.Background(), "继续"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	f.mu.Lock()
+	sendVariant := f.sessions[sid].lastVariant
+	f.mu.Unlock()
+	if sendVariant != "low" {
+		t.Fatalf("send variant = %q, want low", sendVariant)
 	}
 }
 

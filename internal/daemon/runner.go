@@ -4,7 +4,7 @@
 // 统一为 canonical event stream）与「统一能力模型」（未实现能力 fail-closed，不伪造成功）。
 //
 // 本阶段约束：
-//   - permission/question/plan/goal/skill/model/effort 等 kind 未实现，返回 ErrUnsupportedCommand；
+//   - permission/question/plan/goal/skill 等 kind 未实现，返回 ErrUnsupportedCommand；
 //   - 真实密文 envelope 不可解（无 fixture_payload）时返回错误，保持 fail-closed；
 //   - 无本地 instance 映射的 send/resume 返回 ErrSessionInstanceMissing（local_state_missing 语义）；
 //   - 唤醒结果只写 adapter 返回的六态之一，runner 禁止伪造 resumed。
@@ -153,6 +153,8 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 		return r.resumeSession(ctx, cmd)
 	case "session.model_select":
 		return r.selectModel(ctx, cmd)
+	case "session.effort_select":
+		return r.selectEffort(ctx, cmd)
 	default:
 		// 未实现 kind 保持 fail-closed：不写任何成功状态（项目文档「统一能力模型」）。
 		return fmt.Errorf("%w: kind=%s", ErrUnsupportedCommand, kind)
@@ -319,6 +321,17 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 	} else if stored, err := r.store.Get("model:" + sessionID); err == nil {
 		if setter, ok := rs.handle.(adapter.ModelOverrideHandle); ok {
 			setter.SetModel(strings.TrimSpace(stored))
+		}
+	}
+	// 推理档位解析顺序：send 密文随行 > 会话已持久化选择（effort_select）> handle 现值。
+	// 空值表示自动推理/不覆盖，由 Adapter 决定是否透传 variant。
+	if override := strings.TrimSpace(env.effort()); override != "" {
+		if setter, ok := rs.handle.(adapter.EffortOverrideHandle); ok {
+			setter.SetEffort(override)
+		}
+	} else if stored, err := r.store.Get("effort:" + sessionID); err == nil {
+		if setter, ok := rs.handle.(adapter.EffortOverrideHandle); ok {
+			setter.SetEffort(strings.TrimSpace(stored))
 		}
 	}
 	if err := rs.handle.Send(ctx, text); err != nil {
@@ -844,6 +857,28 @@ func (r *SessionRunner) selectModel(ctx context.Context, cmd Command) error {
 	}
 	if err := r.store.Set("model:"+sessionID, model); err != nil {
 		return fmt.Errorf("持久化模型选择: %w", err)
+	}
+	return nil
+}
+
+// selectEffort 兑现 session.effort_select：解析推理档位并持久化到会话元数据。
+// 运行期生效由 send 路径在 EffortOverrideHandle 上应用，和 model_select 保持一致。
+func (r *SessionRunner) selectEffort(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("session.effort_select 缺少 session_id")
+	}
+	// 空 effort 会被 SetEffort 静默忽略，用户以为已切换实则沿用旧档位，因此入口直接拒绝。
+	effort := strings.TrimSpace(env.effort())
+	if effort == "" {
+		return errors.New("session.effort_select 缺少 effort")
+	}
+	if err := r.store.Set("effort:"+sessionID, effort); err != nil {
+		return fmt.Errorf("持久化推理档位: %w", err)
 	}
 	return nil
 }

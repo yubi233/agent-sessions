@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -108,6 +109,7 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	for _, name := range adapter.CapabilityNames {
 		status := adapter.CapabilityUnsupported
 		reason := "OpenCode 本地服务可探测，但该能力未实现或契约未通过。"
+		var effortEntry adapter.Capability
 		switch name {
 		case "start", "resume", "abort", "usage":
 			// 已实现并通过 fixture contract：Start/Resume/Send/Abort 走真实 HTTP/SSE，usage 来自 step-finish 计数。
@@ -128,9 +130,14 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 				reason = "OpenCode Zen 免费模型目录为空，模型选择已安全禁用。"
 			}
 		case "effort_select":
-			reason = effortSelectReason(catalog, catalogErr)
+			effortEntry = effortSelectCapability(catalog, catalogErr)
+			status = effortEntry.Status
+			reason = effortEntry.Reason
 		}
 		entry := adapter.Capability{Name: name, Status: status, Reason: reason}
+		if effortEntry.Name != "" {
+			entry = effortEntry
+		}
 		if name == "model_select" && status == adapter.CapabilityNative {
 			entry.Options = append([]string(nil), catalog.Options...)
 			entry.Default = catalog.Default
@@ -152,20 +159,42 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	}, nil
 }
 
-// effortSelectReason 区分“模型支持推理”与“可选择推理档位”。当前 OpenCode
-// transport 尚未接入 effort 请求参数，因此有 variants 时也必须保持 fail-closed。
-func effortSelectReason(catalog ModelCatalog, catalogErr error) string {
-	if catalogErr != nil || catalog.Default == "" {
-		return "OpenCode 推理档位目录未确认，已安全禁用。"
+// effortSelectCapability 根据目录中是否有可选 variants 暴露 effort_select。
+// 未确认目录、没有任何模型提供可选档位时保持 fail-closed；
+// 只要目录中有模型提供 variants 且 transport 已接入 prompt_async.variant 就升级 native，
+// 具体模型是否可选手感由 model_details 的 efforts 继续按会话模型细分。
+func effortSelectCapability(catalog ModelCatalog, catalogErr error) adapter.Capability {
+	entry := adapter.Capability{Name: "effort_select", Status: adapter.CapabilityUnsupported}
+	if catalogErr != nil || len(catalog.Details) == 0 {
+		entry.Reason = "OpenCode 推理档位目录未确认，已安全禁用。"
+		return entry
 	}
-	detail, ok := catalog.Details[catalog.Default]
-	if !ok || !detail.Reasoning {
-		return "OpenCode 当前默认模型未声明推理档位，已安全禁用。"
+	seen := map[string]bool{}
+	for _, detail := range catalog.Details {
+		if !detail.Reasoning {
+			continue
+		}
+		for _, effort := range detail.Efforts {
+			if strings.TrimSpace(effort) != "" {
+				seen[strings.TrimSpace(effort)] = true
+			}
+		}
 	}
-	if len(detail.Efforts) == 0 {
-		return "OpenCode 当前默认模型使用自动推理，未提供可选推理档位。"
+	if len(seen) == 0 {
+		if detail, ok := catalog.Details[catalog.Default]; ok && detail.Reasoning {
+			entry.Reason = "OpenCode 当前默认模型使用自动推理，未提供可选推理档位。"
+		} else {
+			entry.Reason = "OpenCode 当前免费目录没有提供可选推理档位，已安全禁用。"
+		}
+		return entry
 	}
-	return "OpenCode 当前模型提供推理档位，但 agent-sessions 尚未接入 session.effort_select，已安全禁用。"
+	entry.Status = adapter.CapabilityNative
+	entry.Options = make([]string, 0, len(seen))
+	for effort := range seen {
+		entry.Options = append(entry.Options, effort)
+	}
+	sort.Strings(entry.Options)
+	return entry
 }
 
 // modelDetails 返回健康探测确认过的模型目录元数据。模型不在动态目录时不猜测。
@@ -278,15 +307,16 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 		return nil, fmt.Errorf("opencode create session: %w", err)
 	}
 	h := a.newHandle(session.ID, req.Model)
+	h.setEffort(req.Effort)
 	if err := h.attach(ctx); err != nil {
 		_ = client.Abort(context.Background(), session.ID)
 		a.detach(h)
 		return nil, fmt.Errorf("opencode subscribe events: %w", err)
 	}
 	// 首个 turn：如果 StartRequest 带初始 prompt，异步发送；失败不回滚会话（可重试）。
-	// 显式透传模型选择，避免 live gate 落到服务端默认模型而不可复现。
+	// 显式透传模型选择与推理档位，避免 live gate 落到服务端默认模型而不可复现。
 	if req.Prompt != "" {
-		if err := client.PromptAsync(ctx, session.ID, []Part{TextPart(req.Prompt)}, req.Model); err != nil {
+		if err := client.PromptAsync(ctx, session.ID, []Part{TextPart(req.Prompt)}, req.Model, req.Effort); err != nil {
 			_ = h.Dispose(context.Background())
 			return nil, fmt.Errorf("opencode initial prompt: %w", err)
 		}
@@ -451,6 +481,8 @@ type handle struct {
 	doneOnce  sync.Once
 	// model 是创建/恢复时透传的模型选择；Send 时随 prompt_async 一起提交。
 	model string
+	// effort 是当前推理档位（prompt_async.variant）；空值表示自动/未选择。
+	effort string
 }
 
 // InstanceID 返回 OpenCode /session 创建响应中的真实 session ID。
@@ -486,18 +518,34 @@ func (h *handle) SetModel(model string) {
 	h.mu.Unlock()
 }
 
+// SetEffort 应用运行期推理档位覆盖（session.effort_select / session.send 的随行 effort）。
+// 空值忽略，避免清除后让服务端回退到未受控的默认推理策略。
+func (h *handle) SetEffort(effort string) {
+	h.setEffort(effort)
+}
+
+func (h *handle) setEffort(effort string) {
+	effort = strings.TrimSpace(effort)
+	if effort == "" {
+		return
+	}
+	h.mu.Lock()
+	h.effort = effort
+	h.mu.Unlock()
+}
+
 func (h *handle) Send(ctx context.Context, text string) error {
 	client := h.adapter.getClient()
 	if client == nil {
 		return errors.New("opencode client 未配置")
 	}
 	h.mu.Lock()
-	model := h.model
+	model, effort := h.model, h.effort
 	h.mu.Unlock()
 	if strings.TrimSpace(model) == "" {
 		model = h.adapter.catalogFallbackModel()
 	}
-	return client.PromptAsync(ctx, h.sessionID, []Part{TextPart(text)}, model)
+	return client.PromptAsync(ctx, h.sessionID, []Part{TextPart(text)}, model, effort)
 }
 
 // Abort 中止当前 turn（POST /session/{id}/abort）。

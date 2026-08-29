@@ -176,6 +176,104 @@ func TestDetectExposesDynamicModelCapability(t *testing.T) {
 	}
 }
 
+func TestDetectExposesEffortSelectWhenDefaultHasVariants(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"healthy": true, "version": "1.17.13"})
+	})
+	mux.HandleFunc("/config/providers", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"providers": []any{
+				map[string]any{
+					"id": "opencode",
+					"models": map[string]any{
+						"reasoner-free": map[string]any{
+							"id": "reasoner-free", "providerID": "opencode", "status": "active",
+							"cost":         map[string]any{"input": 0, "output": 0},
+							"capabilities": map[string]any{"reasoning": true},
+							"limit":        map[string]any{"context": 128000},
+							"variants": map[string]any{
+								"low":  map[string]any{},
+								"high": map[string]any{},
+							},
+						},
+					},
+				},
+			},
+			"default": map[string]string{"opencode": "reasoner-free"},
+		})
+	})
+	mux.HandleFunc("/provider", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	a := NewWithClient(modelCatalogClient(t, server))
+	caps, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	entry := byCapabilityName(caps, "effort_select")
+	if entry.Status != adapter.CapabilityNative {
+		t.Fatalf("effort_select status = %q, reason=%q", entry.Status, entry.Reason)
+	}
+	if !equalStrings(entry.Options, []string{"high", "low"}) {
+		t.Fatalf("effort options = %#v", entry.Options)
+	}
+}
+
+func TestDetectExposesEffortSelectWhenAnyModelHasVariants(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"healthy": true, "version": "1.17.13"})
+	})
+	mux.HandleFunc("/config/providers", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"providers": []any{
+				map[string]any{
+					"id": "opencode",
+					"models": map[string]any{
+						"big-pickle": map[string]any{
+							"id": "big-pickle", "providerID": "opencode", "status": "active",
+							"cost":         map[string]any{"input": 0, "output": 0},
+							"capabilities": map[string]any{"reasoning": true},
+							"limit":        map[string]any{"context": 200000},
+						},
+						"mimo-v2.5-free": map[string]any{
+							"id": "mimo-v2.5-free", "providerID": "opencode", "status": "active",
+							"cost":         map[string]any{"input": 0, "output": 0},
+							"capabilities": map[string]any{"reasoning": true},
+							"limit":        map[string]any{"context": 128000},
+							"variants": map[string]any{
+								"medium": map[string]any{},
+								"high":   map[string]any{},
+							},
+						},
+					},
+				},
+			},
+			"default": map[string]string{"opencode": "big-pickle"},
+		})
+	})
+	mux.HandleFunc("/provider", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	a := NewWithClient(modelCatalogClient(t, server))
+	caps, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	entry := byCapabilityName(caps, "effort_select")
+	if entry.Status != adapter.CapabilityNative {
+		t.Fatalf("effort_select status = %q, reason=%q", entry.Status, entry.Reason)
+	}
+	if !equalStrings(entry.Options, []string{"high", "medium"}) {
+		t.Fatalf("effort options = %#v", entry.Options)
+	}
+}
+
 func TestDetectKeepsModelSelectionFailClosedWhenCatalogMissing(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/global/health", func(w http.ResponseWriter, r *http.Request) {

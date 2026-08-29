@@ -90,6 +90,8 @@ type fakeHandle struct {
 	aborts int
 	// models 记录 SetModel 的调用序列；空值覆盖不产生记录。
 	models []string
+	// efforts 记录 SetEffort 的调用序列；空值覆盖不产生记录。
+	efforts []string
 	// sendErr/abortErr 注入传输层同步失败；失败时不得产生任何 Provider 事件。
 	sendErr  error
 	abortErr error
@@ -120,6 +122,16 @@ func (h *fakeHandle) SetModel(model string) {
 	}
 	h.mu.Lock()
 	h.models = append(h.models, model)
+	h.mu.Unlock()
+}
+
+// SetEffort 实现 adapter.EffortOverrideHandle，记录运行期推理档位覆盖序列。
+func (h *fakeHandle) SetEffort(effort string) {
+	if strings.TrimSpace(effort) == "" {
+		return
+	}
+	h.mu.Lock()
+	h.efforts = append(h.efforts, effort)
 	h.mu.Unlock()
 }
 
@@ -1116,24 +1128,77 @@ func TestSessionRunnerAbortAndKillWithoutInstanceFailsClosed(t *testing.T) {
 	}
 }
 
-// effort_select 是有意 fail-closed 的未实现能力：拒绝且不写任何成功状态。
-func TestSessionRunnerEffortSelectFailsClosed(t *testing.T) {
-	s, runner, _ := newRunnerFixture(t, "opencode")
-	err := runner.ConsumeCommand(context.Background(), Command{
+// 合法的 effort_select 持久化到 effort:<session_id>；密文缺省时顶层 effort 字段兜底，
+// 覆盖写生效，且后续 send 不带随行 effort 时应用最近一次持久化选择。
+func TestSessionRunnerEffortSelectPersistsChoice(t *testing.T) {
+	store, runner, fake := newRunnerFixture(t, "opencode")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
 		Kind:        "session.effort_select",
-		PayloadJSON: `{"session_id":"s1","effort":"high","ciphertext":{"fixture_payload":{"effort":"high"}}}`,
-	})
-	if !errors.Is(err, ErrUnsupportedCommand) {
-		t.Fatalf("err = %v, want ErrUnsupportedCommand", err)
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"effort":"high"}}}`,
+	}); err != nil {
+		t.Fatalf("consume session.effort_select: %v", err)
 	}
-	if _, err := s.Get("model:s1"); err == nil {
-		t.Fatal("effort_select 不得写模型选择")
+	if got, err := store.Get("effort:s1"); err != nil || got != "high" {
+		t.Fatalf("effort:s1 = %q err=%v, want high", got, err)
 	}
-	if _, err := s.Get(instanceKey("s1")); err == nil {
-		t.Fatal("effort_select 不得写 instance 映射")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.effort_select",
+		PayloadJSON: `{"session_id":"s1","effort":"medium"}`,
+	}); err != nil {
+		t.Fatalf("consume session.effort_select (top-level): %v", err)
 	}
-	if _, err := s.Get(resumeResultKey("s1")); err == nil {
-		t.Fatal("effort_select 不得写 resume 结果")
+	if got, err := store.Get("effort:s1"); err != nil || got != "medium" {
+		t.Fatalf("effort:s1 = %q err=%v, want medium", got, err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"继续"}}}`,
+	}); err != nil {
+		t.Fatalf("consume session.send: %v", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	efforts := append([]string(nil), h.efforts...)
+	h.mu.Unlock()
+	if len(efforts) != 1 || efforts[0] != "medium" {
+		t.Fatalf("SetEffort got %v, want [medium]", efforts)
+	}
+}
+
+// 非法 effort_select 输入必须稳定失败且不改写已持久化的选择。
+func TestSessionRunnerEffortSelectRejectsInvalidInput(t *testing.T) {
+	store, runner, _ := newRunnerFixture(t, "opencode")
+	if err := store.Set("effort:s1", "keep-original"); err != nil {
+		t.Fatalf("seed session effort: %v", err)
+	}
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{"缺少 session_id", `{"effort":"high"}`},
+		{"缺少 effort", `{"session_id":"s1"}`},
+		{"空 effort", `{"session_id":"s1","effort":""}`},
+		{"空白 effort", `{"session_id":"s1","effort":"   "}`},
+		{"空 fixture effort", `{"session_id":"s1","ciphertext":{"fixture_payload":{"effort":""}}}`},
+		{"envelope 不可解", `{"session_id":"s1",not-json`},
+	}
+	for _, tc := range cases {
+		err := runner.ConsumeCommand(context.Background(), Command{
+			Kind: "session.effort_select", PayloadJSON: tc.payload,
+		})
+		if err == nil {
+			t.Fatalf("%s: 必须失败", tc.name)
+		}
+		got, err := store.Get("effort:s1")
+		if err != nil || got != "keep-original" {
+			t.Fatalf("%s: store 被改写为 %q (err=%v)", tc.name, got, err)
+		}
 	}
 }
 
