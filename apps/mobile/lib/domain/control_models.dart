@@ -20,6 +20,20 @@ enum CapabilityAvailability {
   };
 }
 
+/// 单个模型的安全能力元数据；只保留上下文窗口和推理目录，不含 Provider 配置。
+class CapabilityModelDetail {
+  const CapabilityModelDetail({
+    this.contextWindowTokens = 0,
+    this.reasoning = false,
+    this.efforts = const [],
+  });
+
+  final int contextWindowTokens;
+  final bool reasoning;
+  final List<String> efforts;
+}
+
+
 /// 单项 capability 是 Relay/Daemon 声明的事实，客户端绝不根据 Provider 名称补猜。
 class CapabilityEntry {
   const CapabilityEntry({
@@ -28,6 +42,7 @@ class CapabilityEntry {
     this.reason,
     this.options = const [],
     this.defaultOption,
+    this.modelDetails = const {},
   });
 
   factory CapabilityEntry.fromRelayJson(Map<String, dynamic> json) {
@@ -51,6 +66,25 @@ class CapabilityEntry {
         rawDefault is String && options.contains(rawDefault.trim())
         ? rawDefault.trim()
         : null;
+    final rawModelDetails = json['model_details'];
+    final modelDetails = <String, CapabilityModelDetail>{};
+    if (rawModelDetails is Map) {
+      for (final entry in rawModelDetails.entries) {
+        if (entry.key is! String || entry.value is! Map) continue;
+        final value = Map<String, dynamic>.from(entry.value as Map);
+        final rawEfforts = value['efforts'];
+        modelDetails[entry.key as String] = CapabilityModelDetail(
+          contextWindowTokens: _intFromControlJson(
+                value['context_window_tokens'],
+              ) ??
+              0,
+          reasoning: value['reasoning'] == true,
+          efforts: rawEfforts is List
+              ? rawEfforts.whereType<String>().toList(growable: false)
+              : const [],
+        );
+      }
+    }
     return CapabilityEntry(
       name: name.trim(),
       availability: availability,
@@ -63,6 +97,7 @@ class CapabilityEntry {
           : null,
       options: options,
       defaultOption: defaultOption,
+      modelDetails: modelDetails,
     );
   }
 
@@ -75,6 +110,9 @@ class CapabilityEntry {
 
   /// 只有同时存在于 [options] 中的默认值才被接受。
   final String? defaultOption;
+
+  /// 按 provider/model 索引的模型安全元数据。
+  final Map<String, CapabilityModelDetail> modelDetails;
 
   bool get isSupported => availability != CapabilityAvailability.unsupported;
 }
@@ -155,6 +193,10 @@ class ProviderCapabilityProfile {
   /// 返回 Host 声明的安全选项目录副本，防止调用方修改 capability 快照。
   List<String> optionsFor(String name) =>
       List<String>.unmodifiable(capability(name).options);
+
+  /// 返回 Host 声明的指定模型安全元数据；未知模型不猜测。
+  CapabilityModelDetail? modelDetailFor(String name, String model) =>
+      capability(name).modelDetails[model.trim()];
 }
 
 /// CapabilityMatrix 是 GET /v1/capabilities 的客户端投影。

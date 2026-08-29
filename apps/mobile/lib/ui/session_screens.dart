@@ -4776,6 +4776,9 @@ class _HappyComposerMetaRow extends StatelessWidget {
         controls.model ??
         controls.defaultModel ??
         modelCapability.defaultOption;
+    final modelDetail = selectedModel == null
+        ? null
+        : capabilities.modelDetailFor('model_select', selectedModel);
     return SessionModelSeat(
       key: const Key('happy-session-model-row'),
       provider: sessions.selectedSession?.provider,
@@ -4798,6 +4801,7 @@ class _HappyComposerMetaRow extends StatelessWidget {
         canWrite: canWrite,
       ),
       busy: sessions.isBusy,
+      modelDetail: modelDetail,
       usage: controls.usage,
       onRefresh: () async {
         final error = await sessions.refreshSelectedControls();

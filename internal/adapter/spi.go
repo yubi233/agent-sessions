@@ -20,6 +20,14 @@ var CapabilityNames = []string{
 	"fork", "delegate_session", "delegate_cross_provider",
 }
 
+// ModelCapabilityDetail 是模型目录的安全元数据，用于上下文窗口和推理能力展示。
+// 不包含 Provider 配置、凭据或请求正文。
+type ModelCapabilityDetail struct {
+	ContextWindowTokens int64    `json:"context_window_tokens,omitempty"`
+	Reasoning           bool     `json:"reasoning"`
+	Efforts             []string `json:"efforts,omitempty"`
+}
+
 // Capability 描述单项能力状态与原因。
 // Options 是 additive 选项目录（model/effort/permission_mode 等）：空表示不暴露目录，
 // 客户端按 Status 决定入口是否可用，按 Options 渲染选择列表。
@@ -31,6 +39,8 @@ type Capability struct {
 	// Default 是该能力目录的安全默认项（当前主要用于 model_select）。
 	// 它必须同时存在于 Options 中；缺失时客户端不得自行猜测。
 	Default string `json:"default,omitempty"`
+	// ModelDetails 只对 model_select 生效，以模型引用为键提供上下文/推理白名单元数据。
+	ModelDetails map[string]ModelCapabilityDetail `json:"model_details,omitempty"`
 }
 
 // Capabilities 返回 Provider 的能力矩阵。

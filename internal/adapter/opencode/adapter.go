@@ -134,6 +134,14 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 		if name == "model_select" && status == adapter.CapabilityNative {
 			entry.Options = append([]string(nil), catalog.Options...)
 			entry.Default = catalog.Default
+			entry.ModelDetails = make(map[string]adapter.ModelCapabilityDetail, len(catalog.Details))
+			for model, detail := range catalog.Details {
+				entry.ModelDetails[model] = adapter.ModelCapabilityDetail{
+					ContextWindowTokens: detail.ContextWindowTokens,
+					Reasoning:           detail.Reasoning,
+					Efforts:             append([]string(nil), detail.Efforts...),
+				}
+			}
 		}
 		caps = append(caps, entry)
 	}

@@ -241,6 +241,10 @@ void main() {
           efforts: [],
         ),
         provider: 'opencode',
+        modelDetail: const CapabilityModelDetail(
+          contextWindowTokens: 200000,
+          reasoning: true,
+        ),
         usage: usage,
         effortCapability: const CapabilityEntry(
           name: 'effort_select',
@@ -260,10 +264,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('自动（模型内置）'), findsOneWidget);
-    expect(
-      find.text('自动推理（当前模型未提供可选档位）'),
-      findsOneWidget,
-    );
+    expect(find.text('自动推理（当前模型未提供可选档位）'), findsOneWidget);
     expect(find.text('用量统计'), findsOneWidget);
     expect(find.textContaining('输入 11.9k'), findsOneWidget);
     expect(find.textContaining('输出 111'), findsOneWidget);
@@ -347,6 +348,7 @@ Widget _seatApp({
   String? modelBlockedReason,
   String? effortBlockedReason,
   SessionUsageSummary? usage,
+  CapabilityModelDetail? modelDetail,
   Future<SessionModelCatalogRefresh> Function()? onRefresh,
   Future<String?> Function(String model)? onSelectModel,
   Future<String?> Function(String effort)? onSelectEffort,
@@ -364,6 +366,7 @@ Widget _seatApp({
           effortCapability: effortCapability,
           modelBlockedReason: modelBlockedReason,
           effortBlockedReason: effortBlockedReason,
+          modelDetail: modelDetail,
           usage: usage,
           onRefresh:
               onRefresh ??

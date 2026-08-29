@@ -56,6 +56,7 @@ class SessionModelSeat extends StatefulWidget {
       name: 'effort_select',
       availability: CapabilityAvailability.unsupported,
     ),
+    this.modelDetail,
     this.busy = false,
     this.usage,
     super.key,
@@ -67,6 +68,7 @@ class SessionModelSeat extends StatefulWidget {
   final SessionModelCatalog catalog;
   final CapabilityEntry modelCapability;
   final CapabilityEntry effortCapability;
+  final CapabilityModelDetail? modelDetail;
   final String? modelBlockedReason;
   final String? effortBlockedReason;
   final bool busy;
@@ -96,15 +98,39 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
   }
 
   bool get _usesAutomaticReasoning {
-    final provider = widget.provider?.trim().toLowerCase();
     final effort = widget.catalog.effort?.trim();
-    return provider == 'opencode' && (effort == null || effort.isEmpty);
+    return widget.modelDetail?.reasoning == true &&
+        (effort == null || effort.isEmpty) &&
+        widget.modelDetail?.efforts.isEmpty == true;
   }
+
+  bool get _hasSelectableEfforts =>
+      widget.catalog.efforts.isNotEmpty ||
+      widget.modelDetail?.efforts.isNotEmpty == true;
 
   String get _displayEffort {
     final effort = widget.catalog.effort?.trim();
     if (effort != null && effort.isNotEmpty) return effort;
-    return _usesAutomaticReasoning ? '自动' : '—';
+    if (_usesAutomaticReasoning) return '自动';
+    return _hasSelectableEfforts ? '默认' : '—';
+  }
+
+  SessionUsageSummary? get _effectiveUsage {
+    final usage = widget.usage;
+    final modelWindow = widget.modelDetail?.contextWindowTokens ?? 0;
+    if (usage == null || usage.contextWindowTokens > 0 || modelWindow <= 0) {
+      return usage;
+    }
+    return SessionUsageSummary(
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      contextTokens: usage.contextTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheCreationTokens: usage.cacheCreationTokens,
+      contextWindowTokens: modelWindow,
+      ttftMs: usage.ttftMs,
+      decodeThroughput: usage.decodeThroughput,
+    );
   }
 
   String get _pickerHint {
@@ -145,7 +171,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
   }
 
   Future<void> _openDetails() async {
-    final usage = widget.usage;
+    final usage = _effectiveUsage;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
