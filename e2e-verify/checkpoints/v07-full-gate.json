@@ -1,0 +1,97 @@
+{
+  "checkpoint_version": "v07-full-gate-checkpoint-1",
+  "suite_version": "v07-full-gate-1",
+  "seed": "20260829",
+  "question_count": 12,
+  "generator_version": "v07-qa-pool-1",
+  "oracle_version": "v07-weak-oracle-1",
+  "model_catalog_sha256": "959b1f41965e6e834d00fd62840b3679ca854075ff1f446058ee3a7ddf3f240e",
+  "model_options": [
+    "opencode/big-pickle",
+    "opencode/hy3-free",
+    "opencode/ling-3.0-flash-fin-free",
+    "opencode/mimo-v2.5-free",
+    "opencode/muse-spark-1.2-contributor-free",
+    "opencode/nemotron-3-ultra-free",
+    "opencode/nemotron-3.5-lightning-free"
+  ],
+  "assignments": [
+    {
+      "case_id": "en-code-02",
+      "session_slot": 0,
+      "model": "opencode/big-pickle"
+    },
+    {
+      "case_id": "zh-math-01",
+      "session_slot": 1,
+      "model": "opencode/hy3-free"
+    },
+    {
+      "case_id": "en-math-01",
+      "session_slot": 2,
+      "model": "opencode/ling-3.0-flash-fin-free"
+    },
+    {
+      "case_id": "zh-translation-01",
+      "session_slot": 0,
+      "model": "opencode/big-pickle"
+    },
+    {
+      "case_id": "zh-code-01",
+      "session_slot": 1,
+      "model": "opencode/hy3-free"
+    },
+    {
+      "case_id": "en-explanation-02",
+      "session_slot": 2,
+      "model": "opencode/ling-3.0-flash-fin-free"
+    },
+    {
+      "case_id": "zh-math-03",
+      "session_slot": 0,
+      "model": "opencode/big-pickle"
+    },
+    {
+      "case_id": "en-translation-02",
+      "session_slot": 1,
+      "model": "opencode/hy3-free"
+    },
+    {
+      "case_id": "en-explanation-01",
+      "session_slot": 2,
+      "model": "opencode/ling-3.0-flash-fin-free"
+    },
+    {
+      "case_id": "en-translation-01",
+      "session_slot": 0,
+      "model": "opencode/big-pickle"
+    },
+    {
+      "case_id": "zh-math-02",
+      "session_slot": 1,
+      "model": "opencode/hy3-free"
+    },
+    {
+      "case_id": "zh-translation-03",
+      "session_slot": 2,
+      "model": "opencode/ling-3.0-flash-fin-free"
+    }
+  ],
+  "behavior_hash": "sha256:a1375e925781a1ef9efad5f787913222",
+  "completed_case_ids": [
+    "en-code-02",
+    "en-explanation-01",
+    "en-explanation-02",
+    "en-math-01",
+    "en-translation-01",
+    "en-translation-02",
+    "zh-code-01",
+    "zh-math-01",
+    "zh-math-02",
+    "zh-math-03",
+    "zh-translation-01",
+    "zh-translation-03"
+  ],
+  "failures": [],
+  "updated_at": "2026-08-29T03:45:18.236Z"
+}

@@ -56,20 +56,26 @@ function safeLogSummary(value) {
 
 // startOpenCodeServe 启动真实 opencode serve（随机端口），等待 /global/health 健康后返回控制句柄。
 // options.healthTimeoutMs 默认 60s：serve 启动慢，健康等待需要足够预算。
+// options.cwd 指定 serve 工作目录：opencode 会话的文件/命令都落在该目录，真实编码任务用它绑定演示工作区。
+// options.configDir 显式指定 XDG_CONFIG_HOME，让同一台机器上的演示 serve 使用独立 provider/permission 配置。
 export async function startOpenCodeServe({
   port = 0,
   hostname = "127.0.0.1",
   healthTimeoutMs = 60_000,
+  cwd = null,
+  configDir = null,
 } = {}) {
   const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
   const password = process.env.OPENCODE_SERVER_PASSWORD;
   const actualPort = port === 0 ? await reservePort(hostname) : port;
   const binary = process.env.OPENCODE_BIN || "opencode";
 
+  const safeEnv = safeOpenCodeEnvironment();
+  if (configDir) safeEnv.XDG_CONFIG_HOME = configDir;
   const child = spawn(
     binary,
     ["serve", "--port", String(actualPort), "--hostname", hostname, "--pure", "--print-logs"],
-    { stdio: ["ignore", "pipe", "pipe"], env: safeOpenCodeEnvironment() },
+    { stdio: ["ignore", "pipe", "pipe"], env: safeEnv, ...(cwd ? { cwd } : {}) },
   );
 
   let logs = "";

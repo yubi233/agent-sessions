@@ -229,6 +229,42 @@ async function startSession({ relayBase, ownerToken, terminalId, sessionId, mode
   return leaseEpoch;
 }
 
+// prepareGateSessions 按 slot 创建 workspace/session 并启动会话。
+// terminal 标识必须取 /v1/terminals 行 id（daemon 注册实例，workspace.TerminalID
+// 与命令投递都以它为准）；pairing approval 返回的 device id 是另一个标识，混用会被
+// Relay scope 校验以 403 scope_denied 拒绝（2026-08-29 full gate 12 case 全部因此失败）。
+export async function prepareGateSessions({
+  relayBase,
+  ownerToken,
+  terminalDeviceId,
+  sessions,
+  modelForSlot,
+  commandKinds,
+  createWorkspaceFn = createWorkspace,
+  createSessionFn = createSession,
+  startSessionFn = startSession,
+  waitForTerminalFn = waitForTerminal,
+}) {
+  const terminalId = (await waitForTerminalFn(relayBase, ownerToken, terminalDeviceId)).id;
+  const sessionState = [];
+  for (let slot = 0; slot < sessions; slot += 1) {
+    const folder = `v07-full-${Date.now().toString(36)}-${slot}`;
+    const workspaceId = await createWorkspaceFn(relayBase, ownerToken, folder, commandKinds);
+    const sessionId = await createSessionFn(relayBase, ownerToken, workspaceId);
+    const model = modelForSlot(slot);
+    const leaseEpoch = await startSessionFn({
+      relayBase,
+      ownerToken,
+      terminalId,
+      sessionId,
+      model,
+      commandKinds,
+    });
+    sessionState.push({ slot, sessionId, model, leaseEpoch, terminalId });
+  }
+  return sessionState;
+}
+
 async function runQuestion({ relayBase, ownerToken, terminalId, sessionId, leaseEpoch, model, question, timeoutMs, commandKinds }) {
   const beforeSnapshot = snapshotSummary(await readSnapshot(relayBase, ownerToken, sessionId));
   const beforeUsage = usageCounts(await readControls(relayBase, ownerToken, sessionId));
@@ -489,23 +525,17 @@ export async function runZenFullGate(args = parseFullGateArgs([]), {
     // 目录发现完成后才启动共享拓扑，确保没有 Zen 交集时不会启动无意义的 Daemon。
     await topology.opencode.stop().catch(() => {});
     topology = await prepareTopology(assignments[0]?.model || localCatalog.options[0], rootTemp);
-    const sessionState = [];
-    for (let slot = 0; slot < args.sessions; slot += 1) {
-      const folder = `v07-full-${Date.now().toString(36)}-${slot}`;
-      const workspaceId = await createWorkspace(topology.relay.base, topology.owner.accessToken, folder, report.command_kinds || (report.command_kinds = []));
-      const sessionId = await createSession(topology.relay.base, topology.owner.accessToken, workspaceId);
-      const slotAssignments = assignmentsForSession(assignments, slot);
-      const model = slotAssignments[0]?.model || localCatalog.options[slot % localCatalog.options.length];
-      const leaseEpoch = await startSession({
-        relayBase: topology.relay.base,
-        ownerToken: topology.owner.accessToken,
-        terminalId: (await waitForTerminal(topology.relay.base, topology.owner.accessToken, topology.terminal.deviceId)).id,
-        sessionId,
-        model,
-        commandKinds: report.command_kinds,
-      });
-      sessionState.push({ slot, sessionId, model, leaseEpoch, terminalId: topology.terminal.deviceId });
-    }
+    const sessionState = await prepareGateSessions({
+      relayBase: topology.relay.base,
+      ownerToken: topology.owner.accessToken,
+      terminalDeviceId: topology.terminal.deviceId,
+      sessions: args.sessions,
+      modelForSlot: (slot) => {
+        const slotAssignments = assignmentsForSession(assignments, slot);
+        return slotAssignments[0]?.model || localCatalog.options[slot % localCatalog.options.length];
+      },
+      commandKinds: report.command_kinds || (report.command_kinds = []),
+    });
 
     const questionById = new Map(questions.map((question) => [question.id, question]));
     for (const assignment of assignments) {

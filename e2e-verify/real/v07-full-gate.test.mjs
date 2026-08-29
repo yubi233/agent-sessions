@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   buildAssignments,
   parseFullGateArgs,
+  prepareGateSessions,
   runZenFullGate,
 } from "./v07-full-gate.mjs";
 import { classifyHarnessError, V07HarnessError } from "./v07-harness.mjs";
@@ -157,4 +158,36 @@ test("V07-11 stale checkpoint 统一归类为 checkpoint_mismatch", () => {
     classifyHarnessError(new V07HarnessError("产品收口失败", { failureClass: "product_defect" })).failure_class,
     "product_defect",
   );
+});
+
+test("V07-06 session.start/session.send 统一使用 /v1/terminals 行 id（device id 混用回归）", async () => {
+  // 2026-08-29 真实 full gate：sessionState 曾携带 pairing device id（dev_*），
+  // 与 workspace.TerminalID（term_* 行 id）不一致，Relay 对全部 session.send
+  // 返回 403 scope_denied，12 个 case 被误分类为 credential_or_quota_blocker。
+  const startedWith = [];
+  const sessionState = await prepareGateSessions({
+    relayBase: "http://relay.test",
+    ownerToken: "owner-token",
+    terminalDeviceId: "dev_pairing",
+    sessions: 2,
+    modelForSlot: (slot) => `opencode/model-${slot}`,
+    commandKinds: [],
+    waitForTerminalFn: async () => ({ id: "term_row_1", device_id: "dev_pairing", status: "online" }),
+    createWorkspaceFn: async (_base, _token, folder, kinds) => {
+      kinds.push("workspace.create");
+      return `ws_${folder}`;
+    },
+    createSessionFn: async (_base, _token, workspaceId) => `sess_${workspaceId}`,
+    startSessionFn: async ({ terminalId }) => {
+      startedWith.push(terminalId);
+      return 1;
+    },
+  });
+  assert.equal(sessionState.length, 2);
+  for (const state of sessionState) {
+    assert.equal(state.terminalId, "term_row_1");
+    assert.notEqual(state.terminalId, "dev_pairing");
+    assert.match(state.sessionId, /^sess_ws_v07-full-/);
+  }
+  assert.deepEqual(startedWith, ["term_row_1", "term_row_1"]);
 });
