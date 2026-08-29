@@ -615,8 +615,16 @@ paths:
   /v1/sessions:
     get:
       operationId: listSessions
+      description: 默认返回未归档会话（按 last_activity 倒序），读取前会执行确定性对账与休眠自动归档 sweep；?archived=true 时返回归档列表且不触发 sweep。
       security:
         - bearerAuth: []
+      parameters:
+        - in: query
+          name: archived
+          schema:
+            type: string
+            enum: ["true"]
+          description: 传 "true" 时读取已归档会话列表。
       responses:
         "200":
           description: sessions
@@ -1146,6 +1154,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DaemonHeartbeatResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "426":
+          description: terminal protocol is below the supported compatibility window
+  /v1/daemon/sessions/recover:
+    post:
+      operationId: recoverDaemonSessions
+      description: 仅已配对 terminal 可调用。Daemon 进程启动后声明一次「上一进程已死亡」，Relay 据此对该 terminal 工作区遗留 running 会话做确定性收口：带 instance 或回合证据不全的置 stopped 并清空 instance，命令全终态且最后事件为 message.completed 的置 idle。绝不 archive，不要求心跳失联，幂等可重放。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonSessionRecoveryRequest"
+      responses:
+        "200":
+          description: recovery sweep completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonSessionRecoveryResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1738,6 +1771,10 @@ components:
           format: int64
         provider:
           type: string
+        last_activity_at_unix_ms:
+          type: integer
+          format: int64
+          description: 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端用于最后消息时间展示、列表排序与 idle 休眠衰减。
     SessionList:
       type: object
       required: [sessions]
@@ -1827,7 +1864,11 @@ components:
           minimum: 1
         event_type:
           type: string
-          enum: [session.lifecycle, turn.started, message.delta, message.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated, unknown]
+          enum: [session.lifecycle, turn.started, user.message, message.delta, message.completed, turn.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated, unknown]
+        terminal_status:
+          type: string
+          enum: [idle, stopped]
+          description: 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
         envelope:
           $ref: "#/components/schemas/CipherEnvelopeMetadata"
     CipherEnvelopeMetadata:
@@ -1916,6 +1957,11 @@ components:
           format: int64
         event_type:
           type: string
+          enum: [session.lifecycle, turn.started, user.message, message.delta, message.completed, turn.completed, tool.call, tool.result, permission.request, permission.decision, user.question, plan.changed, goal.changed, skill.catalog_changed, usage.updated, file.changed, git.snapshot, command.updated, delegation.changed]
+        terminal_status:
+          type: string
+          enum: [idle, stopped]
+          description: 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
         envelope:
           type: object
     SubmitCommandRequest:
@@ -2109,6 +2155,28 @@ components:
           minimum: 1
         signature:
           $ref: "#/components/schemas/TerminalSignature"
+    DaemonSessionRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version]
+      description: Daemon 进程启动后的一次性历史收口声明：调用方断言同一 Terminal 的上一进程已死亡。端点幂等，重试安全。
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
+    DaemonSessionRecoveryResponse:
+      type: object
+      required: [recovered_idle, recovered_stopped]
+      description: 本次收口计数。收口只写 idle/stopped 与审计，绝不 archive；命令未终态的会话保持 running。
+      properties:
+        recovered_idle:
+          type: integer
+          minimum: 0
+        recovered_stopped:
+          type: integer
+          minimum: 0
     DaemonHeartbeatResponse:
       type: object
       required: [terminal_id, server_time_unix_ms]
@@ -2319,7 +2387,11 @@ components:
           maxLength: 128
         event_type:
           type: string
-          enum: [session.lifecycle, turn.started, message.delta, message.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated]
+          enum: [session.lifecycle, turn.started, user.message, message.delta, message.completed, turn.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated]
+        terminal_status:
+          type: string
+          enum: [idle, stopped]
+          description: 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
         envelope:
           $ref: "#/components/schemas/OpaqueCipherEnvelope"
         signature:
@@ -2513,6 +2585,14 @@ components:
           enum: [native, emulated, unsupported]
         reason:
           type: string
+        options:
+          type: array
+          description: Host 明确提供的安全选项目录；空值表示没有可选择项。
+          items:
+            type: string
+        default:
+          type: string
+          description: 只有同时存在于 options 中的默认选项才可使用。
     CapabilityProvider:
       type: object
       required: [kind, version, available, capabilities]

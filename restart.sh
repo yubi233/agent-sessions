@@ -17,10 +17,15 @@ OPENCODE_BIN="${OPENCODE_BIN:-opencode}"
 OPENCODE_HOST="${AGENT_SESSIONS_OPENCODE_HOST:-127.0.0.1}"
 OPENCODE_PORT="${AGENT_SESSIONS_OPENCODE_PORT:-4096}"
 OPENCODE_URL="${AGENT_SESSIONS_OPENCODE_URL:-http://$OPENCODE_HOST:$OPENCODE_PORT}"
+# v0.7：默认模型只作为显式 provider/model 配置透传给 Relay 与 Daemon；为空时
+# 由 OpenCode Adapter 的健康目录动态决定，启动脚本不猜测或硬编码付费模型。
+OPENCODE_DEFAULT_MODEL="${AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL:-}"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 FLUTTER_MODE="${AGENT_SESSIONS_FLUTTER_MODE:-mac}"
 FLUTTER_DEVICE="${AGENT_SESSIONS_FLUTTER_DEVICE:-}"
-FLUTTER_TIMEOUT_MS="${AGENT_SESSIONS_FLUTTER_TIMEOUT_MS:-30000}"
+# 冷启动（重启系统/清理缓存后）构建常超过 30s，默认放宽到 180s；
+# 环境变量 AGENT_SESSIONS_FLUTTER_TIMEOUT_MS 仍可覆盖。
+FLUTTER_TIMEOUT_MS="${AGENT_SESSIONS_FLUTTER_TIMEOUT_MS:-180000}"
 FLUTTER_RELAY_BASE="${AGENT_SESSIONS_FLUTTER_RELAY_BASE:-}"
 FLUTTER_TARGET_SESSION_ID="${AGENT_SESSIONS_FLUTTER_TARGET_SESSION_ID:-}"
 FLUTTER_DEVICE_HELPER="${AGENT_SESSIONS_FLUTTER_DEVICE_HELPER:-$ROOT_DIR/tools/flutter_device.sh}"
@@ -67,9 +72,10 @@ STARTED_FLUTTER=false
 
 usage() {
   cat <<'EOF'
-Usage: ./restart.sh [start|stop|restart|status] [options]
+Usage: ./restart.sh [start|stop|restart|restart-flutter|status] [options]
 
-Default action is restart. The default local stack is Relay + local dev-paired
+`restart-flutter` restarts only the managed Flutter process without requiring an
+interactive Flutter terminal. The default action is restart. The default local stack is Relay + local dev-paired
 fixture Daemon + Flutter. When AGENT_SESSIONS_DAEMON_TOKEN is absent, the script
 uses the real Relay HTTP pairing flow to bootstrap a local owner, approve a
 Terminal, and inject the owner session into Flutter macOS.
@@ -113,19 +119,24 @@ Options:
   --dry-run              Print the selected topology without starting anything
   -h, --help             Show this help
 
+Actions:
+  restart-flutter        Reconnect Flutter by replacing its managed process
+                         (alias: flutter-restart); Relay/Daemon remain running
+
 Environment:
   AGENT_SESSIONS_RELAY_ADDR, AGENT_SESSIONS_SQLITE_PATH,
   AGENT_SESSIONS_WEB_PORT, AGENT_SESSIONS_ADMIN_PORT,
   AGENT_SESSIONS_DAEMON_TOKEN, AGENT_SESSIONS_DAEMON_STATE_DIR,
   AGENT_SESSIONS_RESTART_STATE_DIR, AGENT_SESSIONS_RESTART_LOG_DIR,
   AGENT_SESSIONS_OPENCODE_HOST, AGENT_SESSIONS_OPENCODE_PORT,
-  AGENT_SESSIONS_OPENCODE_URL, OPENCODE_BIN,
+  AGENT_SESSIONS_OPENCODE_URL, AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL, OPENCODE_BIN,
   AGENT_SESSIONS_FLUTTER_MODE, AGENT_SESSIONS_FLUTTER_DEVICE,
   AGENT_SESSIONS_FLUTTER_TIMEOUT_MS, AGENT_SESSIONS_FLUTTER_RELAY_BASE,
   AGENT_SESSIONS_FLUTTER_TARGET_SESSION_ID,
   AGENT_SESSIONS_DAEMON_SIGNING,
   AGENT_SESSIONS_DSH_BIN, AGENT_SESSIONS_DSH_CONFIG,
   AGENT_SESSIONS_DSH_PERSIST_ROOT,
+  AGENT_SESSIONS_CODEX_ENABLE, AGENT_SESSIONS_CODEX_BIN,
   AGENT_SESSIONS_LOCAL_DEV_PAIRING, FLUTTER_BIN
 
 Logs and local Relay data never go to testbox; testbox remains the Agent session
@@ -987,7 +998,22 @@ start_daemon() {
     echo "daemon: missing access token after pairing" >&2
     return 1
   fi
-  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_DSH_BIN="${AGENT_SESSIONS_DSH_BIN:-}" AGENT_SESSIONS_DSH_CONFIG="${AGENT_SESSIONS_DSH_CONFIG:-}" AGENT_SESSIONS_DSH_PERSIST_ROOT="${AGENT_SESSIONS_DSH_PERSIST_ROOT:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 )
+  # DSH_* 仅在非空时转发：空字符串会被 Daemon 判定为"显式置空"而 fail-closed，
+  # 未设置时 Daemon 才会回退到 internal/adapter/dsh/bridge.go 里的本机 checkout 默认路径。
+  local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 )
+  if [[ -n "$OPENCODE_DEFAULT_MODEL" ]]; then args+=(AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL="$OPENCODE_DEFAULT_MODEL"); fi
+  if [[ -n "${AGENT_SESSIONS_DSH_BIN:-}" ]]; then args+=(AGENT_SESSIONS_DSH_BIN="$AGENT_SESSIONS_DSH_BIN"); fi
+  if [[ -n "${AGENT_SESSIONS_DSH_CONFIG:-}" ]]; then args+=(AGENT_SESSIONS_DSH_CONFIG="$AGENT_SESSIONS_DSH_CONFIG"); fi
+  # 本地个人 LLM 组合优先：仓库根的 cordis.yml（dsh-happy-init 生成，gitignore，见
+  # b139f5e）承载 opencode-go 等第三方端点与凭据挂载；缺省时才回落 daemon 内置示例。
+  if [[ -z "${AGENT_SESSIONS_DSH_CONFIG:-}" && -f "$ROOT_DIR/cordis.yml" ]]; then
+    args+=(AGENT_SESSIONS_DSH_CONFIG="$ROOT_DIR/cordis.yml")
+  fi
+  if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_ROOT:-}" ]]; then args+=(AGENT_SESSIONS_DSH_PERSIST_ROOT="$AGENT_SESSIONS_DSH_PERSIST_ROOT"); fi
+  # Codex 适配器透传（非空才转发）：ENABLE 是 W4 灰度注册开关，BIN 指向被 --version
+  # 探测的 codex CLI；任一缺失时 Daemon fail-closed，Codex 能力整体 unsupported。
+  if [[ -n "${AGENT_SESSIONS_CODEX_ENABLE:-}" ]]; then args+=(AGENT_SESSIONS_CODEX_ENABLE="$AGENT_SESSIONS_CODEX_ENABLE"); fi
+  if [[ -n "${AGENT_SESSIONS_CODEX_BIN:-}" ]]; then args+=(AGENT_SESSIONS_CODEX_BIN="$AGENT_SESSIONS_CODEX_BIN"); fi
   # v0.6：签名模式向 Daemon 注入本机私钥文件路径；未启用/文件缺失时保持 bearer 行为
   if truthy "$TERMINAL_SIGNING" && [[ -n "$DAEMON_SIGNING_KEY_FILE" && -s "$DAEMON_SIGNING_KEY_FILE" ]]; then
     args+=(AGENT_SESSIONS_DAEMON_SIGNING_KEY_FILE="$DAEMON_SIGNING_KEY_FILE")
@@ -1075,7 +1101,15 @@ start_relay() {
     return 1
   fi
   echo "relay: delegating start to tools/relayctl.sh"
-  if ! RELAY_ADDR="$RELAY_ADDR" RELAY_DB_PATH="$RELAY_DB_PATH" "$ROOT_DIR/tools/relayctl.sh" up; then
+  # Relay 侧能力矩阵（/v1/capabilities）会实时探测 OpenCode Server；URL 必须与
+  # Daemon 一致，否则 Server 明明在跑、App 仍显示 Provider 不可用。凭据非空才透传，
+  # 避免把 Basic Auth 凭据扩散到不需要它的部署形态。
+  local relay_probe_env=()
+  relay_probe_env+=(AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL")
+  if [[ -n "$OPENCODE_DEFAULT_MODEL" ]]; then relay_probe_env+=(AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL="$OPENCODE_DEFAULT_MODEL"); fi
+  if [[ -n "${OPENCODE_SERVER_USERNAME:-}" ]]; then relay_probe_env+=(OPENCODE_SERVER_USERNAME="$OPENCODE_SERVER_USERNAME"); fi
+  if [[ -n "${OPENCODE_SERVER_PASSWORD:-}" ]]; then relay_probe_env+=(OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD"); fi
+  if ! env "${relay_probe_env[@]}" RELAY_ADDR="$RELAY_ADDR" RELAY_DB_PATH="$RELAY_DB_PATH" "$ROOT_DIR/tools/relayctl.sh" up; then
     return 1
   fi
   printf 'owned\n' > "$STATE_DIR/relay-owned"
@@ -1135,6 +1169,17 @@ start_action() {
       echo "  dsh: bridge=$dsh_bin (路径不存在；provider 将以 unavailable 呈现)" >&2
     fi
     echo "  dsh: bridge=${dsh_bin:-<unset>} (config=${AGENT_SESSIONS_DSH_CONFIG:-<unset>}; persist_root=${AGENT_SESSIONS_DSH_PERSIST_ROOT:-<temp-cleanup>}; per-session spawn)"
+  # codex 透传状态如实呈现：ENABLE 缺失 = 适配器不注册；BIN 缺失/不可执行 = 探测必败。
+  local codex_bin="${AGENT_SESSIONS_CODEX_BIN:-}"
+  if [[ -n "${AGENT_SESSIONS_CODEX_ENABLE:-}" && -z "$codex_bin" ]]; then
+    echo "  codex: ENABLE 已设但 BIN 未设；适配器会注册但探测必失败（unavailable）" >&2
+  fi
+  if [[ -n "$codex_bin" && ! -x "$codex_bin" ]]; then
+    echo "  codex: bin=$codex_bin (不可执行；provider 将以 unavailable 呈现)" >&2
+  fi
+  echo "  codex: enable=${AGENT_SESSIONS_CODEX_ENABLE:-<unset>} bin=${codex_bin:-<unset>}"
+    echo "  relay-opencode-probe: $OPENCODE_URL (透传给 Relay，能力矩阵实时探测用)"
+    echo "  opencode-default-model: ${OPENCODE_DEFAULT_MODEL:-<dynamic-free-catalog>}"
     echo "  flutter: $WITH_FLUTTER (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE owner_bootstrap=${LOCAL_OWNER_BOOTSTRAP_B64:+true} workspace=$LOCAL_DEV_WORKSPACE_ID target_session=${FLUTTER_TARGET_SESSION_ID:-<unset>})"
     if truthy "$TERMINAL_SIGNING"; then
       echo "  terminal-signing: on (key=$DAEMON_STATE_DIR/terminal_signing_seed.b64)"
@@ -1174,6 +1219,29 @@ restart_action() {
   stop_action || true
   if [[ "$CLEAN_PORTS_SET" == false ]]; then CLEAN_PORTS=true; fi
   start_action
+}
+
+restart_flutter_action() {
+  if [[ "$WITH_FLUTTER" != true ]]; then
+    echo "restart.sh: restart-flutter requires Flutter; remove --no-flutter" >&2
+    return 2
+  fi
+  mkdir -p "$STATE_DIR"
+  if ! preflight_start; then
+    return 1
+  fi
+  printf '%s\n' "$LOG_DIR" > "$STATE_DIR/log-dir"
+  printf '%s\n' "$FLUTTER_TARGET" > "$STATE_DIR/flutter-target"
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "restart.sh dry-run"
+    echo "  flutter: reconnect (mode=$FLUTTER_MODE target=$FLUTTER_TARGET relay=$FLUTTER_RELAY_BASE)"
+    return 0
+  fi
+  if [[ "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
+    ensure_local_owner_bootstrap || return 1
+  fi
+  stop_process flutter || return 1
+  start_flutter
 }
 
 stop_action() {
@@ -1295,7 +1363,7 @@ parse_args() {
     esac
   done
   case "$ACTION" in
-    start|stop|restart|status) ;;
+    start|stop|restart|restart-flutter|flutter-restart|status) ;;
     *) echo "unknown action: $ACTION" >&2; usage >&2; return 2 ;;
   esac
   if [[ "$ACTION" == "restart" && "$CLEAN_PORTS_SET" == false ]]; then
@@ -1340,6 +1408,7 @@ main() {
     start) start_action ;;
     stop) stop_action ;;
     restart) restart_action ;;
+    restart-flutter|flutter-restart) restart_flutter_action ;;
     status) status_action ;;
   esac
 }

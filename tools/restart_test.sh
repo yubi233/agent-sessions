@@ -48,6 +48,9 @@ codex_unset_line="$(FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no
 grep -F 'codex: enable=<unset> bin=<unset>' <<< "$codex_unset_line" >/dev/null
 # relay 侧 OpenCode 探测契约必须在计划中可见（防止能力矩阵探测环境再次静默丢失）。
 grep -F 'relay-opencode-probe: http://127.0.0.1:4096' <<< "$codex_dry_run" >/dev/null
+# v0.7 默认模型透传：dry-run 明确展示动态目录或显式 provider/model 配置。
+zen_dry_run="$(AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL=opencode/big-pickle FLUTTER_BIN="$fake_flutter" ./restart.sh start --no-web --no-admin --no-flutter --relay-addr "127.0.0.1:$relay_port" --state-dir "$state_dir" --dry-run)"
+grep -F 'opencode-default-model: opencode/big-pickle' <<< "$zen_dry_run" >/dev/null
 
 # P0 回归：默认拓扑必须实际启动 OpenCode（而不是仅在 dry-run 中显示）。
 # 使用隔离端口和本地夹具，验证健康检查、URL 落盘、PID 管理与可回收性。

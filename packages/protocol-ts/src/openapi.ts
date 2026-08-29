@@ -448,6 +448,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /** @description 默认返回未归档会话（按 last_activity 倒序），读取前会执行确定性对账与休眠自动归档 sweep；?archived=true 时返回归档列表且不触发 sweep。 */
         get: operations["listSessions"];
         put?: never;
         /** @description 仅 android_owner/android 写控制端可创建逻辑会话。 */
@@ -723,6 +724,23 @@ export interface paths {
         put?: never;
         /** @description 仅已协商的 terminal 更新在线状态；Relay 只保留 heartbeat 时间与版本摘要。 */
         post: operations["daemonHeartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/sessions/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅已配对 terminal 可调用。Daemon 进程启动后声明一次「上一进程已死亡」，Relay 据此对该 terminal 工作区遗留 running 会话做确定性收口：带 instance 或回合证据不全的置 stopped 并清空 instance，命令全终态且最后事件为 message.completed 的置 idle。绝不 archive，不要求心跳失联，幂等可重放。 */
+        post: operations["recoverDaemonSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1019,6 +1037,11 @@ export interface components {
             /** Format: int64 */
             last_seq?: number;
             provider?: string;
+            /**
+             * Format: int64
+             * @description 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端用于最后消息时间展示、列表排序与 idle 休眠衰减。
+             */
+            last_activity_at_unix_ms?: number;
         };
         SessionList: {
             sessions: components["schemas"]["Session"][];
@@ -1062,7 +1085,12 @@ export interface components {
             /** Format: int64 */
             event_seq: number;
             /** @enum {string} */
-            event_type: "session.lifecycle" | "turn.started" | "message.delta" | "message.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "unknown";
+            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.completed" | "turn.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "unknown";
+            /**
+             * @description 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
+             * @enum {string}
+             */
+            terminal_status?: "idle" | "stopped";
             envelope: components["schemas"]["CipherEnvelopeMetadata"];
         };
         /** @description 仅证明 Relay 已验证版本化密文封装，不包含 key_id、nonce、ciphertext、aad_hash 或任何明文。 */
@@ -1109,7 +1137,13 @@ export interface components {
         CipherEvent: {
             /** Format: int64 */
             event_seq: number;
-            event_type: string;
+            /** @enum {string} */
+            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.completed" | "turn.completed" | "tool.call" | "tool.result" | "permission.request" | "permission.decision" | "user.question" | "plan.changed" | "goal.changed" | "skill.catalog_changed" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "delegation.changed";
+            /**
+             * @description 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
+             * @enum {string}
+             */
+            terminal_status?: "idle" | "stopped";
             envelope: Record<string, never>;
         };
         SubmitCommandRequest: {
@@ -1201,6 +1235,16 @@ export interface components {
         DaemonHeartbeatRequest: {
             protocol_version: number;
             signature?: components["schemas"]["TerminalSignature"];
+        };
+        /** @description Daemon 进程启动后的一次性历史收口声明：调用方断言同一 Terminal 的上一进程已死亡。端点幂等，重试安全。 */
+        DaemonSessionRecoveryRequest: {
+            protocol_version: number;
+            signature?: components["schemas"]["TerminalSignature"];
+        };
+        /** @description 本次收口计数。收口只写 idle/stopped 与审计，绝不 archive；命令未终态的会话保持 running。 */
+        DaemonSessionRecoveryResponse: {
+            recovered_idle: number;
+            recovered_stopped: number;
         };
         DaemonHeartbeatResponse: {
             terminal_id: string;
@@ -1302,7 +1346,12 @@ export interface components {
             command_id: string;
             session_id: string;
             /** @enum {string} */
-            event_type: "session.lifecycle" | "turn.started" | "message.delta" | "message.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated";
+            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.completed" | "turn.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated";
+            /**
+             * @description 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
+             * @enum {string}
+             */
+            terminal_status?: "idle" | "stopped";
             envelope: components["schemas"]["OpaqueCipherEnvelope"];
             signature?: components["schemas"]["TerminalSignature"];
         };
@@ -1394,6 +1443,10 @@ export interface components {
             /** @enum {string} */
             status: "native" | "emulated" | "unsupported";
             reason?: string;
+            /** @description Host 明确提供的安全选项目录；空值表示没有可选择项。 */
+            options?: string[];
+            /** @description 只有同时存在于 options 中的默认选项才可使用。 */
+            default?: string;
         };
         CapabilityProvider: {
             kind: string;
@@ -2179,7 +2232,10 @@ export interface operations {
     };
     listSessions: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 传 "true" 时读取已归档会话列表。 */
+                archived?: "true";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2719,6 +2775,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DaemonHeartbeatResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description terminal protocol is below the supported compatibility window */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recoverDaemonSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonSessionRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description recovery sweep completed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonSessionRecoveryResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];

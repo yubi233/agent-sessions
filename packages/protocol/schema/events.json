@@ -11,8 +11,10 @@
       "enum": [
         "session.lifecycle",
         "turn.started",
+        "user.message",
         "message.delta",
         "message.completed",
+        "turn.completed",
         "tool.call",
         "tool.result",
         "permission.request",
@@ -31,6 +33,11 @@
     "event_seq": { "type": "integer", "minimum": 1 },
     "session_id": { "type": "string" },
     "instance_id": { "type": "string" },
+    "terminal_status": {
+      "type": "string",
+      "enum": ["idle", "stopped"],
+      "description": "仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。"
+    },
     "ciphertext": { "type": "object" }
   }
 }

@@ -65,6 +65,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.POST("/sessions", a.RequireWrite(), a.handleCreateSession)
 		auth.POST("/sessions/:id/commands", a.RequireWrite(), a.handleSubmitCommand)
 		auth.POST("/sessions/:id/forks", a.RequireWrite(), a.handleForkSession)
+		auth.POST("/sessions/:id/archive", a.RequireWrite(), a.handleArchiveSession)
+		auth.POST("/sessions/:id/unarchive", a.RequireWrite(), a.handleUnarchiveSession)
 		auth.PUT("/sessions/:id/feedback/:messageID", a.RequireWrite(), a.handlePutMessageFeedback)
 		auth.DELETE("/sessions/:id/feedback/:messageID", a.RequireWrite(), a.handleDeleteMessageFeedback)
 		auth.POST("/sessions/:id/delegations", a.RequireWrite(), a.handleCreateDelegation)
@@ -110,6 +112,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.GET("/challenge", a.handleDaemonChallenge)
 		daemon.POST("/hello", a.handleDaemonHello)
 		daemon.POST("/heartbeat", a.handleDaemonHeartbeat)
+		// Daemon 进程启动后的一次性历史收口声明：新进程断言上一进程已死亡。
+		daemon.POST("/sessions/recover", a.handleDaemonSessionRecovery)
 		daemon.GET("/commands/stream", a.handleDaemonCommandSSE(logger))
 		daemon.POST("/commands/:id/ack", a.handleDaemonCommandAck)
 		daemon.POST("/commands/:id/result", a.handleDaemonCommandResult)
@@ -485,7 +489,14 @@ func newIdentityKeyView(row store.TerminalIdentityKeyRow) identityKeyView {
 
 func (a *API) handleListSessions(c *gin.Context) {
 	subj := subject(c)
-	sessions, err := a.Sessions.ListSessions(c.Request.Context(), subj.AccountID)
+	// ?archived=true 读取归档列表；归档读取不触发对账/自动归档 sweep。
+	var sessions []store.SessionRow
+	var err error
+	if c.Query("archived") == "true" {
+		sessions, err = a.Sessions.ListArchivedSessions(c.Request.Context(), subj.AccountID)
+	} else {
+		sessions, err = a.Sessions.ListSessions(c.Request.Context(), subj.AccountID)
+	}
 	if err != nil {
 		writeError(c, err)
 		return
@@ -567,21 +578,42 @@ func (a *API) handleListProjects(c *gin.Context) {
 // handleSessionControls 返回会话 composer 可安全展示的白名单控制投影。
 // 真实 Plan/Goal/Skill 正文仍只能来自客户端已解密事件；这里不返回 prompt、回复或 Provider payload。
 func (a *API) handleSessionControls(c *gin.Context) {
-	projection, err := a.Usage.SessionProjection(c.Request.Context(), subject(c).AccountID, c.Param("id"))
+	sessionID := c.Param("id")
+	projection, err := a.Usage.SessionProjection(c.Request.Context(), subject(c).AccountID, sessionID)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
-	if projection == nil {
-		writeOK(c, gin.H{})
-		return
-	}
 	view := gin.H{}
-	if projection.Model != "" {
-		view["model"] = projection.Model
+	if projection != nil {
+		if projection.Model != "" {
+			view["model"] = projection.Model
+		}
+		if projection.HasUsage {
+			view["usage"] = newSessionUsageView(*projection)
+		}
 	}
-	if projection.HasUsage {
-		view["usage"] = newSessionUsageView(*projection)
+	// 从 adapter 能力矩阵提取当前 provider 的 model_select 目录，供客户端渲染模型选择器。
+	if session, err := a.Sessions.GetSession(c.Request.Context(), sessionID); err == nil && session.Provider != "" {
+		providers, err := a.Capabilities.List(c.Request.Context())
+		if err == nil {
+			for _, p := range providers {
+				if p.Kind == session.Provider {
+					for _, cap := range p.Capabilities {
+						if cap.Name == "model_select" && len(cap.Options) > 0 {
+							view["models"] = cap.Options
+							// default_model 只有在 Host 同时把它放进 options 时才
+							// 暴露，客户端不会因缺失投影而自行猜测模型。
+							if cap.Default != "" {
+								view["default_model"] = cap.Default
+							}
+							break
+						}
+					}
+					break
+				}
+			}
+		}
 	}
 	writeOK(c, view)
 }
@@ -703,7 +735,8 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 			return
 		}
 		views = append(views, cipherEventView{
-			EventSeq: event.EventSeq, EventType: event.EventType, Envelope: json.RawMessage(event.EnvelopeJSON),
+			EventSeq: event.EventSeq, EventType: event.EventType, TerminalStatus: event.TerminalStatus,
+			Envelope: json.RawMessage(event.EnvelopeJSON),
 		})
 	}
 	writeOK(c, sessionSnapshotView{Session: newSessionView(session), Events: views})
@@ -869,6 +902,26 @@ func (a *API) handleForkSession(c *gin.Context) {
 	a.publishLatestSessionEvent(c.Request.Context(), subj.AccountID, c.Param("id"))
 	a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, child.ID, 0)
 	c.JSON(http.StatusCreated, newSessionView(child))
+}
+
+func (a *API) handleArchiveSession(c *gin.Context) {
+	subj := subject(c)
+	sess, err := a.Sessions.ArchiveSession(c.Request.Context(), subj.AccountID, subj.Role, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newSessionView(sess))
+}
+
+func (a *API) handleUnarchiveSession(c *gin.Context) {
+	subj := subject(c)
+	sess, err := a.Sessions.UnarchiveSession(c.Request.Context(), subj.AccountID, subj.Role, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newSessionView(sess))
 }
 
 type submitCommandRequest struct {
@@ -1405,6 +1458,10 @@ type sessionView struct {
 	LastSeq             int64  `json:"last_seq"`
 	ParentSessionID     string `json:"parent_session_id,omitempty"`
 	ForkedFromMessageID string `json:"forked_from_message_id,omitempty"`
+	ArchivedAtUnixMS    int64  `json:"archived_at_unix_ms,omitempty"`
+	// LastActivityAtUnixMS 是最后一次状态/事件写入的可审计活动时间；0 表示旧数据未知。
+	// 客户端用它做「最后消息时间」展示、列表排序与 idle 休眠衰减，禁止改作他用。
+	LastActivityAtUnixMS int64 `json:"last_activity_at_unix_ms,omitempty"`
 }
 
 func newSessionView(session store.SessionRow) sessionView {
@@ -1412,25 +1469,28 @@ func newSessionView(session store.SessionRow) sessionView {
 		ID: session.ID, WorkspaceID: session.WorkspaceID, Status: session.Status,
 		Provider: session.Provider, Model: session.Model, LastSeq: session.LastSeq,
 		ParentSessionID: session.ParentSessionID, ForkedFromMessageID: session.ForkedFromMessageID,
+		ArchivedAtUnixMS: session.ArchivedAtUnixMS, LastActivityAtUnixMS: session.LastActivityAtUnixMS,
 	}
 }
 
 type sessionUsageView struct {
-	InputTokens      int64    `json:"input_tokens"`
-	OutputTokens     int64    `json:"output_tokens"`
-	CacheReadTokens  int64    `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64    `json:"cache_write_tokens,omitempty"`
-	ContextTokens    int64    `json:"context_tokens,omitempty"`
-	TTFTMS           *int64   `json:"ttft_ms,omitempty"`
-	DecodeThroughput *float64 `json:"decode_throughput,omitempty"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens    int64    `json:"cache_write_tokens,omitempty"`
+	ContextTokens       int64    `json:"context_tokens,omitempty"`
+	ContextWindowTokens int64    `json:"context_window_tokens,omitempty"`
+	TTFTMS              *int64   `json:"ttft_ms,omitempty"`
+	DecodeThroughput    *float64 `json:"decode_throughput,omitempty"`
 }
 
 func newSessionUsageView(usage domain.SessionUsageProjection) sessionUsageView {
 	return sessionUsageView{
 		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 		CacheReadTokens: usage.CacheReadTokens, CacheWriteTokens: usage.CacheWriteTokens,
-		ContextTokens: usage.InputTokens + usage.OutputTokens + usage.CacheReadTokens + usage.CacheWriteTokens,
-		TTFTMS:        usage.TTFTMS, DecodeThroughput: usage.DecodeThroughput,
+		ContextTokens:       usage.InputTokens + usage.OutputTokens + usage.CacheReadTokens + usage.CacheWriteTokens,
+		ContextWindowTokens: usage.ContextWindowTokens,
+		TTFTMS:              usage.TTFTMS, DecodeThroughput: usage.DecodeThroughput,
 	}
 }
 
@@ -1519,9 +1579,10 @@ func newCommandView(command store.CommandRow) commandView {
 }
 
 type cipherEventView struct {
-	EventSeq  int64           `json:"event_seq"`
-	EventType string          `json:"event_type"`
-	Envelope  json.RawMessage `json:"envelope"`
+	EventSeq       int64           `json:"event_seq"`
+	EventType      string          `json:"event_type"`
+	TerminalStatus string          `json:"terminal_status,omitempty"`
+	Envelope       json.RawMessage `json:"envelope"`
 }
 
 type sessionSnapshotView struct {
@@ -1558,9 +1619,10 @@ func newDaemonCommandObservationView(command domain.DaemonCommandObservation) da
 }
 
 type daemonCipherEventObservationView struct {
-	EventSeq  int64                      `json:"event_seq"`
-	EventType string                     `json:"event_type"`
-	Envelope  cipherEnvelopeMetadataView `json:"envelope"`
+	EventSeq       int64                      `json:"event_seq"`
+	EventType      string                     `json:"event_type"`
+	TerminalStatus string                     `json:"terminal_status,omitempty"`
+	Envelope       cipherEnvelopeMetadataView `json:"envelope"`
 }
 
 type cipherEnvelopeMetadataView struct {
@@ -1573,13 +1635,28 @@ type cipherEnvelopeMetadataView struct {
 func newDaemonCipherEventObservationView(event store.SessionEventRow) daemonCipherEventObservationView {
 	return daemonCipherEventObservationView{
 		EventSeq: event.EventSeq, EventType: daemonObservationEventType(event.EventType),
-		Envelope: daemonCipherEnvelopeMetadata(event.EnvelopeJSON),
+		TerminalStatus: daemonObservationTerminalStatus(event.EventType, event.TerminalStatus),
+		Envelope:       daemonCipherEnvelopeMetadata(event.EnvelopeJSON),
+	}
+}
+
+func daemonObservationTerminalStatus(eventType, status string) string {
+	if eventType != "turn.completed" {
+		return ""
+	}
+	switch strings.TrimSpace(status) {
+	case "idle", "stopped":
+		return strings.TrimSpace(status)
+	default:
+		// Legacy Daemon uploads omitted the projection; UploadEvent treats those
+		// as idle, so the read-only view should expose the same effective state.
+		return "idle"
 	}
 }
 
 func daemonObservationEventType(value string) string {
 	switch value {
-	case "session.lifecycle", "turn.started", "message.delta", "message.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
+	case "session.lifecycle", "turn.started", "user.message", "message.delta", "message.completed", "turn.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
 		return value
 	default:
 		return "unknown"

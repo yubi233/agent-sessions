@@ -130,6 +130,93 @@ func (e CipherEnvelopeMetadataState) Valid() bool {
 	}
 }
 
+// Defines values for CipherEventEventType.
+const (
+	CipherEventEventTypeCommandUpdated      CipherEventEventType = "command.updated"
+	CipherEventEventTypeDelegationChanged   CipherEventEventType = "delegation.changed"
+	CipherEventEventTypeFileChanged         CipherEventEventType = "file.changed"
+	CipherEventEventTypeGitSnapshot         CipherEventEventType = "git.snapshot"
+	CipherEventEventTypeGoalChanged         CipherEventEventType = "goal.changed"
+	CipherEventEventTypeMessageCompleted    CipherEventEventType = "message.completed"
+	CipherEventEventTypeMessageDelta        CipherEventEventType = "message.delta"
+	CipherEventEventTypePermissionDecision  CipherEventEventType = "permission.decision"
+	CipherEventEventTypePermissionRequest   CipherEventEventType = "permission.request"
+	CipherEventEventTypePlanChanged         CipherEventEventType = "plan.changed"
+	CipherEventEventTypeSessionLifecycle    CipherEventEventType = "session.lifecycle"
+	CipherEventEventTypeSkillCatalogChanged CipherEventEventType = "skill.catalog_changed"
+	CipherEventEventTypeToolCall            CipherEventEventType = "tool.call"
+	CipherEventEventTypeToolResult          CipherEventEventType = "tool.result"
+	CipherEventEventTypeTurnCompleted       CipherEventEventType = "turn.completed"
+	CipherEventEventTypeTurnStarted         CipherEventEventType = "turn.started"
+	CipherEventEventTypeUsageUpdated        CipherEventEventType = "usage.updated"
+	CipherEventEventTypeUserMessage         CipherEventEventType = "user.message"
+	CipherEventEventTypeUserQuestion        CipherEventEventType = "user.question"
+)
+
+// Valid indicates whether the value is a known member of the CipherEventEventType enum.
+func (e CipherEventEventType) Valid() bool {
+	switch e {
+	case CipherEventEventTypeCommandUpdated:
+		return true
+	case CipherEventEventTypeDelegationChanged:
+		return true
+	case CipherEventEventTypeFileChanged:
+		return true
+	case CipherEventEventTypeGitSnapshot:
+		return true
+	case CipherEventEventTypeGoalChanged:
+		return true
+	case CipherEventEventTypeMessageCompleted:
+		return true
+	case CipherEventEventTypeMessageDelta:
+		return true
+	case CipherEventEventTypePermissionDecision:
+		return true
+	case CipherEventEventTypePermissionRequest:
+		return true
+	case CipherEventEventTypePlanChanged:
+		return true
+	case CipherEventEventTypeSessionLifecycle:
+		return true
+	case CipherEventEventTypeSkillCatalogChanged:
+		return true
+	case CipherEventEventTypeToolCall:
+		return true
+	case CipherEventEventTypeToolResult:
+		return true
+	case CipherEventEventTypeTurnCompleted:
+		return true
+	case CipherEventEventTypeTurnStarted:
+		return true
+	case CipherEventEventTypeUsageUpdated:
+		return true
+	case CipherEventEventTypeUserMessage:
+		return true
+	case CipherEventEventTypeUserQuestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CipherEventTerminalStatus.
+const (
+	CipherEventTerminalStatusIdle    CipherEventTerminalStatus = "idle"
+	CipherEventTerminalStatusStopped CipherEventTerminalStatus = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the CipherEventTerminalStatus enum.
+func (e CipherEventTerminalStatus) Valid() bool {
+	switch e {
+	case CipherEventTerminalStatusIdle:
+		return true
+	case CipherEventTerminalStatusStopped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DaemonCipherEventObservationEventType.
 const (
 	DaemonCipherEventObservationEventTypeCommandUpdated   DaemonCipherEventObservationEventType = "command.updated"
@@ -140,9 +227,11 @@ const (
 	DaemonCipherEventObservationEventTypeSessionLifecycle DaemonCipherEventObservationEventType = "session.lifecycle"
 	DaemonCipherEventObservationEventTypeToolCall         DaemonCipherEventObservationEventType = "tool.call"
 	DaemonCipherEventObservationEventTypeToolResult       DaemonCipherEventObservationEventType = "tool.result"
+	DaemonCipherEventObservationEventTypeTurnCompleted    DaemonCipherEventObservationEventType = "turn.completed"
 	DaemonCipherEventObservationEventTypeTurnStarted      DaemonCipherEventObservationEventType = "turn.started"
 	DaemonCipherEventObservationEventTypeUnknown          DaemonCipherEventObservationEventType = "unknown"
 	DaemonCipherEventObservationEventTypeUsageUpdated     DaemonCipherEventObservationEventType = "usage.updated"
+	DaemonCipherEventObservationEventTypeUserMessage      DaemonCipherEventObservationEventType = "user.message"
 )
 
 // Valid indicates whether the value is a known member of the DaemonCipherEventObservationEventType enum.
@@ -164,11 +253,33 @@ func (e DaemonCipherEventObservationEventType) Valid() bool {
 		return true
 	case DaemonCipherEventObservationEventTypeToolResult:
 		return true
+	case DaemonCipherEventObservationEventTypeTurnCompleted:
+		return true
 	case DaemonCipherEventObservationEventTypeTurnStarted:
 		return true
 	case DaemonCipherEventObservationEventTypeUnknown:
 		return true
 	case DaemonCipherEventObservationEventTypeUsageUpdated:
+		return true
+	case DaemonCipherEventObservationEventTypeUserMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonCipherEventObservationTerminalStatus.
+const (
+	DaemonCipherEventObservationTerminalStatusIdle    DaemonCipherEventObservationTerminalStatus = "idle"
+	DaemonCipherEventObservationTerminalStatusStopped DaemonCipherEventObservationTerminalStatus = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the DaemonCipherEventObservationTerminalStatus enum.
+func (e DaemonCipherEventObservationTerminalStatus) Valid() bool {
+	switch e {
+	case DaemonCipherEventObservationTerminalStatusIdle:
+		return true
+	case DaemonCipherEventObservationTerminalStatusStopped:
 		return true
 	default:
 		return false
@@ -287,8 +398,10 @@ const (
 	DaemonEventUploadRequestEventTypeSessionLifecycle DaemonEventUploadRequestEventType = "session.lifecycle"
 	DaemonEventUploadRequestEventTypeToolCall         DaemonEventUploadRequestEventType = "tool.call"
 	DaemonEventUploadRequestEventTypeToolResult       DaemonEventUploadRequestEventType = "tool.result"
+	DaemonEventUploadRequestEventTypeTurnCompleted    DaemonEventUploadRequestEventType = "turn.completed"
 	DaemonEventUploadRequestEventTypeTurnStarted      DaemonEventUploadRequestEventType = "turn.started"
 	DaemonEventUploadRequestEventTypeUsageUpdated     DaemonEventUploadRequestEventType = "usage.updated"
+	DaemonEventUploadRequestEventTypeUserMessage      DaemonEventUploadRequestEventType = "user.message"
 )
 
 // Valid indicates whether the value is a known member of the DaemonEventUploadRequestEventType enum.
@@ -310,9 +423,31 @@ func (e DaemonEventUploadRequestEventType) Valid() bool {
 		return true
 	case DaemonEventUploadRequestEventTypeToolResult:
 		return true
+	case DaemonEventUploadRequestEventTypeTurnCompleted:
+		return true
 	case DaemonEventUploadRequestEventTypeTurnStarted:
 		return true
 	case DaemonEventUploadRequestEventTypeUsageUpdated:
+		return true
+	case DaemonEventUploadRequestEventTypeUserMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonEventUploadRequestTerminalStatus.
+const (
+	DaemonEventUploadRequestTerminalStatusIdle    DaemonEventUploadRequestTerminalStatus = "idle"
+	DaemonEventUploadRequestTerminalStatusStopped DaemonEventUploadRequestTerminalStatus = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the DaemonEventUploadRequestTerminalStatus enum.
+func (e DaemonEventUploadRequestTerminalStatus) Valid() bool {
+	switch e {
+	case DaemonEventUploadRequestTerminalStatusIdle:
+		return true
+	case DaemonEventUploadRequestTerminalStatusStopped:
 		return true
 	default:
 		return false
@@ -718,6 +853,21 @@ func (e WorkspaceCreateResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListSessionsParamsArchived.
+const (
+	True ListSessionsParamsArchived = "true"
+)
+
+// Valid indicates whether the value is a known member of the ListSessionsParamsArchived enum.
+func (e ListSessionsParamsArchived) Valid() bool {
+	switch e {
+	case True:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UsageSummaryParamsDays.
 const (
 	N1  UsageSummaryParamsDays = 1
@@ -789,9 +939,14 @@ type BootstrapRequest struct {
 
 // CapabilityItem defines model for CapabilityItem.
 type CapabilityItem struct {
-	Name   string               `json:"name"`
-	Reason *string              `json:"reason,omitempty"`
-	Status CapabilityItemStatus `json:"status"`
+	// Default 只有同时存在于 options 中的默认选项才可使用。
+	Default *string `json:"default,omitempty"`
+	Name    string  `json:"name"`
+
+	// Options Host 明确提供的安全选项目录；空值表示没有可选择项。
+	Options *[]string            `json:"options,omitempty"`
+	Reason  *string              `json:"reason,omitempty"`
+	Status  CapabilityItemStatus `json:"status"`
 }
 
 // CapabilityItemStatus defines model for CapabilityItem.Status.
@@ -827,8 +982,17 @@ type CipherEnvelopeMetadataState string
 type CipherEvent struct {
 	Envelope  map[string]interface{} `json:"envelope"`
 	EventSeq  int64                  `json:"event_seq"`
-	EventType string                 `json:"event_type"`
+	EventType CipherEventEventType   `json:"event_type"`
+
+	// TerminalStatus 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
+	TerminalStatus *CipherEventTerminalStatus `json:"terminal_status,omitempty"`
 }
+
+// CipherEventEventType defines model for CipherEvent.EventType.
+type CipherEventEventType string
+
+// CipherEventTerminalStatus 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
+type CipherEventTerminalStatus string
 
 // Command defines model for Command.
 type Command struct {
@@ -889,10 +1053,16 @@ type DaemonCipherEventObservation struct {
 	Envelope  CipherEnvelopeMetadata                `json:"envelope"`
 	EventSeq  int64                                 `json:"event_seq"`
 	EventType DaemonCipherEventObservationEventType `json:"event_type"`
+
+	// TerminalStatus 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
+	TerminalStatus *DaemonCipherEventObservationTerminalStatus `json:"terminal_status,omitempty"`
 }
 
 // DaemonCipherEventObservationEventType defines model for DaemonCipherEventObservation.EventType.
 type DaemonCipherEventObservationEventType string
+
+// DaemonCipherEventObservationTerminalStatus 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
+type DaemonCipherEventObservationTerminalStatus string
 
 // DaemonCommandAckRequest defines model for DaemonCommandAckRequest.
 type DaemonCommandAckRequest struct {
@@ -984,10 +1154,16 @@ type DaemonEventUploadRequest struct {
 
 	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
+
+	// TerminalStatus 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
+	TerminalStatus *DaemonEventUploadRequestTerminalStatus `json:"terminal_status,omitempty"`
 }
 
 // DaemonEventUploadRequestEventType defines model for DaemonEventUploadRequest.EventType.
 type DaemonEventUploadRequestEventType string
+
+// DaemonEventUploadRequestTerminalStatus 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
+type DaemonEventUploadRequestTerminalStatus string
 
 // DaemonEventUploadResponse defines model for DaemonEventUploadResponse.
 type DaemonEventUploadResponse struct {
@@ -1049,6 +1225,20 @@ type DaemonSessionObservation struct {
 	Commands []DaemonCommandObservation     `json:"commands"`
 	Events   []DaemonCipherEventObservation `json:"events"`
 	Session  DaemonObservationSession       `json:"session"`
+}
+
+// DaemonSessionRecoveryRequest Daemon 进程启动后的一次性历史收口声明：调用方断言同一 Terminal 的上一进程已死亡。端点幂等，重试安全。
+type DaemonSessionRecoveryRequest struct {
+	ProtocolVersion int `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature `json:"signature,omitempty"`
+}
+
+// DaemonSessionRecoveryResponse 本次收口计数。收口只写 idle/stopped 与审计，绝不 archive；命令未终态的会话保持 running。
+type DaemonSessionRecoveryResponse struct {
+	RecoveredIdle    int `json:"recovered_idle"`
+	RecoveredStopped int `json:"recovered_stopped"`
 }
 
 // DaemonWebReadResponseRequest defines model for DaemonWebReadResponseRequest.
@@ -1266,11 +1456,14 @@ type RegisterRequest struct {
 
 // Session defines model for Session.
 type Session struct {
-	Id          string  `json:"id"`
-	LastSeq     *int64  `json:"last_seq,omitempty"`
-	Provider    *string `json:"provider,omitempty"`
-	Status      string  `json:"status"`
-	WorkspaceId string  `json:"workspace_id"`
+	Id string `json:"id"`
+
+	// LastActivityAtUnixMs 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端用于最后消息时间展示、列表排序与 idle 休眠衰减。
+	LastActivityAtUnixMs *int64  `json:"last_activity_at_unix_ms,omitempty"`
+	LastSeq              *int64  `json:"last_seq,omitempty"`
+	Provider             *string `json:"provider,omitempty"`
+	Status               string  `json:"status"`
+	WorkspaceId          string  `json:"workspace_id"`
 }
 
 // SessionList defines model for SessionList.
@@ -1551,6 +1744,15 @@ type StreamEventsParams struct {
 	LastEventID *string `json:"Last-Event-ID,omitempty"`
 }
 
+// ListSessionsParams defines parameters for ListSessions.
+type ListSessionsParams struct {
+	// Archived 传 "true" 时读取已归档会话列表。
+	Archived *ListSessionsParamsArchived `form:"archived,omitempty" json:"archived,omitempty"`
+}
+
+// ListSessionsParamsArchived defines parameters for ListSessions.
+type ListSessionsParamsArchived string
+
 // GetSessionDaemonObservationParams defines parameters for GetSessionDaemonObservation.
 type GetSessionDaemonObservationParams struct {
 	// AfterSeq 仅返回严格大于该会话事件序号的安全事件元数据；命令状态始终返回当前完整安全投影。
@@ -1611,6 +1813,9 @@ type DaemonHeartbeatJSONRequestBody = DaemonHeartbeatRequest
 
 // DaemonHelloJSONRequestBody defines body for DaemonHello for application/json ContentType.
 type DaemonHelloJSONRequestBody = DaemonHelloRequest
+
+// RecoverDaemonSessionsJSONRequestBody defines body for RecoverDaemonSessions for application/json ContentType.
+type RecoverDaemonSessionsJSONRequestBody = DaemonSessionRecoveryRequest
 
 // UploadUsageEventJSONRequestBody defines body for UploadUsageEvent for application/json ContentType.
 type UploadUsageEventJSONRequestBody = UploadUsageEventRequest
@@ -1845,6 +2050,9 @@ type ServerInterface interface {
 	// (POST /v1/daemon/hello)
 	DaemonHello(c *gin.Context)
 
+	// (POST /v1/daemon/sessions/recover)
+	RecoverDaemonSessions(c *gin.Context)
+
 	// (POST /v1/daemon/usage/events)
 	UploadUsageEvent(c *gin.Context)
 
@@ -1894,7 +2102,7 @@ type ServerInterface interface {
 	RestoreRecoveryCode(c *gin.Context)
 
 	// (GET /v1/sessions)
-	ListSessions(c *gin.Context)
+	ListSessions(c *gin.Context, params ListSessionsParams)
 
 	// (POST /v1/sessions)
 	CreateSession(c *gin.Context)
@@ -2356,6 +2564,19 @@ func (siw *ServerInterfaceWrapper) DaemonHello(c *gin.Context) {
 	siw.Handler.DaemonHello(c)
 }
 
+// RecoverDaemonSessions operation middleware
+func (siw *ServerInterfaceWrapper) RecoverDaemonSessions(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.RecoverDaemonSessions(c)
+}
+
 // UploadUsageEvent operation middleware
 func (siw *ServerInterfaceWrapper) UploadUsageEvent(c *gin.Context) {
 
@@ -2707,6 +2928,20 @@ func (siw *ServerInterfaceWrapper) RestoreRecoveryCode(c *gin.Context) {
 // ListSessions operation middleware
 func (siw *ServerInterfaceWrapper) ListSessions(c *gin.Context) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSessionsParams
+
+	// ------------- Optional query parameter "archived" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "archived", c.Request.URL.Query(), &params.Archived, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter archived: %w", err), http.StatusBadRequest)
+		return
+	}
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -2714,7 +2949,7 @@ func (siw *ServerInterfaceWrapper) ListSessions(c *gin.Context) {
 		}
 	}
 
-	siw.Handler.ListSessions(c)
+	siw.Handler.ListSessions(c, params)
 }
 
 // CreateSession operation middleware
@@ -3165,6 +3400,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/daemon/challenge", wrapper.DaemonChallenge)
 	router.POST(options.BaseURL+"/v1/daemon/hello", wrapper.DaemonHello)
 	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)
+	router.POST(options.BaseURL+"/v1/daemon/sessions/recover", wrapper.RecoverDaemonSessions)
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/ack", wrapper.AcknowledgeDaemonCommand)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/result", wrapper.ResolveDaemonCommand)

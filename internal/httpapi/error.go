@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/store"
+	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 	"github.com/yubi233/agent-sessions/packages/protocol"
 )
 
@@ -86,6 +87,14 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "attachment upload incomplete")
 	case errors.Is(err, domain.ErrAttachmentInvalid), errors.Is(err, domain.ErrAttachmentChunkOrder):
 		return http.StatusBadRequest, protocol.NewError(protocol.ErrInvalidRequest, "invalid attachment upload")
+	case errors.Is(err, workspacesafe.ErrWorkspaceName):
+		return http.StatusBadRequest, protocol.NewError(protocol.ErrInvalidRequest, "invalid workspace name")
+	case errors.Is(err, workspacesafe.ErrEscapeRoot), errors.Is(err, workspacesafe.ErrUnsafeSymlink),
+		errors.Is(err, workspacesafe.ErrNotAbsolute), errors.Is(err, workspacesafe.ErrControlChar),
+		errors.Is(err, workspacesafe.ErrNotAGitRoot):
+		return http.StatusForbidden, protocol.NewError(protocol.ErrWorkspacePathDenied, "workspace path denied")
+	case errors.Is(err, workspacesafe.ErrWorkspaceMoved):
+		return http.StatusConflict, protocol.NewError(protocol.ErrWorkspaceMoved, "workspace moved")
 	default:
 		return http.StatusInternalServerError, protocol.NewError(protocol.ErrInvalidRequest, "internal error")
 	}

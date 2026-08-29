@@ -55,6 +55,39 @@ func (a *API) handleDaemonHello(c *gin.Context) {
 	})
 }
 
+type daemonSessionRecoveryRequest struct {
+	ProtocolVersion int                     `json:"protocol_version"`
+	Signature       authz.TerminalSignature `json:"signature"`
+}
+
+type daemonSessionRecoveryView struct {
+	RecoveredIdle    int `json:"recovered_idle"`
+	RecoveredStopped int `json:"recovered_stopped"`
+}
+
+// handleDaemonSessionRecovery 接收 Daemon 进程启动后的一次性历史收口声明。
+// 只有已配对 Terminal 可以调用；收口范围锁定该 Terminal 的工作区，语义见
+// domain.RecoverTerminalSessions（不 archive，不要求心跳失联，幂等）。
+func (a *API) handleDaemonSessionRecovery(c *gin.Context) {
+	var req daemonSessionRecoveryRequest
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon session recovery"))
+		return
+	}
+	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
+		return
+	}
+	summary, err := a.Daemons.RecoverTerminalSessions(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, req.ProtocolVersion)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, daemonSessionRecoveryView{RecoveredIdle: summary.RecoveredIdle, RecoveredStopped: summary.RecoveredStopped})
+}
+
 // handleDaemonChallenge 为 Terminal 签发一次性 hello challenge（ADR-012）。
 // 挑战绑定当前 bearer 设备且只能被 signed hello 消费一次；不返回任何设备元数据。
 func (a *API) handleDaemonChallenge(c *gin.Context) {
@@ -336,6 +369,7 @@ type daemonEventUploadRequest struct {
 	CommandID       string                  `json:"command_id"`
 	SessionID       string                  `json:"session_id"`
 	EventType       string                  `json:"event_type"`
+	TerminalStatus  string                  `json:"terminal_status,omitempty"`
 	Envelope        json.RawMessage         `json:"envelope"`
 	Signature       authz.TerminalSignature `json:"signature"`
 }
@@ -355,7 +389,8 @@ func (a *API) handleDaemonEventUpload(c *gin.Context) {
 	result, err := a.Daemons.UploadEvent(c.Request.Context(), domain.DaemonEventInput{
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
 		ProtocolVersion: req.ProtocolVersion, EventID: req.EventID, CommandID: req.CommandID,
-		SessionID: req.SessionID, EventType: req.EventType, EnvelopeJSON: string(req.Envelope),
+		SessionID: req.SessionID, EventType: req.EventType, TerminalStatus: req.TerminalStatus,
+		EnvelopeJSON: string(req.Envelope),
 	})
 	if err != nil {
 		writeError(c, err)
