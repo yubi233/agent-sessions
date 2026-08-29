@@ -321,7 +321,27 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 			setter.SetModel(strings.TrimSpace(stored))
 		}
 	}
-	return rs.handle.Send(ctx, text)
+	if err := rs.handle.Send(ctx, text); err != nil {
+		// 传输层同步失败不会产生 Provider SSE 事件；若只回写命令回执，时间线里的
+		// user_message 之后没有任何失败痕迹，客户端会停留在生成中。这里补发脱敏
+		// 错误与失败终态，传输细节只保留在本机回执错误码，不进入公共协议。
+		r.emitEvent(sessionID, adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": sessionID,
+				"message":     "Provider 发送失败，详情仅限本机诊断。",
+			},
+		})
+		r.emitEvent(sessionID, adapter.Event{
+			Type: adapter.EventTurnCompleted,
+			Payload: map[string]any{
+				"instance_id": sessionID,
+				"stop_reason": "send_failed",
+			},
+		})
+		return err
+	}
+	return nil
 }
 
 // abortSession 兑现 session.abort。
@@ -338,7 +358,19 @@ func (r *SessionRunner) abortSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	return rs.handle.Abort(ctx)
+	if err := rs.handle.Abort(ctx); err != nil {
+		// Abort 同步失败同样没有 Provider SSE 事件；补发脱敏错误让用户知道中止未生效。
+		// 不合成终态：Provider 回合可能仍在进行，伪造 turn_completed 会掩盖真实状态。
+		r.emitEvent(sessionID, adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": sessionID,
+				"message":     "Provider 中止失败，详情仅限本机诊断。",
+			},
+		})
+		return err
+	}
+	return nil
 }
 
 // killSession 兑现 session.kill。它只调用拥有本机进程树的 Handle.ForceKill，绝不把远端
@@ -361,6 +393,16 @@ func (r *SessionRunner) killSession(ctx context.Context, cmd Command) error {
 		return fmt.Errorf("%w: session.kill requires owned provider process", ErrUnsupportedCommand)
 	}
 	if err := killer.ForceKill(ctx); err != nil {
+		// 强制终止失败意味着 Provider 进程树可能仍在运行；失败必须进入用户时间线，
+		// 而不是只留在命令回执里。Dispose/本地清理失败发生在进程已终止之后，
+		// 由回执错误码承载，不再向时间线追加噪音。
+		r.emitEvent(sessionID, adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": sessionID,
+				"message":     "Provider 进程终止失败，详情仅限本机诊断。",
+			},
+		})
 		return fmt.Errorf("force kill provider process: %w", err)
 	}
 	// ForceKill 成功后立即切断事件转发并释放 handle；重复 delivery 在 Relay/local store 收敛，
@@ -488,6 +530,11 @@ func (r *SessionRunner) forwardEvents(sessionID string, h adapter.Handle, fwdCtx
 			}
 			if ev.Type == adapter.EventTurnCompleted {
 				terminalSeen = true
+			}
+			// select 在取消与事件同时就绪时随机选择分支；写入前再校验一次，
+			// 保证重复 start 回收旧句柄后仍滞留在旧通道里的事件绝不串入时间线。
+			if fwdCtx.Err() != nil {
+				return
 			}
 			r.writeEvent(sessionID, 0, ev)
 		case <-fwdCtx.Done():
@@ -789,7 +836,9 @@ func (r *SessionRunner) selectModel(ctx context.Context, cmd Command) error {
 	if sessionID == "" {
 		return errors.New("session.model_select 缺少 session_id")
 	}
-	model := env.model()
+	// 模型名必须与 send 路径的 TrimSpace 语义一致：纯空白选择存储后会在 SetModel
+	// 被静默忽略，用户以为已切换实则沿用旧模型，因此入口处直接拒绝。
+	model := strings.TrimSpace(env.model())
 	if model == "" {
 		return errors.New("session.model_select 缺少 model")
 	}

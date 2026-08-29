@@ -90,8 +90,13 @@ type fakeHandle struct {
 	aborts int
 	// models 记录 SetModel 的调用序列；空值覆盖不产生记录。
 	models []string
-	events chan adapter.Event
-	done   chan struct{}
+	// sendErr/abortErr 注入传输层同步失败；失败时不得产生任何 Provider 事件。
+	sendErr  error
+	abortErr error
+	// disposed 标记 Dispose 是否被调用（重复 start 回收语义的观测点）。
+	disposed bool
+	events   chan adapter.Event
+	done     chan struct{}
 }
 
 func newFakeHandle(id string) *fakeHandle {
@@ -128,7 +133,11 @@ func (h *fakeHandle) emit(ev adapter.Event) {
 func (h *fakeHandle) Send(ctx context.Context, text string) error {
 	h.mu.Lock()
 	h.sends = append(h.sends, text)
+	err := h.sendErr
 	h.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	h.emit(adapter.Event{Type: adapter.EventMessageDelta, Seq: 3,
 		Payload: map[string]any{"text": text}})
 	return nil
@@ -137,19 +146,30 @@ func (h *fakeHandle) Send(ctx context.Context, text string) error {
 func (h *fakeHandle) Abort(ctx context.Context) error {
 	h.mu.Lock()
 	h.aborts++
+	err := h.abortErr
 	h.mu.Unlock()
-	return nil
+	return err
 }
 
 func (h *fakeHandle) Events() <-chan adapter.Event { return h.events }
 
 func (h *fakeHandle) Dispose(ctx context.Context) error {
+	h.mu.Lock()
+	h.disposed = true
+	h.mu.Unlock()
 	select {
 	case <-h.done:
 	default:
 		close(h.done)
 	}
 	return nil
+}
+
+// wasDisposed 返回 Dispose 是否已被调用（并发安全）。
+func (h *fakeHandle) wasDisposed() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.disposed
 }
 
 // forceKillFakeHandle 只在 Runner 回归中表示 Daemon 明确拥有的受控进程树。真实 HTTP Adapter
@@ -884,5 +904,492 @@ func TestSessionRunnerForwardEventsDoesNotDuplicateTerminalOnClose(t *testing.T)
 	raw, err := s.Get(eventKey("s-completed"))
 	if err != nil || strings.Contains(raw, "stopped") {
 		t.Fatalf("last_event=%q err=%v, must not append stopped terminal", raw, err)
+	}
+}
+
+// readSinkEvent 等待事件出口的下一条事件。
+func readSinkEvent(t *testing.T, events <-chan adapter.Event) adapter.Event {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for sink event")
+		return adapter.Event{}
+	}
+}
+
+// ---- DCM-01：session.model_select 持久化与 fail-closed ----
+
+// 合法的 model_select 持久化到 model:<session_id>；密文缺省时顶层 model 字段兜底，
+// 覆盖写生效，且后续 send 不带随行模型时应用最近一次持久化选择。
+func TestSessionRunnerModelSelectPersistsChoice(t *testing.T) {
+	store, runner, fake := newRunnerFixture(t, "opencode")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.model_select",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"model":"opencode/hy3-free"}}}`,
+	}); err != nil {
+		t.Fatalf("consume session.model_select: %v", err)
+	}
+	if got, err := store.Get("model:s1"); err != nil || got != "opencode/hy3-free" {
+		t.Fatalf("model:s1 = %q err=%v, want opencode/hy3-free", got, err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.model_select",
+		PayloadJSON: `{"session_id":"s1","model":"opencode/big-pickle"}`,
+	}); err != nil {
+		t.Fatalf("consume session.model_select (top-level): %v", err)
+	}
+	if got, err := store.Get("model:s1"); err != nil || got != "opencode/big-pickle" {
+		t.Fatalf("model:s1 = %q err=%v, want opencode/big-pickle", got, err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"继续"}}}`,
+	}); err != nil {
+		t.Fatalf("consume session.send: %v", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	models := append([]string(nil), h.models...)
+	h.mu.Unlock()
+	if len(models) != 1 || models[0] != "opencode/big-pickle" {
+		t.Fatalf("SetModel got %v, want [opencode/big-pickle]", models)
+	}
+}
+
+// 非法 model_select 输入必须稳定失败且不改写已持久化的选择。
+func TestSessionRunnerModelSelectRejectsInvalidInput(t *testing.T) {
+	store, runner, _ := newRunnerFixture(t, "opencode")
+	if err := store.Set("model:s1", "keep-original"); err != nil {
+		t.Fatalf("seed session model: %v", err)
+	}
+	cases := []struct {
+		name    string
+		payload string
+	}{
+		{"缺少 session_id", `{"model":"opencode/hy3-free"}`},
+		{"缺少 model", `{"session_id":"s1"}`},
+		{"空 model", `{"session_id":"s1","model":""}`},
+		{"空白 model", `{"session_id":"s1","model":"   "}`},
+		{"空 fixture model", `{"session_id":"s1","ciphertext":{"fixture_payload":{"model":""}}}`},
+		{"envelope 不可解", `{"session_id":"s1",not-json`},
+	}
+	for _, tc := range cases {
+		err := runner.ConsumeCommand(context.Background(), Command{
+			Kind: "session.model_select", PayloadJSON: tc.payload,
+		})
+		if err == nil {
+			t.Fatalf("%s: 必须失败", tc.name)
+		}
+		got, err := store.Get("model:s1")
+		if err != nil || got != "keep-original" {
+			t.Fatalf("%s: store 被改写为 %q (err=%v)", tc.name, got, err)
+		}
+	}
+}
+
+// ---- DCM-03：重复 session.start 回收旧句柄且不泄漏 ----
+
+// 同一 session_id 重复 start：旧句柄 Dispose 被调用、回收后仍滞留在旧通道的事件
+// 不串入时间线、登记表指向新句柄且后续 send 落到新句柄。
+func TestSessionRunnerStartReclaimsPreviousHandle(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	var mu sync.Mutex
+	var seen []adapter.Event
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID != "s1" {
+			return
+		}
+		mu.Lock()
+		seen = append(seen, event)
+		mu.Unlock()
+	})
+
+	// 旧句柄用测试完全控制的通道：fixture 句柄的 emit goroutine 会在 Dispose 后
+	// 关闭事件通道，无法构造「回收后仍有滞留事件」的窗口。
+	evsA := make(chan adapter.Event, 16)
+	hA := &fakeHandle{id: "instance-a", events: evsA, done: make(chan struct{})}
+	evsA <- adapter.Event{Type: adapter.EventTurnStarted, Seq: 1,
+		Payload: map[string]any{"instance_id": "instance-a"}}
+	fake.mu.Lock()
+	fake.startOverride = hA
+	fake.mu.Unlock()
+	startCmd := Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), startCmd); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+
+	fake.mu.Lock()
+	fake.startOverride = nil
+	fake.mu.Unlock()
+	if err := runner.ConsumeCommand(context.Background(), startCmd); err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	if !hA.wasDisposed() {
+		t.Fatal("重复 start 必须回收旧句柄（Dispose 未调用）")
+	}
+	hB := fake.lastHandle()
+	if hB == nil || hB == hA {
+		t.Fatal("第二次 start 必须产生新句柄")
+	}
+
+	// 向已回收的旧通道注入事件：不得进入时间线（canonical 序列不得跳到 99）。
+	evsA <- adapter.Event{Type: adapter.EventMessageDelta, Seq: 99,
+		Payload: map[string]any{"text": "stale-after-reclaim"}}
+	// 新句柄的 fixture 事件接在旧句柄初始 turn_started 之后，canonical 序列为 2、3。
+	waitEvent(t, s, "s1", `"seq":3`)
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		raw, err := s.Get(eventKey("s1"))
+		if err != nil {
+			t.Fatalf("read last_event: %v", err)
+		}
+		if strings.Contains(raw, `"seq":99`) {
+			t.Fatalf("已回收句柄的事件串入时间线: %s", raw)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	for _, event := range seen {
+		if text, _ := event.Payload["text"].(string); text == "stale-after-reclaim" {
+			mu.Unlock()
+			t.Fatal("已回收句柄的事件进入了事件出口")
+		}
+	}
+	mu.Unlock()
+
+	// 新句柄正常收发：send 落到新句柄，旧句柄不得再收到任何调用。
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"继续"}}}`,
+	}); err != nil {
+		t.Fatalf("send after reclaim: %v", err)
+	}
+	if rs, err := runner.lookupSession("s1"); err != nil || rs.handle != adapter.Handle(hB) {
+		t.Fatalf("登记句柄应为新句柄, err=%v", err)
+	}
+	hB.mu.Lock()
+	sends := append([]string(nil), hB.sends...)
+	hB.mu.Unlock()
+	if len(sends) != 1 || sends[0] != "继续" {
+		t.Fatalf("new handle sends = %v, want [继续]", sends)
+	}
+	hA.mu.Lock()
+	aSends := len(hA.sends)
+	hA.mu.Unlock()
+	if aSends != 0 {
+		t.Fatalf("旧句柄被再次调用 send %d 次", aSends)
+	}
+}
+
+// ---- DCM-05：命令全种类收口与失败分类 ----
+
+// abort/kill 对不存在的 session 保持 local_state_missing 语义，错误消息不含 payload 正文。
+func TestSessionRunnerAbortAndKillWithoutInstanceFailsClosed(t *testing.T) {
+	_, runner, _ := newRunnerFixture(t, "opencode")
+	abortErr := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.abort",
+		PayloadJSON: `{"session_id":"ghost","ciphertext":{"fixture_payload":{"message":"secret-body"}}}`,
+	})
+	if !errors.Is(abortErr, ErrSessionInstanceMissing) {
+		t.Fatalf("abort err = %v, want ErrSessionInstanceMissing", abortErr)
+	}
+	if strings.Contains(abortErr.Error(), "secret-body") {
+		t.Fatalf("abort 错误消息泄漏 payload 正文: %v", abortErr)
+	}
+	killErr := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.kill",
+		PayloadJSON: `{"session_id":"ghost"}`,
+	})
+	if !errors.Is(killErr, ErrSessionInstanceMissing) {
+		t.Fatalf("kill err = %v, want ErrSessionInstanceMissing", killErr)
+	}
+}
+
+// effort_select 是有意 fail-closed 的未实现能力：拒绝且不写任何成功状态。
+func TestSessionRunnerEffortSelectFailsClosed(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.effort_select",
+		PayloadJSON: `{"session_id":"s1","effort":"high","ciphertext":{"fixture_payload":{"effort":"high"}}}`,
+	})
+	if !errors.Is(err, ErrUnsupportedCommand) {
+		t.Fatalf("err = %v, want ErrUnsupportedCommand", err)
+	}
+	if _, err := s.Get("model:s1"); err == nil {
+		t.Fatal("effort_select 不得写模型选择")
+	}
+	if _, err := s.Get(instanceKey("s1")); err == nil {
+		t.Fatal("effort_select 不得写 instance 映射")
+	}
+	if _, err := s.Get(resumeResultKey("s1")); err == nil {
+		t.Fatal("effort_select 不得写 resume 结果")
+	}
+}
+
+// resume 命中存活实例后，登记句柄不变，后续 send 仍走原句柄可用。
+func TestSessionRunnerResumeThenSendRemainsUsable(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	live := fake.lastHandle()
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.resume",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws"}`,
+	}); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	raw, err := s.Get(resumeResultKey("s1"))
+	if err != nil {
+		t.Fatalf("resume 结果未写入 store: %v", err)
+	}
+	var res adapter.ResumeResult
+	if err := json.Unmarshal([]byte(raw), &res); err != nil {
+		t.Fatalf("resume 结果 JSON: %v", err)
+	}
+	if res.Result != adapter.WakeResumed {
+		t.Fatalf("resume 结果 = %q, want resumed", res.Result)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"继续"}}}`,
+	}); err != nil {
+		t.Fatalf("send after resume: %v", err)
+	}
+	if rs, err := runner.lookupSession("s1"); err != nil || rs.handle != adapter.Handle(live) {
+		t.Fatalf("resume 后登记句柄不得变化, err=%v", err)
+	}
+	live.mu.Lock()
+	sends := append([]string(nil), live.sends...)
+	live.mu.Unlock()
+	if len(sends) != 1 || sends[0] != "继续" {
+		t.Fatalf("send after resume got %v, want [继续]", sends)
+	}
+}
+
+// ---- 失败可见性回归：传输层同步失败没有 Provider SSE 事件，runner 必须补发可见错误 ----
+
+// session.send 的传输层同步失败必须补发脱敏 session_error 与失败终态，
+// 让 user_message 之后的失败在时间线可见，客户端不会停留在生成中。
+func TestSessionRunnerSendFailureEmitsVisibleError(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "opencode")
+	events := make(chan adapter.Event, 16)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s1" {
+			events <- event
+		}
+	})
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	h.sendErr = errors.New(`opencode POST /session/ses_1/prompt_async: status 500 body "upstream down"`)
+	h.mu.Unlock()
+
+	err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"继续"}}}`,
+	})
+	if err == nil {
+		t.Fatal("传输失败必须返回错误")
+	}
+	// provider 转发事件与命令生成事件的相对到达顺序取决于转发 goroutine 调度；
+	// 断言对象是 user_message、session_error、失败终态自身的存在与单调序。
+	var user, failure, terminal adapter.Event
+	for terminal.Type == "" {
+		event := readSinkEvent(t, events)
+		switch event.Type {
+		case adapter.EventUserMessage:
+			user = event
+		case adapter.EventSessionError:
+			failure = event
+		case adapter.EventTurnCompleted:
+			if event.Payload["stop_reason"] == "send_failed" {
+				terminal = event
+			}
+		}
+	}
+	if user.Type == "" || failure.Type == "" {
+		t.Fatalf("时间线缺少 user_message/session_error: user=%+v failure=%+v", user, failure)
+	}
+	if user.Payload["text"] != "继续" {
+		t.Fatalf("user_message = %+v", user)
+	}
+	if message, _ := failure.Payload["message"].(string); message != "Provider 发送失败，详情仅限本机诊断。" {
+		t.Fatalf("session_error 必须脱敏: %q", message)
+	}
+	if terminal.Type != adapter.EventTurnCompleted {
+		t.Fatalf("terminal = %+v, want turn_completed(send_failed)", terminal)
+	}
+	if !(user.Seq < failure.Seq && failure.Seq < terminal.Seq) {
+		t.Fatalf("seq not monotonic: %d/%d/%d", user.Seq, failure.Seq, terminal.Seq)
+	}
+}
+
+// session.abort 同步失败必须进入时间线；回合可能仍在进行，不得伪造终态。
+func TestSessionRunnerAbortFailureEmitsVisibleError(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "opencode")
+	events := make(chan adapter.Event, 16)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s1" {
+			events <- event
+		}
+	})
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	h.abortErr = errors.New("opencode POST abort: status 409")
+	h.mu.Unlock()
+
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.abort",
+		PayloadJSON: `{"session_id":"s1"}`,
+	}); err == nil {
+		t.Fatal("abort 失败必须返回错误")
+	}
+	var failure adapter.Event
+	for failure.Type == "" {
+		event := readSinkEvent(t, events)
+		if event.Type == adapter.EventSessionError {
+			failure = event
+		}
+	}
+	if message, _ := failure.Payload["message"].(string); message != "Provider 中止失败，详情仅限本机诊断。" {
+		t.Fatalf("session_error 必须脱敏: %q", message)
+	}
+	// 回合可能仍在进行：abort 失败绝不合成 turn_completed 终态；窗口内允许转发
+	// goroutine 滞留的 provider 事件到达，只对终态类型断言。
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case event := <-events:
+			if event.Type == adapter.EventTurnCompleted {
+				t.Fatalf("abort 失败不得合成终态事件: %+v", event)
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// session.kill 的 ForceKill 失败必须进入时间线，且本地映射保持原状以便重试。
+func TestSessionRunnerKillFailureEmitsVisibleError(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	events := make(chan adapter.Event, 16)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s1" {
+			events <- event
+		}
+	})
+	owned := &forceKillFakeHandle{
+		fakeHandle:   newFakeHandle("instance-owned"),
+		forceKillErr: errors.New("signal denied"),
+	}
+	fake.mu.Lock()
+	fake.startOverride = owned
+	fake.mu.Unlock()
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.kill",
+		PayloadJSON: `{"session_id":"s1"}`,
+	}); err == nil {
+		t.Fatal("kill 失败必须返回错误")
+	}
+	var failure adapter.Event
+	for failure.Type == "" {
+		event := readSinkEvent(t, events)
+		if event.Type == adapter.EventSessionError {
+			failure = event
+		}
+	}
+	if message, _ := failure.Payload["message"].(string); message != "Provider 进程终止失败，详情仅限本机诊断。" {
+		t.Fatalf("session_error 必须脱敏: %q", message)
+	}
+	if _, err := s.Get(instanceKey("s1")); err != nil {
+		t.Fatalf("kill 失败必须保留 instance 映射: %v", err)
+	}
+	if owned.wasDisposed() {
+		t.Fatal("kill 失败不得释放句柄")
+	}
+}
+
+// ---- DCM-06：新回合必须重新武装合成终态 ----
+
+// 上一回合已终态后，新回合的 turn_started 重置抑制；新回合被流中断时仍要补发
+// 合成 session_error 与 stopped 终态，否则该回合在客户端永久停留在生成中。
+func TestSessionRunnerForwardEventsRearmsTerminalAfterNewTurn(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	events := make(chan adapter.Event, 8)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s-rearm" {
+			events <- event
+		}
+	})
+	evs := make(chan adapter.Event, 8)
+	h := &fakeHandle{id: "instance-rearm", events: evs, done: make(chan struct{})}
+	evs <- adapter.Event{Type: adapter.EventTurnCompleted, Seq: 7,
+		Payload: map[string]any{"instance_id": "instance-rearm", "stop_reason": "session_idle"}}
+	evs <- adapter.Event{Type: adapter.EventTurnStarted, Seq: 8,
+		Payload: map[string]any{"instance_id": "instance-rearm"}}
+	close(evs)
+
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner.forwardEvents("s-rearm", h, fwdCtx)
+
+	first := readSinkEvent(t, events)
+	second := readSinkEvent(t, events)
+	third := readSinkEvent(t, events)
+	fourth := readSinkEvent(t, events)
+	if first.Type != adapter.EventTurnCompleted || first.Payload["stop_reason"] != "session_idle" {
+		t.Fatalf("first = %+v, want provider terminal", first)
+	}
+	if second.Type != adapter.EventTurnStarted {
+		t.Fatalf("second = %+v, want new turn", second)
+	}
+	if third.Type != adapter.EventSessionError {
+		t.Fatalf("third = %+v, want synthetic session_error after interrupted new turn", third)
+	}
+	if fourth.Type != adapter.EventTurnCompleted || fourth.Payload["stop_reason"] != "stopped" {
+		t.Fatalf("fourth = %+v, want synthetic stopped terminal", fourth)
+	}
+	// provider 序号（7、8）被保留，合成终态在其后接续；脱敏摘要只含类型、序号与计数。
+	var summary lastEvent
+	raw, err := s.Get(eventKey("s-rearm"))
+	if err != nil {
+		t.Fatalf("read last_event: %v", err)
+	}
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		t.Fatalf("decode last_event: %v", err)
+	}
+	if summary.Count != 4 || summary.Type != adapter.EventTurnCompleted || summary.Seq != fourth.Seq {
+		t.Fatalf("durable summary=%+v, want count=4 turn_completed seq=%d", summary, fourth.Seq)
 	}
 }

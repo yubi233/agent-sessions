@@ -82,11 +82,23 @@ func TestLocalDevEventEncoderMapsWhitelistedEvents(t *testing.T) {
 
 func TestLocalDevEventEncoderSkipsNoiseEvents(t *testing.T) {
 	for _, eventType := range []adapter.EventType{
-		adapter.EventMessageDelta, adapter.EventTurnStarted, adapter.EventUsage,
+		adapter.EventTurnStarted, adapter.EventUsage,
 	} {
 		envelope := localDevEvent(t, eventType, map[string]any{"text": "x"})
 		if envelope != "" {
 			t.Fatalf("%s must be skipped, got %s", eventType, envelope)
+		}
+	}
+	// message_delta 已改为流式映射（见 TestLocalDevEventEncoderStreamsDeltaAccumulation），
+	// 空白增量仍不产出时间线事件。
+	{
+		encoder := NewLocalDevEventEncoder()
+		envelope, err := encoder.Encode("sess-1", adapter.Event{
+			Type: adapter.EventMessageDelta, Seq: 1,
+			Payload: map[string]any{"text": "  ", "message_id": "msg-1"},
+		})
+		if err != nil || envelope != "" {
+			t.Fatalf("blank delta must be skipped, got %q err=%v", envelope, err)
 		}
 	}
 	completed := localDevEvent(t, adapter.EventMessageCompleted, map[string]any{"text": "   "})
@@ -113,5 +125,51 @@ func TestLocalDevEventEncoderRejectsMissingSessionID(t *testing.T) {
 	encoder := NewLocalDevEventEncoder()
 	if _, err := encoder.Encode("  ", adapter.Event{Type: adapter.EventMessageCompleted, Seq: 1}); err == nil {
 		t.Fatal("missing session id must fail")
+	}
+}
+
+// message_delta 按会话+消息累积并回发 streaming 全量文本；message_completed 以
+// 权威全文替换并清账；turn_completed 清理会话剩余缓冲。客户端据此渲染单一
+// 逐字生长的助手气泡，而不是逐 delta 堆叠节点。
+func TestLocalDevEventEncoderStreamsDeltaAccumulation(t *testing.T) {
+	encoder := NewLocalDevEventEncoder()
+	encode := func(eventType adapter.EventType, payload map[string]any) map[string]any {
+		t.Helper()
+		envelope, err := encoder.Encode("sess-1", adapter.Event{Type: eventType, Seq: 1, Payload: payload})
+		if err != nil {
+			t.Fatalf("encode %s: %v", eventType, err)
+		}
+		if envelope == "" {
+			t.Fatalf("encode %s: empty envelope", eventType)
+		}
+		var payloadOut struct {
+			FixturePayload map[string]any `json:"fixture_payload"`
+		}
+		if err := json.Unmarshal([]byte(envelope), &payloadOut); err != nil {
+			t.Fatalf("envelope not json: %v", err)
+		}
+		return payloadOut.FixturePayload
+	}
+
+	first := encode(adapter.EventMessageDelta, map[string]any{"text": "1+", "message_id": "m1"})
+	if first["streaming"] != true || first["text"] != "1+" {
+		t.Fatalf("first delta fixture = %v", first)
+	}
+	second := encode(adapter.EventMessageDelta, map[string]any{"text": "1=2", "message_id": "m1"})
+	if second["streaming"] != true || second["text"] != "1+1=2" {
+		t.Fatalf("second delta fixture = %v", second)
+	}
+	// 另一条 assistant 消息的缓冲相互隔离。
+	other := encode(adapter.EventMessageDelta, map[string]any{"text": "other", "message_id": "m2"})
+	if other["text"] != "other" {
+		t.Fatalf("isolated message fixture = %v", other)
+	}
+	completed := encode(adapter.EventMessageCompleted, map[string]any{"text": "1+1=2。", "message_id": "m1"})
+	if completed["streaming"] != false || completed["text"] != "1+1=2。" {
+		t.Fatalf("completed fixture = %v", completed)
+	}
+	turnDone := encode(adapter.EventTurnCompleted, map[string]any{"instance_id": "sess-1"})
+	if turnDone["completed_turn"] != true {
+		t.Fatalf("turn fixture = %v", turnDone)
 	}
 }

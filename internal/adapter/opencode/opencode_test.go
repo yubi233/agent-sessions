@@ -24,6 +24,8 @@ type fixtureServer struct {
 	seq      int
 	// events 是按 session 追加的原始事件（测试注入）。
 	events map[string][]string
+	// promptAsyncFail 为 true 时所有 prompt_async 返回 500，注入传输层同步失败。
+	promptAsyncFail bool
 }
 
 type fixtureSession struct {
@@ -155,9 +157,15 @@ func (f *fixtureServer) handleMessages(w http.ResponseWriter, r *http.Request, i
 func (f *fixtureServer) handlePromptAsync(w http.ResponseWriter, r *http.Request, id string) {
 	f.mu.Lock()
 	s, ok := f.sessions[id]
+	fail := f.promptAsyncFail
 	f.mu.Unlock()
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if fail {
+		// 注入同步传输失败：Start 的初始 prompt 与 Send 的失败路径都走这里。
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	// 记录消息数与模型透传（Resume 判断上下文用）。
@@ -1077,5 +1085,34 @@ func TestSessionErrorNestedObjectMapsToVisibleError(t *testing.T) {
 	message, _ := ev.Payload["message"].(string)
 	if !strings.Contains(message, "Model not found") {
 		t.Fatalf("error message = %q, want 含 Model not found", message)
+	}
+}
+
+// Start 的初始 prompt 同步失败时必须回收句柄与 SSE 订阅：失败路径不得在
+// adapter 登记表残留句柄，也不得留下无人持有的共享事件流。
+func TestStartInitialPromptFailureDisposesHandle(t *testing.T) {
+	f := newFixtureServer(t, true)
+	c := newFixtureClient(t, f)
+	a := NewWithClient(c)
+	f.mu.Lock()
+	f.promptAsyncFail = true
+	f.mu.Unlock()
+
+	h, err := a.Start(context.Background(), adapter.StartRequest{
+		WorkspaceRoot: "/tmp/ws", Provider: "opencode",
+		Prompt: "初始消息", Model: "opencode/big-pickle",
+	})
+	if err == nil {
+		t.Fatal("初始 prompt 失败必须让 Start 失败")
+	}
+	if h != nil {
+		t.Fatal("失败路径不得返回句柄")
+	}
+	a.mu.Lock()
+	remaining := len(a.handles)
+	streamLeaked := a.stream != nil
+	a.mu.Unlock()
+	if remaining != 0 || streamLeaked {
+		t.Fatalf("初始 prompt 失败后发生泄漏: handles=%d streamLeaked=%v", remaining, streamLeaked)
 	}
 }
