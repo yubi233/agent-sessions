@@ -23,6 +23,13 @@ void main() {
                 'status': 'native',
                 'options': ['opencode/big-pickle', 'opencode/mimo-v2.5-free'],
                 'default': 'opencode/big-pickle',
+                'model_details': {
+                  'opencode/big-pickle': {
+                    'context_window_tokens': 200000,
+                    'reasoning': true,
+                    'efforts': [],
+                  },
+                },
               },
             ],
           },
@@ -38,6 +45,12 @@ void main() {
         parsed.provider('opencode').defaultOptionFor('model_select'),
         'opencode/big-pickle',
       );
+      final detail = parsed
+          .provider('opencode')
+          .modelDetailFor('model_select', 'opencode/big-pickle');
+      expect(detail?.contextWindowTokens, 200000);
+      expect(detail?.reasoning, isTrue);
+      expect(detail?.efforts, isEmpty);
 
       final invalidDefault = CapabilityMatrix.fromRelayJson({
         'providers': [
