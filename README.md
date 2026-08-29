@@ -43,6 +43,9 @@
 ./restart.sh stop
 ./restart.sh restart
 
+# Relay 恢复后只重连 Flutter，不打断 Daemon/OpenCode
+./restart.sh restart-flutter
+
 # 本机 macOS Flutter（默认）
 ./restart.sh restart --flutter-mode mac
 

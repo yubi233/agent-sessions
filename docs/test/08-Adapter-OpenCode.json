@@ -1,6 +1,6 @@
 {
   "suite": "adapter-opencode",
-  "suite_version": 3,
+  "suite_version": 4,
   "status": "completed",
   "plan_id": "ADAPTER-OPENCODE",
   "description": "OpenCode 本地 HTTP/SSE fixture、fail-closed capability contract、授权 CLI live smoke 与 Adapter transport live。真实 CLI 通过不等于移动端 Adapter transport 已打通。",
@@ -215,6 +215,46 @@
       "cleanup": [],
       "evidence": [
         "internal/adapter/opencode/opencode_test.go"
+      ]
+    },
+    {
+      "id": "ADPT-OPENCODE-08",
+      "title": "session.idle/status idle 映射为 turn.completed",
+      "status": "passed",
+      "phase": "v0.6/P3",
+      "category": "OpenCode",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "准备包含 session.idle 与 session.status(type=idle) 的 OpenCode RawEvent fixture。",
+      "steps": [
+        "分别把 session.idle 和 session.status(type=idle) 交给 mapRawEvent",
+        "断言规范事件类型为 turn_completed，并保留 instance_id 与稳定 stop_reason（session_idle/status_idle）",
+        "提交缺失或非法 sessionID 的 idle payload，确认不会制造空 instance 的终态事件"
+      ],
+      "expected": "两种 OpenCode idle 表达都映射为唯一可消费的 turn.completed；非法 payload 被忽略，不会让 Flutter 把无效会话标成已完成。",
+      "cleanup": [],
+      "evidence": [
+        "internal/adapter/opencode/opencode_test.go#TestTerminalRawEventMappings"
+      ]
+    },
+    {
+      "id": "ADPT-OPENCODE-09",
+      "title": "session.error 终态补发与回合级去重",
+      "status": "passed",
+      "phase": "v0.6/P3",
+      "category": "OpenCode",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "准备可注入 busy、idle、session.error 的 OpenCode subscription fixture。",
+      "steps": [
+        "先注入 busy 后重复 idle/status-idle，确认同一回合只广播一次 turn.completed",
+        "注入 session.error，确认先保留 session_error 用户提示，并在缺少 idle 时自动补发 stop_reason=error 的 turn.completed",
+        "再次注入 busy 开始新回合，确认新回合可以再次产生终态且迟到 error 不重复关闭旧回合"
+      ],
+      "expected": "Provider 异常关闭不会让 Relay/Flutter 永久停留在生成中；session_error 与 turn.completed 顺序稳定，重复 idle/error 不产生重复终态。",
+      "cleanup": [],
+      "evidence": [
+        "internal/adapter/opencode/opencode_test.go#TestSubscriptionTerminalEventsAreDeduplicated"
       ]
     }
   ]

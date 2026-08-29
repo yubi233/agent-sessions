@@ -1,6 +1,6 @@
 {
   "suite": "relay-realtime",
-  "suite_version": 2,
+  "suite_version": 3,
   "status": "in_progress",
   "plan_id": "RELAY-REALTIME",
   "description": "Gin REST、账号级 SSE、Session、ControlLease、outbox 与密文扫描。P2 已有受限 Daemon 专用 REST + SSE 命令流；当前没有 WebSocket。SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。",
@@ -486,14 +486,14 @@
       "cleanup": [
         "终止所有测试 Provider 子进程，删除测试会话、事件、outbox 与本地 state"
       ],
-    "evidence": [
-      "internal/relay/p2_daemon_contract_test.go",
-      "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
-      "internal/daemon/runner_test.go",
-      "internal/daemon/process_supervisor_test.go",
-      "Taskfile.yml:test:daemon:process",
-      "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-05.json"
-    ]
+      "evidence": [
+        "internal/relay/p2_daemon_contract_test.go",
+        "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
+        "internal/daemon/runner_test.go",
+        "internal/daemon/process_supervisor_test.go",
+        "Taskfile.yml:test:daemon:process",
+        "e2e-verify/reports/<ts>/RELAY-REALTIME/sess-05.json"
+      ]
     },
     {
       "id": "SYNC-05",
@@ -553,6 +553,112 @@
         "internal/relay/p2_daemon_contract_test.go:TestP2RelayDaemonRestartAndMultiTerminalRecovery",
         "task test:v04:p2 (2026-08-18)",
         "e2e-verify/reports/<ts>/RELAY-REALTIME/relay-lease-03.json"
+      ]
+    },
+    {
+      "id": "SESS-06",
+      "title": "历史 running 会话按确定性证据收口为 idle",
+      "status": "passed",
+      "phase": "v0.6/P5",
+      "category": "会话",
+      "priority": "P0",
+      "test_layer": "Relay domain unit",
+      "precondition": "准备超过 2 分钟的 running 会话：current_instance_id 为空、所有 command 已终态，最后事件为 message.completed，且无活跃 Terminal 心跳。",
+      "steps": [
+        "调用 SessionService.ReconcileStaleRunningSessions 或通过 ListSessions 触发自动对账",
+        "分别注入 active instance、未终态 command、最近活动时间和非 message.completed 尾事件，验证每个条件都会阻止收口",
+        "重复读取会话并检查审计/归档字段，确认操作幂等且不会隐藏或 archive 会话"
+      ],
+      "expected": "仅满足全部确定性条件的历史 running 会话转为 idle；任一条件不满足仍保持 running。完成会话继续出现在默认列表，历史事件和数据均保留。",
+      "cleanup": [],
+      "evidence": [
+        "internal/domain/realtime_test.go#TestReconcileStaleRunningSessions"
+      ]
+    },
+    {
+      "id": "SESS-07",
+      "title": "新鲜 Terminal 心跳不会单独把历史会话判定为过期",
+      "status": "passed",
+      "phase": "v0.6/P5",
+      "category": "会话",
+      "priority": "P0",
+      "test_layer": "Relay domain unit",
+      "precondition": "准备活动时间已超过 TTL、但关联 Terminal 最近仍有 heartbeat 的 running 会话，并保留 message.completed 尾事件。",
+      "steps": [
+        "为关联 Terminal 写入 TTL 内的 heartbeat",
+        "触发 ListSessions 的 stale-running 对账",
+        "检查会话仍为 running，并确认判断同时依赖活动命令/实例与最终事件，而不是只看 Terminal online 标志"
+      ],
+      "expected": "活跃 Terminal 心跳作为保护条件时不会误收口；online 本身不能把历史会话标成完成，也不能替代 command/event 证据。",
+      "cleanup": [],
+      "evidence": [
+        "internal/domain/realtime_test.go#TestReconcileStaleRunningSessionsSkipsFreshTerminal"
+      ]
+    },
+    {
+      "id": "SESS-08",
+      "title": "Daemon 进程启动清扫把遗留 running 会话收口为 idle/stopped",
+      "status": "passed",
+      "phase": "v0.6/P5",
+      "category": "会话",
+      "priority": "P0",
+      "test_layer": "Relay domain unit + HTTP 契约",
+      "precondition": "Daemon 已配对并 hello；其工作区存在遗留 running 会话：完成证据齐备（命令全终态 + 最后事件 message.completed）、回合被打断（尾事件非 message.completed）与带死亡 current_instance_id 三种形态，另有其他 Terminal 的 running 会话与未终态命令会话。",
+      "steps": [
+        "新 Daemon 进程启动后调用 POST /v1/daemon/sessions/recover 声明一次「上一进程已死亡」；Relay 侧要求 Terminal 身份与协议窗口",
+        "断言完成证据齐备的会话置 idle；打断与死亡 instance 的会话置 stopped 并清空 instance；未终态命令与其他 Terminal 的会话保持 running",
+        "检查审计记录、确认绝不 archive；第二次调用必须空转（幂等）；owner token 调用被拒绝；Terminal 心跳新鲜不阻止收口"
+      ],
+      "expected": "进程重启声明只信任已配对 Terminal；收口范围锁定该 Terminal 工作区，确定性证据（命令终态、最后事件）缺一不可；idle/stopped 与 archive 严格分离，已完成会话不从默认列表消失。",
+      "cleanup": [],
+      "evidence": [
+        "internal/domain/daemon_session_recovery_test.go#TestRecoverStaleSessionsForTerminal",
+        "internal/relay/daemon_session_recovery_contract_test.go#TestDaemonSessionRecoverySweep",
+        "internal/daemon/relay_session_recovery_test.go#TestRelayLoopStartupSessionRecoveryFiresOnce"
+      ]
+    },
+    {
+      "id": "SESS-09",
+      "title": "会话列表暴露 last_activity_at_unix_ms 并按真实活动时间倒序",
+      "status": "passed",
+      "phase": "v0.6/P5",
+      "category": "会话",
+      "priority": "P0",
+      "test_layer": "Relay HTTP 契约",
+      "precondition": "账号下存在三个活动时间不同（旧/中/新）的会话；Relay 已重新生成协议产物。",
+      "steps": [
+        "GET /v1/sessions 以 owner token 读取列表",
+        "断言每个 session 元数据携带非零 last_activity_at_unix_ms 且与库内写入值一致",
+        "断言列表顺序按活动时间倒序（新→旧）；确认 last_seq 作为会话内局部序号不参与跨会话排序",
+        "确定性对账/启动清扫使用 SetSessionStatusKeepActivity 翻转状态，不把活动时间改写成收口时刻"
+      ],
+      "expected": "客户端的「最后消息时间」展示、列表排序与 idle 休眠衰减只消费真实活动时间；历史收口不再伪造「刚刚活跃」；活动时间未知（0/缺省）的旧数据在客户端沉底并按休眠展示。",
+      "cleanup": [],
+      "evidence": [
+        "internal/relay/session_activity_order_contract_test.go#TestSessionListExposesActivityAndOrdersByIt",
+        "internal/store/sqlite.go#SetSessionStatusKeepActivity"
+      ]
+    },
+    {
+      "id": "SESS-10",
+      "title": "休眠 idle 会话自动归档且归档列表可读、可恢复",
+      "status": "passed",
+      "phase": "v0.6/P5",
+      "category": "会话",
+      "priority": "P0",
+      "test_layer": "Relay HTTP 契约",
+      "precondition": "账号下存在 idle 超过 24h、活动时间未知的 idle、fresh idle、stopped 四种会话（产品决策变更：休眠会话自动归档，替代早期「不自动 archive」约束；归档可逆且只影响默认列表可见性）。",
+      "steps": [
+        "GET /v1/sessions 触发 ListSessions 内置 sweep",
+        "断言 idle>24h 与活动时间未知的 idle 进入归档；fresh idle 与 stopped 留在默认列表",
+        "GET /v1/sessions?archived=true 断言归档列表内容且携带 archived_at_unix_ms，并检查 session.auto_archived 审计",
+        "POST /v1/sessions/{id}/unarchive 恢复；确认回到默认列表且不会在下次列表读取时被立刻再次归档（unarchive 刷新活动时间）"
+      ],
+      "expected": "自动归档只处理 idle，running/streaming/stopped/errored 永不被本策略隐藏；归档是可逆元数据操作，数据与事件保留；每次归档写审计。",
+      "cleanup": [],
+      "evidence": [
+        "internal/relay/idle_auto_archive_contract_test.go#TestIdleSessionsAutoArchiveAfterTTL",
+        "internal/domain/realtime.go#AutoArchiveStaleIdleSessions"
       ]
     }
   ]
