@@ -82,7 +82,14 @@ type Repository interface {
 	CreateSession(ctx context.Context, s SessionRow) error
 	SessionByID(ctx context.Context, id string) (SessionRow, error)
 	ListSessions(ctx context.Context, accountID string) ([]SessionRow, error)
+	ListArchivedSessions(ctx context.Context, accountID string) ([]SessionRow, error)
+	ListRunningSessions(ctx context.Context, accountID string) ([]SessionRow, error)
+	ArchiveSession(ctx context.Context, id string, archivedAtUnixMS int64) error
+	UnarchiveSession(ctx context.Context, id string) error
 	SetSessionStatus(ctx context.Context, id, status string) error
+	SetSessionStatusAt(ctx context.Context, id, status string, activityAtUnixMS int64) error
+	// SetSessionStatusKeepActivity 只翻转状态不改活动时间；历史收口/清扫专用。
+	SetSessionStatusKeepActivity(ctx context.Context, id, status string) error
 	SetSessionLastSeq(ctx context.Context, id string, lastSeq int64) error
 	SetSessionInstance(ctx context.Context, id, instanceID string) error
 	SetSessionModel(ctx context.Context, id, model string) error
@@ -202,21 +209,22 @@ type Repository interface {
 // UsageEventRow 是 usage_events 表的行投影。字段全部为白名单整数或归属标识，
 // 不包含 prompt、回复、费用、精确时间或会话正文。
 type UsageEventRow struct {
-	UsageKeyHash     string
-	AccountID        string
-	TerminalID       string
-	SessionID        string
-	Provider         string
-	Model            string
-	UTCDay           string
-	InputTokens      int64
-	OutputTokens     int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-	TTFTMS           *int64
-	DecodeThroughput *float64
-	SchemaVersion    int64
-	CreatedAtUnixMS  int64
+	UsageKeyHash        string
+	AccountID           string
+	TerminalID          string
+	SessionID           string
+	Provider            string
+	Model               string
+	UTCDay              string
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheWriteTokens    int64
+	ContextWindowTokens int64
+	TTFTMS              *int64
+	DecodeThroughput    *float64
+	SchemaVersion       int64
+	CreatedAtUnixMS     int64
 }
 
 // UsageDayAggregateRow 是账号某 UTC 日桶内单个 Provider 的聚合投影。
@@ -231,14 +239,15 @@ type UsageDayAggregateRow struct {
 
 // SessionUsageSummaryRow 是单会话 composer stats 的白名单聚合投影。
 type SessionUsageSummaryRow struct {
-	InputTokens      int64
-	OutputTokens     int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-	Model            string
-	TTFTMS           *int64
-	DecodeThroughput *float64
-	HasData          bool
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheWriteTokens    int64
+	ContextWindowTokens int64
+	Model               string
+	TTFTMS              *int64
+	DecodeThroughput    *float64
+	HasData             bool
 }
 
 // AuditRow 是 audit_events 表的脱敏投影。metadata_json 只允许白名单字段。
@@ -366,6 +375,10 @@ type SessionRow struct {
 	ParentSessionID     string
 	ForkedFromMessageID string
 	ForkIdempotencyKey  string
+	ArchivedAtUnixMS    int64
+	// LastActivityAtUnixMS 是 Relay 最近一次可审计状态/事件活动时间；它只用于
+	// stale-running 恢复判定，不携带或推导会话正文。
+	LastActivityAtUnixMS int64
 }
 
 // InstanceRow 是 session_instances 表的行投影。
@@ -384,7 +397,10 @@ type SessionEventRow struct {
 	EventSeq           int64
 	AccountEventCursor int64
 	EventType          string
-	EnvelopeJSON       string
+	// TerminalStatus 是 turn.completed 的非敏感生命周期投影；其它事件为空。
+	// Provider stop_reason 仍只存在 EnvelopeJSON 密文中。
+	TerminalStatus string
+	EnvelopeJSON   string
 }
 
 // CommandRow 是 commands 表的行投影。

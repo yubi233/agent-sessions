@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	// 使用纯 Go SQLite 驱动，保证 Relay 和 Daemon 无需 CGO 或外部数据库服务。
@@ -371,6 +372,10 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS terminal_identity_keys_device_idx
 		ON terminal_identity_keys(device_id, status);`,
+	// 会话归档：保留全部密文事件与关联数据，仅从默认会话列表隐藏。
+	`ALTER TABLE sessions ADD COLUMN archived_at_unix_ms INTEGER NOT NULL DEFAULT 0;`,
+	// 会话活动时间只保存状态机活动的时间戳，供 stale-running 对账使用；不保存正文。
+	`ALTER TABLE sessions ADD COLUMN last_activity_at_unix_ms INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。
@@ -394,7 +399,105 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureUsageContextWindowColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := ensureArchivedAtColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := ensureLastActivityColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := ensureSessionEventTerminalStatusColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+// ensureArchivedAtColumn 用存在性检查补齐 sessions.archived_at_unix_ms。
+// 与 ensureUsageContextWindowColumn 同理：编号迁移中段插入可能导致存量库跳过该列。
+func ensureArchivedAtColumn(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('sessions') WHERE name='archived_at_unix_ms'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN archived_at_unix_ms INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
+func ensureLastActivityColumn(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('sessions') WHERE name='last_activity_at_unix_ms'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN last_activity_at_unix_ms INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
+// ensureSessionEventTerminalStatusColumn 为 session_events 补齐非敏感终态投影。
+// 该列只保存 idle/stopped（或空值），Provider stop_reason 仍在密文 envelope；
+// 使用存在性检查兼容历史上可能跳过列表中段编号的存量库。
+func ensureSessionEventTerminalStatusColumn(db *sql.DB) error {
+	var tableCount int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='session_events'`).Scan(&tableCount); err != nil {
+		return err
+	}
+	// 极简/尚未完成初始化的漂移库可能暂时没有 session_events；基础
+	// migrations 会在后续创建它，不能让这个 additive 守卫阻断 Open。
+	if tableCount == 0 {
+		return nil
+	}
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('session_events') WHERE name='terminal_status'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE session_events ADD COLUMN terminal_status TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// ensureUsageContextWindowColumn 用存在性检查补齐 usage_events.context_window_tokens。
+// 编号迁移按下角标记录已应用版本；历史上一次“列表中段插入”让部分存量库的版本号与
+// 语句内容错位，导致追加式编号迁移可能被永久跳过。additive 列改用 pragma 守卫，
+// 对新库与任何错位的存量库都幂等收敛（与 daemon 本地库的 ensureColumnIfExists 同口径）。
+func ensureUsageContextWindowColumn(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('usage_events') WHERE name='context_window_tokens'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(`ALTER TABLE usage_events ADD COLUMN context_window_tokens INTEGER NOT NULL DEFAULT 0`)
+	return err
 }
 
 const relaySQLiteBusyTimeoutMS = 5000
@@ -421,6 +524,10 @@ func relaySQLiteDSN(path string) (string, error) {
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }
+
+// alterAddColumnRe 识别 "ALTER TABLE t ADD COLUMN c" 形态的迁移语句。
+// 表名/列名只接受 \w+（迁移列表是仓库内常量，同时保证 pragma 查询可安全拼接）。
+var alterAddColumnRe = regexp.MustCompile(`(?i)^\s*ALTER\s+TABLE\s+["'` + "`" + `]?([A-Za-z0-9_]+)["'` + "`" + `]?\s+ADD\s+COLUMN\s+["'` + "`" + `]?([A-Za-z0-9_]+)`)
 
 // Migrate 按编号执行尚未应用的 SQL。所有 pending migration 在同一 SQLite transaction 内提交：
 // 任意一条失败时 schema_migrations 和表结构一起回滚，进程重启可从完整旧状态重新演练。
@@ -449,6 +556,23 @@ func migrateWith(db *sql.DB, statements []string) error {
 		}
 		if n > 0 {
 			continue
+		}
+		// 存量库可能已经通过历史 ensure/编号插入路径具备同名列（版本号未记录）。
+		// 此时该 ADD COLUMN 迁移的意图已满足：登记版本后跳过，避免 duplicate column
+		// 中断升级；其余迁移形态不受影响，真实 SQL 错误仍按失败回滚。
+		if m := alterAddColumnRe.FindStringSubmatch(stmt); m != nil {
+			var existing int
+			columnProbe := fmt.Sprintf(
+				`SELECT COUNT(1) FROM pragma_table_info('%s') WHERE name='%s'`, m[1], m[2])
+			if err := tx.QueryRow(columnProbe).Scan(&existing); err != nil {
+				return rollback(err)
+			}
+			if existing > 0 {
+				if _, err := tx.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, i); err != nil {
+					return rollback(err)
+				}
+				continue
+			}
 		}
 		if _, err := tx.Exec(stmt); err != nil {
 			return rollback(fmt.Errorf("migration %d: %w", i, err))

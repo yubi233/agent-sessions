@@ -567,20 +567,50 @@ func (r *sqliteRepo) SessionByID(ctx context.Context, id string) (SessionRow, er
 	var s SessionRow
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
-		        parent_session_id,forked_from_message_id,fork_idempotency_key
+		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
+		        last_activity_at_unix_ms
 		   FROM sessions WHERE id=?`, id).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
-			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey); err != nil {
+			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
+			&s.LastActivityAtUnixMS); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil
 }
 
 func (r *sqliteRepo) ListSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
-		        parent_session_id,forked_from_message_id,fork_idempotency_key
-		 FROM sessions WHERE account_id=? ORDER BY last_seq DESC`, accountID)
+	return r.listSessions(ctx, accountID, false)
+}
+
+func (r *sqliteRepo) ListArchivedSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
+	return r.listSessions(ctx, accountID, true)
+}
+
+func (r *sqliteRepo) ListRunningSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
+	const query = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
+		parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,last_activity_at_unix_ms
+		FROM sessions WHERE account_id=? AND status='running' ORDER BY last_activity_at_unix_ms ASC, id ASC`
+	return r.scanSessions(ctx, query, accountID)
+}
+
+func (r *sqliteRepo) listSessions(ctx context.Context, accountID string, archived bool) ([]SessionRow, error) {
+	const selectSessions = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
+		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
+		        last_activity_at_unix_ms
+		 FROM sessions`
+	var query string
+	if archived {
+		query = selectSessions + ` WHERE account_id=? AND archived_at_unix_ms<>0 ORDER BY last_seq DESC`
+	} else {
+		// 默认列表按真实活动时间倒序：最后事件/状态写入最近者在前。last_seq 是
+		// 会话内局部序号，跨会话不可比；last_activity=0（旧数据未知）自然沉底。
+		query = selectSessions + ` WHERE account_id=? AND archived_at_unix_ms=0 ORDER BY last_activity_at_unix_ms DESC, last_seq DESC`
+	}
+	return r.scanSessions(ctx, query, accountID)
+}
+
+func (r *sqliteRepo) scanSessions(ctx context.Context, query string, args ...any) ([]SessionRow, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +619,8 @@ func (r *sqliteRepo) ListSessions(ctx context.Context, accountID string) ([]Sess
 	for rows.Next() {
 		var s SessionRow
 		if err := rows.Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
-			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey); err != nil {
+			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
+			&s.LastActivityAtUnixMS); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -597,13 +628,35 @@ func (r *sqliteRepo) ListSessions(ctx context.Context, accountID string) ([]Sess
 	return out, rows.Err()
 }
 
+func (r *sqliteRepo) ArchiveSession(ctx context.Context, id string, archivedAtUnixMS int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET archived_at_unix_ms=? WHERE id=?`, archivedAtUnixMS, id)
+	return err
+}
+
+func (r *sqliteRepo) UnarchiveSession(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET archived_at_unix_ms=0 WHERE id=?`, id)
+	return err
+}
+
 func (r *sqliteRepo) SetSessionStatus(ctx context.Context, id, status string) error {
+	return r.SetSessionStatusAt(ctx, id, status, time.Now().UnixMilli())
+}
+
+func (r *sqliteRepo) SetSessionStatusAt(ctx context.Context, id, status string, activityAtUnixMS int64) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET status=?, last_activity_at_unix_ms=? WHERE id=?`, status, activityAtUnixMS, id)
+	return err
+}
+
+// SetSessionStatusKeepActivity 只翻转状态，保留 last_activity_at_unix_ms。
+// 确定性对账/启动清扫用：历史收口不制造虚假的“刚刚活跃”，最后消息时间
+// 继续反映真实的最后一次事件/命令写入。
+func (r *sqliteRepo) SetSessionStatusKeepActivity(ctx context.Context, id, status string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET status=? WHERE id=?`, status, id)
 	return err
 }
 
 func (r *sqliteRepo) SetSessionLastSeq(ctx context.Context, id string, lastSeq int64) error {
-	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET last_seq=? WHERE id=?`, lastSeq, id)
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET last_seq=?, last_activity_at_unix_ms=? WHERE id=?`, lastSeq, time.Now().UnixMilli(), id)
 	return err
 }
 
@@ -621,11 +674,13 @@ func (r *sqliteRepo) SessionByParentForkKey(ctx context.Context, parentSessionID
 	var s SessionRow
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
-		        parent_session_id,forked_from_message_id,fork_idempotency_key
+		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
+		        last_activity_at_unix_ms
 		   FROM sessions WHERE parent_session_id=? AND fork_idempotency_key=?`,
 		parentSessionID, idempotencyKey).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
-			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey); err != nil {
+			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
+			&s.LastActivityAtUnixMS); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil
@@ -659,8 +714,8 @@ func (r *sqliteRepo) AppendEvent(ctx context.Context, e SessionEventRow) (int64,
 		}
 	}
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO session_events(session_id,event_seq,event_type,envelope_json) VALUES(?,?,?,?)`,
-		e.SessionID, e.EventSeq, e.EventType, e.EnvelopeJSON); err != nil {
+		`INSERT INTO session_events(session_id,event_seq,event_type,terminal_status,envelope_json) VALUES(?,?,?,?,?)`,
+		e.SessionID, e.EventSeq, e.EventType, e.TerminalStatus, e.EnvelopeJSON); err != nil {
 		return 0, err
 	}
 	if _, err := r.db.ExecContext(ctx,
@@ -672,7 +727,7 @@ func (r *sqliteRepo) AppendEvent(ctx context.Context, e SessionEventRow) (int64,
 
 func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afterSeq int64) ([]SessionEventRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.envelope_json
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json
 		 FROM session_events AS events
 		 JOIN account_event_log AS event_log
 		   ON event_log.session_id=events.session_id AND event_log.event_seq=events.event_seq
@@ -684,7 +739,7 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 	var out []SessionEventRow
 	for rows.Next() {
 		var e SessionEventRow
-		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.EnvelopeJSON); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -696,7 +751,7 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 // 不能相信调用方提供的 session_id 或把其他账号的 event log 暴露到流中。
 func (r *sqliteRepo) ListAccountEventsAfter(ctx context.Context, accountID string, afterCursor int64) ([]SessionEventRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.envelope_json
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json
 		 FROM account_event_log AS event_log
 		 JOIN session_events AS events
 		   ON events.session_id=event_log.session_id AND events.event_seq=event_log.event_seq
@@ -710,7 +765,7 @@ func (r *sqliteRepo) ListAccountEventsAfter(ctx context.Context, accountID strin
 	var out []SessionEventRow
 	for rows.Next() {
 		var e SessionEventRow
-		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.EnvelopeJSON); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -1449,10 +1504,10 @@ func (r *sqliteRepo) UpsertUsageEvent(ctx context.Context, u UsageEventRow) (boo
 		`INSERT OR IGNORE INTO usage_events
 			(usage_key_hash, account_id, terminal_id, session_id, provider, model, utc_day,
 			 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			 ttft_ms, decode_throughput, schema_version, created_at_unix_ms)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			 context_window_tokens, ttft_ms, decode_throughput, schema_version, created_at_unix_ms)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		u.UsageKeyHash, u.AccountID, u.TerminalID, u.SessionID, u.Provider, u.Model, u.UTCDay,
-		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens,
+		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens, u.ContextWindowTokens,
 		u.TTFTMS, u.DecodeThroughput,
 		u.SchemaVersion, u.CreatedAtUnixMS)
 	if err != nil {
@@ -1522,21 +1577,25 @@ func (r *sqliteRepo) SessionUsageSummary(ctx context.Context, accountID, session
 	}
 
 	var model sql.NullString
+	var contextWindow sql.NullInt64
 	var ttft sql.NullInt64
 	var throughput sql.NullFloat64
 	err := r.db.QueryRowContext(ctx,
-		`SELECT model, ttft_ms, decode_throughput
+		`SELECT model, context_window_tokens, ttft_ms, decode_throughput
 		   FROM usage_events
 		  WHERE account_id=? AND session_id=?
-		    AND (model <> '' OR ttft_ms IS NOT NULL OR decode_throughput IS NOT NULL)
+		    AND (model <> '' OR context_window_tokens > 0 OR ttft_ms IS NOT NULL OR decode_throughput IS NOT NULL)
 		  ORDER BY created_at_unix_ms DESC, usage_key_hash DESC
 		  LIMIT 1`, accountID, sessionID).
-		Scan(&model, &ttft, &throughput)
+		Scan(&model, &contextWindow, &ttft, &throughput)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return SessionUsageSummaryRow{}, err
 	}
 	if model.Valid {
 		out.Model = model.String
+	}
+	if contextWindow.Valid {
+		out.ContextWindowTokens = contextWindow.Int64
 	}
 	if ttft.Valid {
 		value := ttft.Int64
