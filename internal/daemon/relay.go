@@ -209,6 +209,12 @@ func (c *RelayClient) Heartbeat(ctx context.Context) error {
 	return c.postJSON(ctx, "/v1/daemon/heartbeat", map[string]any{"protocol_version": daemonProtocolVersion}, &struct{}{})
 }
 
+// RecoverSessions 在进程启动后向 Relay 声明一次「上一进程已死亡」，触发 Relay
+// 对本 Terminal 工作区遗留 running 会话的历史收口。端点幂等，重试安全。
+func (c *RelayClient) RecoverSessions(ctx context.Context) error {
+	return c.postJSON(ctx, "/v1/daemon/sessions/recover", map[string]any{"protocol_version": daemonProtocolVersion}, &struct{}{})
+}
+
 func (c *RelayClient) Ack(ctx context.Context, commandID string, deliverySeq int64, ackKind, errorCode string) error {
 	return c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/ack", map[string]any{
 		"protocol_version": daemonProtocolVersion, "delivery_seq": deliverySeq, "ack_kind": ackKind, "error_code": errorCode,
@@ -262,10 +268,14 @@ func (c *RelayClient) UploadWebReadResponse(ctx context.Context, commandID strin
 
 func (c *RelayClient) UploadEvent(ctx context.Context, event RelayEvent) error {
 	var envelope json.RawMessage = json.RawMessage(event.EnvelopeJSON)
-	return c.postJSON(ctx, "/v1/daemon/events", map[string]any{
+	body := map[string]any{
 		"protocol_version": daemonProtocolVersion, "event_id": event.EventID, "command_id": event.CommandID,
 		"session_id": event.SessionID, "event_type": event.EventType, "envelope": envelope,
-	}, &struct{}{})
+	}
+	if event.TerminalStatus != "" {
+		body["terminal_status"] = event.TerminalStatus
+	}
+	return c.postJSON(ctx, "/v1/daemon/events", body, &struct{}{})
 }
 
 // UploadUsage 只上传白名单整数计数与 UTC 日桶（ADR-010）。usage key 由 Daemon
@@ -275,6 +285,9 @@ func (c *RelayClient) UploadUsage(ctx context.Context, usage RelayUsage) error {
 		"usage_key": usage.UsageKey, "provider": usage.Provider, "utc_day": usage.UTCDay,
 		"input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens,
 		"cache_read_tokens": usage.CacheReadTokens, "cache_write_tokens": usage.CacheWriteTokens,
+	}
+	if usage.ContextWindowTokens > 0 {
+		body["context_window_tokens"] = usage.ContextWindowTokens
 	}
 	if strings.TrimSpace(usage.SessionID) != "" {
 		body["session_id"] = strings.TrimSpace(usage.SessionID)
@@ -502,6 +515,8 @@ type RelayLoop struct {
 	commandBySession      map[string]string
 	usageContextBySession map[string]usageContext
 	eventWake             chan struct{}
+	// sessionRecoveryDone 门限每进程一次的启动清扫声明；runOnce 串行执行，无需加锁。
+	sessionRecoveryDone bool
 }
 
 func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, encoder EventEncoder, logger *slog.Logger) *RelayLoop {
@@ -568,6 +583,20 @@ func (l *RelayLoop) adoptTerminalIdentity(helloTerminalID string) error {
 	return l.Store.Set("terminal_id", helloTerminalID)
 }
 
+// ensureStartupSessionRecovery 每进程最多成功声明一次「进程已重启」。Relay 侧
+// 收口幂等，但成功后重复往返没有意义；返回 error 只表示本次未完成，调用方
+// 下一次 runOnce 重试，失败不阻塞命令主循环。
+func (l *RelayLoop) ensureStartupSessionRecovery(ctx context.Context) error {
+	if l.sessionRecoveryDone {
+		return nil
+	}
+	if err := l.Client.RecoverSessions(ctx); err != nil {
+		return err
+	}
+	l.sessionRecoveryDone = true
+	return nil
+}
+
 func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if l.Store == nil || l.Client == nil || l.Runner == nil {
 		return errors.New("relay loop dependencies missing")
@@ -581,6 +610,11 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	}
 	if err := l.Client.Heartbeat(ctx); err != nil {
 		return err
+	}
+	// hello 会在同一进程的网络重连中重复发送，不能作为进程启动信号；进程级
+	// 「上一进程已死亡」声明由这里的一次性清扫端点承载。
+	if err := l.ensureStartupSessionRecovery(ctx); err != nil {
+		l.Logger.Warn("daemon startup session recovery failed; retrying next relay loop", "error", err)
 	}
 	// hello/heartbeat 成功说明 Relay 可达：自动恢复上一轮因瞬态故障转入 failed 的事件。
 	// 确定性毒丸（RELAY_REJECTED_PERMANENT）不参与自动恢复，只能显式全量恢复。
@@ -909,7 +943,7 @@ func (l *RelayLoop) enqueueCommandEvent(command RelayCommand, event adapter.Even
 	}
 	if err := l.Store.EnqueueRelayEvent(RelayEvent{
 		EventID: id.New("evt"), CommandID: command.CommandID, SessionID: command.SessionID,
-		EventType: relayEventType(event.Type), EnvelopeJSON: envelope,
+		EventType: relayEventType(event.Type), TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
 	}); err != nil {
 		return err
 	}
@@ -985,7 +1019,7 @@ func (l *RelayLoop) enqueueCanonicalEvent(sessionID string, event adapter.Event)
 	}
 	if err := l.Store.EnqueueRelayEvent(RelayEvent{
 		EventID: id.New("evt"), CommandID: commandID, SessionID: sessionID,
-		EventType: relayEventType(event.Type), EnvelopeJSON: envelope,
+		EventType: relayEventType(event.Type), TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
 	}); err != nil {
 		l.Logger.Warn("daemon event outbox enqueue failed", "event_type", event.Type, "error", err)
 		return
@@ -1101,22 +1135,27 @@ func relayUsageFromAdapterEvent(sessionID, commandID string, ctx usageContext, e
 	}
 	ttft := ttftFromPayload(event.Payload)
 	throughput := throughputFromPayload(event.Payload, output)
+	contextWindow, _ := int64FromPayload(event.Payload, "context_window_tokens", "contextWindowTokens", "contextWindow")
+	if contextWindow < 0 {
+		return RelayUsage{}, false
+	}
 	keySuffix := id.New("usage")
 	if strings.TrimSpace(commandID) != "" {
 		keySuffix = commandID + ":" + keySuffix
 	}
 	return RelayUsage{
-		UsageKey:         "daemon:" + sessionID + ":" + keySuffix,
-		SessionID:        sessionID,
-		Provider:         provider,
-		Model:            model,
-		UTCDay:           time.Now().UTC().Format("2006-01-02"),
-		InputTokens:      input,
-		OutputTokens:     output,
-		CacheReadTokens:  cacheRead,
-		CacheWriteTokens: cacheWrite,
-		TTFTMS:           ttft,
-		DecodeThroughput: throughput,
+		UsageKey:            "daemon:" + sessionID + ":" + keySuffix,
+		SessionID:           sessionID,
+		Provider:            provider,
+		Model:               model,
+		UTCDay:              time.Now().UTC().Format("2006-01-02"),
+		InputTokens:         input,
+		OutputTokens:        output,
+		CacheReadTokens:     cacheRead,
+		CacheWriteTokens:    cacheWrite,
+		ContextWindowTokens: contextWindow,
+		TTFTMS:              ttft,
+		DecodeThroughput:    throughput,
 	}, true
 }
 
@@ -1213,10 +1252,14 @@ func relayEventType(value adapter.EventType) string {
 	switch value {
 	case adapter.EventTurnStarted:
 		return "turn.started"
+	case adapter.EventUserMessage:
+		return "user.message"
 	case adapter.EventMessageDelta:
 		return "message.delta"
 	case adapter.EventMessageCompleted:
 		return "message.completed"
+	case adapter.EventTurnCompleted:
+		return "turn.completed"
 	case adapter.EventToolCall:
 		return "tool.call"
 	case adapter.EventToolResult:
@@ -1227,6 +1270,22 @@ func relayEventType(value adapter.EventType) string {
 		return "file.changed"
 	default:
 		return "command.updated"
+	}
+}
+
+// terminalStatusForEvent projects only the lifecycle outcome needed by Relay. The
+// provider stop_reason remains inside the encrypted envelope; unknown reasons fail
+// closed to stopped so an interrupted turn cannot remain visibly running.
+func terminalStatusForEvent(event adapter.Event) string {
+	if event.Type != adapter.EventTurnCompleted {
+		return ""
+	}
+	reason, _ := event.Payload["stop_reason"].(string)
+	switch strings.TrimSpace(reason) {
+	case "session_idle", "status_idle", "end_turn", "completed", "complete", "idle":
+		return "idle"
+	default:
+		return "stopped"
 	}
 }
 

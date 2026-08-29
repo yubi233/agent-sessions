@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS relay_event_outbox (
 	command_id TEXT NOT NULL,
 	session_id TEXT NOT NULL,
 	event_type TEXT NOT NULL,
+	terminal_status TEXT NOT NULL DEFAULT '',
 	envelope_json TEXT NOT NULL,
 	status TEXT NOT NULL DEFAULT 'pending',
 	created_at INTEGER NOT NULL
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS relay_usage_outbox (
 	output_tokens INTEGER NOT NULL,
 	cache_read_tokens INTEGER NOT NULL DEFAULT 0,
 	cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+	context_window_tokens INTEGER NOT NULL DEFAULT 0,
 	ttft_ms INTEGER,
 	decode_throughput REAL,
 	status TEXT NOT NULL DEFAULT 'pending',
@@ -136,7 +138,13 @@ func (s *Store) migrate() error {
 	}
 	// v0.6 P2：事件 outbox 增加重试退避与失败原因列。旧库升级只加列，不重写历史行，
 	// 已落盘的 pending/delivered 状态与密文 envelope 保持原样。
-	return s.ensureRelayEventOutboxRetryColumns()
+	if err := s.ensureRelayEventOutboxRetryColumns(); err != nil {
+		return err
+	}
+	if err := s.ensureColumnIfExists("relay_event_outbox", "terminal_status", "terminal_status TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return s.ensureColumnIfExists("relay_usage_outbox", "context_window_tokens", "context_window_tokens INTEGER NOT NULL DEFAULT 0")
 }
 
 // ensureColumnIfExists 是 additive 列迁移的最小实现：存在即跳过，缺失才 ALTER。
@@ -380,27 +388,32 @@ type RelayCommand struct {
 
 // RelayEvent 是等待上传的 canonical event。envelope_json 已在调用方加密，Store 不解析它。
 type RelayEvent struct {
-	EventID      string
-	CommandID    string
-	SessionID    string
-	EventType    string
-	EnvelopeJSON string
+	EventID   string
+	CommandID string
+	SessionID string
+	EventType string
+	// TerminalStatus is a stable, non-sensitive lifecycle projection for turn.completed.
+	// It is deliberately separate from the opaque event envelope so Relay can update the
+	// session status without decrypting provider payloads.
+	TerminalStatus string
+	EnvelopeJSON   string
 }
 
 // RelayUsage 是等待上传的白名单 usage 计数（ADR-010）。UsageKey 由 Daemon 对
 // 来源事件生成，保证断线 outbox 重放幂等；绝不包含 prompt、回复、费用或精确时间。
 type RelayUsage struct {
-	UsageKey         string
-	SessionID        string
-	Provider         string
-	Model            string
-	UTCDay           string
-	InputTokens      int64
-	OutputTokens     int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-	TTFTMS           *int64
-	DecodeThroughput *float64
+	UsageKey            string
+	SessionID           string
+	Provider            string
+	Model               string
+	UTCDay              string
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheWriteTokens    int64
+	ContextWindowTokens int64
+	TTFTMS              *int64
+	DecodeThroughput    *float64
 }
 
 // RecordRelayCommand 原子记录一个 SSE delivery。相同 command_id 即使因至少一次投递再次到达，
@@ -607,9 +620,9 @@ func (s *Store) EnqueueRelayEvent(event RelayEvent) error {
 		return errors.New("invalid relay event")
 	}
 	_, err := s.db.Exec(
-		`INSERT OR IGNORE INTO relay_event_outbox(event_id,command_id,session_id,event_type,envelope_json,status,created_at)
-		 VALUES(?,?,?,?,?,'pending',?)`,
-		event.EventID, event.CommandID, event.SessionID, event.EventType, event.EnvelopeJSON, time.Now().UnixMilli())
+		`INSERT OR IGNORE INTO relay_event_outbox(event_id,command_id,session_id,event_type,terminal_status,envelope_json,status,created_at)
+		 VALUES(?,?,?,?,?,?,'pending',?)`,
+		event.EventID, event.CommandID, event.SessionID, event.EventType, event.TerminalStatus, event.EnvelopeJSON, time.Now().UnixMilli())
 	return err
 }
 
@@ -640,7 +653,7 @@ func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT event_id,command_id,session_id,event_type,envelope_json
+		`SELECT event_id,command_id,session_id,event_type,terminal_status,envelope_json
 		 FROM relay_event_outbox
 		 WHERE status='pending' AND next_attempt_at <= ?
 		 ORDER BY created_at,event_id`, time.Now().UnixMilli())
@@ -651,7 +664,7 @@ func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
 	var events []RelayEvent
 	for rows.Next() {
 		var event RelayEvent
-		if err := rows.Scan(&event.EventID, &event.CommandID, &event.SessionID, &event.EventType, &event.EnvelopeJSON); err != nil {
+		if err := rows.Scan(&event.EventID, &event.CommandID, &event.SessionID, &event.EventType, &event.TerminalStatus, &event.EnvelopeJSON); err != nil {
 			return nil, err
 		}
 		events = append(events, event)
@@ -793,11 +806,11 @@ func (s *Store) EnqueueRelayUsage(usage RelayUsage) error {
 	_, err := s.db.Exec(
 		`INSERT OR IGNORE INTO relay_usage_outbox(
 			usage_key,session_id,provider,model,utc_day,input_tokens,output_tokens,
-			cache_read_tokens,cache_write_tokens,ttft_ms,decode_throughput,status,created_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,'pending',?)`,
+			cache_read_tokens,cache_write_tokens,context_window_tokens,ttft_ms,decode_throughput,status,created_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)`,
 		usage.UsageKey, usage.SessionID, usage.Provider, usage.Model, usage.UTCDay,
 		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens,
-		usage.TTFTMS, usage.DecodeThroughput, time.Now().UnixMilli())
+		usage.ContextWindowTokens, usage.TTFTMS, usage.DecodeThroughput, time.Now().UnixMilli())
 	return err
 }
 
@@ -806,7 +819,7 @@ func (s *Store) PendingRelayUsages() ([]RelayUsage, error) {
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT usage_key,session_id,provider,model,utc_day,input_tokens,output_tokens,
-		        cache_read_tokens,cache_write_tokens,ttft_ms,decode_throughput
+		        cache_read_tokens,cache_write_tokens,context_window_tokens,ttft_ms,decode_throughput
 		   FROM relay_usage_outbox WHERE status='pending' ORDER BY created_at,usage_key`)
 	if err != nil {
 		return nil, err
@@ -820,7 +833,7 @@ func (s *Store) PendingRelayUsages() ([]RelayUsage, error) {
 		if err := rows.Scan(
 			&usage.UsageKey, &usage.SessionID, &usage.Provider, &usage.Model, &usage.UTCDay,
 			&usage.InputTokens, &usage.OutputTokens, &usage.CacheReadTokens, &usage.CacheWriteTokens,
-			&ttft, &throughput,
+			&usage.ContextWindowTokens, &ttft, &throughput,
 		); err != nil {
 			return nil, err
 		}

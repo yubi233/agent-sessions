@@ -88,6 +88,8 @@ type fakeHandle struct {
 	id     string
 	sends  []string
 	aborts int
+	// models 记录 SetModel 的调用序列；空值覆盖不产生记录。
+	models []string
 	events chan adapter.Event
 	done   chan struct{}
 }
@@ -104,6 +106,16 @@ func newFakeHandle(id string) *fakeHandle {
 		<-h.done
 	}()
 	return h
+}
+
+// SetModel 实现 adapter.ModelOverrideHandle，记录运行期模型覆盖序列。
+func (h *fakeHandle) SetModel(model string) {
+	if strings.TrimSpace(model) == "" {
+		return
+	}
+	h.mu.Lock()
+	h.models = append(h.models, model)
+	h.mu.Unlock()
 }
 
 func (h *fakeHandle) emit(ev adapter.Event) {
@@ -296,6 +308,215 @@ func TestSessionRunnerSendForwardsFixtureMessage(t *testing.T) {
 	h.mu.Unlock()
 	if len(sends) != 1 || sends[0] != "继续" {
 		t.Fatalf("handle.Send got %v, want [继续]", sends)
+	}
+}
+
+// 存量库可能通过 model_select 持久化了会话模型；send 密文不带模型时必须应用它，
+// 绝不能把空模型交给 opencode 服务端回退到它的配置默认（可能命中付费条目）。
+func TestSessionRunnerSendAppliesStoredSessionModel(t *testing.T) {
+	store, runner, fake := newRunnerFixture(t, "opencode")
+	if err := store.Set("model:s1", "opencode/big-pickle"); err != nil {
+		t.Fatalf("seed session model: %v", err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	h := fake.lastHandle()
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"继续"}}}`,
+	}); err != nil {
+		t.Fatalf("consume session.send: %v", err)
+	}
+	h.mu.Lock()
+	models := append([]string(nil), h.models...)
+	h.mu.Unlock()
+	if len(models) != 1 || models[0] != "opencode/big-pickle" {
+		t.Fatalf("SetModel got %v, want [opencode/big-pickle]", models)
+	}
+
+	// send 密文随行模型优先于持久化选择。
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"再试","model":"opencode/hy3-free"}}}`,
+	}); err != nil {
+		t.Fatalf("consume session.send: %v", err)
+	}
+	h.mu.Lock()
+	models = append([]string(nil), h.models...)
+	h.mu.Unlock()
+	if len(models) != 2 || models[1] != "opencode/hy3-free" {
+		t.Fatalf("SetModel got %v, want 末次为 opencode/hy3-free", models)
+	}
+}
+
+// runner-generated user_message events share the Provider event sequence. They
+// must be positive for production E2EE and must not collide with the next
+// Provider event emitted by the handle.
+func TestSessionRunnerUserMessageSequenceIsCanonical(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	observed := make(chan adapter.Event, 32)
+	userSummary := make(chan lastEvent, 1)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s-user-seq" {
+			observed <- event
+			if event.Type == adapter.EventUserMessage {
+				if raw, err := s.Get(eventKey(sessionID)); err == nil {
+					var summary lastEvent
+					if json.Unmarshal([]byte(raw), &summary) == nil {
+						userSummary <- summary
+					}
+				}
+			}
+		}
+	})
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: "{\"session_id\":\"s-user-seq\",\"workspace_root\":\"/tmp/ws\",\"provider\":\"opencode\"}",
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// Wait until the first Provider delta has been forwarded so the allocator's
+	// current sequence is deterministic before sending the user message.
+	var providerSeq int64
+	deadline := time.After(2 * time.Second)
+	for providerSeq == 0 {
+		select {
+		case event := <-observed:
+			if event.Type == adapter.EventMessageDelta {
+				providerSeq = event.Seq
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for provider event")
+		}
+	}
+	if providerSeq <= 0 {
+		t.Fatalf("provider sequence=%d, want positive", providerSeq)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: "{\"session_id\":\"s-user-seq\",\"ciphertext\":{\"fixture_payload\":{\"message\":\"用户输入\"}}}",
+	}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	var userEvent adapter.Event
+	deadline = time.After(2 * time.Second)
+	for userEvent.Type == "" {
+		select {
+		case event := <-observed:
+			if event.Type == adapter.EventUserMessage {
+				userEvent = event
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for user_message event")
+		}
+	}
+	if userEvent.Seq != providerSeq+1 {
+		t.Fatalf("user_message seq=%d, provider seq=%d; want next canonical sequence", userEvent.Seq, providerSeq)
+	}
+	encoder, err := NewE2EEEventEncoder(testEventDEK(), "runner-user-message-sequence")
+	if err != nil {
+		t.Fatalf("event encoder: %v", err)
+	}
+	defer encoder.Destroy()
+	if _, err := encoder.Encode("s-user-seq", userEvent); err != nil {
+		t.Fatalf("user_message seq=%d rejected by production encoder: %v", userEvent.Seq, err)
+	}
+	select {
+	case summary := <-userSummary:
+		if summary.Type != adapter.EventUserMessage || summary.Seq != userEvent.Seq || summary.Count < 1 {
+			t.Fatalf("last_event=%+v, want user_message seq=%d with cumulative count", summary, userEvent.Seq)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for durable user_message summary")
+	}
+}
+
+// The canonical sequence and count must survive a daemon restart. A provider
+// that restarts its own sequence at one must still be folded after the durable
+// local summary rather than reusing an earlier AAD sequence.
+func TestSessionRunnerEventSequenceResumesFromDurableSummary(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	runner.recordEvent("s-restart", adapter.Event{Type: adapter.EventMessageCompleted, Seq: 17})
+	if err := runner.Close(context.Background()); err != nil {
+		t.Fatalf("close first runner: %v", err)
+	}
+
+	runner2 := NewSessionRunner(s, map[string]adapter.Adapter{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = runner2.Close(context.Background()) })
+	var got adapter.Event
+	runner2.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s-restart" {
+			got = event
+		}
+	})
+	runner2.recordEvent("s-restart", adapter.Event{Type: adapter.EventTurnCompleted, Seq: 1})
+	if got.Seq != 18 {
+		t.Fatalf("restarted event seq=%d, want 18", got.Seq)
+	}
+	var summary lastEvent
+	raw, err := s.Get(eventKey("s-restart"))
+	if err != nil {
+		t.Fatalf("read durable summary: %v", err)
+	}
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		t.Fatalf("decode durable summary: %v", err)
+	}
+	if summary.Seq != 18 || summary.Count != 2 || summary.Type != adapter.EventTurnCompleted {
+		t.Fatalf("durable summary=%+v, want seq=18 count=2 turn_completed", summary)
+	}
+}
+
+// Provider forwarding and runner-generated events can arrive concurrently. The
+// sink must observe one strict per-session order and the durable count must
+// match that order, with no duplicate sequence values.
+func TestSessionRunnerConcurrentEventRecordingIsOrdered(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	const total = 64
+	observed := make(chan adapter.Event, total)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s-concurrent" {
+			observed <- event
+		}
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			runner.recordEvent("s-concurrent", adapter.Event{
+				Type: adapter.EventMessageDelta,
+				Seq:  1 + int64(i%3), // deliberately duplicate/late provider values
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(observed)
+	var previous int64
+	count := 0
+	for event := range observed {
+		if event.Seq <= previous {
+			t.Fatalf("non-monotonic sink sequence: previous=%d current=%d", previous, event.Seq)
+		}
+		previous = event.Seq
+		count++
+	}
+	if count != total {
+		t.Fatalf("observed %d events, want %d", count, total)
+	}
+	var summary lastEvent
+	raw, err := s.Get(eventKey("s-concurrent"))
+	if err != nil {
+		t.Fatalf("read concurrent summary: %v", err)
+	}
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		t.Fatalf("decode concurrent summary: %v", err)
+	}
+	if summary.Count != total || summary.Seq != previous {
+		t.Fatalf("concurrent summary=%+v, want count=%d seq=%d", summary, total, previous)
 	}
 }
 
@@ -529,5 +750,139 @@ func TestSessionRunnerStartWithoutTurnStartedFailsClosed(t *testing.T) {
 	// 启动失败后 handle 不得留在登记表：send 必须 fail-closed。
 	if _, err := runner.lookupSession("s1"); !errors.Is(err, ErrSessionInstanceMissing) {
 		t.Fatalf("启动失败后登记表应回滚, err = %v", err)
+	}
+}
+
+// Provider 事件流异常关闭时，runner 必须发出脱敏错误和 stopped 终态，
+// 否则 Relay/Flutter 会把历史会话永久保留为“生成中”。
+func TestSessionRunnerForwardEventsClosesWithStoppedTerminal(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	closed := make(chan adapter.Event)
+	close(closed)
+	h := &fakeHandle{id: "instance-crashed", events: closed, done: make(chan struct{})}
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	events := make(chan adapter.Event, 2)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s-crashed" {
+			events <- event
+		}
+	})
+	done := make(chan struct{})
+	go func() {
+		runner.forwardEvents("s-crashed", h, fwdCtx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("forwardEvents did not exit after provider stream close")
+	}
+	if raw, err := s.Get(eventKey("s-crashed")); err != nil || !strings.Contains(raw, string(adapter.EventTurnCompleted)) {
+		t.Fatalf("last_event=%q err=%v, want stopped terminal", raw, err)
+	}
+	first := <-events
+	second := <-events
+	if first.Type != adapter.EventSessionError || first.Payload["instance_id"] != "s-crashed" {
+		t.Fatalf("first synthetic event=%+v, want redacted session_error", first)
+	}
+	if first.Seq != 1 {
+		t.Fatalf("first synthetic seq=%d, want 1 for an empty provider stream", first.Seq)
+	}
+	if second.Type != adapter.EventTurnCompleted || second.Payload["instance_id"] != "s-crashed" || second.Payload["stop_reason"] != "stopped" {
+		t.Fatalf("second synthetic event=%+v, want stopped turn_completed", second)
+	}
+	if second.Seq != 2 || second.Seq <= first.Seq {
+		t.Fatalf("second synthetic seq=%d, first=%d; want monotonic 2", second.Seq, first.Seq)
+	}
+}
+
+// Synthetic recovery events must continue after the highest provider sequence,
+// including when the first turn_started event is supplied through forwardEvents' initial argument.
+func TestSessionRunnerForwardEventsSyntheticSequenceFollowsProvider(t *testing.T) {
+	_, runner, _ := newRunnerFixture(t, "opencode")
+	closed := make(chan adapter.Event)
+	close(closed)
+	h := &fakeHandle{id: "instance-sequence", events: closed, done: make(chan struct{})}
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var got []adapter.Event
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s-sequence" {
+			got = append(got, event)
+		}
+	})
+	// The initial event is the path used by session.start when the adapter emits
+	// turn_started before the forwarding goroutine is launched.
+	runner.forwardEvents("s-sequence", h, fwdCtx, adapter.Event{
+		Type: adapter.EventTurnStarted, Seq: 41,
+		Payload: map[string]any{"instance_id": "s-sequence"},
+	})
+	if len(got) != 3 {
+		t.Fatalf("events=%+v, want initial + two synthetic terminals", got)
+	}
+	if got[0].Seq != 41 || got[1].Seq != 42 || got[2].Seq != 43 {
+		t.Fatalf("sequence=%d,%d,%d, want 41,42,43", got[0].Seq, got[1].Seq, got[2].Seq)
+	}
+	if got[1].Type != adapter.EventSessionError || got[2].Type != adapter.EventTurnCompleted {
+		t.Fatalf("synthetic events=%+v, want session_error then turn_completed", got[1:])
+	}
+	encoder, err := NewE2EEEventEncoder(testEventDEK(), "runner-sequence-test")
+	if err != nil {
+		t.Fatalf("event encoder: %v", err)
+	}
+	defer encoder.Destroy()
+	for _, event := range got[1:] {
+		if _, err := encoder.Encode("s-sequence", event); err != nil {
+			t.Fatalf("synthetic event seq=%d rejected by production encoder: %v", event.Seq, err)
+		}
+	}
+}
+
+// Intentional runner cancellation (Close/kill) must not manufacture an
+// abnormal stopped event after the caller has explicitly ended forwarding.
+func TestSessionRunnerForwardEventsCancellationSuppressesSyntheticTerminal(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	closed := make(chan adapter.Event)
+	close(closed)
+	h := &fakeHandle{id: "instance-cancelled", events: closed, done: make(chan struct{})}
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	events := make(chan adapter.Event, 1)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) { events <- event })
+	runner.forwardEvents("s-cancelled", h, fwdCtx)
+	if _, err := s.Get(eventKey("s-cancelled")); err == nil {
+		t.Fatal("cancelled forwarding must not write a synthetic terminal event")
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("cancelled forwarding emitted event=%+v", event)
+	default:
+	}
+}
+
+// A provider terminal event already closes the turn; an ensuing stream EOF
+// must not append a duplicate stopped marker.
+func TestSessionRunnerForwardEventsDoesNotDuplicateTerminalOnClose(t *testing.T) {
+	s, runner, _ := newRunnerFixture(t, "opencode")
+	closed := make(chan adapter.Event, 1)
+	closed <- adapter.Event{Type: adapter.EventTurnCompleted, Seq: 7, Payload: map[string]any{
+		"instance_id": "s-completed", "stop_reason": "session_idle",
+	}}
+	close(closed)
+	h := &fakeHandle{id: "instance-completed", events: closed, done: make(chan struct{})}
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var got []adapter.Event
+	runner.SetEventSink(func(sessionID string, event adapter.Event) { got = append(got, event) })
+	runner.forwardEvents("s-completed", h, fwdCtx)
+	if len(got) != 1 || got[0].Type != adapter.EventTurnCompleted || got[0].Payload["stop_reason"] != "session_idle" {
+		t.Fatalf("events=%+v, want only provider terminal", got)
+	}
+	raw, err := s.Get(eventKey("s-completed"))
+	if err != nil || strings.Contains(raw, "stopped") {
+		t.Fatalf("last_event=%q err=%v, must not append stopped terminal", raw, err)
 	}
 }

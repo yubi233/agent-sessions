@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
@@ -59,10 +60,34 @@ type sessionUpdatedProps struct {
 	Info      Session `json:"info"`
 }
 
-// errorProps 是 session.error 的 properties。
+// errorProps 是 session.error 的 properties。opencode 1.17 的 error 既可能是
+// 字符串，也可能是 {name, data:{message}} 对象（异步模型调用失败的真实形态），
+// 两种形状都必须兼容，否则反序列化失败会把模型错误整个吞掉。
 type errorProps struct {
-	SessionID string `json:"sessionID"`
-	Error     string `json:"error"`
+	SessionID string          `json:"sessionID"`
+	Error     json.RawMessage `json:"error"`
+}
+
+// errorMessage 提取面向用户的错误摘要：优先对象形态的 data.message，
+// 回退 name，再回退字符串形态本身。
+func (p errorProps) errorMessage() string {
+	var text string
+	if err := json.Unmarshal(p.Error, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	var info struct {
+		Name string `json:"name"`
+		Data struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(p.Error, &info); err == nil {
+		if strings.TrimSpace(info.Data.Message) != "" {
+			return strings.TrimSpace(info.Data.Message)
+		}
+		return strings.TrimSpace(info.Name)
+	}
+	return ""
 }
 
 // parseProperties 解析 SSE 事件的 properties 字段。
@@ -85,7 +110,11 @@ func parseProperties[T any](raw json.RawMessage) (T, error) {
 //   - message.part.updated(part.type=tool)  -> EventToolCall / EventToolResult（按 state）
 //   - message.part.updated(part.type=step-finish) -> EventUsage（含 tokens 摘要）
 //   - session.status(busy)                  -> EventTurnStarted
+//   - session.idle / session.status(idle)   -> EventTurnCompleted
 //   - session.error                         -> EventSessionError
+//
+// step-finish 是一个内部推理/工具步骤的结算，不一定是整个回合的结算；整个回合以
+// session.idle 为权威终态。终态去重必须在 subscription 层完成，不能只依赖单条原始事件映射。
 func mapRawEvent(raw RawEvent) (canonicalEvent, bool) {
 	switch raw.Type {
 	case evMessagePartDelta:
@@ -146,27 +175,49 @@ func mapRawEvent(raw RawEvent) (canonicalEvent, bool) {
 		if err != nil {
 			return canonicalEvent{}, false
 		}
-		if props.Status.Type != "busy" {
-			// idle 状态由 step-finish / session.idle 表达，不单独广播。
+		switch props.Status.Type {
+		case "busy":
+			if props.SessionID == "" {
+				return canonicalEvent{}, false
+			}
+			return canonicalEvent{Event: adapter.Event{
+				Type: adapter.EventTurnStarted,
+				Payload: map[string]any{
+					"instance_id": props.SessionID,
+				},
+			}, Origin: raw.Type}, true
+		case "idle":
+			if props.SessionID == "" {
+				return canonicalEvent{}, false
+			}
+			return turnCompletedEvent(props.SessionID, "status_idle"), true
+		default:
 			return canonicalEvent{}, false
 		}
-		return canonicalEvent{Event: adapter.Event{
-			Type: adapter.EventTurnStarted,
-			Payload: map[string]any{
-				"instance_id": props.SessionID,
-			},
-		}, Origin: raw.Type}, true
+
+	case evSessionIdle:
+		props, err := parseProperties[struct {
+			SessionID string `json:"sessionID"`
+		}](raw.Properties)
+		if err != nil || props.SessionID == "" {
+			return canonicalEvent{}, false
+		}
+		return turnCompletedEvent(props.SessionID, "session_idle"), true
 
 	case evSessionError:
 		props, err := parseProperties[errorProps](raw.Properties)
-		if err != nil {
+		if err != nil || props.SessionID == "" {
+			return canonicalEvent{}, false
+		}
+		message := props.errorMessage()
+		if message == "" {
 			return canonicalEvent{}, false
 		}
 		return canonicalEvent{Event: adapter.Event{
 			Type: adapter.EventSessionError,
 			Payload: map[string]any{
 				"instance_id": props.SessionID,
-				"message":     truncateText(props.Error, 512),
+				"message":     truncateText(message, 512),
 			},
 		}, Origin: raw.Type}, true
 
@@ -175,6 +226,16 @@ func mapRawEvent(raw RawEvent) (canonicalEvent, bool) {
 		// integration.updated / reference.updated / session.diff 等不进入公共协议。
 		return canonicalEvent{}, false
 	}
+}
+
+func turnCompletedEvent(sessionID, reason string) canonicalEvent {
+	return canonicalEvent{Event: adapter.Event{
+		Type: adapter.EventTurnCompleted,
+		Payload: map[string]any{
+			"instance_id": sessionID,
+			"stop_reason": reason,
+		},
+	}}
 }
 
 // mapToolPart 把 tool part 映射为 tool_call 或 tool_result。
@@ -235,6 +296,8 @@ type subscription struct {
 	// roles 记录 message.updated 观察到的 messageID → role。part.updated 只带
 	// messageID 不带角色；没有这张表就无法把用户输入从助手事件流中剔除。
 	roles map[string]string
+	// turnClosed 对 session.idle/status-idle 的终态做每回合去重。
+	turnClosed bool
 }
 
 // streamReader 是 /event SSE 的消费者。它以 goroutine 读取流并解析事件；
@@ -243,8 +306,14 @@ type streamReader struct {
 	client *Client
 	cancel context.CancelFunc
 	raw    chan RawEvent
+	mu     sync.Mutex
 	subs   map[string][]*subscription
 	closed chan struct{}
+	// closedFlag is guarded by mu. It closes the small race where a provider
+	// stream EOF happens between dispatchLoop's final fan-out and close(closed).
+	// A late subscriber must fail instead of waiting on an event channel that
+	// can never receive.
+	closedFlag bool
 }
 
 // openStream 建立 /event SSE 连接并启动分发 goroutine。
@@ -310,13 +379,34 @@ func (s *streamReader) readLoop(body io.ReadCloser) {
 
 // dispatchLoop 把原始事件按 sessionID 分发给订阅者；无订阅者时丢弃。
 func (s *streamReader) dispatchLoop() {
-	defer close(s.closed)
+	defer func() {
+		// Propagate provider EOF to every live subscription. Without closing
+		// sub.raw, the per-session forwarder (and therefore the Daemon runner)
+		// would wait forever after the shared SSE stream died.
+		s.mu.Lock()
+		s.closedFlag = true
+		subs := make([]*subscription, 0)
+		for sessionID, sessionSubs := range s.subs {
+			for _, sub := range sessionSubs {
+				subs = append(subs, sub)
+			}
+			delete(s.subs, sessionID)
+		}
+		s.mu.Unlock()
+		for _, sub := range subs {
+			close(sub.raw)
+		}
+		close(s.closed)
+	}()
 	for raw := range s.raw {
 		sessionID := rawSessionID(raw)
 		if sessionID == "" {
 			continue
 		}
-		for _, sub := range s.subs[sessionID] {
+		s.mu.Lock()
+		sessionSubs := append([]*subscription(nil), s.subs[sessionID]...)
+		s.mu.Unlock()
+		for _, sub := range sessionSubs {
 			select {
 			case sub.raw <- raw:
 			default:
@@ -342,6 +432,11 @@ func (s *streamReader) subscribe(sessionID string) (*subscription, bool) {
 		ev:    make(chan adapter.Event, 128),
 		roles: map[string]string{},
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closedFlag {
+		return nil, false
+	}
 	s.subs[sessionID] = append(s.subs[sessionID], sub)
 	go s.forward(sub, sessionID)
 	return sub, true
@@ -356,6 +451,15 @@ func (s *streamReader) forward(sub *subscription, sessionID string) {
 		if !ok {
 			continue
 		}
+		if mapped.Event.Type == adapter.EventTurnStarted {
+			sub.turnClosed = false
+		}
+		if mapped.Event.Type == adapter.EventTurnCompleted {
+			if sub.turnClosed {
+				continue
+			}
+			sub.turnClosed = true
+		}
 		if skipUserMessageEcho(sub, mapped.Event) {
 			continue
 		}
@@ -363,6 +467,18 @@ func (s *streamReader) forward(sub *subscription, sessionID string) {
 		case sub.ev <- mapped.Event:
 		case <-s.closed:
 			return
+		}
+		// session.error is terminal for the current Provider turn as well as a
+		// user-visible error. OpenCode may omit session.idle on failures, so emit
+		// the same de-duplicated terminal marker here.
+		if raw.Type == evSessionError && !sub.turnClosed {
+			sub.turnClosed = true
+			terminal := turnCompletedEvent(sessionID, "error").Event
+			select {
+			case sub.ev <- terminal:
+			case <-s.closed:
+				return
+			}
 		}
 	}
 }
@@ -400,6 +516,8 @@ func skipUserMessageEcho(sub *subscription, event adapter.Event) bool {
 
 // unsubscribe 注销会话订阅。
 func (s *streamReader) unsubscribe(sessionID string, sub *subscription) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	subs := s.subs[sessionID]
 	for i, item := range subs {
 		if item == sub {

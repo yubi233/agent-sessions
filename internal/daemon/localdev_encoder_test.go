@@ -20,6 +20,13 @@ func localDevEvent(t *testing.T, eventType adapter.EventType, payload map[string
 
 // 本地开发编码器只把可展示事件映射为 fixture 时间线词汇；遥测与流式增量不进入时间线。
 func TestLocalDevEventEncoderMapsWhitelistedEvents(t *testing.T) {
+	user := localDevEvent(t, adapter.EventUserMessage, map[string]any{
+		"instance_id": "ses-x", "text": "请计算 1+1。",
+	})
+	if !strings.Contains(user, `"kind":"user_message"`) || !strings.Contains(user, "请计算 1+1。") {
+		t.Fatalf("user fixture = %s", user)
+	}
+
 	completed := localDevEvent(t, adapter.EventMessageCompleted, map[string]any{
 		"instance_id": "ses-x", "text": "1+1等于2。",
 	})
@@ -85,6 +92,20 @@ func TestLocalDevEventEncoderSkipsNoiseEvents(t *testing.T) {
 	completed := localDevEvent(t, adapter.EventMessageCompleted, map[string]any{"text": "   "})
 	if completed != "" {
 		t.Fatalf("blank text must be skipped, got %s", completed)
+	}
+
+	turnDone := localDevEvent(t, adapter.EventTurnCompleted, map[string]any{
+		"instance_id": "ses-x", "stop_reason": "end_turn",
+	})
+	var turnFixture struct {
+		FixturePayload map[string]any `json:"fixture_payload"`
+	}
+	if err := json.Unmarshal([]byte(turnDone), &turnFixture); err != nil {
+		t.Fatalf("turn.completed envelope not json: %v", err)
+	}
+	if turnFixture.FixturePayload["completed_turn"] != true ||
+		turnFixture.FixturePayload["kind"] != "assistant_message" {
+		t.Fatalf("turn.completed fixture = %v", turnFixture.FixturePayload)
 	}
 }
 

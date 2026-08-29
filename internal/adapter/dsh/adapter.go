@@ -15,6 +15,13 @@ import (
 // 30s 宽裕量足以覆盖慢速磁盘；无调用方截止时间时才套用。
 const handshakeTimeout = 30 * time.Second
 
+// dshKnownModels 是桥 llm-pi-ai provider 的已知模型 roster（cordis.yml models 列表）。
+// 新增模型时需同步更新此处；运行期模型目录以桥实际探测结果为准（此处仅供能力矩阵 UI 渲染）。
+var dshKnownModels = []string{
+	"deepseek-v4-flash",
+	"deepseek-v4-pro",
+}
+
 // Adapter 是 DeepSeek Harness ACP 桥适配器（spi.Adapter 实现）。
 // Detect 做一次性真实握手（spawn 桥 + initialize）并缓存结果，之后不再触碰子进程；
 // 每次 Start 独立 spawn 一个 per-session 子进程（ADR-013 §3 方案 A）。
@@ -192,8 +199,18 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现技能调用方法"
 		case "model_select":
-			status = adapter.CapabilityUnsupported
-			reason = "模型由桥配置承载，不支持运行期选择"
+			// 模型由桥配置承载，但允许运行期从目录中选择（session/new 时生效）。
+			status = adapter.CapabilityNative
+			reason = ""
+			// 目录来自 cordis.yml 的 llm provider 模型列表（adapter 不解析配置，
+			// 使用已知 roster；新增模型需同步更新此处）。
+			caps = append(caps, adapter.Capability{
+				Name:    name,
+				Status:  status,
+				Reason:  reason,
+				Options: dshKnownModels,
+			})
+			continue
 		case "effort_select":
 			status = adapter.CapabilityUnsupported
 			reason = "桥不支持运行期 effort 选择"
@@ -207,8 +224,7 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现 git 读取能力"
 		case "usage":
-			status = adapter.CapabilityUnsupported
-			reason = "桥不广播 usage_update（仅提交 agent_message_chunk）"
+			status = adapter.CapabilityNative
 		case "fork":
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现 session/fork"

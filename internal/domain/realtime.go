@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/id"
@@ -254,9 +255,322 @@ func (s *SessionService) GetSession(ctx context.Context, id string) (store.Sessi
 	return sess, nil
 }
 
-// ListSessions 列出账号下会话。
+const staleSessionRecoveryTTL = 2 * time.Minute
+
+// idleAutoArchiveTTL 是休眠会话自动归档阈值：idle 且最后活动超过该时长（或活动
+// 时间未知的旧数据）从默认列表转入归档。归档是可逆的本地元数据操作（unarchive
+// 即恢复），不删除任何数据或事件；仅处理 idle，streaming/stopped/errored 不参与。
+const idleAutoArchiveTTL = 24 * time.Hour
+
+// ListSessions 列出账号下未归档会话，并在返回前收口确定性历史悬挂状态、把长期
+// 休眠的 idle 会话自动归档。
+// 该恢复只处理：无活跃命令、无当前实例且最后事件已经是 message.completed 的旧 running
+// 会话；不会根据“未归档”或单纯的年龄隐藏数据，也不会把仍有活动的会话误判为完成。
 func (s *SessionService) ListSessions(ctx context.Context, accountID string) ([]store.SessionRow, error) {
+	if err := s.ReconcileStaleRunningSessions(ctx, accountID, staleSessionRecoveryTTL); err != nil {
+		return nil, err
+	}
+	if _, err := s.AutoArchiveStaleIdleSessions(ctx, accountID, idleAutoArchiveTTL); err != nil {
+		return nil, err
+	}
 	return s.repo.ListSessions(ctx, accountID)
+}
+
+// ReconcileStaleRunningSessions 幂等收口可确定已经结束的 running 会话。
+// 终态事件是唯一可信完成依据；活动命令、当前实例或新鲜 Terminal 都会跳过。
+func (s *SessionService) ReconcileStaleRunningSessions(ctx context.Context, accountID string, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = staleSessionRecoveryTTL
+	}
+	cutoff := s.now().Add(-ttl).UnixMilli()
+	return s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		sessions, err := tx.ListRunningSessions(ctx, accountID)
+		if err != nil {
+			return err
+		}
+		for _, sess := range sessions {
+			// 0 表示旧 schema/旧数据没有活动时间；此类记录只允许通过无实例+最后
+			// message.completed 的确定性规则收口，不能按未知时间直接按 TTL 处理。
+			if sess.LastActivityAtUnixMS != 0 && sess.LastActivityAtUnixMS > cutoff {
+				continue
+			}
+			// 无论活动时间是否来自旧 schema，都必须确认归属 Terminal 已经失联；
+			// 活跃 Terminal 上长时间无 token 输出的回合不能被时间阈值错误收口。
+			// 旧库的 last_activity=0 只表示“未知”，不能绕过 heartbeat guard。
+			workspace, workspaceErr := tx.WorkspaceByID(ctx, sess.WorkspaceID)
+			if workspaceErr != nil {
+				return workspaceErr
+			}
+			if workspace.TerminalID != "" {
+				terminal, terminalErr := tx.TerminalByID(ctx, workspace.TerminalID)
+				if terminalErr != nil && !errors.Is(terminalErr, sql.ErrNoRows) {
+					return terminalErr
+				}
+				if terminalErr == nil && terminal.LastHeartbeatUnixMS > cutoff {
+					continue
+				}
+			}
+			if sess.CurrentInstanceID != "" {
+				continue
+			}
+			commands, err := tx.ListCommands(ctx, sess.ID)
+			if err != nil {
+				return err
+			}
+			active := false
+			for _, command := range commands {
+				if !isTerminal(command.Status) {
+					active = true
+					break
+				}
+			}
+			if active {
+				continue
+			}
+			events, err := tx.ListEventsAfter(ctx, sess.ID, 0)
+			if err != nil {
+				return err
+			}
+			if len(events) == 0 || events[len(events)-1].EventType != "message.completed" {
+				continue
+			}
+			if err := tx.SetSessionStatusKeepActivity(ctx, sess.ID, SessionIdle); err != nil {
+				return err
+			}
+			if err := tx.AppendAudit(ctx, sess.AccountID, "session.reconciled", `{"session_id":"`+sess.ID+`","status":"idle","reason":"completed_event_without_active_instance"}`); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// AutoArchiveStaleIdleSessions 把长期休眠的 idle 会话自动归档：最后活动超过 ttl
+// （或活动时间未知的旧数据）即从默认列表转入归档。这是列表整理策略，不是状态
+// 收口——archive 与 complete/idle 状态正交且可逆（unarchive 即恢复），数据与
+// 事件全部保留并写审计。仅处理 idle；running/streaming/stopped/errored 不参与，
+// 因此活跃与异常会话永远不会被本策略隐藏。幂等：已归档会话不在默认列表中。
+func (s *SessionService) AutoArchiveStaleIdleSessions(ctx context.Context, accountID string, ttl time.Duration) (int, error) {
+	if ttl <= 0 {
+		ttl = idleAutoArchiveTTL
+	}
+	cutoff := s.now().Add(-ttl).UnixMilli()
+	archived := 0
+	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		sessions, err := tx.ListSessions(ctx, accountID)
+		if err != nil {
+			return err
+		}
+		for _, sess := range sessions {
+			if sess.Status != SessionIdle {
+				continue
+			}
+			if sess.LastActivityAtUnixMS != 0 && sess.LastActivityAtUnixMS > cutoff {
+				continue
+			}
+			if err := tx.ArchiveSession(ctx, sess.ID, s.now().UnixMilli()); err != nil {
+				return err
+			}
+			archived++
+			metadata, err := json.Marshal(map[string]any{
+				"session_id": sess.ID, "reason": "idle_dormant_auto_archive",
+				"last_activity_at_unix_ms": sess.LastActivityAtUnixMS,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.AppendAudit(ctx, sess.AccountID, "session.auto_archived", string(metadata)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return archived, nil
+}
+
+// SessionRecoverySummary 汇总一次 Terminal 启动清扫的收口计数；只用于诊断日志与响应。
+type SessionRecoverySummary struct {
+	RecoveredIdle    int `json:"recovered_idle"`
+	RecoveredStopped int `json:"recovered_stopped"`
+}
+
+// RecoverStaleSessionsForTerminal 在 Daemon 声明进程重启后，收口该 Terminal 工作区上
+// 遗留的 running 会话（语义见 recoverStaleSessionsForTerminal）。
+func (s *SessionService) RecoverStaleSessionsForTerminal(ctx context.Context, accountID, terminalID string) (SessionRecoverySummary, error) {
+	return recoverStaleSessionsForTerminal(ctx, s.repo, accountID, terminalID)
+}
+
+// recoverStaleSessionsForTerminal 的调用方（新 Daemon 进程）提供的 ground truth 是：
+// 上一进程已死亡，其全部 instance 不再可能活跃，因此这里不要求 Terminal 心跳失联，
+// 也不依赖活动时间 TTL；确定性证据（命令终态、最后事件）仍缺一不可。收口只写
+// idle/stopped 与审计，绝不 archive、不删除事件，幂等可重放。
+//   - current_instance_id 非空：上一进程带着未结束的回合死亡 → stopped 并清空 instance；
+//   - 无 instance 且命令全部终态：最后事件为 message.completed → idle（完成证据齐备，
+//     仅终态事件丢失），否则 → stopped（回合被打断，包括尚未产出模型输出的回合）；
+//   - 命令未全部终态：保持 running，交给命令生命周期路径处理。
+func recoverStaleSessionsForTerminal(ctx context.Context, repo store.Repository, accountID, terminalID string) (SessionRecoverySummary, error) {
+	var summary SessionRecoverySummary
+	if strings.TrimSpace(accountID) == "" || strings.TrimSpace(terminalID) == "" {
+		return summary, ErrTerminalRequired
+	}
+	err := repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		sessions, err := tx.ListRunningSessions(ctx, accountID)
+		if err != nil {
+			return err
+		}
+		for _, sess := range sessions {
+			workspace, workspaceErr := tx.WorkspaceByID(ctx, sess.WorkspaceID)
+			if workspaceErr != nil {
+				return workspaceErr
+			}
+			if workspace.TerminalID != terminalID {
+				continue
+			}
+			status := SessionIdle
+			reason := "completed_event_without_active_instance"
+			if sess.CurrentInstanceID != "" {
+				status = SessionStopped
+				reason = "daemon_restart_with_live_instance"
+			} else {
+				commands, commandsErr := tx.ListCommands(ctx, sess.ID)
+				if commandsErr != nil {
+					return commandsErr
+				}
+				open := false
+				for _, command := range commands {
+					if !isTerminal(command.Status) {
+						open = true
+						break
+					}
+				}
+				if open {
+					continue
+				}
+				events, eventsErr := tx.ListEventsAfter(ctx, sess.ID, 0)
+				if eventsErr != nil {
+					return eventsErr
+				}
+				if len(events) == 0 || events[len(events)-1].EventType != "message.completed" {
+					status = SessionStopped
+					reason = "daemon_restart_before_terminal_event"
+				}
+			}
+			// 收口保留原活动时间：last_activity 继续指向真实的最后一次事件/命令，
+			// 客户端的「最后消息时间」排序与休眠展示不会被清扫时间污染。
+			if err := tx.SetSessionStatusKeepActivity(ctx, sess.ID, status); err != nil {
+				return err
+			}
+			if sess.CurrentInstanceID != "" {
+				if err := tx.SetSessionInstance(ctx, sess.ID, ""); err != nil {
+					return err
+				}
+			}
+			switch status {
+			case SessionIdle:
+				summary.RecoveredIdle++
+			case SessionStopped:
+				summary.RecoveredStopped++
+			}
+			metadata, err := json.Marshal(map[string]string{
+				"session_id": sess.ID, "status": status, "reason": reason,
+			})
+			if err != nil {
+				return err
+			}
+			if err := tx.AppendAudit(ctx, sess.AccountID, "session.recovered", string(metadata)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return SessionRecoverySummary{}, err
+	}
+	return summary, nil
+}
+
+// ListArchivedSessions 列出账号下已归档会话。
+func (s *SessionService) ListArchivedSessions(ctx context.Context, accountID string) ([]store.SessionRow, error) {
+	return s.repo.ListArchivedSessions(ctx, accountID)
+}
+
+// ArchiveSession 把会话标记为已归档并从默认列表隐藏；数据与事件全部保留。
+// 归档是 Relay 本地元数据操作，不要求 Provider 声明 archive 能力。
+func (s *SessionService) ArchiveSession(ctx context.Context, accountID, role, sessionID string) (store.SessionRow, error) {
+	if !protocol.DeviceRoleCanWrite(role) {
+		return store.SessionRow{}, ErrReadOnlyDevice
+	}
+	var out store.SessionRow
+	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		sess, err := tx.SessionByID(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		if sess.AccountID != accountID {
+			return ErrScopeDenied
+		}
+		if sess.ArchivedAtUnixMS != 0 {
+			out = sess
+			return nil
+		}
+		archivedAt := s.now().UnixMilli()
+		if err := tx.ArchiveSession(ctx, sessionID, archivedAt); err != nil {
+			return err
+		}
+		if err := tx.AppendAudit(ctx, accountID, "session.archived", `{"session_id":"`+sessionID+`","archived_at_unix_ms":`+strconv.FormatInt(archivedAt, 10)+`}`); err != nil {
+			return err
+		}
+		sess.ArchivedAtUnixMS = archivedAt
+		out = sess
+		return nil
+	})
+	return out, err
+}
+
+// UnarchiveSession 把已归档会话恢复到默认列表。
+func (s *SessionService) UnarchiveSession(ctx context.Context, accountID, role, sessionID string) (store.SessionRow, error) {
+	if !protocol.DeviceRoleCanWrite(role) {
+		return store.SessionRow{}, ErrReadOnlyDevice
+	}
+	var out store.SessionRow
+	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		sess, err := tx.SessionByID(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSessionNotFound
+			}
+			return err
+		}
+		if sess.AccountID != accountID {
+			return ErrScopeDenied
+		}
+		if sess.ArchivedAtUnixMS == 0 {
+			out = sess
+			return nil
+		}
+		if err := tx.UnarchiveSession(ctx, sessionID); err != nil {
+			return err
+		}
+		// 取消归档视为一次用户主动操作：刷新活动时间，否则下一次 ListSessions 的
+		// 休眠自动归档会把仍然陈旧的 idle 会话立刻再次归档，形成恢复即消失的循环。
+		if err := tx.SetSessionStatusAt(ctx, sessionID, sess.Status, s.now().UnixMilli()); err != nil {
+			return err
+		}
+		if err := tx.AppendAudit(ctx, accountID, "session.unarchived", `{"session_id":"`+sessionID+`"}`); err != nil {
+			return err
+		}
+		sess.ArchivedAtUnixMS = 0
+		sess.LastActivityAtUnixMS = s.now().UnixMilli()
+		out = sess
+		return nil
+	})
+	return out, err
 }
 
 // ListWorkspaces 列出账号下工作区。

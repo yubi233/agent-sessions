@@ -21,10 +21,16 @@ var CapabilityNames = []string{
 }
 
 // Capability 描述单项能力状态与原因。
+// Options 是 additive 选项目录（model/effort/permission_mode 等）：空表示不暴露目录，
+// 客户端按 Status 决定入口是否可用，按 Options 渲染选择列表。
 type Capability struct {
-	Name   string `json:"name"`
-	Status string `json:"status"` // native | emulated | unsupported
-	Reason string `json:"reason,omitempty"`
+	Name    string   `json:"name"`
+	Status  string   `json:"status"` // native | emulated | unsupported
+	Reason  string   `json:"reason,omitempty"`
+	Options []string `json:"options,omitempty"`
+	// Default 是该能力目录的安全默认项（当前主要用于 model_select）。
+	// 它必须同时存在于 Options 中；缺失时客户端不得自行猜测。
+	Default string `json:"default,omitempty"`
 }
 
 // Capabilities 返回 Provider 的能力矩阵。
@@ -50,8 +56,10 @@ type EventType string
 // canonical 事件类型。
 const (
 	EventTurnStarted        EventType = "turn_started"
+	EventUserMessage        EventType = "user_message"
 	EventMessageDelta       EventType = "message_delta"
 	EventMessageCompleted   EventType = "message_completed"
+	EventTurnCompleted      EventType = "turn_completed"
 	EventToolCall           EventType = "tool_call"
 	EventToolResult         EventType = "tool_result"
 	EventPermissionRequest  EventType = "permission_request"
@@ -126,6 +134,13 @@ type Handle interface {
 type InstanceIDHandle interface {
 	Handle
 	InstanceID() string
+}
+
+// ModelOverrideHandle 支持运行期更新会话模型（session.model_select / session.send
+// 的随行模型）。由具备模型路由能力的 adapter 实现；daemon 按可选接口断言，不强制。
+type ModelOverrideHandle interface {
+	Handle
+	SetModel(model string)
 }
 
 // ForceKillHandle 只由明确拥有本机 Provider 进程树的 Handle 实现。它和 Abort 的语义不同：

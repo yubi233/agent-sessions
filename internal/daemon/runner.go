@@ -67,6 +67,9 @@ type SessionRunner struct {
 	store    *Store
 	adapters map[string]adapter.Adapter // key: provider 名（如 "opencode"）
 	logger   *slog.Logger
+	// DefaultModel 是启动时注入的默认模型。只有 OpenCode 且命令未携带模型时才
+	// 使用它；空值会交给 Adapter/服务端按既有兼容语义处理，绝不猜测其它 Provider。
+	DefaultModel string
 
 	mu      sync.Mutex
 	handles map[string]*runningSession // key: sessionID
@@ -78,6 +81,13 @@ type SessionRunner struct {
 	// 未配置 sink 时仍保留本地状态，但绝不伪造 Relay event 成功。
 	eventSinkMu sync.RWMutex
 	eventSink   func(sessionID string, event adapter.Event)
+
+	// eventSeq 保存每个 session 最近分配的 canonical 序号。Provider handle 的
+	// 序号只覆盖 Provider 事件，runner 自己生成的 user_message/断流终态也必须
+	// 使用同一条单调序列，否则生产 E2EE encoder 会拒绝 Seq=0，或发生 AAD 序号冲突。
+	eventSeqMu sync.Mutex
+	eventSeq   map[string]int64
+	eventCount map[string]int
 
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -95,6 +105,8 @@ func NewSessionRunner(store *Store, adapters map[string]adapter.Adapter, logger 
 		adapters:   adapters,
 		logger:     logger,
 		handles:    map[string]*runningSession{},
+		eventSeq:   map[string]int64{},
+		eventCount: map[string]int{},
 		rootCtx:    ctx,
 		rootCancel: cancel,
 	}
@@ -139,6 +151,8 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 		return r.killSession(ctx, cmd)
 	case "session.resume":
 		return r.resumeSession(ctx, cmd)
+	case "session.model_select":
+		return r.selectModel(ctx, cmd)
 	default:
 		// 未实现 kind 保持 fail-closed：不写任何成功状态（项目文档「统一能力模型」）。
 		return fmt.Errorf("%w: kind=%s", ErrUnsupportedCommand, kind)
@@ -195,10 +209,14 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	}
 	r.mu.Unlock()
 
+	model := strings.TrimSpace(env.model())
+	if model == "" && provider == "opencode" {
+		model = strings.TrimSpace(r.DefaultModel)
+	}
 	handle, err := ad.Start(ctx, adapter.StartRequest{
 		WorkspaceRoot: workspaceRoot,
 		Provider:      provider,
-		Model:         env.model(),
+		Model:         model,
 		Effort:        env.effort(),
 		PlanMode:      env.PlanMode,
 		Prompt:        env.prompt(), // 密文或本机状态；不写公共日志
@@ -281,6 +299,27 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 	rs, err := r.lookupSession(sessionID)
 	if err != nil {
 		return err
+	}
+	// The prompt is the canonical source for the user's timeline entry. Emit it
+	// before the provider call so slow model turns do not hide the sent message.
+	r.emitEvent(sessionID, adapter.Event{
+		Type: adapter.EventUserMessage,
+		Payload: map[string]any{
+			"instance_id": sessionID,
+			"text":        text,
+		},
+	})
+	// 模型解析顺序：send 密文随行 > 会话已持久化选择（model_select）> handle 现值
+	// （Start 时的目录默认）。空模型会让 opencode 服务端回退到它的配置默认，
+	// 可能命中付费订阅条目，因此绝不能带着空模型发出。
+	if override := strings.TrimSpace(env.model()); override != "" {
+		if setter, ok := rs.handle.(adapter.ModelOverrideHandle); ok {
+			setter.SetModel(override)
+		}
+	} else if stored, err := r.store.Get("model:" + sessionID); err == nil {
+		if setter, ok := rs.handle.(adapter.ModelOverrideHandle); ok {
+			setter.SetModel(strings.TrimSpace(stored))
+		}
 	}
 	return rs.handle.Send(ctx, text)
 }
@@ -410,40 +449,205 @@ func (r *SessionRunner) removeHandle(sessionID string) {
 // 退出路径：fwdCtx 取消（Close/会话回收）或 handle 事件流关闭。
 // handle.Dispose 由调用方（startSession 失败路径或 Close）负责，这里只负责停止转发。
 func (r *SessionRunner) forwardEvents(sessionID string, h adapter.Handle, fwdCtx context.Context, initial ...adapter.Event) {
-	count := 0
+	terminalSeen := false
 	if len(initial) > 0 && initial[0].Type != "" {
-		count = 1
-		r.writeEvent(sessionID, count, initial[0])
+		terminalSeen = initial[0].Type == adapter.EventTurnCompleted
+		r.writeEvent(sessionID, 0, initial[0])
 	}
 	for {
 		select {
 		case ev, ok := <-h.Events():
 			if !ok {
+				// A provider-owned event stream closing while the forwarding context is
+				// still live is an abnormal interruption (for example, a bridge crash).
+				// Emit one canonical terminal marker so Relay/Flutter cannot retain a
+				// stale generating state. Intentional Close/kill paths cancel fwdCtx
+				// first and must not manufacture a stopped event.
+				if fwdCtx.Err() == nil && !terminalSeen {
+					r.writeEvent(sessionID, 0, adapter.Event{
+						Type: adapter.EventSessionError,
+						Payload: map[string]any{
+							"instance_id": sessionID,
+							"message":     "Provider 事件流已中断，详情仅限本机诊断。",
+						},
+					})
+					r.writeEvent(sessionID, 0, adapter.Event{
+						Type: adapter.EventTurnCompleted,
+						Payload: map[string]any{
+							"instance_id": sessionID,
+							"stop_reason": "stopped",
+						},
+					})
+				}
 				return
 			}
-			count++
-			r.writeEvent(sessionID, count, ev)
+			if ev.Type == adapter.EventTurnStarted {
+				// A new busy marker opens a fresh turn; a terminal from a prior
+				// turn must not suppress recovery if this one is interrupted.
+				terminalSeen = false
+			}
+			if ev.Type == adapter.EventTurnCompleted {
+				terminalSeen = true
+			}
+			r.writeEvent(sessionID, 0, ev)
 		case <-fwdCtx.Done():
 			return
 		}
 	}
 }
 
-// writeEvent 写最后一条 canonical 事件；失败只告警，不阻塞命令消费。
-func (r *SessionRunner) writeEvent(sessionID string, count int, ev adapter.Event) {
-	raw, err := json.Marshal(lastEvent{Count: count, Type: ev.Type, Seq: ev.Seq})
-	if err != nil {
+// emitEvent 将 runner 生成的规范化事件交给连接层；连接层负责编码和上传。
+func (r *SessionRunner) emitEvent(sessionID string, ev adapter.Event) {
+	// sendMessage 生成的 user_message 不经过 Provider handle，因此必须走与
+	// forwardEvents 完全相同的记录路径。这样它既不会被摘要遗漏，也不会在
+	// Daemon 重启后让序号分配器从落后的 last_event 重新开始。
+	r.recordEvent(sessionID, ev)
+}
+
+// normalizeEventSeq 将 Provider 提供的序号纳入 runner 的 canonical 序列。
+// Provider 序号通常从 1 开始，但不同事件源可能重复、缺失或在 runner 自己的
+// user_message 之后回退；此时统一递增，保证正数且不发生 AAD 序号冲突。首次使用
+// 某 session 时尽量从本地 last_event 摘要恢复，避免 Daemon 重启后重新从 1 开始。
+func (r *SessionRunner) normalizeEventSeq(sessionID string, ev adapter.Event) adapter.Event {
+	if strings.TrimSpace(sessionID) == "" {
+		// 调用方已在命令入口校验 sessionID；保留一个确定性正数兜底，避免
+		// 内部测试/未来调用把 Seq=0 送进生产 encoder。
+		if ev.Seq <= 0 {
+			ev.Seq = 1
+		}
+		return ev
+	}
+	r.eventSeqMu.Lock()
+	defer r.eventSeqMu.Unlock()
+	if r.eventSeq == nil {
+		// Keep zero-value SessionRunner fixtures safe; production constructors
+		// initialize this map eagerly, but tests and embedders may use a literal.
+		r.eventSeq = make(map[string]int64)
+	}
+	if r.eventCount == nil {
+		r.eventCount = make(map[string]int)
+	}
+	current, ok := r.eventSeq[sessionID]
+	if !ok {
+		summary := r.persistedLastEvent(sessionID)
+		current = summary.Seq
+		r.eventCount[sessionID] = summary.Count
+	}
+	if ev.Seq > current {
+		current = ev.Seq
+	} else {
+		if current == int64(^uint64(0)>>1) {
+			// Sequence exhaustion is unrecoverable; retain the highest valid value
+			// rather than wrapping into a negative number rejected by E2EE.
+			ev.Seq = current
+			return ev
+		}
+		current++
+	}
+	r.eventSeq[sessionID] = current
+	ev.Seq = current
+	return ev
+}
+
+// recordEvent 是 Runner 唯一的 canonical event 记录路径：在同一把锁下分配
+// 单调序号、递增脱敏计数、写入 last_event 摘要并通知连接层 sink。Provider
+// 事件和 Runner 生成的 user_message/EOF 终态都必须经过这里；否则并发路径
+// 可能先发出事件、后写旧摘要，导致重启后序号重用。sink 在摘要提交后
+// 顺序调用，保证同一 Runner 内观察到的事件顺序与摘要一致。
+func (r *SessionRunner) recordEvent(sessionID string, ev adapter.Event) {
+	if strings.TrimSpace(sessionID) == "" {
+		if ev.Seq <= 0 {
+			ev.Seq = 1
+		}
+		r.notifyEventSink(sessionID, ev)
 		return
 	}
-	if err := r.store.Set(eventKey(sessionID), string(raw)); err != nil {
-		r.logger.Warn("daemon runner persist event", "error", err)
+
+	r.eventSeqMu.Lock()
+	defer r.eventSeqMu.Unlock()
+	if r.eventSeq == nil {
+		r.eventSeq = make(map[string]int64)
 	}
+	if r.eventCount == nil {
+		r.eventCount = make(map[string]int)
+	}
+	current, ok := r.eventSeq[sessionID]
+	if !ok {
+		summary := r.persistedLastEvent(sessionID)
+		current = summary.Seq
+		r.eventCount[sessionID] = summary.Count
+	}
+	ev.Seq = nextEventSequence(current, ev.Seq)
+	r.eventSeq[sessionID] = ev.Seq
+	r.eventCount[sessionID]++
+	count := r.eventCount[sessionID]
+	r.persistEventSummary(sessionID, lastEvent{Count: count, Type: ev.Type, Seq: ev.Seq})
+	r.notifyEventSink(sessionID, ev)
+}
+
+// nextEventSequence folds a provider-supplied sequence into the Runner-owned
+// canonical sequence. Provider gaps are preserved, while duplicate/late/zero
+// values advance by one. Saturation avoids wrapping into a negative sequence.
+func nextEventSequence(current, supplied int64) int64 {
+	if supplied > current {
+		return supplied
+	}
+	if current == int64(^uint64(0)>>1) {
+		return current
+	}
+	return current + 1
+}
+
+func (r *SessionRunner) notifyEventSink(sessionID string, ev adapter.Event) {
 	r.eventSinkMu.RLock()
 	sink := r.eventSink
 	r.eventSinkMu.RUnlock()
 	if sink != nil {
 		sink(sessionID, ev)
 	}
+}
+
+func (r *SessionRunner) persistEventSummary(sessionID string, summary lastEvent) {
+	if r == nil || r.store == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		return
+	}
+	if err := r.store.Set(eventKey(sessionID), string(raw)); err != nil && r.logger != nil {
+		r.logger.Warn("daemon runner persist event", "error", err)
+	}
+}
+
+func (r *SessionRunner) persistedLastEvent(sessionID string) lastEvent {
+	if r == nil || r.store == nil {
+		return lastEvent{}
+	}
+	raw, err := r.store.Get(eventKey(sessionID))
+	if err != nil {
+		return lastEvent{}
+	}
+	var summary lastEvent
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		return lastEvent{}
+	}
+	if summary.Seq < 0 {
+		summary.Seq = 0
+	}
+	if summary.Count < 0 {
+		summary.Count = 0
+	}
+	return summary
+}
+
+func (r *SessionRunner) persistedEventSeq(sessionID string) int64 {
+	return r.persistedLastEvent(sessionID).Seq
+}
+
+// writeEvent 写最后一条 canonical 事件；失败只告警，不阻塞命令消费。
+func (r *SessionRunner) writeEvent(sessionID string, _ int, ev adapter.Event) {
+	r.recordEvent(sessionID, ev)
 }
 
 // awaitFirstEvent 等待 handle 事件流的第一条事件；超时或提前关闭视为启动失败。
@@ -572,4 +776,25 @@ func (e *commandEnvelope) prompt() string {
 		return e.Ciphertext.FixturePayload.Prompt
 	}
 	return e.Prompt
+}
+
+// selectModel 兑现 session.model_select：解析模型名并持久化到会话元数据。
+// 当前只更新本地 KV store；运行期模型覆盖需要桥侧 session/new 或 sessionUpdate 支持。
+func (r *SessionRunner) selectModel(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("session.model_select 缺少 session_id")
+	}
+	model := env.model()
+	if model == "" {
+		return errors.New("session.model_select 缺少 model")
+	}
+	if err := r.store.Set("model:"+sessionID, model); err != nil {
+		return fmt.Errorf("持久化模型选择: %w", err)
+	}
+	return nil
 }

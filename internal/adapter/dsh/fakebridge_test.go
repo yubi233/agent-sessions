@@ -307,6 +307,54 @@ func TestStartSendRoundTripAndMessageCompleted(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 message_completed 事件超时")
 	}
+
+	// session/prompt 应答（stopReason=end_turn）后必须补发回合终止标记，
+	// 否则客户端无法区分“模型仍在生成”与“本轮已结束”。
+	select {
+	case ev := <-h.Events():
+		if ev.Type != adapter.EventTurnCompleted {
+			t.Fatalf("事件类型 = %q, want turn_completed", ev.Type)
+		}
+		if ev.Payload["stop_reason"] != "end_turn" {
+			t.Fatalf("stop_reason = %v", ev.Payload["stop_reason"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待 turn_completed 事件超时")
+	}
+}
+
+// (b2) prompt 失败也必须收敛回合：先 session_error 提示，再 turn_completed 终止，
+// 否则客户端在 upstream 故障时永远停留在“生成中”。
+func TestSendPromptFailureEmitsTerminalEvents(t *testing.T) {
+	const sessionID = "sess-0001"
+	fb := newFakeBridge()
+	fb.script = func(fb *fakeBridge, msg map[string]any) {
+		if methodOf(msg) == "session/prompt" {
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": frameID(msg),
+				"error": map[string]any{"code": -32603, "message": "Internal error: quota"},
+			})
+			return
+		}
+		respondByMethod(t, sessionID)(fb, msg)
+	}
+	h := startWithFake(t, fb)
+
+	if err := h.Send(context.Background(), "会失败的消息"); err == nil {
+		t.Fatal("prompt 失败必须返回错误")
+	}
+
+	first := <-h.Events()
+	if first.Type != adapter.EventSessionError {
+		t.Fatalf("第一个事件 = %q, want session_error", first.Type)
+	}
+	second := <-h.Events()
+	if second.Type != adapter.EventTurnCompleted {
+		t.Fatalf("第二个事件 = %q, want turn_completed", second.Type)
+	}
+	if second.Payload["stop_reason"] != "error" {
+		t.Fatalf("stop_reason = %v, want error", second.Payload["stop_reason"])
+	}
 }
 
 // (c) Abort 幂等：重复 cancel 通知不报错，且帧形状为 {sessionId}。

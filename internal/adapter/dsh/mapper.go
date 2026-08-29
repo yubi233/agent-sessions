@@ -12,6 +12,15 @@ type updateBody struct {
 	SessionUpdate string          `json:"sessionUpdate"`
 	Content       json.RawMessage `json:"content"`
 	MessageID     string          `json:"messageId"`
+	Usage         json.RawMessage `json:"usage"`
+	ContextWindow int64           `json:"contextWindow"`
+}
+
+type usageUpdate struct {
+	InputTokens      int64 `json:"inputTokens"`
+	OutputTokens     int64 `json:"outputTokens"`
+	CacheReadTokens  int64 `json:"cacheReadTokens"`
+	CacheWriteTokens int64 `json:"cacheWriteTokens"`
 }
 
 // contentBlock 是 ACP content 块的最小投影（目前只消费 text 块）。
@@ -26,8 +35,8 @@ type contentBlock struct {
 // 落地后才发送，因此映射为 message_completed，而不是原始 token delta；这样本地
 // 开发编码器与生产时间线都只消费完整助手文本。
 // 其余变体（user_message_chunk/agent_thought_chunk/tool_call/tool_call_update/
-// plan/plan_update/usage_update 等）与未知变体一律 ok=false，由调用方丢弃并计数，
-// 不报错——这与能力矩阵中这些能力的 unsupported 承诺一致。
+// plan/plan_update 等）与未知变体一律 ok=false，由调用方丢弃并计数；usage_update
+// 是桥为 usage 投影提供的受控扩展，不携带正文。
 // 返回的第三个值是变体名（含解析失败时的占位），供调用方按变体计数。
 func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, bool, string) {
 	var body updateBody
@@ -35,6 +44,29 @@ func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, 
 		return adapter.Event{}, false, "<malformed>"
 	}
 	variant := body.SessionUpdate
+	if variant == "usage_update" {
+		var usage usageUpdate
+		if err := json.Unmarshal(body.Usage, &usage); err != nil {
+			return adapter.Event{}, false, variant
+		}
+		if usage.InputTokens < 0 || usage.OutputTokens < 0 ||
+			usage.CacheReadTokens < 0 || usage.CacheWriteTokens < 0 ||
+			(usage.InputTokens == 0 && usage.OutputTokens == 0 &&
+				usage.CacheReadTokens == 0 && usage.CacheWriteTokens == 0) {
+			return adapter.Event{}, false, variant
+		}
+		payload := map[string]any{
+			"instance_id":        sessionID,
+			"input_tokens":       usage.InputTokens,
+			"output_tokens":      usage.OutputTokens,
+			"cache_read_tokens":  usage.CacheReadTokens,
+			"cache_write_tokens": usage.CacheWriteTokens,
+		}
+		if body.ContextWindow > 0 {
+			payload["context_window_tokens"] = body.ContextWindow
+		}
+		return adapter.Event{Type: adapter.EventUsage, Payload: payload}, true, variant
+	}
 	if variant != "agent_message_chunk" {
 		// 白名单外/未知变体：丢弃并计数，不产生事件。
 		return adapter.Event{}, false, variant

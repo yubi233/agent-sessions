@@ -221,3 +221,249 @@ func TestNewWakeResult(t *testing.T) {
 		t.Fatalf("invalid wake should error")
 	}
 }
+
+// 归档是本地元数据操作：默认列表隐藏、数据仍可读取，取消归档恢复列表。
+func TestArchiveSessionHidesFromDefaultListAndRestores(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	svc := NewSessionService(repo)
+	sessID := newSession(t, repo)
+
+	if _, err := svc.ArchiveSession(ctx, "acct", "web", sessID); err != ErrReadOnlyDevice {
+		t.Fatalf("readonly archive error=%v want ErrReadOnlyDevice", err)
+	}
+
+	archived, err := svc.ArchiveSession(ctx, "acct", RoleAndroidOwner, sessID)
+	if err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if archived.ArchivedAtUnixMS <= 0 {
+		t.Fatalf("archived at <= 0: %+v", archived)
+	}
+	active, err := repo.ListSessions(ctx, "acct")
+	if err != nil || len(active) != 0 {
+		t.Fatalf("active sessions should hide archived; got %d err=%v", len(active), err)
+	}
+	archivedList, err := repo.ListArchivedSessions(ctx, "acct")
+	if err != nil || len(archivedList) != 1 || archivedList[0].ID != sessID {
+		t.Fatalf("archived list=%+v err=%v", archivedList, err)
+	}
+	direct, err := repo.SessionByID(ctx, sessID)
+	if err != nil || direct.ArchivedAtUnixMS <= 0 {
+		t.Fatalf("direct session should still be readable: %+v err=%v", direct, err)
+	}
+
+	restored, err := svc.UnarchiveSession(ctx, "acct", RoleAndroidOwner, sessID)
+	if err != nil {
+		t.Fatalf("unarchive: %v", err)
+	}
+	if restored.ArchivedAtUnixMS != 0 {
+		t.Fatalf("restored archived time = %d", restored.ArchivedAtUnixMS)
+	}
+	active, err = repo.ListSessions(ctx, "acct")
+	if err != nil || len(active) != 1 || active[0].ID != sessID {
+		t.Fatalf("active sessions after restore=%+v err=%v", active, err)
+	}
+}
+
+// prepareStaleRunningSession creates the exact persisted shape that can be
+// reconciled: running, no Provider instance, old activity, and a final
+// message.completed event. The event is appended directly through the store so
+// the test can set an old activity timestamp after all writes.
+func prepareStaleRunningSession(t *testing.T, withTerminal bool) (store.Repository, *SessionService, string, time.Time) {
+	t.Helper()
+	repo := newRepo(t)
+	ctx := context.Background()
+	accountID, projectID, workspaceID := "acct", "proj", "ws"
+	if !withTerminal {
+		// Reuse the normal fixture for the common no-terminal case.
+		sessID := newSession(t, repo)
+		now := time.UnixMilli(2_000_000_000_000)
+		svc := NewSessionService(repo)
+		svc.now = func() time.Time { return now }
+		return finishStaleSession(t, repo, svc, sessID, now)
+	}
+	// A terminal-linked workspace is needed to exercise the heartbeat guard.
+	if err := repo.CreateAccount(ctx, accountID, "stale@test.dev", []byte("h"), time.Now()); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	if err := repo.CreateProject(ctx, store.ProjectRow{ID: projectID, AccountID: accountID, Fingerprint: "fp"}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if err := repo.CreateDevice(ctx, store.DeviceRow{ID: "dev", AccountID: accountID, Role: "terminal", Status: "online", DisplayName: "fixture"}); err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+	if err := repo.CreateTerminal(ctx, store.TerminalRow{ID: "term", DeviceID: "dev", AccountID: accountID, Status: "online"}); err != nil {
+		t.Fatalf("create terminal: %v", err)
+	}
+	if err := repo.CreateWorkspace(ctx, store.WorkspaceRow{ID: workspaceID, ProjectID: projectID, TerminalID: "term", CanonicalRoot: "/ws", Status: "active"}); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	svc := NewSessionService(repo)
+	sess, err := svc.CreateSession(ctx, accountID, workspaceID, "mock")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.UnixMilli(2_000_000_000_000)
+	svc.now = func() time.Time { return now }
+	return finishStaleSession(t, repo, svc, sess.ID, now)
+}
+
+func finishStaleSession(t *testing.T, repo store.Repository, svc *SessionService, sessID string, now time.Time) (store.Repository, *SessionService, string, time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	seq, err := repo.AppendEvent(ctx, store.SessionEventRow{
+		SessionID: sessID, EventType: "message.completed", EnvelopeJSON: "{}",
+	})
+	if err != nil {
+		t.Fatalf("append completed event: %v", err)
+	}
+	if err := repo.SetSessionLastSeq(ctx, sessID, seq); err != nil {
+		t.Fatalf("set last seq: %v", err)
+	}
+	// SetSessionLastSeq uses wall clock time; overwrite it with deterministic old
+	// activity after all event/sequence writes are complete.
+	if err := repo.SetSessionStatusAt(ctx, sessID, SessionRunning, now.Add(-5*time.Minute).UnixMilli()); err != nil {
+		t.Fatalf("set stale status: %v", err)
+	}
+	return repo, svc, sessID, now
+}
+
+// Reconciliation is deliberately conservative: only the fully-qualified
+// historical shape is changed to idle. Every individual guard must prevent a
+// false positive, and the operation is idempotent/non-archiving.
+func TestReconcileStaleRunningSessions(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(t *testing.T, repo store.Repository, sessID string, now time.Time)
+		wantIdle bool
+	}{
+		{name: "qualified completed history", wantIdle: true},
+		{
+			name: "terminal command",
+			mutate: func(t *testing.T, repo store.Repository, sessID string, _ time.Time) {
+				t.Helper()
+				if err := repo.CreateCommand(context.Background(), store.CommandRow{
+					ID: "cmd-done", AccountID: "acct", SessionID: sessID, Kind: "session.send",
+					Status: CommandSucceeded, ScopeHash: "scope-done", IdempotencyKey: "done", LeaseEpoch: 1,
+				}); err != nil {
+					t.Fatalf("create terminal command: %v", err)
+				}
+			},
+			wantIdle: true,
+		},
+		{
+			name: "active instance",
+			mutate: func(t *testing.T, repo store.Repository, sessID string, _ time.Time) {
+				t.Helper()
+				if err := repo.SetSessionInstance(context.Background(), sessID, "inst-live"); err != nil {
+					t.Fatalf("set instance: %v", err)
+				}
+			},
+		},
+		{
+			name: "active command",
+			mutate: func(t *testing.T, repo store.Repository, sessID string, _ time.Time) {
+				t.Helper()
+				if err := repo.CreateCommand(context.Background(), store.CommandRow{
+					ID: "cmd-active", AccountID: "acct", SessionID: sessID, Kind: "session.send",
+					Status: CommandRunning, ScopeHash: "scope", IdempotencyKey: "active", LeaseEpoch: 1,
+				}); err != nil {
+					t.Fatalf("create active command: %v", err)
+				}
+			},
+		},
+		{
+			name: "fresh activity",
+			mutate: func(t *testing.T, repo store.Repository, sessID string, now time.Time) {
+				t.Helper()
+				if err := repo.SetSessionStatusAt(context.Background(), sessID, SessionRunning, now.Add(-30*time.Second).UnixMilli()); err != nil {
+					t.Fatalf("set fresh activity: %v", err)
+				}
+			},
+		},
+		{
+			name: "non-completed final event",
+			mutate: func(t *testing.T, repo store.Repository, sessID string, now time.Time) {
+				t.Helper()
+				seq, err := repo.AppendEvent(context.Background(), store.SessionEventRow{SessionID: sessID, EventType: "usage.updated", EnvelopeJSON: "{}"})
+				if err != nil {
+					t.Fatalf("append trailing event: %v", err)
+				}
+				if err := repo.SetSessionLastSeq(context.Background(), sessID, seq); err != nil {
+					t.Fatalf("set trailing seq: %v", err)
+				}
+				if err := repo.SetSessionStatusAt(context.Background(), sessID, SessionRunning, now.Add(-5*time.Minute).UnixMilli()); err != nil {
+					t.Fatalf("restore stale status: %v", err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, svc, sessID, now := prepareStaleRunningSession(t, false)
+			if tt.mutate != nil {
+				tt.mutate(t, repo, sessID, now)
+			}
+			rows, err := svc.ListSessions(context.Background(), "acct")
+			if err != nil {
+				t.Fatalf("list sessions/reconcile: %v", err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("rows=%d, want one visible session", len(rows))
+			}
+			if got := rows[0].Status == SessionIdle; got != tt.wantIdle {
+				t.Fatalf("status=%q, idle=%v want %v", rows[0].Status, got, tt.wantIdle)
+			}
+			if rows[0].ArchivedAtUnixMS != 0 {
+				t.Fatalf("reconcile must not archive session: %+v", rows[0])
+			}
+			// A second read must be stable and must not append another transition.
+			rows2, err := svc.ListSessions(context.Background(), "acct")
+			if err != nil || len(rows2) != 1 || rows2[0].Status != rows[0].Status {
+				t.Fatalf("second reconciliation rows=%+v err=%v", rows2, err)
+			}
+		})
+	}
+}
+
+// A fresh heartbeat on the workspace Terminal blocks reconciliation even when
+// the persisted session activity itself is older than the TTL.
+func TestReconcileStaleRunningSessionsSkipsFreshTerminal(t *testing.T) {
+	repo, svc, sessID, now := prepareStaleRunningSession(t, true)
+	if sessID == "" {
+		t.Fatal("stale session id must not be empty")
+	}
+	if err := repo.TouchTerminal(context.Background(), "term", now.Add(-30*time.Second).UnixMilli()); err != nil {
+		t.Fatalf("touch terminal: %v", err)
+	}
+	rows, err := svc.ListSessions(context.Background(), "acct")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Status != SessionRunning {
+		t.Fatalf("fresh terminal must keep running session: %+v", rows)
+	}
+}
+
+// A legacy row may have last_activity_at_unix_ms=0 because it predates the
+// additive column.  That unknown timestamp must not bypass the Terminal
+// heartbeat guard: a fresh linked Terminal still proves that the session may
+// be active and therefore must remain running.
+func TestReconcileLegacyActivityStillHonorsFreshTerminal(t *testing.T) {
+	repo, svc, sessID, now := prepareStaleRunningSession(t, true)
+	ctx := context.Background()
+	if err := repo.SetSessionStatusAt(ctx, sessID, SessionRunning, 0); err != nil {
+		t.Fatalf("clear legacy activity timestamp: %v", err)
+	}
+	if err := repo.TouchTerminal(ctx, "term", now.Add(-30*time.Second).UnixMilli()); err != nil {
+		t.Fatalf("touch terminal: %v", err)
+	}
+	rows, err := svc.ListSessions(ctx, "acct")
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Status != SessionRunning {
+		t.Fatalf("fresh terminal must keep legacy running session: %+v", rows)
+	}
+}

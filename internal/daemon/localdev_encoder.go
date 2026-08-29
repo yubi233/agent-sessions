@@ -62,6 +62,18 @@ func (e LocalDevEventEncoder) Encode(sessionID string, event adapter.Event) (str
 // localDevFixturePayload 只复制白名单字段；tool input/output 沿用 adapter 层已有的截断。
 func localDevFixturePayload(event adapter.Event) (map[string]any, bool) {
 	switch event.Type {
+	case adapter.EventUserMessage:
+		text, _ := event.Payload["text"].(string)
+		if strings.TrimSpace(text) == "" {
+			return nil, false
+		}
+		return map[string]any{
+			"kind":      "user_message",
+			"label":     "你",
+			"text":      text,
+			"streaming": false,
+			"copy_text": text,
+		}, true
 	case adapter.EventMessageCompleted:
 		text, _ := event.Payload["text"].(string)
 		if strings.TrimSpace(text) == "" {
@@ -73,6 +85,14 @@ func localDevFixturePayload(event adapter.Event) (map[string]any, bool) {
 			"text":      text,
 			"streaming": false,
 			"copy_text": text,
+		}, true
+	case adapter.EventTurnCompleted:
+		return map[string]any{
+			// The marker is intentionally empty: the mobile projection consumes
+			// completed_turn to stop generating without rendering a fake message.
+			"kind":           "assistant_message",
+			"label":          "Assistant",
+			"completed_turn": true,
 		}, true
 	case adapter.EventToolCall:
 		name := nonEmptyOr(event.Payload["tool_name"], "工具")

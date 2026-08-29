@@ -34,29 +34,31 @@ const (
 // UsageEventInput 是 Daemon 上传的 usage 事件输入。usageKey 由 Daemon 对来源事件
 // 生成（如 session id + event seq + provider），保证断线重试幂等。
 type UsageEventInput struct {
-	UsageKey         string
-	SessionID        string
-	Provider         string
-	Model            string
-	UTCDay           string // "2006-01-02"（UTC）
-	InputTokens      int64
-	OutputTokens     int64
-	CacheReadTokens  int64
-	CacheWriteTokens int64
-	TTFTMS           *int64
-	DecodeThroughput *float64
+	UsageKey            string
+	SessionID           string
+	Provider            string
+	Model               string
+	UTCDay              string // "2006-01-02"（UTC）
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheWriteTokens    int64
+	ContextWindowTokens int64
+	TTFTMS              *int64
+	DecodeThroughput    *float64
 }
 
 // SessionUsageProjection 是单会话 StatsLine/Model seat 能安全展示的 usage 投影。
 type SessionUsageProjection struct {
-	Model            string   `json:"model,omitempty"`
-	InputTokens      int64    `json:"input_tokens"`
-	OutputTokens     int64    `json:"output_tokens"`
-	CacheReadTokens  int64    `json:"cache_read_tokens"`
-	CacheWriteTokens int64    `json:"cache_write_tokens"`
-	TTFTMS           *int64   `json:"ttft_ms,omitempty"`
-	DecodeThroughput *float64 `json:"decode_throughput,omitempty"`
-	HasUsage         bool     `json:"-"`
+	Model               string   `json:"model,omitempty"`
+	InputTokens         int64    `json:"input_tokens"`
+	OutputTokens        int64    `json:"output_tokens"`
+	CacheReadTokens     int64    `json:"cache_read_tokens"`
+	CacheWriteTokens    int64    `json:"cache_write_tokens"`
+	ContextWindowTokens int64    `json:"context_window_tokens,omitempty"`
+	TTFTMS              *int64   `json:"ttft_ms,omitempty"`
+	DecodeThroughput    *float64 `json:"decode_throughput,omitempty"`
+	HasUsage            bool     `json:"-"`
 }
 
 // UsageDayAggregate 是单账号单 Provider 单 UTC 日桶的聚合投影。
@@ -103,6 +105,9 @@ func (s *UsageService) UploadUsageEvent(ctx context.Context, accountID, terminal
 	if err := validateTokens(input.InputTokens, input.OutputTokens, input.CacheReadTokens, input.CacheWriteTokens); err != nil {
 		return false, err
 	}
+	if input.ContextWindowTokens < 0 || input.ContextWindowTokens > UsageMaxTokenValue {
+		return false, protocol.NewError(protocol.ErrInvalidRequest, "context_window_tokens is invalid")
+	}
 	if err := validateUsageTiming(input.TTFTMS, input.DecodeThroughput); err != nil {
 		return false, err
 	}
@@ -132,21 +137,22 @@ func (s *UsageService) UploadUsageEvent(ctx context.Context, accountID, terminal
 	}
 	keyHash := usageKeyHash(input.UsageKey)
 	inserted, err = s.repo.UpsertUsageEvent(ctx, store.UsageEventRow{
-		UsageKeyHash:     keyHash,
-		AccountID:        accountID,
-		TerminalID:       terminalID,
-		SessionID:        sessionID,
-		Provider:         input.Provider,
-		Model:            model,
-		UTCDay:           input.UTCDay,
-		InputTokens:      input.InputTokens,
-		OutputTokens:     input.OutputTokens,
-		CacheReadTokens:  input.CacheReadTokens,
-		CacheWriteTokens: input.CacheWriteTokens,
-		TTFTMS:           input.TTFTMS,
-		DecodeThroughput: input.DecodeThroughput,
-		SchemaVersion:    UsageSchemaVersion,
-		CreatedAtUnixMS:  time.Now().UnixMilli(),
+		UsageKeyHash:        keyHash,
+		AccountID:           accountID,
+		TerminalID:          terminalID,
+		SessionID:           sessionID,
+		Provider:            input.Provider,
+		Model:               model,
+		UTCDay:              input.UTCDay,
+		InputTokens:         input.InputTokens,
+		OutputTokens:        input.OutputTokens,
+		CacheReadTokens:     input.CacheReadTokens,
+		CacheWriteTokens:    input.CacheWriteTokens,
+		ContextWindowTokens: input.ContextWindowTokens,
+		TTFTMS:              input.TTFTMS,
+		DecodeThroughput:    input.DecodeThroughput,
+		SchemaVersion:       UsageSchemaVersion,
+		CreatedAtUnixMS:     time.Now().UnixMilli(),
 	})
 	if err != nil {
 		return false, err
@@ -176,21 +182,22 @@ func (s *UsageService) SessionProjection(ctx context.Context, accountID, session
 	if err != nil {
 		return nil, err
 	}
-	if !row.HasData && row.Model == "" && row.TTFTMS == nil && row.DecodeThroughput == nil {
+	if !row.HasData && row.Model == "" && row.ContextWindowTokens == 0 && row.TTFTMS == nil && row.DecodeThroughput == nil {
 		if session.Model == "" {
 			return nil, nil
 		}
 		row.Model = session.Model
 	}
 	return &SessionUsageProjection{
-		Model:            firstNonEmpty(row.Model, session.Model),
-		InputTokens:      row.InputTokens,
-		OutputTokens:     row.OutputTokens,
-		CacheReadTokens:  row.CacheReadTokens,
-		CacheWriteTokens: row.CacheWriteTokens,
-		TTFTMS:           row.TTFTMS,
-		DecodeThroughput: row.DecodeThroughput,
-		HasUsage:         row.HasData || row.TTFTMS != nil || row.DecodeThroughput != nil,
+		Model:               firstNonEmpty(row.Model, session.Model),
+		InputTokens:         row.InputTokens,
+		OutputTokens:        row.OutputTokens,
+		CacheReadTokens:     row.CacheReadTokens,
+		CacheWriteTokens:    row.CacheWriteTokens,
+		ContextWindowTokens: row.ContextWindowTokens,
+		TTFTMS:              row.TTFTMS,
+		DecodeThroughput:    row.DecodeThroughput,
+		HasUsage:            row.HasData || row.ContextWindowTokens > 0 || row.TTFTMS != nil || row.DecodeThroughput != nil,
 	}, nil
 }
 

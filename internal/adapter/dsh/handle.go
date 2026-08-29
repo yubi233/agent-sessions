@@ -80,8 +80,43 @@ func (h *handle) Send(ctx context.Context, text string) error {
 		"sessionId": h.sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": text}},
 	}
-	_, err := h.request(ctx, "session/prompt", params)
-	return err
+	result, err := h.request(ctx, "session/prompt", params)
+	if err != nil {
+		// 失败也必须收敛回合状态：没有终止标记客户端会永远停留在“生成中”。
+		// 先发 session_error（UI 提示），再发 turn_completed（关掉 generating 态）。
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"message":     fmt.Sprintf("模型回合失败：%v", err),
+			},
+		})
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventTurnCompleted,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"stop_reason": "error",
+			},
+		})
+		return err
+	}
+	// ACP delivers assistant content as notifications before session/prompt
+	// resolves. Emit an explicit terminal marker after that response so the
+	// daemon can close the mobile generating state deterministically.
+	var response struct {
+		StopReason string `json:"stopReason"`
+	}
+	if decodeErr := json.Unmarshal(result, &response); decodeErr != nil {
+		return fmt.Errorf("解析 session/prompt 响应: %w", decodeErr)
+	}
+	h.pushEvent(adapter.Event{
+		Type: adapter.EventTurnCompleted,
+		Payload: map[string]any{
+			"instance_id": h.sessionID,
+			"stop_reason": response.StopReason,
+		},
+	})
+	return nil
 }
 
 // Abort 发送 session/cancel 通知（通知型无应答帧；幂等，对空闲会话桥容错）。
@@ -252,10 +287,17 @@ func (m *rpcMessage) idInt() (int64, error) {
 }
 
 // readLoop 消费桥 stdout 帧并分发：响应→pending、通知→mapper、桥请求→fail-closed 应答。
-// 循环退出时关闭事件通道（Dispose 等待 readDone 后返回，保证不向已关闭通道写事件）。
+// 循环退出时先把 closed 置位再关闭事件通道：Send 失败路径可能在桥退出后才补发
+// session_error/turn_completed 终止事件，必须让 pushEvent 看到一致的关闭状态（Dispose 等待
+// readDone 后返回，保证不向已关闭通道写事件）。
 func (h *handle) readLoop() {
 	defer close(h.readDone)
-	defer close(h.events)
+	defer func() {
+		h.mu.Lock()
+		h.closed = true
+		h.mu.Unlock()
+		close(h.events)
+	}()
 	for {
 		raw, err := h.transport.ReadFrame()
 		if err != nil {
@@ -394,6 +436,12 @@ func (h *handle) resolvePending(id int64, msg rpcMessage) {
 // （与 opencode SSE 订阅的丢增量口径一致；完整正文仍可从会话历史恢复）。
 func (h *handle) pushEvent(ev adapter.Event) {
 	h.mu.Lock()
+	// 读循环在桥关闭后 close(events)；此后任何入队（如 Send 失败路径的终止事件）
+	// 必须安静丢弃，不能 panic。closed 由 Dispose/Close 与 mu 一起维护。
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
 	h.nextSeq++
 	ev.Seq = h.nextSeq
 	h.mu.Unlock()

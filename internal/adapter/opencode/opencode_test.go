@@ -439,6 +439,7 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 	}
 
 	// 注入流式事件序列：busy -> part.delta -> part.updated(text) -> tool -> step-finish -> session.error。
+	// session.error 还应自动追发唯一的 turn_completed(error) 终态。
 	sid := handle.sessionID
 	f.emitEvent(t, sid, "session.status", map[string]any{"sessionID": sid, "status": map[string]string{"type": "busy"}})
 	f.emitEvent(t, sid, "message.part.delta", map[string]any{
@@ -480,7 +481,7 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 
 	timeout := 5 * time.Second
 	seen := map[adapter.EventType]bool{}
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 9; i++ {
 		ev := mustEvent(t, h, timeout)
 		seen[ev.Type] = true
 		switch ev.Type {
@@ -513,13 +514,18 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 			if !strings.Contains(ev.Payload["message"].(string), "provider") {
 				t.Fatalf("session_error message = %v", ev.Payload["message"])
 			}
+		case adapter.EventTurnCompleted:
+			if ev.Payload["instance_id"] != sid || ev.Payload["stop_reason"] != "error" {
+				t.Fatalf("turn_completed = %v", ev.Payload)
+			}
 		default:
 			t.Fatalf("unexpected event type %q", ev.Type)
 		}
 	}
 	if !seen[adapter.EventTurnStarted] || !seen[adapter.EventMessageDelta] ||
 		!seen[adapter.EventMessageCompleted] || !seen[adapter.EventToolCall] ||
-		!seen[adapter.EventToolResult] || !seen[adapter.EventUsage] || !seen[adapter.EventSessionError] {
+		!seen[adapter.EventToolResult] || !seen[adapter.EventUsage] || !seen[adapter.EventSessionError] ||
+		!seen[adapter.EventTurnCompleted] {
 		t.Fatalf("missing mapped events: %v", seen)
 	}
 
@@ -817,6 +823,142 @@ func TestUserMessagePartsAreNotEchoedAsAssistantEvents(t *testing.T) {
 	}
 }
 
+// ADPT-OPENCODE-02 terminal mapping regression: OpenCode exposes both
+// session.idle and session.status(type=idle) in different server versions.
+// Both must become the public turn_completed event with a deterministic
+// stop_reason; session.error remains a user-visible session_error and is
+// closed by the subscription layer (covered below).
+func TestTerminalRawEventMappings(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        RawEvent
+		wantType   adapter.EventType
+		wantReason string
+	}{
+		{
+			name:       "session.idle",
+			raw:        RawEvent{Type: evSessionIdle, Properties: json.RawMessage(`{"sessionID":"ses_idle"}`)},
+			wantType:   adapter.EventTurnCompleted,
+			wantReason: "session_idle",
+		},
+		{
+			name:       "session.status idle",
+			raw:        RawEvent{Type: evSessionStatus, Properties: json.RawMessage(`{"sessionID":"ses_status","status":{"type":"idle"}}`)},
+			wantType:   adapter.EventTurnCompleted,
+			wantReason: "status_idle",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mapped, ok := mapRawEvent(tt.raw)
+			if !ok {
+				t.Fatalf("mapRawEvent returned ok=false")
+			}
+			if mapped.Event.Type != tt.wantType {
+				t.Fatalf("event type=%q, want %q", mapped.Event.Type, tt.wantType)
+			}
+			if got := mapped.Event.Payload["instance_id"]; got == nil || got == "" {
+				t.Fatalf("instance_id missing: %+v", mapped.Event.Payload)
+			}
+			if got := mapped.Event.Payload["stop_reason"]; got != tt.wantReason {
+				t.Fatalf("stop_reason=%v, want %q", got, tt.wantReason)
+			}
+		})
+	}
+
+	// A malformed/empty idle payload must never manufacture a terminal event
+	// with an empty instance id.
+	for _, raw := range []RawEvent{
+		{Type: evSessionIdle, Properties: json.RawMessage(`{}`)},
+		{Type: evSessionIdle, Properties: json.RawMessage(`{"sessionID":123}`)},
+		{Type: evSessionStatus, Properties: json.RawMessage(`{"status":{"type":"idle"}}`)},
+		{Type: evSessionStatus, Properties: json.RawMessage(`{"sessionID":123,"status":{"type":"idle"}}`)},
+	} {
+		if _, ok := mapRawEvent(raw); ok {
+			t.Fatalf("malformed idle payload unexpectedly mapped: %+v", raw)
+		}
+	}
+
+	errEvent, ok := mapRawEvent(RawEvent{
+		Type:       evSessionError,
+		Properties: json.RawMessage(`{"sessionID":"ses_err","error":"provider failed"}`),
+	})
+	if !ok || errEvent.Event.Type != adapter.EventSessionError {
+		t.Fatalf("session.error mapping=%+v ok=%v, want session_error", errEvent.Event, ok)
+	}
+	if errEvent.Event.Payload["instance_id"] != "ses_err" {
+		t.Fatalf("session.error instance_id=%v", errEvent.Event.Payload["instance_id"])
+	}
+	for _, raw := range []RawEvent{
+		{Type: evSessionError, Properties: json.RawMessage("{\"error\":\"missing session\"}")},
+		{Type: evSessionError, Properties: json.RawMessage("{\"sessionID\":123,\"error\":\"invalid session\"}")},
+	} {
+		if _, ok := mapRawEvent(raw); ok {
+			t.Fatalf("malformed session.error payload unexpectedly mapped: %+v", raw)
+		}
+	}
+}
+
+// The Provider can emit duplicate idle notifications, and failures may omit
+// idle entirely. Verify per-turn deduplication and the synthetic error terminal
+// event in the subscription forwarder. A subsequent busy starts a new turn.
+func TestSubscriptionTerminalEventsAreDeduplicated(t *testing.T) {
+	sr := &streamReader{closed: make(chan struct{})}
+	sub := &subscription{
+		raw:   make(chan RawEvent, 16),
+		ev:    make(chan adapter.Event, 16),
+		roles: map[string]string{},
+	}
+	go sr.forward(sub, "ses_terminal")
+
+	props := func(v string) json.RawMessage { return json.RawMessage(v) }
+	for _, raw := range []RawEvent{
+		{Type: evSessionStatus, Properties: props(`{"sessionID":"ses_terminal","status":{"type":"busy"}}`)},
+		{Type: evSessionIdle, Properties: props(`{"sessionID":"ses_terminal"}`)},
+		{Type: evSessionStatus, Properties: props(`{"sessionID":"ses_terminal","status":{"type":"idle"}}`)},
+		// Since the first turn is already closed, this error is only a visible
+		// session_error and must not add a second terminal marker.
+		{Type: evSessionError, Properties: props(`{"sessionID":"ses_terminal","error":"late failure"}`)},
+		{Type: evSessionStatus, Properties: props(`{"sessionID":"ses_terminal","status":{"type":"busy"}}`)},
+		// This turn has no idle; session.error must synthesize turn_completed.
+		{Type: evSessionError, Properties: props(`{"sessionID":"ses_terminal","error":"provider down"}`)},
+		// A repeated error remains an error notification but must not synthesize
+		// another turn terminal for the already-closed turn.
+		{Type: evSessionError, Properties: props(`{"sessionID":"ses_terminal","error":"provider down again"}`)},
+		{Type: evSessionIdle, Properties: props(`{"sessionID":"ses_terminal"}`)},
+	} {
+		sub.raw <- raw
+	}
+	close(sub.raw)
+
+	var got []adapter.Event
+	for ev := range sub.ev {
+		got = append(got, ev)
+	}
+	if len(got) != 7 {
+		t.Fatalf("got %d events, want 7: %+v", len(got), got)
+	}
+	wantTypes := []adapter.EventType{
+		adapter.EventTurnStarted, adapter.EventTurnCompleted, adapter.EventSessionError,
+		adapter.EventTurnStarted, adapter.EventSessionError, adapter.EventTurnCompleted,
+		adapter.EventSessionError,
+	}
+	for i, want := range wantTypes {
+		if got[i].Type != want {
+			t.Fatalf("event[%d] type=%q, want %q; all=%+v", i, got[i].Type, want, got)
+		}
+	}
+	if got[1].Payload["stop_reason"] != "session_idle" {
+		t.Fatalf("first terminal payload=%+v", got[1].Payload)
+	}
+	if got[5].Payload["stop_reason"] != "error" {
+		t.Fatalf("synthetic terminal payload=%+v", got[5].Payload)
+	}
+	if got[2].Payload["message"] != "late failure" || got[4].Payload["message"] != "provider down" || got[6].Payload["message"] != "provider down again" {
+		t.Fatalf("error payloads=%+v / %+v / %+v", got[2].Payload, got[4].Payload, got[6].Payload)
+	}
+}
+
 // handleSessionID 从已启动 handle 提取 opencode session id（测试辅助）。
 func handleSessionID(t *testing.T, h adapter.Handle) string {
 	t.Helper()
@@ -825,4 +967,115 @@ func handleSessionID(t *testing.T, h adapter.Handle) string {
 		t.Fatal("handle does not expose instance id")
 	}
 	return identified.InstanceID()
+}
+
+// ---- 空模型兜底：prompt 永不携带空 model，绝不落到 opencode 服务端默认 ----
+
+// Start 未指定模型且 catalog.Default 为空时，回退到目录排序首项；
+// prompt_async 请求体必须显式携带 model，不能缺省让服务端自行回退。
+func TestStartWithoutModelFallsBackToCatalogOption(t *testing.T) {
+	f := newFixtureServer(t, true)
+	c := newFixtureClient(t, f)
+	a := NewWithClient(c)
+	a.mu.Lock()
+	a.modelCatalog = ModelCatalog{Options: []string{"opencode/big-pickle", "opencode/hy3-free"}}
+	a.mu.Unlock()
+
+	h, err := a.Start(context.Background(), adapter.StartRequest{
+		WorkspaceRoot: "/tmp/ws", Provider: "opencode", Prompt: "初始消息",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer h.Dispose(context.Background())
+
+	handle := h.(*handle)
+	f.mu.Lock()
+	startModel := f.sessions[handle.sessionID].lastModel
+	f.mu.Unlock()
+	if startModel != "opencode/big-pickle" {
+		t.Fatalf("start model = %q, want 目录首项 opencode/big-pickle", startModel)
+	}
+}
+
+// handle 模型为空时 Send 走目录兜底；SetModel 应用运行期覆盖。
+func TestSendModelFallbackAndOverride(t *testing.T) {
+	f := newFixtureServer(t, true)
+	c := newFixtureClient(t, f)
+	a := NewWithClient(c)
+	a.mu.Lock()
+	a.modelCatalog = ModelCatalog{Options: []string{"opencode/big-pickle", "opencode/hy3-free"}}
+	a.mu.Unlock()
+
+	h, err := a.Start(context.Background(), adapter.StartRequest{
+		WorkspaceRoot: "/tmp/ws", Provider: "opencode",
+		Model: "opencode/go-deepseek",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer h.Dispose(context.Background())
+	handle := h.(*handle)
+	// 模拟存量 handle 的模型漂移：模型为空时 Send 必须走目录兜底而非缺省。
+	handle.mu.Lock()
+	handle.model = ""
+	handle.mu.Unlock()
+	if err := h.Send(context.Background(), "继续"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	f.mu.Lock()
+	sendModel := f.sessions[handle.sessionID].lastModel
+	f.mu.Unlock()
+	if sendModel != "opencode/big-pickle" {
+		t.Fatalf("send model = %q, want 目录首项 opencode/big-pickle", sendModel)
+	}
+
+	// SetModel 覆盖后 Send 沿用覆盖值；空覆盖被忽略。
+	handle.SetModel("opencode/hy3-free")
+	if err := h.Send(context.Background(), "再试"); err != nil {
+		t.Fatalf("send after SetModel: %v", err)
+	}
+	f.mu.Lock()
+	sendModel = f.sessions[handle.sessionID].lastModel
+	f.mu.Unlock()
+	if sendModel != "opencode/hy3-free" {
+		t.Fatalf("send model = %q, want 覆盖值 opencode/hy3-free", sendModel)
+	}
+}
+
+// opencode 1.17 异步模型调用失败的真实 session.error 是嵌套对象
+// （error:{name, data:{message}}）；适配器必须提取 data.message 为
+// EventSessionError 文本，不能因反序列化失败把模型错误整个吞掉。
+func TestSessionErrorNestedObjectMapsToVisibleError(t *testing.T) {
+	f := newFixtureServer(t, false)
+	c := newFixtureClient(t, f)
+	a := NewWithClient(c)
+	h, err := a.Start(context.Background(), adapter.StartRequest{
+		WorkspaceRoot: "/tmp/ws", Provider: "opencode",
+		Model: "opencode/big-pickle",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer h.Dispose(context.Background())
+	handle := h.(*handle)
+
+	f.emitEvent(t, handle.sessionID, "session.error", map[string]any{
+		"sessionID": handle.sessionID,
+		"error": map[string]any{
+			"name": "UnknownError",
+			"data": map[string]any{
+				"message": "ProviderModelNotFoundError: Model not found: opencode/definitely-not-a-model.",
+			},
+		},
+	})
+
+	ev := mustEvent(t, h, 5*time.Second)
+	if ev.Type != adapter.EventSessionError {
+		t.Fatalf("event type = %v, want session_error", ev.Type)
+	}
+	message, _ := ev.Payload["message"].(string)
+	if !strings.Contains(message, "Model not found") {
+		t.Fatalf("error message = %q, want 含 Model not found", message)
+	}
 }

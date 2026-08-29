@@ -203,6 +203,9 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 		logger.Info("codex adapter enabled", "bin_configured", os.Getenv(codex.EnvBin) != "")
 	}
 	runner := daemon.NewSessionRunner(st, adapters, logger)
+	// 默认模型只从显式环境读取并做结构校验；留空时由 OpenCode Adapter 的健康
+	// 目录决定，避免 Daemon 在不知情时把请求落到付费或未知模型。
+	runner.DefaultModel = opencode.DefaultModelFromEnv()
 	defer func() { _ = runner.Close(context.Background()) }()
 	// workspace.create 的绝对路径只能由本机授权根推导；授权根在进程启动时
 	// fail-closed 校验，避免 Daemon 在错误目录下先上线再处理命令。
@@ -282,6 +285,7 @@ func cmdRunner(st *daemon.Store) error {
 	runner := daemon.NewSessionRunner(st, map[string]adapter.Adapter{
 		"opencode": opencode.New(),
 	}, logger)
+	runner.DefaultModel = opencode.DefaultModelFromEnv()
 	if codex.EnabledFromEnv(os.Getenv) {
 		a := codex.New()
 		// 诊断入口同样按 feature flag 注册；进程生命周期随 cmdRunner 返回结束。

@@ -46,7 +46,8 @@ func TestRelayClientUploadUsageIncludesSessionModelAndTiming(t *testing.T) {
 	if err := client.UploadUsage(context.Background(), RelayUsage{
 		UsageKey: "usage-1", SessionID: "sess-1", Provider: "opencode", Model: "opencode/deepseek-v4",
 		UTCDay: "2026-08-22", InputTokens: 120, OutputTokens: 80, CacheReadTokens: 30, CacheWriteTokens: 10,
-		TTFTMS: &ttft, DecodeThroughput: &throughput,
+		ContextWindowTokens: 128000,
+		TTFTMS:              &ttft, DecodeThroughput: &throughput,
 	}); err != nil {
 		t.Fatalf("upload usage: %v", err)
 	}
@@ -55,7 +56,8 @@ func TestRelayClientUploadUsageIncludesSessionModelAndTiming(t *testing.T) {
 		"usage_key": "usage-1", "session_id": "sess-1", "provider": "opencode", "model": "opencode/deepseek-v4",
 		"utc_day": "2026-08-22", "input_tokens": float64(120), "output_tokens": float64(80),
 		"cache_read_tokens": float64(30), "cache_write_tokens": float64(10),
-		"ttft_ms": float64(640), "decode_throughput": 42.5,
+		"context_window_tokens": float64(128000),
+		"ttft_ms":               float64(640), "decode_throughput": 42.5,
 	}
 	for key, value := range want {
 		if body[key] != value {

@@ -96,7 +96,11 @@ type DaemonEventInput struct {
 	CommandID       string
 	SessionID       string
 	EventType       string
-	EnvelopeJSON    string
+	// TerminalStatus 是 turn.completed 的非敏感生命周期投影。Relay 不解密
+	// envelope，因此由 Daemon 明确声明正常 idle 或异常 stopped；空值保留
+	// v0.5 旧客户端兼容语义（turn.completed 默认 idle）。
+	TerminalStatus string
+	EnvelopeJSON   string
 }
 
 type DaemonEventResult struct {
@@ -196,6 +200,25 @@ func (s *DaemonService) TerminalForDevice(ctx context.Context, accountID, device
 		return store.TerminalRow{}, ErrTerminalRequired
 	}
 	return s.terminalForDevice(ctx, accountID, deviceID)
+}
+
+// RecoverTerminalSessions 校验 Terminal 身份与协议窗口后执行进程启动清扫。
+// 只有已配对 Terminal 可以声明进程重启——这是新 Daemon 进程的 ground truth 断言，
+// Relay 据此收口该 Terminal 工作区遗留的 running 会话（收口语义见
+// recoverStaleSessionsForTerminal：不要求心跳失联，但命令/事件证据缺一不可，
+// 绝不 archive）。
+func (s *DaemonService) RecoverTerminalSessions(ctx context.Context, accountID, deviceID, role string, protocolVersion int) (SessionRecoverySummary, error) {
+	if role != RoleTerminal || deviceID == "" {
+		return SessionRecoverySummary{}, ErrTerminalRequired
+	}
+	if err := validateDaemonProtocol(protocolVersion); err != nil {
+		return SessionRecoverySummary{}, err
+	}
+	terminal, err := s.terminalForDevice(ctx, accountID, deviceID)
+	if err != nil {
+		return SessionRecoverySummary{}, err
+	}
+	return recoverStaleSessionsForTerminal(ctx, s.repo, accountID, terminal.ID)
 }
 
 func (s *DaemonService) terminalForDevice(ctx context.Context, accountID, deviceID string) (store.TerminalRow, error) {
@@ -612,6 +635,9 @@ func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (D
 	if strings.TrimSpace(in.EventID) == "" || strings.TrimSpace(in.CommandID) == "" || strings.TrimSpace(in.SessionID) == "" || !validDaemonEventType(in.EventType) {
 		return DaemonEventResult{}, protocol.NewError(protocol.ErrInvalidRequest, "invalid daemon event metadata")
 	}
+	if err := validateDaemonTerminalStatus(in.EventType, in.TerminalStatus); err != nil {
+		return DaemonEventResult{}, err
+	}
 	envelope, err := normalizeDaemonCipherEnvelope(in.EnvelopeJSON)
 	if err != nil {
 		return DaemonEventResult{}, err
@@ -652,7 +678,7 @@ func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (D
 			return err
 		}
 		seq, appendErr := tx.AppendEvent(ctx, store.SessionEventRow{
-			SessionID: in.SessionID, EventType: in.EventType, EnvelopeJSON: envelope,
+			SessionID: in.SessionID, EventType: in.EventType, TerminalStatus: in.TerminalStatus, EnvelopeJSON: envelope,
 		})
 		if appendErr != nil {
 			return appendErr
@@ -660,7 +686,8 @@ func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (D
 		if err := tx.SetSessionLastSeq(ctx, in.SessionID, seq); err != nil {
 			return err
 		}
-		if err := tx.SetSessionStatus(ctx, in.SessionID, SessionRunning); err != nil {
+		status := sessionStatusForDaemonEvent(in.EventType, in.TerminalStatus)
+		if err := tx.SetSessionStatus(ctx, in.SessionID, status); err != nil {
 			return err
 		}
 		if err := tx.SetDaemonEventReceiptSeq(ctx, in.EventID, seq); err != nil {
@@ -800,10 +827,36 @@ func validWebReadResponseEnvelope(raw string) bool {
 
 func validDaemonEventType(value string) bool {
 	switch value {
-	case "session.lifecycle", "turn.started", "message.delta", "message.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
+	case "session.lifecycle", "turn.started", "user.message", "message.delta", "message.completed", "turn.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
 		return true
 	}
 	return false
+}
+
+// validateDaemonTerminalStatus 检查 Daemon 对终态事件提供的稳定状态投影。
+// 该字段不能被用于把任意中间事件伪装成终态；未知值也必须拒绝，避免
+// Relay/Flutter 在不同实现间产生不一致的 running/idle/stopped 解释。
+func validateDaemonTerminalStatus(eventType, terminalStatus string) error {
+	status := strings.TrimSpace(terminalStatus)
+	if status == "" {
+		return nil // 兼容旧 Daemon；turn.completed 缺省按 idle 处理。
+	}
+	if eventType != "turn.completed" || (status != SessionIdle && status != SessionStopped) {
+		return protocol.NewError(protocol.ErrInvalidRequest, "invalid daemon terminal status")
+	}
+	return nil
+}
+
+// sessionStatusForDaemonEvent 将公开生命周期投影收口为 Relay 会话状态。
+// 只有 turn.completed 能结束回合；其它 canonical event 仍表示活动中。
+func sessionStatusForDaemonEvent(eventType, terminalStatus string) string {
+	if eventType != "turn.completed" {
+		return SessionRunning
+	}
+	if strings.TrimSpace(terminalStatus) == SessionStopped {
+		return SessionStopped
+	}
+	return SessionIdle
 }
 
 // normalizeDaemonCipherEnvelope 只检查可转发的加密外形，不解析业务 payload。任何像正文、路径

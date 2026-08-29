@@ -230,6 +230,11 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 			}
 			model, _ = configuredDefaultModel()
 		}
+		if model == "" {
+			// 目录兜底只能取健康探测确认过的条目；空模型会让 opencode 服务端
+			// 回退到它自己的配置默认，可能命中付费订阅条目。
+			model = a.catalogFallbackModel()
+		}
 		if model != "" {
 			req.Model = model
 		}
@@ -392,6 +397,32 @@ func (h *handle) InstanceID() string { return h.sessionID }
 func (h *handle) ID() string { return h.sessionID }
 
 // Send 向会话异步发送一条文本消息（POST /session/{id}/prompt_async）。
+// catalogFallbackModel 返回目录排序后的兜底模型；目录为空时返回空串，由调用方
+// 保持空值（不发明模型名）。
+func (a *Adapter) catalogFallbackModel() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.modelCatalog.Default != "" {
+		return a.modelCatalog.Default
+	}
+	if len(a.modelCatalog.Options) > 0 {
+		return a.modelCatalog.Options[0]
+	}
+	return ""
+}
+
+// SetModel 应用运行期模型覆盖（session.model_select / session.send 的随行模型）。
+// 空值忽略：空模型会让 opencode 服务端回退到它的配置默认，可能命中付费条目。
+func (h *handle) SetModel(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	h.mu.Lock()
+	h.model = model
+	h.mu.Unlock()
+}
+
 func (h *handle) Send(ctx context.Context, text string) error {
 	client := h.adapter.getClient()
 	if client == nil {
@@ -400,6 +431,9 @@ func (h *handle) Send(ctx context.Context, text string) error {
 	h.mu.Lock()
 	model := h.model
 	h.mu.Unlock()
+	if strings.TrimSpace(model) == "" {
+		model = h.adapter.catalogFallbackModel()
+	}
 	return client.PromptAsync(ctx, h.sessionID, []Part{TextPart(text)}, model)
 }
 
