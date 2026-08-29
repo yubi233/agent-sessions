@@ -3,7 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../domain/control_models.dart';
+import '../../../domain/session_projection_models.dart';
 import '../../app_theme.dart';
+import 'session_context_meter.dart';
+import 'session_stats_line.dart';
 
 /// Host 投影的模型与推理等级目录。目录只包含可展示、可选择的安全标签。
 @immutable
@@ -92,14 +95,23 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
     return '模型不可用';
   }
 
+  bool get _usesAutomaticReasoning {
+    final provider = widget.provider?.trim().toLowerCase();
+    final effort = widget.catalog.effort?.trim();
+    return provider == 'opencode' && (effort == null || effort.isEmpty);
+  }
+
   String get _displayEffort {
     final effort = widget.catalog.effort?.trim();
-    return effort == null || effort.isEmpty ? '—' : effort;
+    if (effort != null && effort.isNotEmpty) return effort;
+    return _usesAutomaticReasoning ? '自动' : '—';
   }
 
   String get _pickerHint {
     if (!widget.providerAvailable) return 'Provider 当前不可用。';
-    if (_canOpenPicker) return '选择模型和推理等级';
+    if (_canOpenPicker) {
+      return _effortDisabled ? '选择模型' : '选择模型和推理等级';
+    }
     return widget.modelBlockedReason ??
         widget.effortBlockedReason ??
         '模型和推理等级当前不可用';
@@ -167,11 +179,14 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                   value: _displayModel,
                 ),
                 if (widget.catalog.effort != null &&
-                    widget.catalog.effort!.isNotEmpty)
+                        widget.catalog.effort!.isNotEmpty ||
+                    _usesAutomaticReasoning)
                   _ModelDetailRow(
                     key: const Key('session-model-details-effort'),
-                    label: '推理等级',
-                    value: widget.catalog.effort!,
+                    label: _usesAutomaticReasoning ? '推理' : '推理等级',
+                    value: _usesAutomaticReasoning
+                        ? '自动（模型内置）'
+                        : widget.catalog.effort!,
                   ),
                 _ModelDetailRow(
                   key: const Key('session-model-details-catalog'),
@@ -190,11 +205,13 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                 ),
                 _ModelDetailRow(
                   key: const Key('session-model-details-effort-capability'),
-                  label: '推理等级',
-                  value: _capabilityDescription(
-                    widget.effortCapability,
-                    widget.effortBlockedReason,
-                  ),
+                  label: _usesAutomaticReasoning ? '推理' : '推理等级',
+                  value: _usesAutomaticReasoning
+                      ? '自动推理（当前模型未提供可选档位）'
+                      : _capabilityDescription(
+                          widget.effortCapability,
+                          widget.effortBlockedReason,
+                        ),
                 ),
                 if (usage != null) ...[
                   const Divider(height: 20),
@@ -203,7 +220,21 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                     style: Theme.of(dialogContext).textTheme.titleSmall,
                   ),
                   const SizedBox(height: 8),
-                  _UsageStatsSection(usage: usage),
+                  SessionStatsLine(
+                    stats: SessionStatsLineProjection.fromUsage(usage),
+                  ),
+                  if (usage.contextWindowTokens > 0)
+                    _ModelDetailRow(
+                      key: const Key('session-model-details-context'),
+                      label: '上下文',
+                      value:
+                          '${SessionUsageSummary.compactForDisplay(usage.contextTokens)} / '
+                          '${SessionUsageSummary.compactForDisplay(usage.contextWindowTokens)}'
+                          '（${((usage.contextRatio ?? 0) * 100).toStringAsFixed(0)}%）',
+                    ),
+                  SessionContextMeter(
+                    meter: SessionContextMeterProjection.fromUsage(usage),
+                  ),
                 ],
               ],
             ),
@@ -693,101 +724,4 @@ IconData _providerIcon(String? provider) {
     'dsh' => Icons.hub_outlined,
     _ => Icons.smart_toy_outlined,
   };
-}
-
-/// 模型设置弹窗内的用量统计区块：token 计数、上下文占用。
-class _UsageStatsSection extends StatelessWidget {
-  const _UsageStatsSection({required this.usage});
-
-  final SessionUsageSummary usage;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final input = usage.inputTokens;
-    final output = usage.outputTokens;
-    final cache = usage.cacheReadTokens + usage.cacheCreationTokens;
-    final ctx = usage.contextTokens;
-    final window = usage.contextWindowTokens;
-    final ratio = usage.contextRatio;
-    final items = <Widget>[];
-    if (input > 0) {
-      items.add(_UsageStatChip(
-        label: '输入 ${SessionUsageSummary.compactForDisplay(input)}',
-      ));
-    }
-    if (output > 0) {
-      items.add(_UsageStatChip(
-        label: '输出 ${SessionUsageSummary.compactForDisplay(output)}',
-      ));
-    }
-    if (cache > 0) {
-      items.add(_UsageStatChip(
-        label: '缓存 ${SessionUsageSummary.compactForDisplay(cache)}',
-      ));
-    }
-    if (items.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 8),
-        child: Text(
-          '暂无用量数据',
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      );
-    }
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(spacing: 8, runSpacing: 4, children: items),
-        if (window > 0) ...[
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: (ratio ?? 0).clamp(0.0, 1.0),
-                    minHeight: 8,
-                    backgroundColor:
-                        theme.colorScheme.surfaceContainerHighest,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '上下文 ${ratio != null ? '${(ratio * 100).toStringAsFixed(0)}%' : SessionUsageSummary.compactForDisplay(ctx)}'
-                ' / ${SessionUsageSummary.compactForDisplay(window)}',
-                style: theme.textTheme.labelSmall,
-              ),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _UsageStatChip extends StatelessWidget {
-  const _UsageStatChip({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(label, style: Theme.of(context).textTheme.labelSmall),
-    );
-  }
 }

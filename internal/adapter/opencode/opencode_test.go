@@ -413,10 +413,16 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 	f := newFixtureServer(t, true)
 	c := newFixtureClient(t, f)
 	a := NewWithClient(c)
+	a.modelCatalog = ModelCatalog{Details: map[string]ModelDetails{
+		"opencode/big-pickle": {
+			ContextWindowTokens: 200000,
+			Reasoning:           true,
+		},
+	}}
 
 	h, err := a.Start(context.Background(), adapter.StartRequest{
 		WorkspaceRoot: "/tmp/ws", Provider: "opencode", Prompt: "初始消息",
-		Model: "opencode-go/deepseek-v4-flash",
+		Model: "opencode/big-pickle",
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -431,8 +437,8 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 	f.mu.Lock()
 	startModel := f.sessions[handle.sessionID].lastModel
 	f.mu.Unlock()
-	if startModel != "opencode-go/deepseek-v4-flash" {
-		t.Fatalf("start model = %q, want 透传 opencode-go/deepseek-v4-flash", startModel)
+	if startModel != "opencode/big-pickle" {
+		t.Fatalf("start model = %q, want 透传 opencode/big-pickle", startModel)
 	}
 
 	// Send 命中 prompt_async（204）且保持模型透传。
@@ -442,7 +448,7 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 	f.mu.Lock()
 	sendModel := f.sessions[handle.sessionID].lastModel
 	f.mu.Unlock()
-	if sendModel != "opencode-go/deepseek-v4-flash" {
+	if sendModel != "opencode/big-pickle" {
 		t.Fatalf("send model = %q, want 保持模型透传", sendModel)
 	}
 
@@ -517,6 +523,9 @@ func TestStartSendAbortAndEventMapping(t *testing.T) {
 		case adapter.EventUsage:
 			if ev.Payload["total_tokens"] != int64(100) {
 				t.Fatalf("usage = %v", ev.Payload)
+			}
+			if ev.Payload["provider"] != "opencode" || ev.Payload["model"] != "opencode/big-pickle" || ev.Payload["context_window_tokens"] != int64(200000) {
+				t.Fatalf("usage metadata = %v", ev.Payload)
 			}
 		case adapter.EventSessionError:
 			if !strings.Contains(ev.Payload["message"].(string), "provider") {

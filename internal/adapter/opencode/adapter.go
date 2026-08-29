@@ -127,6 +127,8 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 			} else {
 				reason = "OpenCode Zen 免费模型目录为空，模型选择已安全禁用。"
 			}
+		case "effort_select":
+			reason = effortSelectReason(catalog, catalogErr)
 		}
 		entry := adapter.Capability{Name: name, Status: status, Reason: reason}
 		if name == "model_select" && status == adapter.CapabilityNative {
@@ -140,6 +142,30 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 		Version:      health.Version,
 		Capabilities: caps,
 	}, nil
+}
+
+// effortSelectReason 区分“模型支持推理”与“可选择推理档位”。当前 OpenCode
+// transport 尚未接入 effort 请求参数，因此有 variants 时也必须保持 fail-closed。
+func effortSelectReason(catalog ModelCatalog, catalogErr error) string {
+	if catalogErr != nil || catalog.Default == "" {
+		return "OpenCode 推理档位目录未确认，已安全禁用。"
+	}
+	detail, ok := catalog.Details[catalog.Default]
+	if !ok || !detail.Reasoning {
+		return "OpenCode 当前默认模型未声明推理档位，已安全禁用。"
+	}
+	if len(detail.Efforts) == 0 {
+		return "OpenCode 当前默认模型使用自动推理，未提供可选推理档位。"
+	}
+	return "OpenCode 当前模型提供推理档位，但 agent-sessions 尚未接入 session.effort_select，已安全禁用。"
+}
+
+// modelDetails 返回健康探测确认过的模型目录元数据。模型不在动态目录时不猜测。
+func (a *Adapter) modelDetails(model string) (ModelDetails, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	detail, ok := a.modelCatalog.Details[strings.TrimSpace(model)]
+	return detail, ok
 }
 
 // failClosed 构造全 unsupported 能力矩阵；reason 为空时根据探测失败原因生成中文说明。
@@ -343,6 +369,7 @@ func (h *handle) attach(ctx context.Context) error {
 				if !ok {
 					return
 				}
+				ev = h.enrichUsageEvent(ev)
 				h.mu.Lock()
 				ev.Seq = h.seq
 				h.seq++
@@ -358,6 +385,34 @@ func (h *handle) attach(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// enrichUsageEvent 将健康探测确认过的模型目录元数据补入 usage 事件。
+// 这里只写模型标识、Provider 与上下文窗口计数，不写原始目录或 Provider 配置。
+func (h *handle) enrichUsageEvent(event adapter.Event) adapter.Event {
+	if event.Type != adapter.EventUsage {
+		return event
+	}
+	h.mu.Lock()
+	model := strings.TrimSpace(h.model)
+	h.mu.Unlock()
+	if model == "" {
+		model = h.adapter.catalogFallbackModel()
+	}
+	if model == "" {
+		return event
+	}
+	payload := make(map[string]any, len(event.Payload)+3)
+	for key, value := range event.Payload {
+		payload[key] = value
+	}
+	payload["provider"] = "opencode"
+	payload["model"] = model
+	if detail, ok := h.adapter.modelDetails(model); ok && detail.ContextWindowTokens > 0 {
+		payload["context_window_tokens"] = detail.ContextWindowTokens
+	}
+	event.Payload = payload
+	return event
 }
 
 // detach 注销 handle 的订阅与登记；没有存活句柄时回收共享 SSE 流。

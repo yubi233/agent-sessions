@@ -225,6 +225,52 @@ void main() {
     );
   });
 
+  testWidgets('MOBILE-V05-09：OpenCode 自动推理与上下文窗口显示在模型设置', (tester) async {
+    const usage = SessionUsageSummary(
+      inputTokens: 11900,
+      outputTokens: 111,
+      contextTokens: 12011,
+      contextWindowTokens: 200000,
+    );
+    await tester.pumpWidget(
+      _seatApp(
+        catalog: const SessionModelCatalog(
+          model: 'opencode/big-pickle',
+          effort: null,
+          models: ['opencode/big-pickle'],
+          efforts: [],
+        ),
+        provider: 'opencode',
+        usage: usage,
+        effortCapability: const CapabilityEntry(
+          name: 'effort_select',
+          availability: CapabilityAvailability.unsupported,
+          reason: 'OpenCode 当前默认模型使用自动推理，未提供可选推理档位。',
+        ),
+        effortBlockedReason: 'OpenCode 当前默认模型使用自动推理，未提供可选推理档位。',
+      ),
+    );
+
+    expect(find.text('自动'), findsOneWidget);
+    expect(find.text('推理等级不可用'), findsNothing);
+    await tester.tap(find.byKey(const Key('session-model-seat-details')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('session-model-details-dialog')),
+      findsOneWidget,
+    );
+    expect(find.text('自动（模型内置）'), findsOneWidget);
+    expect(
+      find.text('自动推理（当前模型未提供可选档位）'),
+      findsOneWidget,
+    );
+    expect(find.text('用量统计'), findsOneWidget);
+    expect(find.textContaining('输入 11.9k'), findsOneWidget);
+    expect(find.textContaining('输出 111'), findsOneWidget);
+    expect(find.textContaining('上下文 6%'), findsOneWidget);
+    expect(find.textContaining('200.0k'), findsOneWidget);
+  });
+
   testWidgets('MOBILE-V05-09：能力均被阻断时不打开选择弹层', (tester) async {
     await tester.pumpWidget(
       _seatApp(
@@ -300,6 +346,7 @@ Widget _seatApp({
   ),
   String? modelBlockedReason,
   String? effortBlockedReason,
+  SessionUsageSummary? usage,
   Future<SessionModelCatalogRefresh> Function()? onRefresh,
   Future<String?> Function(String model)? onSelectModel,
   Future<String?> Function(String effort)? onSelectEffort,
@@ -317,6 +364,7 @@ Widget _seatApp({
           effortCapability: effortCapability,
           modelBlockedReason: modelBlockedReason,
           effortBlockedReason: effortBlockedReason,
+          usage: usage,
           onRefresh:
               onRefresh ??
               () async => SessionModelCatalogRefresh(catalog: catalog),

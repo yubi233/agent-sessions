@@ -86,10 +86,18 @@ type Session struct {
 }
 
 // ModelCatalog 是 OpenCode 本机已配置且确认属于 Zen 免费目录的模型摘要。
-// 只保留 provider/model、默认值和数量所需字段，不把 provider 原始配置回传给客户端。
+// Details 只保留 UI/usage 需要的安全元数据，不把 provider 原始配置回传给客户端。
 type ModelCatalog struct {
 	Options []string
 	Default string
+	Details map[string]ModelDetails
+}
+
+// ModelDetails 是单个模型的安全目录元数据。它不包含 Provider 配置、凭据或请求内容。
+type ModelDetails struct {
+	ContextWindowTokens int64
+	Reasoning           bool
+	Efforts             []string
 }
 
 type providerModelsResponse struct {
@@ -104,10 +112,17 @@ type providerModelProvider struct {
 }
 
 type providerModel struct {
-	ID         string `json:"id"`
-	ProviderID string `json:"providerID"`
-	Status     string `json:"status"`
-	API        struct {
+	ID           string `json:"id"`
+	ProviderID   string `json:"providerID"`
+	Status       string `json:"status"`
+	Capabilities struct {
+		Reasoning bool `json:"reasoning"`
+	} `json:"capabilities"`
+	Limit struct {
+		Context int64 `json:"context"`
+	} `json:"limit"`
+	Variants map[string]json.RawMessage `json:"variants"`
+	API      struct {
 		URL string `json:"url"`
 	} `json:"api"`
 	Cost struct {
@@ -280,6 +295,7 @@ func (c *Client) DiscoverZenFreeModels(ctx context.Context) (ModelCatalog, error
 	}
 
 	allowed := make(map[string]struct{})
+	details := make(map[string]ModelDetails)
 	providers := payload.Providers
 	if len(providers) == 0 {
 		providers = payload.All
@@ -301,7 +317,25 @@ func (c *Client) DiscoverZenFreeModels(ctx context.Context) (ModelCatalog, error
 			if !isZenFreeProviderModel(modelProviderID, modelID, item) {
 				continue
 			}
-			allowed[modelProviderID+"/"+modelID] = struct{}{}
+			modelRef := modelProviderID + "/" + modelID
+			allowed[modelRef] = struct{}{}
+			efforts := make([]string, 0, len(item.Variants))
+			for effort := range item.Variants {
+				effort = strings.TrimSpace(effort)
+				if effort != "" {
+					efforts = append(efforts, effort)
+				}
+			}
+			sort.Strings(efforts)
+			contextWindow := item.Limit.Context
+			if contextWindow < 0 {
+				contextWindow = 0
+			}
+			details[modelRef] = ModelDetails{
+				ContextWindowTokens: contextWindow,
+				Reasoning:           item.Capabilities.Reasoning,
+				Efforts:             efforts,
+			}
 		}
 	}
 	options := make([]string, 0, len(allowed))
@@ -317,18 +351,18 @@ func (c *Client) DiscoverZenFreeModels(ctx context.Context) (ModelCatalog, error
 	// -> 当前官方候选（若仍在目录）-> 稳定排序后的第一项。
 	configured := DefaultModelFromEnv()
 	if configured != "" && containsString(options, configured) {
-		return ModelCatalog{Options: options, Default: configured}, nil
+		return ModelCatalog{Options: options, Default: configured, Details: details}, nil
 	}
 	for providerID, modelID := range payload.Default {
 		candidate := strings.TrimSpace(providerID) + "/" + strings.TrimSpace(modelID)
 		if containsString(options, candidate) {
-			return ModelCatalog{Options: options, Default: candidate}, nil
+			return ModelCatalog{Options: options, Default: candidate, Details: details}, nil
 		}
 	}
 	if containsString(options, DefaultZenModel) {
-		return ModelCatalog{Options: options, Default: DefaultZenModel}, nil
+		return ModelCatalog{Options: options, Default: DefaultZenModel, Details: details}, nil
 	}
-	return ModelCatalog{Options: options, Default: options[0]}, nil
+	return ModelCatalog{Options: options, Default: options[0], Details: details}, nil
 }
 
 // fetchProviderModels 只解码 provider/model 目录与默认值白名单。

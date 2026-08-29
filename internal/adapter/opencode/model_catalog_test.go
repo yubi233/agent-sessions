@@ -47,7 +47,9 @@ func writeModelCatalogJSON(w http.ResponseWriter, fallback bool) {
 				"models": map[string]any{
 					"big-pickle": map[string]any{
 						"id": "big-pickle", "providerID": "opencode", "status": "active",
-						"cost": map[string]any{"input": 0, "output": 0},
+						"cost":         map[string]any{"input": 0, "output": 0},
+						"capabilities": map[string]any{"reasoning": true},
+						"limit":        map[string]any{"context": 200000},
 					},
 					"mimo-v2.5-free": map[string]any{
 						"id": "mimo-v2.5-free", "providerID": "opencode", "status": "active",
@@ -133,6 +135,10 @@ func TestDiscoverZenFreeModelsFiltersProviderAndPicksDefault(t *testing.T) {
 	if catalog.Default != "opencode/big-pickle" {
 		t.Fatalf("default = %q", catalog.Default)
 	}
+	detail, ok := catalog.Details["opencode/big-pickle"]
+	if !ok || !detail.Reasoning || detail.ContextWindowTokens != 200000 || len(detail.Efforts) != 0 {
+		t.Fatalf("big-pickle details = %#v", detail)
+	}
 }
 
 func TestDiscoverZenFreeModelsSupportsProviderFallback(t *testing.T) {
@@ -163,6 +169,10 @@ func TestDetectExposesDynamicModelCapability(t *testing.T) {
 	}
 	if entry.Default != "opencode/big-pickle" {
 		t.Fatalf("model default = %q", entry.Default)
+	}
+	effort := byCapabilityName(caps, "effort_select")
+	if effort.Status != adapter.CapabilityUnsupported || effort.Reason != "OpenCode 当前默认模型使用自动推理，未提供可选推理档位。" {
+		t.Fatalf("effort_select = %#v", effort)
 	}
 }
 
