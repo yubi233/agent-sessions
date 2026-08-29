@@ -122,7 +122,9 @@ class _SessionContextMeterState extends State<SessionContextMeter> {
               ),
               const SizedBox(width: 8),
               Text(
-                '上下文 ${(ratio * 100).toStringAsFixed(0)}%',
+                '上下文 ${(ratio * 100).toStringAsFixed(0)}% · '
+                '${SessionUsageSummary.compactForDisplay(used)} / '
+                '${SessionUsageSummary.compactForDisplay(window)}',
                 style: theme.textTheme.labelSmall,
               ),
               const SizedBox(width: 2),

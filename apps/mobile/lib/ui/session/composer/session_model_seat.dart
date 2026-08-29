@@ -249,15 +249,6 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                   SessionStatsLine(
                     stats: SessionStatsLineProjection.fromUsage(usage),
                   ),
-                  if (usage.contextWindowTokens > 0)
-                    _ModelDetailRow(
-                      key: const Key('session-model-details-context'),
-                      label: '上下文',
-                      value:
-                          '${SessionUsageSummary.compactForDisplay(usage.contextTokens)} / '
-                          '${SessionUsageSummary.compactForDisplay(usage.contextWindowTokens)}'
-                          '（${((usage.contextRatio ?? 0) * 100).toStringAsFixed(0)}%）',
-                    ),
                   SessionContextMeter(
                     meter: SessionContextMeterProjection.fromUsage(usage),
                   ),
