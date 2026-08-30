@@ -313,6 +313,9 @@ void main() {
       expect(clipboardValues[2], contains('会话 Debug 信息'));
       expect(clipboardValues[2], contains(sessionId));
       expect(clipboardValues[2], contains('codex'));
+      expect(clipboardValues[2], contains('--- 控制面 ---'));
+      expect(clipboardValues[2], contains('--- Provider 能力 ---'));
+      expect(clipboardValues[2], contains('--- 轨迹'));
       expect(clipboardValues[2], isNot(contains('fixture-access-token')));
     });
 

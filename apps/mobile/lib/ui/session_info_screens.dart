@@ -40,10 +40,18 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
     }
   }
 
-  /// 生成排障用 debug 文本：只包含当前页面已展示的白名单元数据，不写 token、
-  /// 消息正文、恢复码或完整路径。终端/会话 opaque ID 属于本机排查所需，不视为密钥。
+  /// 生成排障用 debug 文本：包含会话白名单、控制面、Provider 能力与当前已加载轨迹。
+  /// 不写原始 token、恢复码、完整路径或 Provider 私有 payload；轨迹只取客户端已解密/展示的 display-safe 投影。
   String _debugInfoText(MobileSession session) {
     final controller = ref.read(sessionInfoControllerProvider(session.id));
+    final sessions = ref.read(sessionControllerProvider);
+    final controls = sessions.controls;
+    final provider = sessions.selectedProviderCapabilities;
+    final lease = sessions.selectedLease;
+    final modelCap = provider.capability('model_select');
+    final effortCap = provider.capability('effort_select');
+    final trajectory = sessions.timelineWindowFor(session.id);
+    final allTrajectory = trajectory.isNotEmpty ? trajectory : sessions.timeline;
     final buffer = StringBuffer()
       ..writeln('会话 Debug 信息')
       ..writeln('会话 ID: ${session.id}')
@@ -75,7 +83,143 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
     if (session.archivedAt != null) {
       buffer.writeln('归档时间: ${session.archivedAt!.toIso8601String()}');
     }
-    buffer.writeln('终端:');
+    buffer.writeln(
+      '租约: ${lease == null ? '无' : 'session=${lease.sessionId} epoch=${lease.epoch}'}',
+    );
+    buffer.writeln('本地游标: ${sessions.selectedCursor}');
+
+    buffer
+      ..writeln('')
+      ..writeln('--- 控制面 ---')
+      ..writeln('当前模型: ${controls.model ?? ''}')
+      ..writeln('当前推理档位: ${controls.effort ?? ''}')
+      ..writeln('默认模型: ${controls.defaultModel ?? ''}')
+      ..writeln('可选模型: ${controls.models.join(', ')}')
+      ..writeln('可选推理档位: ${controls.efforts.join(', ')}');
+    if (controls.plan != null) {
+      buffer.writeln(
+        '计划: ${controls.plan!.phase.label} ${controls.plan!.title} ${controls.plan!.summary}',
+      );
+    }
+    if (controls.goal != null) {
+      buffer.writeln(
+        '目标: ${controls.goal!.phase.label} ${controls.goal!.title} ${controls.goal!.progressLabel}',
+      );
+    }
+    for (final todo in controls.todos) {
+      buffer.writeln('待办: [${todo.status.label}] ${todo.content}');
+    }
+    for (final skill in controls.skills) {
+      buffer.writeln(
+        '技能: ${skill.id} ${skill.title} ${skill.risk.label} ${skill.summary}',
+      );
+    }
+    if (controls.usage != null) {
+      final usage = controls.usage!;
+      buffer.writeln(
+        '用量: in=${usage.inputTokens} out=${usage.outputTokens} ctx=${usage.contextTokens} '
+        'cache_read=${usage.cacheReadTokens} cache_write=${usage.cacheCreationTokens} '
+        'window=${usage.contextWindowTokens} ttft=${usage.ttftMs ?? ''} '
+        'throughput=${usage.decodeThroughput ?? ''}',
+      );
+    }
+    if (controls.permissionMode != null) {
+      buffer.writeln('权限模式: ${controls.permissionMode}');
+      buffer.writeln(
+        '可用权限模式: ${controls.availablePermissionModes.join(', ')}',
+      );
+    }
+
+    buffer
+      ..writeln('')
+      ..writeln('--- Provider 能力 ---')
+      ..writeln(
+        'Provider: ${provider.kind} available=${provider.available} version=${provider.version}',
+      );
+    for (final capability in provider.capabilities) {
+      buffer.writeln(
+        '  ${capability.name}: ${capability.availability.wireValue} '
+        'options=[${capability.options.join(', ')}] '
+        'default=${capability.defaultOption ?? ''} '
+        'reason=${capability.reason ?? ''}',
+      );
+    }
+    buffer.writeln(
+      '  model_select 摘要: status=${modelCap.availability.wireValue} '
+      'options=${modelCap.options.join(', ')} default=${modelCap.defaultOption ?? ''}',
+    );
+    buffer.writeln(
+      '  effort_select 摘要: status=${effortCap.availability.wireValue} '
+      'options=${effortCap.options.join(', ')}',
+    );
+
+    buffer
+      ..writeln('')
+      ..writeln('--- 轨迹 (${allTrajectory.length}) ---');
+    for (final event in allTrajectory) {
+      buffer
+        ..writeln('[${event.sequence}] ${event.kind.name} ${event.label}')
+        ..writeln(
+          '    message_id=${event.messageId ?? ''} '
+          'created_at=${event.createdAt?.toIso8601String() ?? ''} '
+          'streaming=${event.isStreaming} completed_turn=${event.completedTurn}',
+        );
+      if (event.text != null && event.text!.isNotEmpty) {
+        buffer.writeln('    text=${event.text}');
+      }
+      if (event.copyText != null && event.copyText!.isNotEmpty) {
+        buffer.writeln('    copy_text=${event.copyText}');
+      }
+      if (event.toolStatus != null) {
+        buffer.writeln('    tool_status=${event.toolStatus}');
+      }
+      if (event.filePath != null) {
+        buffer.writeln('    file_path=${event.filePath}');
+      }
+      if (event.toolInput != null) {
+        buffer.writeln('    tool_input=${event.toolInput}');
+      }
+      if (event.toolOutput != null) {
+        buffer.writeln('    tool_output=${event.toolOutput}');
+      }
+      if (event.inspectTarget != null) {
+        buffer.writeln('    inspect_target=${event.inspectTarget}');
+      }
+      if (event.producedFilePaths.isNotEmpty) {
+        buffer.writeln('    produced_files=${event.producedFilePaths.join(', ')}');
+      }
+      if (event.referenceLabels.isNotEmpty) {
+        buffer.writeln('    references=${event.referenceLabels.join(', ')}');
+      }
+      if (event.permission != null) {
+        final permission = event.permission!;
+        buffer.writeln(
+          '    permission=${permission.requestId} ${permission.title} '
+          '${permission.summary} command=${permission.command ?? ''} '
+          'resolved=${permission.resolved}',
+        );
+      }
+      if (event.question != null) {
+        final question = event.question!;
+        buffer.writeln(
+          '    question=${question.requestId} ${question.prompt} '
+          'options=${question.options.join(', ')} '
+          'allows_freeform=${question.allowsFreeform} resolved=${question.resolved}',
+        );
+      }
+      if (event.toolSubcalls.isNotEmpty) {
+        for (final sub in event.toolSubcalls) {
+          buffer.writeln(
+            '    subcall=${sub.callId} ${sub.label} status=${sub.status ?? ''} '
+            'input=${sub.input ?? ''} output=${sub.output ?? ''}',
+          );
+        }
+      }
+    }
+
+    buffer
+      ..writeln('')
+      ..writeln('--- 终端 ---');
     if (controller.visibleTerminals.isEmpty) {
       buffer.writeln('  暂无已确认终端');
     } else {

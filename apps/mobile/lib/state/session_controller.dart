@@ -99,6 +99,12 @@ class SessionController extends ChangeNotifier {
   bool get workspaceSettling => _workspaceSettling;
   List<SessionTimelineEvent> get timeline =>
       List<SessionTimelineEvent>.unmodifiable(_timeline);
+
+  /// 指定会话当前已拉取/合并的完整时间线窗口；用于“复制 Debug 信息”导出全部轨迹。
+  List<SessionTimelineEvent> timelineWindowFor(String sessionId) =>
+      List<SessionTimelineEvent>.unmodifiable(
+        _timelineWindows[sessionId] ?? const [],
+      );
   bool get historyLoading => _historyLoading;
   String? get historyErrorMessage => _historyErrorMessage;
   bool get canLoadOlder {
