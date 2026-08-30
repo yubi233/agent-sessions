@@ -971,6 +971,13 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	// model_select 是会话级偏好：受理后立即把新模型同步到 Relay 会话元数据，
+	// 避免 App 端显示仍停留在旧模型（真实模型调用失败时尤其明显）。
+	if req.Kind == "session.model_select" {
+		if model := modelFromCommandCiphertext(req.Ciphertext); model != "" {
+			_ = a.Repo.SetSessionModel(c.Request.Context(), cmd.SessionID, model)
+		}
+	}
 	// 投递已经随命令事务提交；Hub 只缩短已连接 Daemon 的可见延迟，断线恢复仍读取 SQLite。
 	if cmd.TargetTerminalID != "" {
 		if delivery, deliveryErr := a.Sessions.DaemonDeliveryForCommand(c.Request.Context(), cmd.ID); deliveryErr == nil {
@@ -978,6 +985,25 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusAccepted, newCommandView(cmd))
+}
+
+// modelFromCommandCiphertext 从 session.model_select 命令的 fixture envelope 中提取模型。
+// 真实 E2EE 下 Relay 不解密，保留空值；本地开发/fixture 路径下用于同步会话展示模型。
+func modelFromCommandCiphertext(raw json.RawMessage) string {
+	var envelope struct {
+		Ciphertext struct {
+			FixturePayload struct {
+				Model string `json:"model"`
+			} `json:"fixture_payload"`
+		} `json:"ciphertext"`
+	}
+	if len(raw) == 0 {
+		return ""
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Ciphertext.FixturePayload.Model)
 }
 
 // Delegation 请求只包含密文任务书/摘要、目标 Provider 与父会话 fencing；不接受正文、路径或 child 会话内容。
