@@ -99,14 +99,17 @@ void main() {
       expect(find.byKey(const Key('session-info-screen')), findsOneWidget);
       expect(find.byKey(const Key('session-info-list')), findsOneWidget);
       expect(find.text('会话信息'), findsOneWidget);
+      expect(find.text('会话 ID'), findsOneWidget);
       expect(find.text('状态'), findsOneWidget);
       expect(find.text('空闲'), findsOneWidget);
       expect(find.text('Provider'), findsOneWidget);
       expect(find.text('codex'), findsOneWidget);
+      expect(find.text('模型'), findsOneWidget);
       expect(find.text('事件序号'), findsOneWidget);
       expect(find.text('1'), findsOneWidget);
+      expect(find.text('工作区 ID'), findsOneWidget);
       expect(find.text('工作区'), findsOneWidget);
-      expect(find.text('fixture-workspace'), findsOneWidget);
+      expect(find.text('fixture-workspace'), findsNWidgets(2));
     });
 
     testWidgets('机器卡只显示 hostname/平台/Daemon 版本，不显示终端 ID、路径、日志', (tester) async {

@@ -47,11 +47,14 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
     final buffer = StringBuffer()
       ..writeln('会话 Debug 信息')
       ..writeln('会话 ID: ${session.id}')
+      ..writeln('会话名称: ${session.displayName ?? ''}')
       ..writeln('状态: ${controller.statusLabel} (${session.status.wireValue})')
       ..writeln('Provider: ${session.provider}')
       ..writeln('模型: ${session.model ?? ''}')
       ..writeln('工作区 ID: ${session.workspaceId}')
+      ..writeln('工作区名称: ${session.workspaceName ?? ''}')
       ..writeln('工作区: ${session.workspaceLabel}')
+      ..writeln('项目: ${session.projectName ?? ''}')
       ..writeln('事件序号: ${session.lastSequence}')
       ..writeln('更新时间: ${session.updatedAt?.toIso8601String() ?? ''}')
       ..writeln(
@@ -126,10 +129,50 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                   _InfoCard(
                     title: '会话',
                     children: [
+                      _InfoRow(label: '会话 ID', value: session.id),
+                      if (session.displayName?.trim().isNotEmpty == true)
+                        _InfoRow(label: '会话名称', value: session.displayName!),
                       _InfoRow(label: '状态', value: controller.statusLabel),
                       _InfoRow(label: 'Provider', value: session.provider),
+                      _InfoRow(
+                        label: '模型',
+                        value: session.model?.trim().isNotEmpty == true
+                            ? session.model!
+                            : '未设置',
+                      ),
                       _InfoRow(label: '事件序号', value: '${session.lastSequence}'),
+                      _InfoRow(label: '工作区 ID', value: session.workspaceId),
+                      if (session.projectName?.trim().isNotEmpty == true)
+                        _InfoRow(label: '项目', value: session.projectName!),
                       _InfoRow(label: '工作区', value: session.workspaceLabel),
+                      _InfoRow(
+                        label: '更新时间',
+                        value: session.updatedAt?.toIso8601String() ?? '未知',
+                      ),
+                      _InfoRow(
+                        label: '最后活动',
+                        value: session.lastActivityAt?.toIso8601String() ??
+                            '未知',
+                      ),
+                      if (session.parentSessionId != null)
+                        _InfoRow(label: '父会话 ID', value: session.parentSessionId!),
+                      if (session.forkedFromMessageId != null)
+                        _InfoRow(
+                          label: 'Fork 来源',
+                          value: session.forkedFromMessageId!,
+                        ),
+                      if (session.agentPresetId != null)
+                        _InfoRow(label: 'Agent 预设', value: session.agentPresetId!),
+                      if (session.subagentReadOnlyReason != null)
+                        _InfoRow(
+                          label: '子会话只读',
+                          value: session.subagentReadOnlyReason!,
+                        ),
+                      if (session.archivedAt != null)
+                        _InfoRow(
+                          label: '归档时间',
+                          value: session.archivedAt!.toIso8601String(),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 12),
