@@ -594,9 +594,15 @@ func (a *API) handleSessionControls(c *gin.Context) {
 		}
 	}
 	// 从 adapter 能力矩阵提取当前 provider 的 model_select 目录，供客户端渲染模型选择器。
+	// efforts 按当前会话模型投影，未选择时使用 Host 默认模型；只有该模型确实声明了
+	// variants 才返回，避免把其它模型的推理档位误当成当前模型可选。
 	if session, err := a.Sessions.GetSession(c.Request.Context(), sessionID); err == nil && session.Provider != "" {
 		providers, err := a.Capabilities.List(c.Request.Context())
 		if err == nil {
+			model := strings.TrimSpace(session.Model)
+			if projection != nil && strings.TrimSpace(projection.Model) != "" {
+				model = strings.TrimSpace(projection.Model)
+			}
 			for _, p := range providers {
 				if p.Kind == session.Provider {
 					for _, cap := range p.Capabilities {
@@ -606,6 +612,12 @@ func (a *API) handleSessionControls(c *gin.Context) {
 							// 暴露，客户端不会因缺失投影而自行猜测模型。
 							if cap.Default != "" {
 								view["default_model"] = cap.Default
+								if model == "" {
+									model = cap.Default
+								}
+							}
+							if detail, ok := cap.ModelDetails[model]; ok && len(detail.Efforts) > 0 {
+								view["efforts"] = detail.Efforts
 							}
 							break
 						}

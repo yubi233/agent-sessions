@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../app/providers.dart';
+import '../domain/session_models.dart';
 import '../domain/terminal_models.dart';
 import '../state/session_controller.dart';
 import 'app_theme.dart';
@@ -37,6 +38,58 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
         }
       });
     }
+  }
+
+  /// 生成排障用 debug 文本：只包含当前页面已展示的白名单元数据，不写 token、
+  /// 消息正文、恢复码或完整路径。终端/会话 opaque ID 属于本机排查所需，不视为密钥。
+  String _debugInfoText(MobileSession session) {
+    final controller = ref.read(sessionInfoControllerProvider(session.id));
+    final buffer = StringBuffer()
+      ..writeln('会话 Debug 信息')
+      ..writeln('会话 ID: ${session.id}')
+      ..writeln('状态: ${controller.statusLabel} (${session.status.wireValue})')
+      ..writeln('Provider: ${session.provider}')
+      ..writeln('模型: ${session.model ?? ''}')
+      ..writeln('工作区 ID: ${session.workspaceId}')
+      ..writeln('工作区: ${session.workspaceLabel}')
+      ..writeln('事件序号: ${session.lastSequence}')
+      ..writeln('更新时间: ${session.updatedAt?.toIso8601String() ?? ''}')
+      ..writeln(
+        '最后活动: ${session.lastActivityAt?.toIso8601String() ?? ''}',
+      );
+    if (session.parentSessionId != null) {
+      buffer.writeln('父会话 ID: ${session.parentSessionId}');
+    }
+    if (session.forkedFromMessageId != null) {
+      buffer.writeln('Fork 来源消息: ${session.forkedFromMessageId}');
+    }
+    if (session.agentPresetId != null) {
+      buffer.writeln('Agent 预设: ${session.agentPresetId}');
+    }
+    if (session.subagentReadOnlyReason != null) {
+      buffer.writeln('子会话只读原因: ${session.subagentReadOnlyReason}');
+    }
+    if (session.archivedAt != null) {
+      buffer.writeln('归档时间: ${session.archivedAt!.toIso8601String()}');
+    }
+    buffer.writeln('终端:');
+    if (controller.visibleTerminals.isEmpty) {
+      buffer.writeln('  暂无已确认终端');
+    } else {
+      for (final terminal in controller.visibleTerminals) {
+        buffer
+          ..writeln('  - ID: ${terminal.id}')
+          ..writeln('    名称: ${terminal.hostname}')
+          ..writeln('    平台: ${terminal.platform}')
+          ..writeln('    状态: ${terminal.status.wireValue}')
+          ..writeln('    协议版本: ${terminal.protocolVersion}')
+          ..writeln('    Daemon 版本: ${terminal.daemonVersion ?? ''}')
+          ..writeln(
+            '    最后在线: ${terminal.lastSeen?.toIso8601String() ?? ''}',
+          );
+      }
+    }
+    return buffer.toString();
   }
 
   @override
@@ -140,6 +193,14 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                         ),
                         icon: const Icon(Icons.copy_outlined, size: 16),
                         label: const Text('复制 Provider'),
+                      ),
+                      OutlinedButton.icon(
+                        key: const Key('session-info-copy-debug-button'),
+                        onPressed: () => Clipboard.setData(
+                          ClipboardData(text: _debugInfoText(session)),
+                        ),
+                        icon: const Icon(Icons.bug_report_outlined, size: 16),
+                        label: const Text('复制 Debug 信息'),
                       ),
                     ],
                   ),

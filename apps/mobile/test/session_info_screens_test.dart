@@ -253,7 +253,7 @@ void main() {
       expect(find.text('分享能力未通过安全决策门，当前不可用。'), findsOneWidget);
     });
 
-    testWidgets('复制按钮只复制会话 ID 与 Provider（mock 剪贴板）', (tester) async {
+    testWidgets('复制按钮复制会话 ID、Provider 与 Debug 白名单（mock 剪贴板）', (tester) async {
       _usePhoneSurface(tester);
       final relay = await _fixtureWithSession(
         provider: 'codex',
@@ -286,6 +286,11 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('复制 Provider'), findsOneWidget);
+      expect(
+        find.byKey(const Key('session-info-copy-debug-button')),
+        findsOneWidget,
+      );
+      expect(find.text('复制 Debug 信息'), findsOneWidget);
 
       await _tapVisible(
         tester,
@@ -295,7 +300,17 @@ void main() {
         tester,
         find.byKey(const Key('session-info-copy-provider-button')),
       );
-      expect(clipboardValues, [sessionId, 'codex']);
+      await _tapVisible(
+        tester,
+        find.byKey(const Key('session-info-copy-debug-button')),
+      );
+      expect(clipboardValues, hasLength(3));
+      expect(clipboardValues[0], sessionId);
+      expect(clipboardValues[1], 'codex');
+      expect(clipboardValues[2], contains('会话 Debug 信息'));
+      expect(clipboardValues[2], contains(sessionId));
+      expect(clipboardValues[2], contains('codex'));
+      expect(clipboardValues[2], isNot(contains('fixture-access-token')));
     });
 
     testWidgets('页面不显示消息正文、token、恢复码与完整路径', (tester) async {
@@ -366,6 +381,10 @@ void main() {
       );
       expect(
         find.byKey(const Key('session-info-copy-provider-button')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('session-info-copy-debug-button')),
         findsNothing,
       );
     });
