@@ -177,8 +177,7 @@ tasks:
           echo "test:v08:real blocked: set AGENT_SESSIONS_DSH_REAL=1 after confirming local history/model scope" >&2
           exit 2
         fi
-        echo "test:v08:real blocked: DSH Resume 契约已实现，但真实 Resume/load/send runner 尚未接入；已准备 provider=opencode-zen models=deepseek-v4-flash-free,mimo-v2.5-free,big-pickle,ling-3.0-flash-fin-free，不启动模型请求" >&2
-        exit 2
+        node e2e-verify/real/dsh-v08-resume.mjs
 
   record:v07:
     desc: v0.7 录屏入口（必须分别提供 Flutter macOS 与 headed Web passed gate 报告）
