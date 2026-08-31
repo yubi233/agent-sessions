@@ -68,6 +68,48 @@ describe("P4 会话列表页", () => {
     expect(wrapper.find("textarea").exists()).toBe(false);
   });
 
+  it("V08-11/V08-15：DSH 模式按工作区分组且无写入口", async () => {
+    sessionState.token = "tok";
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("/v1/workspaces")) {
+        return {
+          ok: true,
+          json: async () => ({
+            workspaces: [
+              { id: "w-dsh-1", project_id: "project-alpha", terminal_id: "t1" },
+              { id: "w-dsh-2", project_id: "project-beta", terminal_id: "t1" },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          sessions: [
+            { id: "s1", workspace_id: "w-dsh-1", status: "idle", provider: "dsh", last_seq: 1 },
+            { id: "s2", workspace_id: "w-dsh-1", status: "idle", provider: "dsh", last_seq: 2 },
+            { id: "s3", workspace_id: "w-dsh-2", status: "idle", provider: "dsh", last_seq: 1 },
+            { id: "s4", workspace_id: "w-other", status: "idle", provider: "codex", last_seq: 1 },
+          ],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const wrapper = mount(SessionsView, { global: { plugins: [router] } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="sessions-list"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="dsh-mode-toggle"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="dsh-sessions-list"]').exists()).toBe(true);
+    const titles = wrapper.findAll('[data-testid="dsh-group-title"]').map((n) => n.text());
+    expect(titles).toEqual(["project-alpha", "project-beta"]);
+    // 非 dsh 会话不进入 DSH 分组。
+    expect(wrapper.text()).not.toContain("s4");
+    // 只读：没有输入框/写按钮。
+    expect(wrapper.find("input").exists()).toBe(false);
+    expect(wrapper.find("textarea").exists()).toBe(false);
+  });
+
   it("WEB-01：空列表显示空态", async () => {
     sessionState.token = "tok";
     vi.stubGlobal(

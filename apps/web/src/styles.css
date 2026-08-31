@@ -614,3 +614,21 @@ input {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* ---- v0.8 DSH 只读分组 ---- */
+.section-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dsh-group {
+  margin-bottom: 16px;
+}
+
+.dsh-group-title {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 8px 0 6px;
+}

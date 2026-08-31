@@ -39,11 +39,18 @@ import 'session/session_subagent_chrome.dart';
 import 'session/session_workspace_picker.dart';
 
 /// Happy 风格会话首页：优先呈现会话工作流，同时将 owner 安全入口保留在轻量控制区。
-class SessionHomeScreen extends ConsumerWidget {
+class SessionHomeScreen extends ConsumerStatefulWidget {
   const SessionHomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SessionHomeScreen> createState() => _SessionHomeScreenState();
+}
+
+class _SessionHomeScreenState extends ConsumerState<SessionHomeScreen> {
+  bool _dshMode = false;
+
+  @override
+  Widget build(BuildContext context) {
     final app = ref.watch(appControllerProvider);
     final sessions = ref.watch(sessionControllerProvider);
     return Scaffold(
@@ -51,6 +58,12 @@ class SessionHomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const _SessionHeaderTitle(title: 'Sessions'),
         actions: [
+          IconButton(
+            key: const Key('session-dsh-mode-button'),
+            tooltip: _dshMode ? '退出 DSH 模式' : 'DSH 模式',
+            onPressed: () => setState(() => _dshMode = !_dshMode),
+            icon: Icon(_dshMode ? Icons.science_outlined : Icons.science),
+          ),
           const AppearanceMenu(),
           IconButton(
             key: const Key('session-command-palette-button'),
@@ -94,6 +107,7 @@ class SessionHomeScreen extends ConsumerWidget {
                 deviceId: app.currentDevice?.id,
                 fixtureMode:
                     ref.read(relayRepositoryProvider) is FixtureRelayRepository,
+                dshMode: _dshMode,
               ),
             ),
           ),
@@ -109,12 +123,14 @@ class _SessionHomeBody extends StatelessWidget {
     required this.sessions,
     required this.deviceId,
     required this.fixtureMode,
+    required this.dshMode,
   });
 
   final AppController app;
   final SessionController sessions;
   final String? deviceId;
   final bool fixtureMode;
+  final bool dshMode;
 
   @override
   Widget build(BuildContext context) {
@@ -140,7 +156,9 @@ class _SessionHomeBody extends StatelessWidget {
       );
     }
 
-    final groups = _groupSessions(sessions.sessions);
+    final groups = dshMode
+        ? _groupDSHSessions(sessions.sessions)
+        : _groupSessions(sessions.sessions);
     return ListView(
       key: const Key('session-list-scroll'),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
@@ -157,17 +175,26 @@ class _SessionHomeBody extends StatelessWidget {
           const _ReadOnlyBanner(),
           const SizedBox(height: 12),
         ],
-        if (sessions.isEmpty)
+        if (dshMode) ...[
+          const _SectionLabel('DSH 工作区'),
+          if (sessions.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text('暂无 DSH 会话。', key: Key('dsh-session-empty')),
+            ),
+        ] else if (sessions.isEmpty)
           _SessionEmptyState(
             sessions: sessions,
             canWrite: app.canManageDevices,
             deviceId: deviceId,
             fixtureMode: fixtureMode,
-          )
-        else ...[
-          const _SectionLabel('会话'),
+          ),
+        if (sessions.isNotEmpty)
           for (final group in groups.entries) ...[
-            _ProjectGroupHeader(title: group.key),
+            _ProjectGroupHeader(
+              title: dshMode ? group.key : group.key,
+              dsh: dshMode,
+            ),
             for (final session in group.value)
               _SessionListItem(
                 session: session,
@@ -179,7 +206,6 @@ class _SessionHomeBody extends StatelessWidget {
                 },
               ),
           ],
-        ],
         const SizedBox(height: 16),
         _SecurityControls(app: app),
       ],
@@ -194,6 +220,20 @@ Map<String, List<MobileSession>> _groupSessions(List<MobileSession> sessions) {
         ? session.projectName!.trim()
         : '未命名项目';
     groups.putIfAbsent(project, () => []).add(session);
+  }
+  return groups;
+}
+
+/// DSH 模式按 workspace_id 分组；工作区名称优先使用白名单 workspaceName。
+Map<String, List<MobileSession>> _groupDSHSessions(
+  List<MobileSession> sessions,
+) {
+  final groups = <String, List<MobileSession>>{};
+  for (final session in sessions) {
+    final workspace = session.workspaceName?.trim().isNotEmpty == true
+        ? session.workspaceName!.trim()
+        : session.workspaceId;
+    groups.putIfAbsent(workspace, () => []).add(session);
   }
   return groups;
 }
@@ -4619,14 +4659,23 @@ class _SectionLabel extends StatelessWidget {
 }
 
 class _ProjectGroupHeader extends StatelessWidget {
-  const _ProjectGroupHeader({required this.title});
+  const _ProjectGroupHeader({required this.title, this.dsh = false});
 
   final String title;
+  final bool dsh;
 
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(top: 6, bottom: 6),
-    child: Text(title, style: Theme.of(context).textTheme.labelLarge),
+    child: Row(
+      children: [
+        if (dsh) ...[
+          const Icon(Icons.science_outlined, size: 16),
+          const SizedBox(width: 4),
+        ],
+        Text(title, style: Theme.of(context).textTheme.labelLarge),
+      ],
+    ),
   );
 }
 
