@@ -31,7 +31,7 @@ const configSource = process.env.AGENT_SESSIONS_DSH_CONFIG
   : configArgument
     ? "cli:--config"
     : "repository:cordis.yml";
-const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? argOf("--model") ?? "deepseek-v4-flash-free";
+const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? argOf("--model") ?? "nemotron-3-ultra-free";
 const provider = process.env.AGENT_SESSIONS_DSH_PROVIDER
   ?? argOf("--provider")
   ?? (dshZenTestModels.has(model) ? "opencode-zen" : "opencode-go");

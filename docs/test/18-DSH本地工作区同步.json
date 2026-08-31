@@ -275,7 +275,7 @@
       "category": "real_model",
       "priority": "P0",
       "test_layer": "real/full_gate",
-      "precondition": "用户授权读取指定历史和一次真实模型请求；AGENT_SESSIONS_DSH_REAL=1，固定 provider=opencode-zen，模型池为 deepseek-v4-flash-free、mimo-v2.5-free、big-pickle、ling-3.0-flash-fin-free；每个模型最多额外重试 5 次。",
+      "precondition": "用户授权读取指定历史和一次真实模型请求；AGENT_SESSIONS_DSH_REAL=1，固定 provider=opencode-zen，模型池为 nemotron-3-ultra-free、nemotron-3.5-lightning-free、ling-3.0-flash-fin-free、mimo-v2.5-free；每个模型最多额外重试 5 次。",
       "steps": [
         "先运行 Resume smoke",
         "load 或 resume 后发送一条受控短消息",

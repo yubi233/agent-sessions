@@ -3,10 +3,10 @@
 // 是 FreeUsageLimitError/免费额度耗尽即可按约定接受，普通鉴权错误仍保持 blocked。
 const zenQuotaPattern = /FreeUsageLimitError|(?:free\s*(?:model\s*)?(?:usage|quota)\s*(?:limit|exhausted|exceeded|reached|depleted))|(?:(?:usage|quota)\s*(?:limit|exhausted|exceeded|reached|depleted))|免费(?:模型)?\s*(?:额度|用量)[^\n]{0,80}(?:上限|耗尽|超限|用尽)/i;
 export const dshZenTestModels = new Set([
-  "deepseek-v4-flash-free",
-  "mimo-v2.5-free",
-  "big-pickle",
+  "nemotron-3-ultra-free",
+  "nemotron-3.5-lightning-free",
   "ling-3.0-flash-fin-free",
+  "mimo-v2.5-free",
 ]);
 
 function result(status, failureClass, passReason, quotaAccepted, diagnosticCode, remainingRisk) {

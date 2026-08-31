@@ -33,7 +33,7 @@ const relayBase = process.env.AGENT_SESSIONS_RELAY_BASE_URL ?? 'http://127.0.0.1
 const dshBin = process.env.AGENT_SESSIONS_DSH_BIN ?? '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/bin.js';
 // 默认使用仓库根的本地配置，避免继续调用已经下线的旧模型。
 const dshConfig = process.env.AGENT_SESSIONS_DSH_CONFIG ?? join(ROOT, 'cordis.yml');
-const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? 'deepseek-v4-flash-free';
+const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? 'nemotron-3-ultra-free';
 const dshRouteProvider = process.env.AGENT_SESSIONS_DSH_PROVIDER ?? 'opencode-zen';
 const report = {
   suite: 'v0.5.next-dsh-cache-relay-flutter-live',

@@ -17,18 +17,16 @@
           mode: normal
           maxRetries: 5
         models:
-          - id: deepseek-v4-flash-free
+          - id: nemotron-3-ultra-free
             input:
               - text
-            reasoningEfforts:
-              max: max
-          - id: mimo-v2.5-free
-            input:
-              - text
-          - id: big-pickle
+          - id: nemotron-3.5-lightning-free
             input:
               - text
           - id: ling-3.0-flash-fin-free
+            input:
+              - text
+          - id: mimo-v2.5-free
             input:
               - text
 
@@ -70,7 +68,7 @@
   name: '@deepseek-ai/dsh-acp-demo'
   config:
     provider: opencode-zen
-    model: deepseek-v4-flash-free
+    model: nemotron-3-ultra-free
     persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
     persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? (process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none')"
     workspaceContext:

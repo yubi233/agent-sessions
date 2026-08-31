@@ -170,7 +170,7 @@ tasks:
       - git diff --check
 
   test:v08:real:
-    desc: v0.8 真实 DSH 恢复门（Zen 测试池：deepseek-v4-flash-free、mimo-v2.5-free、big-pickle、ling-3.0-flash-fin-free；429 按约定通过）
+    desc: v0.8 真实 DSH 恢复门（Zen 测试池：nemotron-3-ultra-free、nemotron-3.5-lightning-free、ling-3.0-flash-fin-free、mimo-v2.5-free；429 按约定通过）
     cmds:
       - |
         if [[ "${AGENT_SESSIONS_DSH_REAL:-}" != "1" ]]; then

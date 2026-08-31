@@ -8,11 +8,11 @@ import { classifyDshLiveFailure, dshZenTestModels } from "./dsh-live-result.mjs"
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 test("DSH Zen 测试池稳定声明四个模型", () => {
-  assert.deepEqual([...dshZenTestModels], ["deepseek-v4-flash-free", "mimo-v2.5-free", "big-pickle", "ling-3.0-flash-fin-free"]);
+  assert.deepEqual([...dshZenTestModels], ["nemotron-3-ultra-free", "nemotron-3.5-lightning-free", "ling-3.0-flash-fin-free", "mimo-v2.5-free"]);
 });
 
 test("DSH Zen 测试池的 429 FreeUsageLimitError 按 v0.8 约定通过", () => {
-  for (const model of ["deepseek-v4-flash-free", "mimo-v2.5-free", "big-pickle", "ling-3.0-flash-fin-free"]) {
+  for (const model of ["nemotron-3-ultra-free", "nemotron-3.5-lightning-free", "ling-3.0-flash-fin-free", "mimo-v2.5-free"]) {
     const result = classifyDshLiveFailure({
       provider: "opencode-zen",
       model,
@@ -29,7 +29,7 @@ test("DSH Zen 测试池的 429 FreeUsageLimitError 按 v0.8 约定通过", () =>
 test("Zen 网关把免费额度映射为 403 时仍按明确错误类型通过", () => {
   const result = classifyDshLiveFailure({
     provider: "opencode-zen",
-    model: "big-pickle",
+    model: "nemotron-3-ultra-free",
     message: "prompt 被拒绝: 403 FreeUsageLimitError: free model usage limit reached",
   });
   assert.equal(result.status, "passed");
@@ -52,7 +52,7 @@ test("非 Zen mimo 的 429 不得误判为通过", () => {
 test("不在 DSH Zen 测试池的模型不得因 429 通过", () => {
   const result = classifyDshLiveFailure({
     provider: "opencode-zen",
-    model: "nemotron-3-ultra-free",
+    model: "deepseek-v4-flash-free",
     stderr: "429 FreeUsageLimitError: Rate limit exceeded",
   });
 
@@ -87,7 +87,7 @@ test("Zen 免费模型访问被拒绝但未声明额度耗尽时保持 blocked",
 test("可重试的 HTTP/超时错误返回稳定分类", () => {
   const http = classifyDshLiveFailure({
     provider: "opencode-zen",
-    model: "big-pickle",
+    model: "nemotron-3.5-lightning-free",
     message: "prompt 被拒绝：HTTP 503",
   });
   assert.equal(http.status, "failed");
@@ -107,7 +107,7 @@ test("可重试的 HTTP/超时错误返回稳定分类", () => {
 test("模型不可用不按额度命中放行", () => {
   const result = classifyDshLiveFailure({
     provider: "opencode-zen",
-    model: "deepseek-v4-flash-free",
+    model: "mimo-v2.5-free",
     message: "400 Upstream request failed: Model is unavailable.",
   });
   assert.equal(result.status, "failed");
@@ -132,9 +132,9 @@ test("DSH 活动配置不再引用已下线模型", () => {
   const cacheRunner = readFileSync(join(REPO_ROOT, "e2e-verify", "real", "dsh-cache-flutter-live.mjs"), "utf8");
   assert.equal(fixture.includes("ox-alpha-free"), false);
   assert.match(fixture, /provider:\s*opencode-zen/);
-  assert.match(fixture, /model:\s*deepseek-v4-flash-free/);
+  assert.match(fixture, /model:\s*nemotron-3-ultra-free/);
   assert.equal(cacheRunner.includes("cordis-oxalpha.yml"), false);
-  assert.match(cacheRunner, /\?\?\s*'deepseek-v4-flash-free'/);
+  assert.match(cacheRunner, /\?\?\s*'nemotron-3-ultra-free'/);
 
   // 根配置属于本机忽略文件；存在时同样禁止旧模型回流，缺失时不阻断可移植测试。
   const rootConfigPath = join(REPO_ROOT, "cordis.yml");

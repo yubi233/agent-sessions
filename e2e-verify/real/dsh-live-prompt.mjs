@@ -3,7 +3,7 @@
 // 口径：real_model=true（消耗真实 token）、real_upstream=true；凭据只经
 // DEEPSEEK_API_KEY / OPENCODE_GO_API_KEY 环境变量或 DSH 侧自身 .env 注入，本脚本不读取其值。
 // 每个模型执行一次初始请求，最多额外重试五次；可识别的 Zen 额度错误按约定通过。
-// 用法：node e2e-verify/real/dsh-live-prompt.mjs --model deepseek-v4-flash-free --config cordis.yml
+// 用法：node e2e-verify/real/dsh-live-prompt.mjs --model nemotron-3-ultra-free --config cordis.yml
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -32,7 +32,7 @@ const configSource = process.env.AGENT_SESSIONS_DSH_CONFIG
   : configArgument
     ? "cli:--config"
     : "repository:cordis.yml";
-const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? argOf("--model") ?? "deepseek-v4-flash-free";
+const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? argOf("--model") ?? "nemotron-3-ultra-free";
 const provider = process.env.AGENT_SESSIONS_DSH_PROVIDER
   ?? argOf("--provider")
   ?? (dshZenTestModels.has(model) ? "opencode-zen" : "opencode-go");
