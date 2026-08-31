@@ -894,9 +894,22 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			if l.WorkspaceManager == nil {
 				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
 			} else {
-				// 当前实现先以空列表成功收口；真实 JSONL 导入由后续 P2 子任务补全。
-				// 这里保持与计划“只导入白名单元数据、不读取正文”的边界。
-				sessionIDs = []string{}
+				var payload struct {
+					WorkspaceID string `json:"workspace_id"`
+				}
+				if err := json.Unmarshal([]byte(command.PayloadJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
+					status, errorCode = "failed", protocol.ErrWorkspacePathDenied
+				} else {
+					imported, importErr := l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store)
+					if importErr != nil {
+						status, errorCode = "failed", CommandErrorCode(importErr)
+						l.Logger.Warn("daemon dsh session import failed", "command", command.CommandID, "error_code", errorCode)
+					} else {
+						for _, item := range imported {
+							sessionIDs = append(sessionIDs, item.RelaySessionID)
+						}
+					}
+				}
 			}
 			receipt, resolveErr := l.Client.ResolveDSHImport(ctx, command.CommandID, command.DeliverySeq, sessionIDs, status, errorCode)
 			if resolveErr != nil {

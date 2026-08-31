@@ -6,12 +6,15 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
+	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 )
 
@@ -207,4 +210,79 @@ func (m *WorkspaceManager) ConfirmExistingDSHWorkspace(ctx context.Context, work
 		return ConfirmedWorkspace{}, errors.New("directory 缺少 DSH 持久化证据")
 	}
 	return m.store.ConfirmWorkspace(workspaceID, resolved)
+}
+
+// DSHImportedSession 是一次按需导入的本机映射结果。Relay 只接收 opaque relay session id。
+type DSHImportedSession struct {
+	RelaySessionID string
+	DSHSessionID   string
+	WorkspaceRoot  string
+}
+
+// ImportDSHSessions 扫描已确认 DSH 工作区下的 JSONL artifact，为每个有效会话生成
+// opaque Relay session id 并写入本机 instance/replay 映射。它不读取 JSONL 正文，
+// 不把 DSH session id、cwd 或路径上传到 Relay。
+func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID string, store *Store) ([]DSHImportedSession, error) {
+	if m == nil || store == nil {
+		return nil, ErrWorkspaceRootInvalid
+	}
+	confirmed, err := store.ConfirmedWorkspaceByID(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	// 只扫描该 Workspace 自己的 .dsh-sessions，不递归到其他项目。
+	persistenceRoot := filepath.Join(confirmed.Root, ".dsh-sessions")
+	artifacts, err := dsh.ScanSessionArtifacts(persistenceRoot)
+	if err != nil {
+		// 没有持久化根时视为空导入，而不是让整个同步失败。
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []DSHImportedSession
+	for _, artifact := range artifacts {
+		if artifact.ID == "" || artifact.CWD == "" {
+			continue
+		}
+		// 只导入 cwd 与当前 canonical workspace 一致的会话；不一致视为移动/越权，跳过。
+		if !sameCanonicalPath(artifact.CWD, confirmed.Root) {
+			continue
+		}
+		if seen[artifact.ID] {
+			continue
+		}
+		seen[artifact.ID] = true
+		relaySessionID := id.New("sess")
+		// 写本机 instance 映射：Relay session -> DSH session + workspace root。
+		mapping, err := json.Marshal(providerThread{
+			Provider:      "dsh",
+			InstanceID:    artifact.ID,
+			WorkspaceRoot: confirmed.Root,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := store.Set(instanceKey(relaySessionID), string(mapping)); err != nil {
+			return nil, err
+		}
+		// 新导入的 DSH 会话应走 session.load 回放，因此 replay state 置 pending。
+		if err := store.Set(replayStateKey(relaySessionID), replayPending); err != nil {
+			return nil, err
+		}
+		out = append(out, DSHImportedSession{
+			RelaySessionID: relaySessionID,
+			DSHSessionID:   artifact.ID,
+			WorkspaceRoot:  confirmed.Root,
+		})
+	}
+	return out, nil
+}
+
+// sameCanonicalPath 比较两个路径是否指向同一 canonical 目录。
+func sameCanonicalPath(left, right string) bool {
+	left = comparableWorkspacePath(left)
+	right = comparableWorkspacePath(right)
+	return left != "" && right != "" && left == right
 }
