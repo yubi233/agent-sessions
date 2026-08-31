@@ -189,9 +189,10 @@ class _SessionHomeBody extends StatelessWidget {
             deviceId: deviceId,
             fixtureMode: fixtureMode,
           ),
-        if (sessions.isNotEmpty)
+        if (!sessions.isEmpty)
           for (final group in groups.entries) ...[
             _ProjectGroupHeader(
+              key: Key(dshMode ? 'dsh-group-${group.key}' : 'project-group-${group.key}'),
               title: dshMode ? group.key : group.key,
               dsh: dshMode,
             ),
@@ -4659,7 +4660,7 @@ class _SectionLabel extends StatelessWidget {
 }
 
 class _ProjectGroupHeader extends StatelessWidget {
-  const _ProjectGroupHeader({required this.title, this.dsh = false});
+  const _ProjectGroupHeader({super.key, required this.title, this.dsh = false});
 
   final String title;
   final bool dsh;

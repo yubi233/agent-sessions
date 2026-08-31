@@ -43,7 +43,7 @@ void main() {
       ProviderScope(
         overrides: [
           relayRepositoryProvider.overrideWithValue(relay),
-          sessionControllerProvider.overrideWithValue(controller),
+          sessionControllerProvider.overrideWith((_) => controller),
         ],
         child: const MaterialApp(home: SessionHomeScreen()),
       ),
@@ -60,8 +60,8 @@ void main() {
 
     expect(find.text('DSH 工作区'), findsOneWidget);
     // 两个工作区分组头存在（fixture 中 workspaceName 默认等于 workspaceId）。
-    expect(find.text('ws-dsh-alpha'), findsOneWidget);
-    expect(find.text('ws-dsh-beta'), findsOneWidget);
+    expect(find.byKey(const Key('dsh-group-ws-dsh-alpha')), findsOneWidget);
+    expect(find.byKey(const Key('dsh-group-ws-dsh-beta')), findsOneWidget);
     // 三个 DSH 会话均展示。
     expect(find.text(dshSession.title), findsOneWidget);
   });
