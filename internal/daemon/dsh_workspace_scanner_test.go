@@ -10,13 +10,27 @@ import (
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 )
 
+// mustWriteDSHArtifact 构造符合 DSH 布局的 session.jsonl，作为工作区证据。
+func mustWriteDSHArtifact(t *testing.T, project, id string) {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", project, err)
+	}
+	canonical, err = filepath.Abs(canonical)
+	if err != nil {
+		t.Fatalf("abs %s: %v", project, err)
+	}
+	writeDSHSessionArtifactForTest(t, filepath.Join(project, ".dsh-sessions"), filepath.Clean(canonical), id, "{}")
+}
+
 // V08-01/03/18：Scanner 只发现授权根内“有 DSH 证据且为 Git 根”的项目。
 func TestDSHWorkspaceScannerFindsOnlyDSHGitRoots(t *testing.T) {
 	root := t.TempDir()
 	// 有效 DSH 项目：Git 根 + .dsh-sessions/session.jsonl
 	valid := filepath.Join(root, "valid")
 	mustMkdirAll(t, filepath.Join(valid, ".dsh-sessions"))
-	mustWriteFile(t, filepath.Join(valid, ".dsh-sessions", "session.jsonl"), "{}")
+	mustWriteDSHArtifact(t, valid, "s1")
 	mustGitInit(t, valid)
 
 	// 仅 Git 根但没有 DSH 证据
@@ -55,7 +69,7 @@ func TestDSHWorkspaceScannerIdempotent(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "p")
 	mustMkdirAll(t, filepath.Join(project, ".dsh-sessions"))
-	mustWriteFile(t, filepath.Join(project, ".dsh-sessions", "session.jsonl"), "{}")
+	mustWriteDSHArtifact(t, project, "s1")
 	mustGitInit(t, project)
 
 	scanner := NewDSHWorkspaceScanner(root)
@@ -78,7 +92,7 @@ func TestDSHWorkspaceScannerLimits(t *testing.T) {
 	// 深度超过 4 的项目不应进入候选（但中间层若已是 DSH 根则仍会命中）。
 	deep := filepath.Join(root, "a", "b", "c", "d", "deep")
 	mustMkdirAll(t, filepath.Join(deep, ".dsh-sessions"))
-	mustWriteFile(t, filepath.Join(deep, ".dsh-sessions", "session.jsonl"), "{}")
+	mustWriteDSHArtifact(t, deep, "deep-s1")
 	mustGitInit(t, deep)
 
 	scanner := NewDSHWorkspaceScanner(root)
@@ -93,7 +107,7 @@ func TestDSHWorkspaceScannerLimits(t *testing.T) {
 	// 用极小上限验证 limit_reached 可见：根下先放一个可命中候选。
 	rootLevel := filepath.Join(root, "root-level")
 	mustMkdirAll(t, filepath.Join(rootLevel, ".dsh-sessions"))
-	mustWriteFile(t, filepath.Join(rootLevel, ".dsh-sessions", "session.jsonl"), "{}")
+	mustWriteDSHArtifact(t, rootLevel, "root-s1")
 	mustGitInit(t, rootLevel)
 	limited := &DSHWorkspaceScanner{root: root, maxDepth: 4, maxCandidates: 0}
 	_, limitedSummary, err := limited.Scan(context.Background())
@@ -119,7 +133,7 @@ func TestConfirmExistingDSHWorkspaceRejectsInvalid(t *testing.T) {
 	}
 	project := filepath.Join(root, "p")
 	mustMkdirAll(t, filepath.Join(project, ".dsh-sessions"))
-	mustWriteFile(t, filepath.Join(project, ".dsh-sessions", "session.jsonl"), "{}")
+	mustWriteDSHArtifact(t, project, "s1")
 	mustGitInit(t, project)
 
 	confirmed, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-dsh", project)
@@ -139,7 +153,7 @@ func TestConfirmExistingDSHWorkspaceRejectsInvalid(t *testing.T) {
 	// 授权根外
 	outside := t.TempDir()
 	mustMkdirAll(t, filepath.Join(outside, ".dsh-sessions"))
-	mustWriteFile(t, filepath.Join(outside, ".dsh-sessions", "session.jsonl"), "{}")
+	mustWriteDSHArtifact(t, outside, "outside-s1")
 	mustGitInit(t, outside)
 	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-out", outside); err == nil {
 		t.Fatal("expected outside rejection")
@@ -147,7 +161,7 @@ func TestConfirmExistingDSHWorkspaceRejectsInvalid(t *testing.T) {
 	// 非 Git
 	plain := filepath.Join(root, "plain")
 	mustMkdirAll(t, filepath.Join(plain, ".dsh-sessions"))
-	mustWriteFile(t, filepath.Join(plain, ".dsh-sessions", "session.jsonl"), "{}")
+	mustWriteDSHArtifact(t, plain, "plain-s1")
 	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-plain", plain); !errors.Is(err, workspacesafe.ErrNotAGitRoot) {
 		t.Fatalf("expected not git rejection, got %v", err)
 	}

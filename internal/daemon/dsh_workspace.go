@@ -150,8 +150,9 @@ func (s *DSHWorkspaceScanner) Scan(ctx context.Context) ([]DSHWorkspaceCandidate
 }
 
 // hasDSHEvidence 检查目录下是否存在 DSH 持久化证据：
-// `.dsh-sessions` 内至少有一个 `session.jsonl` / `session.jsonl.zstd`，或存在 `session-query.db` 标记。
-// 它不解析正文，也不把 `session-query.db` 当作会话事实来源。
+// `.dsh-sessions` 内存在 `session-query.db` 标记，或存在符合 DSH 布局的有效
+// `session.jsonl` / `session.jsonl.zstd` artifact。它不读取事件正文，也不把
+// `session-query.db` 当作会话事实来源。
 func (s *DSHWorkspaceScanner) hasDSHEvidence(projectRoot string) bool {
 	sessionRoot := filepath.Join(projectRoot, ".dsh-sessions")
 	info, err := os.Lstat(sessionRoot)
@@ -163,15 +164,17 @@ func (s *DSHWorkspaceScanner) hasDSHEvidence(projectRoot string) bool {
 		return false
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+		if entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		name := entry.Name()
-		if name == "session.jsonl" || name == "session.jsonl.zstd" || name == "session-query.db" {
+		if !entry.IsDir() && entry.Name() == "session-query.db" {
 			return true
 		}
 	}
-	return false
+	// 真实 DSH 布局是 `.dsh-sessions/<project>/<session>/session.jsonl[.zstd]`，
+	// 因此用持久化层扫描来确认至少一个有效 artifact；无效文件不会被当作证据。
+	artifacts, err := dsh.ScanSessionArtifacts(sessionRoot)
+	return err == nil && len(artifacts) > 0
 }
 
 func pathWithin(root, path string) bool {
