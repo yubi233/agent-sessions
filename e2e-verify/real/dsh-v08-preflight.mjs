@@ -2,16 +2,50 @@
 // v0.8 DSH 历史存储预检：只读取 session header 和文件校验摘要，不迁移、不删除、不输出路径或正文。
 import { createHash } from 'node:crypto';
 import { createReadStream, mkdirSync, promises as fs } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 import { createZstdDecompress } from 'node:zlib';
 
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..', '..');
 const REPORT_SCHEMA_VERSION = 1;
 const MAX_HEADER_BYTES = 64 * 1024;
+// 当前 DSH session-persistence-jsonl 只读取格式版本 0；未知版本必须先升级适配器。
+const SUPPORTED_SESSION_HEADER_VERSION = 0;
 
 function digest(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+export function encodeSegment(raw) {
+  if (raw === '.' || raw === '..') return [...raw].map(() => '~002E').join('');
+  let encoded = '';
+  for (let index = 0; index < raw.length; index += 1) {
+    const code = raw.charCodeAt(index);
+    const char = raw[index];
+    if (char !== '~' && /[A-Za-z0-9._-]/.test(char)) encoded += char;
+    else encoded += `~${code.toString(16).toUpperCase().padStart(4, '0')}`;
+  }
+  return encoded;
+}
+
+export function projectKey(cwd) {
+  let readable = '';
+  let separatorRun = false;
+  for (let index = 0; index < cwd.length; index += 1) {
+    const code = cwd.charCodeAt(index);
+    const char = cwd[index];
+    if (char === '/' || char === '\\' || char === ':') {
+      if (!separatorRun) readable += '-';
+      separatorRun = true;
+    } else if (char !== '~' && /[A-Za-z0-9._-]/.test(char)) {
+      readable += char;
+      separatorRun = false;
+    } else {
+      readable += `~${code.toString(16).toUpperCase().padStart(4, '0')}`;
+      separatorRun = false;
+    }
+  }
+  return `--${(readable.replace(/^-+/, '') || 'root').slice(0, 251)}--`;
 }
 
 function usage() {
@@ -101,6 +135,9 @@ async function listSessionArtifacts(sessionRoot, maxArtifacts, sink) {
 }
 
 async function discoverArtifacts(root, maxProjectDepth, maxArtifacts, sink) {
+  // 调用方可能直接传入 DSH 的 `.dsh-sessions` 持久化根；此时不能再拼接
+  // 第二层 `.dsh-sessions`，否则旧会话会被误报为零个 artifact。
+  if (basename(root) === '.dsh-sessions') return listSessionArtifacts(root, maxArtifacts, sink);
   // 显式 root 本身已有存储时，它就是一个 DSH project/legacy persistence root。只清点
   // 这一处，不能为了预检再遍历整个源码树并把无关子项目混进迁移清单。
   const directSessionRoot = join(root, '.dsh-sessions');
@@ -199,10 +236,12 @@ function parseHeader(line) {
   } catch {
     return { error: 'header_invalid_json' };
   }
-  if (value?.type !== 'session' || typeof value.version !== 'number' || typeof value.id !== 'string' || value.id.length === 0) {
+  if (value?.type !== 'session' || value.version !== SUPPORTED_SESSION_HEADER_VERSION || typeof value.id !== 'string' || value.id.length === 0) {
     return { error: 'header_invalid_shape' };
   }
-  if (value.cwd !== undefined && typeof value.cwd !== 'string') return { error: 'header_invalid_cwd' };
+  if (typeof value.createdAt !== 'number' || !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) return { error: 'header_invalid_created_at' };
+  if (typeof value.delegationDepth !== 'number' || !Number.isSafeInteger(value.delegationDepth) || value.delegationDepth < 0) return { error: 'header_invalid_delegation_depth' };
+  if (value.cwd !== undefined && (typeof value.cwd !== 'string' || !isAbsolute(value.cwd))) return { error: 'header_invalid_cwd' };
   return { id: value.id, cwd: value.cwd ?? '' };
 }
 
@@ -225,6 +264,13 @@ async function inspectArtifact(path, root, rootLabel) {
     };
     if (base.source_changed) return { ...base, error: 'migration_source_changed' };
     if (parsed.error) return { ...base, error: parsed.error };
+    const sessionDir = dirname(path);
+    const projectDir = dirname(sessionDir);
+    const expectedProject = projectKey(parsed.cwd);
+    const expectedSession = encodeSegment(parsed.id);
+    if (basename(sessionDir) !== expectedSession || basename(projectDir) !== expectedProject) {
+      return { ...base, session_id_hash: digest(parsed.id), cwd_hash: parsed.cwd ? digest(parsed.cwd) : null, error: 'header_path_mismatch' };
+    }
     return {
       ...base,
       session_id_hash: digest(parsed.id),
@@ -311,7 +357,9 @@ export async function runPreflight(options) {
     report_schema_version: REPORT_SCHEMA_VERSION,
     suite: 'V08-PREFLIGHT',
     report_kind: 'local_dsh_storage_inventory',
-    status: errors.has('authorized_root_unavailable') ? 'blocked' : 'passed',
+    // 只要清单不能证明可安全迁移，就把进程结果标为 blocked；调用方不能只看
+    // artifact_count 而忽略 migration_ready=false。
+    status: migrationReady ? 'passed' : 'blocked',
     real_browser: false,
     real_model: false,
     real_upstream: false,

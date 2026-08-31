@@ -127,6 +127,31 @@ func TestPersistRootRejectsEmptyOrRelativeOptIn(t *testing.T) {
 	}
 }
 
+func TestMinimalEnvBindsExactPersistenceRootAndWorkspaceFallback(t *testing.T) {
+	withEnvUnset(t, EnvPersistCompression)
+	env := strings.Join(minimalEnv("/tmp/workspace/.dsh-sessions", "/tmp/workspace"), "\n")
+	if strings.Contains(env, "DSH_SNAPSHOT_SESSIONS_ROOT=/tmp/workspace/.dsh-sessions/sessions") {
+		t.Fatal("持久化根不得被错误追加 sessions 子目录")
+	}
+	if !strings.Contains(env, "DSH_SNAPSHOT_SESSIONS_ROOT=/tmp/workspace/.dsh-sessions") {
+		t.Fatal("环境变量必须使用精确 DSH 持久化根")
+	}
+	if !strings.Contains(env, "DSH_SESSION_CWD=/tmp/workspace") {
+		t.Fatal("工作区会话回退根未注入")
+	}
+	if !strings.Contains(env, "DSH_SNAPSHOT_COMPRESSION=none") {
+		t.Fatal("默认 artifact 编码必须显式注入为 none")
+	}
+}
+
+func TestMinimalEnvHonorsZstdPersistenceCompression(t *testing.T) {
+	t.Setenv(EnvPersistCompression, PersistenceCompressionZstd)
+	env := strings.Join(minimalEnv("/tmp/workspace/.dsh-sessions", "/tmp/workspace"), "\n")
+	if !strings.Contains(env, "DSH_SNAPSHOT_COMPRESSION=zstd") {
+		t.Fatal("zstd artifact 编码未注入桥环境")
+	}
+}
+
 // awaitPidFile 轮询等待 pid 文件出现（SESS-05 awaitChildPID 同款口径）。
 func awaitPidFile(t *testing.T, path string) int {
 	t.Helper()
@@ -323,10 +348,8 @@ func TestStderrRingBufferCapsAndRedacts(t *testing.T) {
 	}
 }
 
-// 6. Resume 六态定级固化：对任意输入（空请求、空白/伪造 instanceId、带工作区路径等）
-// 恒返回六态中的 unsupported（绝不伪装成 resumed），InstanceID 必须为空；同时不产生
-// 任何子进程——工厂计数必须保持 0，Resume 不得触碰 spawn 路径。
-func TestResumeAlwaysUnsupported(t *testing.T) {
+// 6. Resume 输入缺失时保持 unsupported，且不触发桥进程。
+func TestResumeMissingRequestDoesNotSpawn(t *testing.T) {
 	spawned := 0
 	factory := func() (BridgeTransport, error) {
 		spawned++
@@ -337,8 +360,7 @@ func TestResumeAlwaysUnsupported(t *testing.T) {
 	cases := []adapter.ResumeRequest{
 		{},
 		{InstanceID: "   "},
-		{InstanceID: "sk-" + strings.Repeat("x", 32), WorkspaceRoot: "/tmp/ws"},
-		{InstanceID: "c790235f-0000-0000-0000-000000000000", WorkspaceRoot: "/nonexistent/ws"},
+		{InstanceID: "sk-" + strings.Repeat("x", 32)},
 	}
 	sixStates := []string{
 		adapter.WakeResumed,
@@ -354,7 +376,7 @@ func TestResumeAlwaysUnsupported(t *testing.T) {
 			t.Fatalf("case %d Resume 必须不报错: %v", i, err)
 		}
 		if res.Result != adapter.WakeUnsupported {
-			t.Fatalf("case %d Result = %q, want %q（六态定级不得伪装 resumed）", i, res.Result, adapter.WakeUnsupported)
+			t.Fatalf("case %d Result = %q, want %q", i, res.Result, adapter.WakeUnsupported)
 		}
 		inSix := false
 		for _, s := range sixStates {
@@ -374,9 +396,73 @@ func TestResumeAlwaysUnsupported(t *testing.T) {
 		t.Fatalf("Resume 产生了 %d 个子进程，必须为 0", spawned)
 	}
 
-	// 生产适配器（真实工厂）的 Resume 同样不得 spawn：连 node 查找都不应走到。
-	prod := New()
-	if res, err := prod.Resume(context.Background(), adapter.ResumeRequest{InstanceID: "anything"}); err != nil || res.Result != adapter.WakeUnsupported {
-		t.Fatalf("生产适配器 Resume = %+v, %v, want unsupported", res, err)
+}
+
+// 7. 有效 Resume 通过 ACP session/resume 恢复已有会话；直接 Adapter.Resume
+// 没有 Daemon 句柄接收通道，因此调用完成后会主动释放桥进程。
+func TestResumeExistingSessionUsesACPResume(t *testing.T) {
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, "sess-existing")
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	result, err := a.Resume(context.Background(), adapter.ResumeRequest{
+		InstanceID: "sess-existing", WorkspaceRoot: "/tmp/dsh-ws", ReplayHistory: false,
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if result.Result != adapter.WakeResumed || result.InstanceID != "sess-existing" {
+		t.Fatalf("Resume 结果 = %+v", result)
+	}
+	var found bool
+	for _, frame := range fb.written() {
+		if methodOf(frame) == "session/resume" {
+			found = true
+			params, _ := frame["params"].(map[string]any)
+			if params["cwd"] != "/tmp/dsh-ws" {
+				t.Fatalf("session/resume cwd = %v", params["cwd"])
+			}
+			if values, _ := params["mcpServers"].([]any); len(values) != 0 {
+				t.Fatalf("session/resume mcpServers = %v", values)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("有效 Resume 必须发送 session/resume")
+	}
+}
+
+// 工作区不匹配时，无论调用方是否接管句柄，都必须回收已经启动的桥进程。
+func TestResumeWorkspaceMovedDisposesBridge(t *testing.T) {
+	fb := newFakeBridge()
+	fb.script = func(fb *fakeBridge, msg map[string]any) {
+		id := frameID(msg)
+		switch methodOf(msg) {
+		case "initialize":
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": id,
+				"result": map[string]any{
+					"protocolVersion": 1,
+					"agentInfo":       map[string]any{"name": "deepseek-harness-acp", "version": "0.0.1"},
+				},
+			})
+		case "session/resume":
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": id,
+				"error": map[string]any{"code": -32602, "message": "cwd does not match stored cwd"},
+			})
+		}
+	}
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	result, err := a.Resume(context.Background(), adapter.ResumeRequest{
+		InstanceID: "sess-moved", WorkspaceRoot: "/tmp/dsh-ws", ReplayHistory: false,
+	})
+	if err != nil || result.Result != adapter.WakeWorkspaceMoved {
+		t.Fatalf("工作区移动 Resume = %+v, %v", result, err)
+	}
+	fb.mu.Lock()
+	closed := fb.closed
+	fb.mu.Unlock()
+	if !closed {
+		t.Fatal("工作区移动后桥进程必须回收")
 	}
 }

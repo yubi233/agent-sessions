@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +34,10 @@ var dshKnownModels = []string{
 type Adapter struct {
 	mu      sync.Mutex
 	factory func() (BridgeTransport, error)
+	// workspaceFactory 将生产 Start/Resume 的工作区根与无工作区 Detect 探测隔离；
+	// fixture 适配器仍可沿用旧的无参数工厂形状。
+	workspaceFactory func(string) (BridgeTransport, error)
+	production       bool
 
 	// 一次性握手缓存：首次 Detect 后确定能力口径。
 	handshakeDone bool
@@ -42,12 +48,109 @@ type Adapter struct {
 
 // New 构造生产适配器（真实 dsh-acp-demo 子进程）。
 func New() *Adapter {
-	return &Adapter{factory: func() (BridgeTransport, error) { return newBinTransport() }}
+	return &Adapter{
+		factory:          func() (BridgeTransport, error) { return newBinTransport() },
+		workspaceFactory: func(root string) (BridgeTransport, error) { return newBinTransportForWorkspace(root) },
+		production:       true,
+	}
 }
 
 // NewWithTransport 构造指定桥工厂的适配器（契约测试注入内存假桥）。
 func NewWithTransport(factory func() (BridgeTransport, error)) *Adapter {
-	return &Adapter{factory: factory}
+	if factory == nil {
+		factory = func() (BridgeTransport, error) {
+			return nil, errors.New("DSH bridge factory 未配置")
+		}
+	}
+	return &Adapter{
+		factory:          factory,
+		workspaceFactory: func(string) (BridgeTransport, error) { return factory() },
+	}
+}
+
+func (a *Adapter) transportForWorkspace(workspaceRoot string) (BridgeTransport, error) {
+	if a.workspaceFactory != nil {
+		return a.workspaceFactory(workspaceRoot)
+	}
+	if a.factory == nil {
+		return nil, errors.New("DSH bridge factory 未配置")
+	}
+	return a.factory()
+}
+
+// prepareWorkspacePersistence 在 DSH 打开新根前迁移匹配的旧 artifact。
+// 缺失/空旧根不阻断启动；格式错误或冲突则保留给 DSH 检查路径可见，绝不覆盖。
+func (a *Adapter) prepareWorkspacePersistence(workspaceRoot string) error {
+	if !a.production || strings.TrimSpace(workspaceRoot) == "" {
+		return nil
+	}
+	canonical, err := canonicalWorkspacePath(workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("规约 workspace root: %w", err)
+	}
+	workspaceRoot = canonical
+	destination := filepath.Join(workspaceRoot, ".dsh-sessions")
+	roots := LegacyRootsFromEnv()
+	if bin, _, err := binConfig(); err == nil {
+		checkout := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(bin)))))
+		roots = append(roots, filepath.Join(checkout, ".dsh-sessions"))
+	}
+	var existing []string
+	seen := map[string]bool{}
+	for _, root := range roots {
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		abs = filepath.Clean(abs)
+		canonicalRoot, canonicalErr := filepath.EvalSymlinks(abs)
+		if canonicalErr != nil {
+			continue
+		}
+		canonicalRoot, canonicalErr = filepath.Abs(canonicalRoot)
+		if canonicalErr != nil {
+			continue
+		}
+		canonicalRoot = filepath.Clean(canonicalRoot)
+		if canonicalRoot == destination || seen[canonicalRoot] {
+			continue
+		}
+		if info, statErr := os.Stat(canonicalRoot); statErr == nil && info.IsDir() {
+			existing = append(existing, canonicalRoot)
+			seen[canonicalRoot] = true
+		}
+	}
+	if len(existing) == 0 {
+		return nil
+	}
+	compression, err := configuredPersistenceCompression()
+	if err != nil {
+		return err
+	}
+	report, err := MigrateLegacySessionsToCompression(destination, workspaceRoot, existing, compression)
+	if err != nil {
+		return err
+	}
+	// 任何无法确认、冲突或复制期间发生变化的 artifact 都不能静默略过；
+	// 让调用方在 DSH 启动前看到稳定分类，修复源文件后再重试迁移。
+	if report.Unsupported > 0 || report.Conflicts > 0 || report.SourceChanged > 0 {
+		return fmt.Errorf("DSH 历史迁移未完成（无效=%d，冲突=%d，源文件变化=%d）", report.Unsupported, report.Conflicts, report.SourceChanged)
+	}
+	return nil
+}
+
+// configuredPersistenceCompression 返回桥和迁移共用的 artifact 编码。
+// 默认使用明文 JSONL，便于当前 record 模式与本地 fixture 保持一致；需要压缩时
+// 由部署显式设置 AGENT_SESSIONS_DSH_PERSIST_COMPRESSION=zstd。
+func configuredPersistenceCompression() (string, error) {
+	value := strings.TrimSpace(os.Getenv(EnvPersistCompression))
+	if value == "" {
+		return PersistenceCompressionNone, nil
+	}
+	if value != PersistenceCompressionNone && value != PersistenceCompressionZstd {
+		return "", fmt.Errorf("%s 仅支持 %q 或 %q", EnvPersistCompression, PersistenceCompressionNone, PersistenceCompressionZstd)
+	}
+	return value, nil
 }
 
 // Detect 做一次性 ACP 握手并缓存：协议版本须为 1 才升级能力矩阵；
@@ -59,7 +162,13 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 		return a.matrixLocked(), nil
 	}
 	// 一次性握手（持锁执行：Registry 对每类 Provider 顺序调用，结果需要原子提交）。
-	tr, err := a.factory()
+	var tr BridgeTransport
+	var err error
+	if a.factory == nil {
+		err = errors.New("DSH bridge factory 未配置")
+	} else {
+		tr, err = a.factory()
+	}
 	if err == nil {
 		h := newHandle(tr)
 		go h.readLoop()
@@ -99,7 +208,18 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	if strings.TrimSpace(req.WorkspaceRoot) == "" {
 		return nil, errors.New("Start 需要 workspace root")
 	}
-	tr, err := a.factory()
+	workspaceRoot := req.WorkspaceRoot
+	if a.production {
+		var err error
+		workspaceRoot, err = canonicalWorkspacePath(workspaceRoot)
+		if err != nil {
+			return nil, fmt.Errorf("规约 workspace root: %w", err)
+		}
+	}
+	if err := a.prepareWorkspacePersistence(workspaceRoot); err != nil {
+		return nil, fmt.Errorf("准备 DSH workspace 持久化: %w", err)
+	}
+	tr, err := a.transportForWorkspace(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +242,7 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	// 会话 cwd 取调用方工作区（与 ACP session/new 的 cwd 语义一致）；mcpServers 固定空数组
 	// （桥对非空 mcpServers 直接抛 invalidParams，见 acp-demo validateSessionParams）。
 	newCtx, cancelNew := withTimeout(ctx, handshakeTimeout)
-	sessionID, err := h.newSession(newCtx, req.WorkspaceRoot)
+	sessionID, err := h.newSession(newCtx, workspaceRoot)
 	cancelNew()
 	if err != nil {
 		return fail(fmt.Errorf("dsh session/new: %w", err))
@@ -131,12 +251,85 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	return h, nil
 }
 
-// Resume 恢复已存在会话：桥未实现 session/load、session/list（实测 -32601），
-// 一律返回六态枚举中的 unsupported，绝不伪装成 resumed（spi 硬性要求）。
+// Resume 恢复已存在会话。直接调用方没有 runtime handle 接收通道，因此
+// ResumeStreaming 完成后会释放句柄；Daemon 应使用 ResumeStreaming 接管句柄。
 func (a *Adapter) Resume(ctx context.Context, req adapter.ResumeRequest) (adapter.ResumeResult, error) {
-	_ = ctx
-	_ = req
-	return adapter.ResumeResult{Result: adapter.WakeUnsupported}, nil
+	return a.resumeStreaming(ctx, req, nil)
+}
+
+// ResumeStreaming 建立新的 DSH ACP 进程并在发送 load/resume 前交出句柄。
+// ready 返回错误时不会发送恢复请求；任何失败路径都会回收本机进程组。
+func (a *Adapter) ResumeStreaming(ctx context.Context, req adapter.ResumeRequest, ready func(adapter.Handle) error) (adapter.ResumeResult, error) {
+	return a.resumeStreaming(ctx, req, ready)
+}
+
+func (a *Adapter) resumeStreaming(ctx context.Context, req adapter.ResumeRequest, ready func(adapter.Handle) error) (adapter.ResumeResult, error) {
+	if strings.TrimSpace(req.InstanceID) == "" {
+		return adapter.ResumeResult{Result: adapter.WakeUnsupported}, nil
+	}
+	if strings.TrimSpace(req.WorkspaceRoot) == "" {
+		return adapter.ResumeResult{Result: adapter.WakeUnsupported}, nil
+	}
+	workspaceRoot := req.WorkspaceRoot
+	if a.production {
+		var err error
+		workspaceRoot, err = canonicalWorkspacePath(workspaceRoot)
+		if err != nil {
+			return adapter.ResumeResult{}, fmt.Errorf("规约 workspace root: %w", err)
+		}
+	}
+	if err := a.prepareWorkspacePersistence(workspaceRoot); err != nil {
+		return adapter.ResumeResult{}, fmt.Errorf("准备 DSH workspace 持久化: %w", err)
+	}
+	tr, err := a.transportForWorkspace(workspaceRoot)
+	if err != nil {
+		return adapter.ResumeResult{}, err
+	}
+	h := newHandle(tr)
+	go h.readLoop()
+	fail := func(cause error) (adapter.ResumeResult, error) {
+		_ = h.Dispose(context.Background())
+		return adapter.ResumeResult{}, cause
+	}
+	initCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	info, err := h.initialize(initCtx)
+	cancel()
+	if err != nil {
+		return fail(fmt.Errorf("dsh initialize: %w", err))
+	}
+	if info.ProtocolVersion != 1 {
+		return fail(fmt.Errorf("dsh 协议版本不符: protocolVersion=%v", info.ProtocolVersion))
+	}
+	h.setSessionID(strings.TrimSpace(req.InstanceID))
+	h.setReplayMode(req.ReplayHistory && ready != nil)
+	if ready != nil {
+		if err := ready(h); err != nil {
+			return fail(err)
+		}
+	}
+	resumeCtx, cancelResume := withTimeout(ctx, handshakeTimeout)
+	if req.ReplayHistory {
+		err = h.loadSession(resumeCtx, workspaceRoot)
+	} else {
+		err = h.resumeSession(resumeCtx, workspaceRoot)
+	}
+	cancelResume()
+	if err != nil {
+		// 上游桥把 cwd 不一致报告为 invalid params；这里转换为带类型的唤醒结果，
+		// 让 UI 能解释工作区移动，同时不暴露 Provider wire 细节。
+		if strings.Contains(err.Error(), "cwd does not match") || strings.Contains(err.Error(), "cwd 不匹配") {
+			// 无论是否交接给 Daemon，当前恢复句柄都已启动，必须统一回收，
+			// 避免直接调用 Resume 时遗留桥进程和临时资源。
+			_ = h.Dispose(context.Background())
+			return adapter.ResumeResult{Result: adapter.WakeWorkspaceMoved, InstanceID: req.InstanceID}, nil
+		}
+		return fail(fmt.Errorf("dsh session resume: %w", err))
+	}
+	result := adapter.ResumeResult{Result: adapter.WakeResumed, InstanceID: req.InstanceID}
+	if ready == nil {
+		_ = h.Dispose(context.Background())
+	}
+	return result, nil
 }
 
 // matrixLocked 根据握手缓存构造能力矩阵（调用方须持锁）。
@@ -177,9 +370,8 @@ func successMatrix(version string) adapter.Capabilities {
 				reason = "per-session 子进程进程组所有权"
 			}
 		case "resume":
-			// 桥未实现 session/load（实测 -32601），Resume 恒返回 unsupported 六态之一。
-			status = adapter.CapabilityUnsupported
-			reason = "桥未实现 session/load（实测 -32601）"
+			// 当前桥已实现 session/load 与 session/resume；适配器会先交接句柄，
+			// 再发出恢复请求，确保回放与恢复后发送均走同一事件流。
 		case "permission":
 			// 决策通道（session/request_permission）已接通，但当前策略为取消而非静默批准。
 			status = adapter.CapabilityEmulated
@@ -203,18 +395,10 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现技能调用方法"
 		case "model_select":
-			// 模型由桥配置承载，但允许运行期从目录中选择（session/new 时生效）。
-			status = adapter.CapabilityNative
-			reason = ""
-			// 目录来自 cordis.yml 的 llm provider 模型列表（adapter 不解析配置，
-			// 使用已知 roster；新增模型需同步更新此处）。
-			caps = append(caps, adapter.Capability{
-				Name:    name,
-				Status:  status,
-				Reason:  reason,
-				Options: dshKnownModels,
-			})
-			continue
+			// ACP set_session_config_option 尚未接入 Go handle；仅配置文件中的
+			// modelProviders 能路由真实 Zen 模型，不能把 UI 选择伪装成 native。
+			status = adapter.CapabilityUnsupported
+			reason = "桥侧模型由配置承载，Go 侧尚未下发 set_config_option"
 		case "effort_select":
 			status = adapter.CapabilityUnsupported
 			reason = "桥不支持运行期 effort 选择"

@@ -7,15 +7,18 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter"
 	"github.com/yubi233/agent-sessions/internal/adapter/claude"
 	"github.com/yubi233/agent-sessions/internal/adapter/codex"
+	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
 	"github.com/yubi233/agent-sessions/internal/adapter/openclaw"
 	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
 )
 
-// TestProviderCapabilitiesFailClosedWithoutTransport 统一保护四类 v0.4 Provider：
+// TestProviderCapabilitiesFailClosedWithoutTransport 统一保护四类 v0.4 Provider 与 DSH：
 // 安装状态、URL 或历史 smoke 都不能替代当前 transport/凭据，未配置时必须完整 fail-closed。
 func TestProviderCapabilitiesFailClosedWithoutTransport(t *testing.T) {
 	t.Setenv(claude.EnvBin, "")
 	t.Setenv(codex.EnvBin, "")
+	t.Setenv(dsh.EnvBin, "")
+	t.Setenv(dsh.EnvConfig, "")
 	t.Setenv(openclaw.EnvURL, "")
 	t.Setenv(opencode.EnvURL, "")
 	t.Setenv(opencode.EnvPassword, "")
@@ -26,6 +29,7 @@ func TestProviderCapabilitiesFailClosedWithoutTransport(t *testing.T) {
 	}{
 		{name: "claude", adapter: claude.New()},
 		{name: "codex", adapter: codex.New()},
+		{name: "dsh", adapter: dsh.New()},
 		{name: "opencode", adapter: opencode.New()},
 		{name: "openclaw", adapter: openclaw.New()},
 	}

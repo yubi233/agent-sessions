@@ -1,7 +1,7 @@
 {
   "suite": "v08-dsh-local-workspace",
-  "suite_version": "0.1.0",
-  "status": "planned",
+  "suite_version": "0.2.0",
+  "status": "in_progress",
   "plan_id": "V08",
   "description": "v0.8 DSH 本地工作区同步、存量会话恢复和 Terminal 归属的分层验收。所有扫描、迁移和导入均不得上传路径、DSH session id 或对话正文。",
   "id_registry": {
@@ -68,7 +68,7 @@
     {
       "id": "V08-04",
       "title": "工作区会话根持久且 Close 不可删除",
-      "status": "planned",
+      "status": "partial",
       "phase": "P0",
       "category": "persistence",
       "priority": "P0",
@@ -77,12 +77,12 @@
       "steps": ["Start DSH 会话", "检查传给桥的 session root", "Close bridge 后重启 Daemon 并检查 artifact"],
       "expected": "artifact 位于 <workspace>/.dsh-sessions；Close 只能清理 Detect 的已拥有临时根，永不删除 workspace、.dsh-sessions 或其父目录。",
       "cleanup": ["测试仅删除其创建的临时工作区"],
-      "evidence": ["internal/adapter/dsh/bridge_test.go（P0 新增）", "tools/restart_test.sh"]
+      "evidence": ["internal/adapter/dsh/process_test.go", "internal/adapter/dsh/persistence_test.go", "internal/adapter/dsh/live_transport_test.go"]
     },
     {
       "id": "V08-05",
       "title": "完整 Resume 链路后能力矩阵 truthful",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "adapter_capability",
       "priority": "P0",
@@ -91,26 +91,26 @@
       "steps": ["Detect 后读取 DSH Capabilities", "与 ADR-013 和 ADPT-DSH-09 对照"],
       "expected": "仅在完整恢复闭环可用时 resume=native；未实际下发的 model_select=unsupported。",
       "cleanup": ["Dispose 假桥"],
-      "evidence": ["internal/adapter/dsh/fakebridge_test.go（P1 更新）", "docs/test/16-Adapter-Dsh.json"]
+      "evidence": ["internal/adapter/dsh/fakebridge_test.go", "internal/adapter/dsh/process_test.go", "docs/test/16-Adapter-Dsh.json"]
     },
     {
       "id": "V08-06",
       "title": "session.load 先订阅再回放用户和助手历史",
-      "status": "planned",
+      "status": "partial",
       "phase": "P1",
       "category": "resume_replay",
       "priority": "P0",
       "test_layer": "integration/real_smoke",
       "precondition": "已导入 session 的本机 replay state=pending，假桥按 user/agent 顺序发送历史。",
-      "steps": ["执行 session.resume", "在 load 返回前收集 outbox 事件", "检查 load 响应后 UI completion 状态"],
+      "steps": ["执行 session.resume（本机 replay state=pending）", "在 load 返回前收集 outbox 事件", "检查 load 响应后 UI completion 状态"],
       "expected": "Runner 在发送 load 前登记 Handle 并启动转发；user_message 与 message_completed 按上游顺序完整出现，load 响应是回放完成信号。",
       "cleanup": ["Dispose handle，删除 fixture outbox"],
-      "evidence": ["internal/adapter/dsh/fakebridge_test.go（P1 更新）", "e2e-verify/real/dsh-v08-resume.mjs（P4 新增）"]
+      "evidence": ["internal/adapter/dsh/fakebridge_test.go", "internal/adapter/dsh/mapper_test.go", "internal/daemon/runner_test.go"]
     },
     {
       "id": "V08-07",
       "title": "session.resume 不回放且 Daemon 重启后可继续发送",
-      "status": "planned",
+      "status": "partial",
       "phase": "P1",
       "category": "resume",
       "priority": "P0",
@@ -119,7 +119,7 @@
       "steps": ["重启 Runner", "执行 session.resume", "立刻执行 session.send"],
       "expected": "使用 session/resume 而非 load；新 Handle 被登记并接收 send，不重放既有消息。",
       "cleanup": ["关闭 Runner 和假桥"],
-      "evidence": ["internal/daemon/runner_test.go（P1 更新）", "e2e-verify/real/dsh-v08-resume.mjs（P4 新增）"]
+      "evidence": ["internal/daemon/runner_test.go", "internal/adapter/dsh/process_test.go"]
     },
     {
       "id": "V08-08",
@@ -185,7 +185,7 @@
       "category": "real_model",
       "priority": "P0",
       "test_layer": "real/full_gate",
-      "precondition": "用户授权读取指定历史和一次真实模型请求；AGENT_SESSIONS_DSH_REAL=1，固定 provider=opencode-zen，模型池为 mimo-v2.5-free、big-pickle、ling-3.0-flash-fin-free；每个模型最多额外重试 5 次。",
+      "precondition": "用户授权读取指定历史和一次真实模型请求；AGENT_SESSIONS_DSH_REAL=1，固定 provider=opencode-zen，模型池为 deepseek-v4-flash-free、mimo-v2.5-free、big-pickle、ling-3.0-flash-fin-free；每个模型最多额外重试 5 次。",
       "steps": ["先运行 Resume smoke", "load 或 resume 后发送一条受控短消息", "记录脱敏结果和 usage 摘要"],
       "expected": "恢复与继续发送均成功；报告不含路径、正文、凭据或原始 DSH id。Zen 测试池中任一模型在最多 5 次额外重试后返回可识别的 429 FreeUsageLimitError，按本迭代测试约定记为 passed（pass_reason=zen_quota_accepted），并保留未验证回复/回放/恢复后 send 的风险；未授权或其他鉴权错误仍为 blocked。",
       "cleanup": ["Dispose bridge，脱敏归档报告"],
@@ -194,7 +194,7 @@
     {
       "id": "V08-13",
       "title": "approval.policy=never 不上报 permission request",
-      "status": "planned",
+      "status": "partial",
       "phase": "P1/P4",
       "category": "permission",
       "priority": "P1",
@@ -203,7 +203,7 @@
       "steps": ["触发受 policy 约束的工具行为", "观察 ACP 和 canonical events", "以假桥直接发 request_permission"],
       "expected": "正常路径在 DSH 侧 rejected 且不发 permission request；异常桥请求只得到 cancelled fail-closed 回包。",
       "cleanup": ["终止受控桥进程"],
-      "evidence": ["internal/adapter/dsh/fakebridge_test.go（P1 更新）", "e2e-verify/real/dsh-v08-resume.mjs（P4 新增）"]
+      "evidence": ["internal/adapter/dsh/fakebridge_test.go", "e2e-verify/real/dsh-live-prompt.mjs"]
     },
     {
       "id": "V08-14",
@@ -236,7 +236,7 @@
     {
       "id": "V08-16",
       "title": "历史根迁移和只读查找不删除源文件",
-      "status": "planned",
+      "status": "partial",
       "phase": "P0/P2",
       "category": "migration",
       "priority": "P0",
@@ -245,21 +245,21 @@
       "steps": ["运行预检", "按 header cwd 执行受控迁移或 legacy-root 登记", "重启后恢复/导入"],
       "expected": "目标符合 DSH artifact 布局，query index 可重建，源 artifact 保留且内容 digest 未变。",
       "cleanup": ["删除测试目标副本，保留并最终清理测试源目录"],
-      "evidence": ["internal/adapter/dsh/migration_test.go（P0 新增）"]
+      "evidence": ["internal/adapter/dsh/persistence_test.go", "e2e-verify/real/dsh-v08-preflight.test.mjs"]
     },
     {
       "id": "V08-17",
       "title": "回放去重、断线恢复和背压",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "resume_replay",
       "priority": "P0",
       "test_layer": "unit/integration",
       "precondition": "假桥产生超过既有 Events 缓冲容量的 user/agent 历史，并可在中途模拟 Daemon 重启。",
-      "steps": ["重复触发 load", "在 checkpoint 中途重启", "检查加密 outbox source key 和最终事件序列"],
-      "expected": "事件不丢失不重复；source key 由 Relay session + ordinal 稳定派生，checkpoint 只在 outbox 成功后前进。",
+      "steps": ["重复触发 load", "在 checkpoint 中途重启", "检查稳定 outbox event_id/source key 和最终事件序列"],
+      "expected": "事件不丢失不重复；source key 由 Relay session + ordinal 稳定派生并生成稳定 outbox event_id，checkpoint 只在 outbox 成功后前进。",
       "cleanup": ["清理测试 outbox 和桥"],
-      "evidence": ["internal/daemon/runner_test.go（P1 更新）"]
+      "evidence": ["internal/daemon/runner_test.go", "internal/adapter/dsh/fakebridge_test.go"]
     },
     {
       "id": "V08-18",
@@ -292,7 +292,7 @@
     {
       "id": "V08-20",
       "title": "移动工作区 fail-closed",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P3",
       "category": "resume",
       "priority": "P0",
@@ -301,12 +301,12 @@
       "steps": ["尝试导入和恢复", "读取 wake result 与 UI 状态"],
       "expected": "返回 WakeWorkspaceMoved；不创建半开 Handle、不改写 JSONL、不把会话显示为已恢复。",
       "cleanup": ["清理 fixture workspace"],
-      "evidence": ["internal/adapter/dsh/fakebridge_test.go（P1 更新）", "internal/daemon/runner_test.go（P1 更新）"]
+      "evidence": ["internal/adapter/dsh/process_test.go", "internal/daemon/runner_test.go"]
     },
     {
       "id": "V08-21",
       "title": "Sandbox 工具 cwd 与 session/new.cwd 一致",
-      "status": "planned",
+      "status": "partial",
       "phase": "P0",
       "category": "sandbox",
       "priority": "P1",
@@ -315,7 +315,7 @@
       "steps": ["以 workspaceRoot 创建 session", "执行受控 pwd 和 ls", "比较 session/new.cwd"],
       "expected": "工具会话工作目录等于 canonical WorkspaceRoot；不得把 bridge cmd.Dir 当成 workspace root。",
       "cleanup": ["关闭真实桥，不读取或记录凭据"],
-      "evidence": ["e2e-verify/real/dsh-v08-resume.mjs（P4 新增）"]
+      "evidence": ["internal/adapter/dsh/live_transport_test.go", "e2e-verify/real/dsh-live-prompt.mjs"]
     },
     {
       "id": "V08-22",
@@ -334,7 +334,7 @@
     {
       "id": "V08-23",
       "title": "迁移冲突与源文件写入竞争 fail-closed",
-      "status": "planned",
+      "status": "partial",
       "phase": "P0",
       "category": "migration",
       "priority": "P0",
@@ -343,7 +343,7 @@
       "steps": ["执行 dry-run", "尝试迁移", "检查目标目录、冲突摘要和恢复/导入结果"],
       "expected": "仅同 id 同 digest 可幂等；其余均不写目标并标记冲突或 migration_source_changed，源文件不删除。",
       "cleanup": ["删除测试目录"],
-      "evidence": ["internal/adapter/dsh/migration_test.go（P0 新增）", "e2e-verify/real/dsh-v08-preflight.test.mjs"]
+      "evidence": ["internal/adapter/dsh/persistence_test.go", "e2e-verify/real/dsh-v08-preflight.test.mjs"]
     }
   ]
 }

@@ -1,26 +1,45 @@
-# ACP automation server and backend snapshot-record composition. With
-# `DSH_SNAPSHOT=record`, the app bin runs the real DeepSeek adapter and the
-# harness harvests its persisted log. The bin loads the gitignored root `.env`
-# before this config. This tree has no stdout logger or HMR because stdout
-# carries ACP JSON-RPC.
+# ACP 自动化服务与后端快照记录组合。设置 `DSH_SNAPSHOT=record` 后，应用二进制
+# 运行真实 DeepSeek 适配器，测试工具收集其持久化日志。二进制会在加载本配置前
+# 读取被 git 忽略的根目录 `.env`。本组合不启用 stdout 日志器或 HMR，因为 stdout
+# 承载 ACP JSON-RPC。
+# 文件名保留历史兼容路径；原默认模型已下线，快照改用仍受支持的模型。
 
-# The DeepSeek adapter. Shipped default: full thinking at max effort on every
-# request; exact-model resolution materializes request defaults before logging.
-- id: llm-deepseek
-  name: '@deepseek-ai/dsh-llm-deepseek'
+# Zen 路由使用通用 pi-ai 适配器；凭据只引用环境变量，不把密钥写入 fixture。
+- id: llm
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
   config:
-    thinking: enabled
-    reasoningEffort: max
-    models:
-      - id: deepseek-v4-flash
-      - id: deepseek-v4-pro
+    providers:
+      opencode-zen:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/v1
+        retryPolicy:
+          mode: normal
+          maxRetries: 5
+        models:
+          - id: deepseek-v4-flash-free
+            input:
+              - text
+            reasoningEfforts:
+              max: max
+          - id: mimo-v2.5-free
+            input:
+              - text
+          - id: big-pickle
+            input:
+              - text
+          - id: ling-3.0-flash-fin-free
+            input:
+              - text
 
-# The default composition confines bash AND the filesystem tools to the
-# workspace and asks before a wider retry. Snapshot runs select
-# danger-full-access so the established scenarios remain runner-independent;
-# DSH_PERMISSION_MODE provides the same explicit deployment/test override
-# outside the snapshot harness. The sandbox default + fallback root live on
-# ctx.sandboxPolicy; agent calls resolve both families against the session cwd.
+- id: attachment-local
+  name: '@deepseek-ai/dsh-attachment-local'
+
+
+# 默认组合把 bash 和文件系统工具限制在工作区内，扩大范围前需要确认。快照运行选择
+# danger-full-access，使既有场景不依赖 Runner；快照工具之外也可用 DSH_PERMISSION_MODE
+# 提供同样明确的部署/测试覆盖。沙箱默认值和回退根位于 ctx.sandboxPolicy，Agent 调用
+# 会以会话 cwd 解析这两类边界。
 - id: sandbox
   name: '@deepseek-ai/dsh-sandbox-local'
 
@@ -28,9 +47,9 @@
   name: '@deepseek-ai/dsh-sandbox-policy'
   config:
     mode: !!js "process.env.DSH_PERMISSION_MODE ?? (process.env.DSH_SNAPSHOT === undefined ? 'workspace-write' : 'danger-full-access')"
-    workspaceRoot: !!js process.cwd()
+    workspaceRoot: !!js "process.env.DSH_SESSION_CWD ?? process.cwd()"
 
-# Managed child-process groups for the bash executor (spawn/kill/output plumbing).
+# bash 执行器使用的受控子进程组（负责创建、终止和输出处理）。
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
 
@@ -44,32 +63,31 @@
   config:
     policy: !!js "(process.env.DSH_PERMISSION_MODE ?? (process.env.DSH_SNAPSHOT === undefined ? 'workspace-write' : 'danger-full-access')) === 'danger-full-access' ? 'never' : 'ask'"
 
-# The ACP automation app: agent spine + JSONL persistence + protocol bridge.
-# Persistence root: $DSH_SNAPSHOT_SESSIONS_ROOT when the snapshot harness sets it
-# (so it can harvest / isolate the log), else ./.sessions for the demo.
-# Snapshot modes use raw JSONL fixtures; ordinary runs keep the compressed default.
+# ACP 自动化应用：Agent 主干、JSONL 持久化和协议桥。
+# 持久化根：快照工具设置 `$DSH_SNAPSHOT_SESSIONS_ROOT` 时使用该隔离目录，
+# 否则使用当前工作区的 `.dsh-sessions`。快照模式使用原始 JSONL，普通运行使用压缩格式。
 - id: acp-agent
   name: '@deepseek-ai/dsh-acp-demo'
   config:
-    provider: deepseek-official
-    model: ox-alpha-free
-    persistenceRoot: !!js process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? './.sessions'
-    persistenceCompression: !!js "process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none'"
+    provider: opencode-zen
+    model: deepseek-v4-flash-free
+    persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
+    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? (process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none')"
     workspaceContext:
       maxBytes: 65536
-    # Keep the persona to identity and behavior; tool plugins own tool guidance.
-    # The loop resolves {{model}} and each ACP session's client-supplied {{cwd}}.
+    # persona 只保留身份和行为，工具插件负责工具说明；循环会解析 {{model}} 和
+    # ACP 会话传入的 {{cwd}}。
     persona: |
       You are a coding assistant powered by the {{model}} model. Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access denied …]` result is policy, not a command bug.
 
       Verify your work by running the code or tests. Keep answers brief and factual.
 
-# Replay-aware request pressure; the routed adapter supplies model capacity.
+# 感知回放的请求压力控制；路由适配器提供模型容量。
 - id: token-meter
   name: '@deepseek-ai/dsh-token-meter'
 
-# Summarize an older range after measured pressure or a canonical provider overflow.
-# Ratios scale against the routed model's context window.
+# 在测得压力或 Provider 明确发生上下文溢出后，压缩较早的消息范围；比例按路由模型
+# 的上下文窗口缩放。
 - id: compaction-basic
   name: '@deepseek-ai/dsh-compaction-basic'
   config:
@@ -78,15 +96,13 @@
     maxTokens: 8192
     compactionRetries: 1
 
-# Projection registry: subagent catalog identity (mode/label) folds through
-# its registered units; the catalog surfaces (`list_agents`, subagent listing)
-# fail loud without the capability.
+# 投影注册表：子 Agent 目录身份（模式/标签）通过已注册单元汇总；缺少能力时，目录
+# 入口（`list_agents`、子 Agent 列表）明确失败。
 - id: session-projection
   name: '@deepseek-ai/dsh-session-projection'
 
-# Expose fresh-child `spawn` and completed-prefix `fork` through separate tool
-# names so multi-child scenarios exercise both transports. These leaves follow
-# the app because it provides `ctx.agents` and `ctx.tools`.
+# 通过不同工具名称暴露新子级 `spawn` 和已完成前缀 `fork`，让多子级场景覆盖两种
+# 传输。这些叶子插件跟随应用加载，因为应用提供 `ctx.agents` 和 `ctx.tools`。
 - id: subagent
   name: '@deepseek-ai/dsh-subagent'
 
@@ -100,10 +116,9 @@
   config:
     providerName: fork
 
-# Continuable background children are selected per delegation tool. The
-# separately loaded control package registers the global `send_message`; its
-# list plugin registers `list_agents`, served through the sessionProjections
-# registry mounted above. `report` is installed only in continuable child scopes.
+# 可继续的后台子级按委派工具选择。单独加载的控制包注册全局 `send_message`，其列表
+# 插件注册 `list_agents`，并通过上方挂载的 sessionProjections 注册表提供；`report`
+# 只安装在可继续的子级作用域。
 - id: tool-subagent-control
   name: '@deepseek-ai/dsh-tool-subagent-control'
 
@@ -121,10 +136,10 @@
     backgroundMode: continuable
     maxDepth: 1
 
-# Fork stays one-shot because a continuable child's `report` tool and prompt
-# section precede the inherited history a fork reuses; `run_in_background` is off
-# as an explicit foreground-only choice even though agent-spine-demo mounts the
-# generic Job runtime. See .agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.md.
+# Fork 保持一次性执行，因为可继续子级的 `report` 工具和 prompt 段会排在 fork 复用的
+# 继承历史之前；即使 agent-spine-demo 挂载通用 Job 运行时，也明确关闭
+# `run_in_background`，只允许前台执行。参见
+# .agents/notes/implemented/architecture/2026-08-10-fork-children-stay-one-shot.md。
 - id: tool-subagent-fork
   name: '@deepseek-ai/dsh-tool-subagent'
   config:
@@ -135,8 +150,8 @@
     maxDepth: 1
 
 
-# The worker-thread workflow engine fans a model-written JavaScript script's
-# `agent()` calls out through the spawn backend; the adjacent tool exposes it to the model.
+# worker-thread 工作流引擎通过 spawn 后端分发模型编写的 JavaScript 脚本中的
+# `agent()` 调用；相邻工具将该能力暴露给模型。
 - id: workflow-worker-thread
   name: '@deepseek-ai/dsh-workflow-worker-thread'
   config:
@@ -147,22 +162,21 @@
 
 - id: tool-ralph
   name: '@deepseek-ai/dsh-tool-ralph'
-# `todo_write` replaces the logged whole list for later model requests.
+# `todo_write` 会替换记录中的完整列表，供后续模型请求使用。
 - id: tool-todo
   name: '@deepseek-ai/dsh-tool-todo'
   config:
     allowParallelInProgress: true
 
-# Identical repeat calls trigger advisory context, never a block, at the default
-# thresholds [3, 5, 8]. Only the repeat-tool-reminder snapshot scenario reaches them.
+# 相同的重复调用在默认阈值 [3, 5, 8] 触发提示上下文，不会阻断请求；只有
+# repeat-tool-reminder 快照场景会达到这些阈值。
 - id: repeat-tool-reminder
   name: '@deepseek-ai/dsh-repeat-tool-reminder'
 
-# The filesystem stack rides the SAME sandbox policy as bash: dsh-fs-sandbox
-# replaces dsh-fs-local behind ctx.fs and fences write/edit by the effective
-# mode (read-only denies, workspace-write contains to the workspace + temp
-# roots, danger-full-access passes through), so read/write/edit are available
-# under every mode. fs-observation-policy (read-before-edit) composes orthogonally on top.
+# 文件系统栈与 bash 使用同一份沙箱策略：dsh-fs-sandbox 在 ctx.fs 后替代 dsh-fs-local，
+# 按生效模式限制写入/编辑（只读拒绝，workspace-write 限制在工作区和临时根，
+# danger-full-access 直接放行），因此所有模式都提供读/写/编辑。fs-observation-policy
+#（编辑前读取）在此基础上正交组合。
 - id: fs-sandbox
   name: '@deepseek-ai/dsh-fs-sandbox'
   config:
@@ -174,19 +188,18 @@
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 
-# `configPath` is read once at load and resolves from the server launch cwd, not
-# `session/new.cwd`; one `hooks.json` therefore applies to every session and a
-# project-local file is not discovered. Missing config registers nothing. Hook
-# commands still run in the session cwd. Warnings use `ctx.logger`, never stdout;
-# see packages/hooks/hooks-claude-code/README.md for the deferred per-session design.
+# `configPath` 只在加载时读取，并从服务启动 cwd 解析，不使用 `session/new.cwd`；因此
+# 一个 `hooks.json` 会作用于所有会话，也不会发现项目本地文件。配置缺失时不注册任何
+# 内容。Hook 命令仍在会话 cwd 执行，警告写入 `ctx.logger`，绝不写 stdout；按会话设计
+# 的延后方案见 packages/hooks/hooks-claude-code/README.md。
 - id: hooks-claude-code
   name: '@deepseek-ai/dsh-hooks-claude-code'
   config:
     configPath: ./hooks.json
 
-# Codex uses its own `codex-hooks.json` and snake_case five-event dialect; it
-# cannot share Claude's file. It has the same process-level, read-once, missing-is-no-op,
-# logger-only contract. Shipping both bridges lets a scenario seed and exercise either dialect.
+# Codex 使用自己的 `codex-hooks.json` 和 snake_case 五事件方言，不能与 Claude 共用
+# 文件。它同样遵循进程级、只读一次、缺失即不操作、仅写 logger 的契约。两个桥同时
+# 随包提供，场景可以分别初始化并验证两种方言。
 - id: hooks-codex
   name: '@deepseek-ai/dsh-hooks-codex'
   config:

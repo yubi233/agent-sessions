@@ -12,10 +12,14 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +43,17 @@ func eventKey(sessionID string) string { return instanceKey(sessionID) + ":last_
 
 // resumeResultKey 是 resume 唤醒结果的 local_state 键。
 func resumeResultKey(sessionID string) string { return instanceKey(sessionID) + ":resume_result" }
+
+func replayStateKey(sessionID string) string { return instanceKey(sessionID) + ":replay_state" }
+func replayCheckpointKey(sessionID string) string {
+	return instanceKey(sessionID) + ":replay_checkpoint"
+}
+
+const (
+	replayPending  = "pending"
+	replayLoading  = "loading"
+	replayComplete = "complete"
+)
 
 // providerThread 是本地持久化的会话实例映射。
 // 只存 provider 与 OpenCode session id（及 workspace root），不存正文/密文。
@@ -73,6 +88,9 @@ type SessionRunner struct {
 
 	mu      sync.Mutex
 	handles map[string]*runningSession // key: sessionID
+	// resumeGeneration 用来使旧恢复协程的完成回调失效，避免旧句柄在新一轮恢复后
+	// 把 replay 状态错误地写成 complete。
+	resumeGeneration map[string]uint64
 	// executionMu 把同一 Daemon 的命令兑现串行化。Relay 已有 delivery/idempotency，但这里仍要
 	// 防止 start 与 kill 并发改写同一 session 的本地 instance 映射。
 	executionMu sync.Mutex
@@ -81,6 +99,9 @@ type SessionRunner struct {
 	// 未配置 sink 时仍保留本地状态，但绝不伪造 Relay event 成功。
 	eventSinkMu sync.RWMutex
 	eventSink   func(sessionID string, event adapter.Event)
+	// eventSinkResult 供回放路径确认事件已进入本机 outbox；普通 sink 仍保留旧的
+	// 无返回值形状，避免 fixture/嵌入方被迫改接口。
+	eventSinkResult func(sessionID string, event adapter.Event) error
 
 	// eventSeq 保存每个 session 最近分配的 canonical 序号。Provider handle 的
 	// 序号只覆盖 Provider 事件，runner 自己生成的 user_message/断流终态也必须
@@ -101,14 +122,15 @@ func NewSessionRunner(store *Store, adapters map[string]adapter.Adapter, logger 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &SessionRunner{
-		store:      store,
-		adapters:   adapters,
-		logger:     logger,
-		handles:    map[string]*runningSession{},
-		eventSeq:   map[string]int64{},
-		eventCount: map[string]int{},
-		rootCtx:    ctx,
-		rootCancel: cancel,
+		store:            store,
+		adapters:         adapters,
+		logger:           logger,
+		handles:          map[string]*runningSession{},
+		resumeGeneration: map[string]uint64{},
+		eventSeq:         map[string]int64{},
+		eventCount:       map[string]int{},
+		rootCtx:          ctx,
+		rootCancel:       cancel,
 	}
 }
 
@@ -119,6 +141,9 @@ func NewSessionRunner(store *Store, adapters map[string]adapter.Adapter, logger 
 func (r *SessionRunner) RegisterAdapter(provider string, ad adapter.Adapter) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.adapters == nil {
+		r.adapters = make(map[string]adapter.Adapter)
+	}
 	r.adapters[provider] = ad
 }
 
@@ -126,6 +151,16 @@ func (r *SessionRunner) SetEventSink(sink func(sessionID string, event adapter.E
 	r.eventSinkMu.Lock()
 	defer r.eventSinkMu.Unlock()
 	r.eventSink = sink
+	r.eventSinkResult = nil
+}
+
+// SetEventSinkResult 设置带提交结果的事件出口。回放事件只有在该出口返回成功后
+// 才会推进 checkpoint；普通事件仍可通过 SetEventSink 使用旧的无返回值出口。
+func (r *SessionRunner) SetEventSinkResult(sink func(sessionID string, event adapter.Event) error) {
+	r.eventSinkMu.Lock()
+	defer r.eventSinkMu.Unlock()
+	r.eventSink = nil
+	r.eventSinkResult = sink
 }
 
 // ConsumeCommand 消费 outbox 中的一条 Relay 命令。
@@ -163,15 +198,22 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 
 // Close 停止全部事件转发 goroutine 并回收所有存活 handle（幂等）。
 func (r *SessionRunner) Close(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
 	r.mu.Lock()
 	handles := r.handles
 	r.handles = map[string]*runningSession{}
+	// 清空代数表会使尚未退出的旧回放回调无法再提交 complete。
+	r.resumeGeneration = map[string]uint64{}
 	r.mu.Unlock()
 	for _, rs := range handles {
 		rs.cancel()
 		_ = rs.handle.Dispose(ctx)
 	}
-	r.rootCancel()
+	if r.rootCancel != nil {
+		r.rootCancel()
+	}
 	return nil
 }
 
@@ -205,6 +247,9 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 
 	// 重复 start 先回收旧句柄，避免泄漏与事件串流。
 	r.mu.Lock()
+	if r.handles == nil {
+		r.handles = make(map[string]*runningSession)
+	}
 	if old := r.handles[sessionID]; old != nil {
 		old.cancel()
 		_ = old.handle.Dispose(context.Background())
@@ -227,7 +272,11 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 		return fmt.Errorf("adapter start: %w", err)
 	}
 	// 先登记 handle（session.send/abort 立即可用），再等待首个事件。
-	fwdCtx, cancel := context.WithCancel(r.rootCtx)
+	parent := r.rootCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	fwdCtx, cancel := context.WithCancel(parent)
 	r.mu.Lock()
 	r.handles[sessionID] = &runningSession{handle: handle, cancel: cancel}
 	r.mu.Unlock()
@@ -302,8 +351,8 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	// The prompt is the canonical source for the user's timeline entry. Emit it
-	// before the provider call so slow model turns do not hide the sent message.
+	// prompt 是用户时间线消息的规范来源；在调用 Provider 前先写入，避免模型回合
+	// 较慢时用户看不到刚发送的消息。
 	r.emitEvent(sessionID, adapter.Event{
 		Type: adapter.EventUserMessage,
 		Payload: map[string]any{
@@ -434,9 +483,13 @@ func (r *SessionRunner) killSession(ctx context.Context, cmd Command) error {
 	return nil
 }
 
-// resumeSession 兑现 session.resume：用本地 instance 映射中的 OpenCode session id
-// 调 adapter.Resume，并把结果（六态之一）写入 store；禁止伪造 resumed。
+// resumeSession 兑现 session.resume：用本地 instance 映射中的 Provider session id
+// 调 adapter.Resume，并把结果（六态之一）写入 store；支持流式 Adapter 时先登记
+// 新句柄并转发事件，再由 Adapter 发出 session/load 或 session/resume。
 func (r *SessionRunner) resumeSession(ctx context.Context, cmd Command) error {
+	if r == nil || r.store == nil {
+		return errors.New("daemon 本地状态存储不可用")
+	}
 	env, err := parseEnvelope(cmd.PayloadJSON)
 	if err != nil {
 		return err
@@ -462,22 +515,172 @@ func (r *SessionRunner) resumeSession(ctx context.Context, cmd Command) error {
 	if root == "" {
 		root = th.WorkspaceRoot
 	}
-	res, err := ad.Resume(ctx, adapter.ResumeRequest{
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return fmt.Errorf("session.resume 缺少 workspace root")
+	}
+	// persisted cwd 与调用方工作区不一致时，不能把路径移动当作同一会话继续。
+	if th.WorkspaceRoot != "" && workspaceRootsDiffer(th.WorkspaceRoot, root) {
+		// 同一进程内若仍有旧工作区句柄，也必须先撤销并回收，避免旧 cwd
+		// 的事件继续写入新工作区时间线；重启后的无句柄情况自然跳过。
+		r.mu.Lock()
+		movedHandle := r.handles[sessionID]
+		delete(r.handles, sessionID)
+		r.mu.Unlock()
+		if movedHandle != nil {
+			movedHandle.cancel()
+			_ = movedHandle.handle.Dispose(context.Background())
+		}
+		res := adapter.ResumeResult{Result: adapter.WakeWorkspaceMoved, InstanceID: th.InstanceID}
+		resultJSON, _ := json.Marshal(res)
+		_ = r.store.Set(resumeResultKey(sessionID), string(resultJSON))
+		return nil
+	}
+	replay := true
+	if state, stateErr := r.store.Get(replayStateKey(sessionID)); stateErr == nil && strings.TrimSpace(state) == replayComplete {
+		replay = false
+	}
+	// 每次恢复都分配新的代数；旧句柄即使在取消后晚到完成信号，也不能改写本轮状态。
+	resumeGeneration := r.beginResumeGeneration(sessionID)
+	req := adapter.ResumeRequest{
 		InstanceID:    th.InstanceID,
 		WorkspaceRoot: root,
-	})
+		ReplayHistory: replay,
+	}
+	var registered *runningSession
+	var replayDone <-chan struct{}
+	ready := func(handle adapter.Handle) error {
+		if handle == nil {
+			return errors.New("resume ready callback 收到空句柄")
+		}
+		parent := r.rootCtx
+		if parent == nil {
+			parent = context.Background()
+		}
+		fwdCtx, cancel := context.WithCancel(parent)
+		registered = &runningSession{handle: handle, cancel: cancel}
+		// 先登记，再启动 forwardEvents；Adapter 只有在 callback 返回后才发送
+		// load/resume，因此回放通知不会落在无人消费的窗口内。
+		r.mu.Lock()
+		if r.handles == nil {
+			r.handles = make(map[string]*runningSession)
+		}
+		var old *runningSession
+		if old = r.handles[sessionID]; old != nil {
+			old.cancel()
+		}
+		r.handles[sessionID] = registered
+		r.mu.Unlock()
+		if old != nil {
+			_ = old.handle.Dispose(context.Background())
+		}
+		if replay {
+			if completion, ok := handle.(adapter.ReplayCompletionHandle); ok {
+				replayDone = completion.ReplayComplete()
+			}
+		}
+		go r.forwardEventsWithReplay(sessionID, handle, fwdCtx, replayDone, func() {
+			r.markReplayCompleteForGeneration(sessionID, resumeGeneration)
+		})
+		return nil
+	}
+	if replay {
+		if err := r.setReplayState(sessionID, replayLoading); err != nil {
+			return fmt.Errorf("记录 replay loading 状态: %w", err)
+		}
+	}
+	var res adapter.ResumeResult
+	streaming, isStreaming := ad.(adapter.ResumeStreamingAdapter)
+	if isStreaming {
+		res, err = streaming.ResumeStreaming(ctx, req, ready)
+	} else {
+		// 旧 Adapter 无法交出 runtime handle，只保留原有结果语义；若本进程
+		// 没有存活句柄，resumed 仍不会让后续 send 虚构可用实例。
+		res, err = ad.Resume(ctx, req)
+	}
 	if err != nil {
+		if registered != nil {
+			registered.cancel()
+			_ = registered.handle.Dispose(context.Background())
+			r.removeHandle(sessionID)
+		}
+		r.resetReplayStateAfterFailure(sessionID, replay)
 		return fmt.Errorf("adapter resume: %w", err)
 	}
 	// 结果必须来自 adapter 且是六态之一；runner 不推断、不伪造（项目文档「统一能力模型」）。
 	if !validWakeResult(res.Result) {
+		if registered != nil {
+			registered.cancel()
+			_ = registered.handle.Dispose(context.Background())
+			r.removeHandle(sessionID)
+		}
+		r.resetReplayStateAfterFailure(sessionID, replay)
 		return fmt.Errorf("adapter 返回非法唤醒结果 %q，保持 fail-closed", res.Result)
+	}
+	if res.Result == adapter.WakeResumed {
+		// 流式恢复必须在 RPC 返回前交出新句柄；否则结果看似成功，后续 send
+		// 却只能落到不存在的本机实例。旧式 Adapter 则至少必须保留可用旧句柄。
+		if isStreaming && registered == nil {
+			r.resetReplayStateAfterFailure(sessionID, replay)
+			return fmt.Errorf("adapter resume 成功但未交接句柄，保持 fail-closed")
+		}
+		if !isStreaming {
+			if _, lookupErr := r.lookupSession(sessionID); lookupErr != nil {
+				r.resetReplayStateAfterFailure(sessionID, replay)
+				return fmt.Errorf("adapter resume 成功但本机没有可用句柄，保持 fail-closed: %w", lookupErr)
+			}
+		}
+	}
+	if res.Result != adapter.WakeResumed && registered != nil {
+		registered.cancel()
+		_ = registered.handle.Dispose(context.Background())
+		r.removeHandle(sessionID)
+	}
+	if res.Result != adapter.WakeResumed {
+		r.resetReplayStateAfterFailure(sessionID, replay)
 	}
 	resultJSON, err := json.Marshal(res)
 	if err != nil {
+		r.resetReplayStateAfterFailure(sessionID, replay)
 		return err
 	}
-	return r.store.Set(resumeResultKey(sessionID), string(resultJSON))
+	if err := r.store.Set(resumeResultKey(sessionID), string(resultJSON)); err != nil {
+		r.resetReplayStateAfterFailure(sessionID, replay)
+		return err
+	}
+	if res.Result == adapter.WakeResumed && replay && replayDone == nil {
+		// 旧版流式适配器没有提供回放完成信号，只能把 RPC 响应作为完成边界；
+		// DSH 适配器实现了 ReplayCompletionHandle，会等待事件转发后再标记。
+		if err := r.store.Set(replayStateKey(sessionID), replayComplete); err != nil {
+			r.resetReplayStateAfterFailure(sessionID, replay)
+			return fmt.Errorf("记录 replay complete 状态: %w", err)
+		}
+	}
+	return nil
+}
+
+// workspaceRootsDiffer 比较两个工作区的 canonical 路径；任一目录已被移动/删除时，
+// 退回绝对规范字符串，仍能把“旧路径 vs 新路径”分类为 workspace_moved，而不是把
+// 文件不存在误报成普通 Provider 错误。两边都可 realpath 时优先采用 realpath，兼容
+// macOS 的符号链接别名。
+func workspaceRootsDiffer(stored, current string) bool {
+	stored = comparableWorkspacePath(stored)
+	current = comparableWorkspacePath(current)
+	return stored != "" && current != "" && stored != current
+}
+
+func comparableWorkspacePath(root string) string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return ""
+	}
+	if canonical, err := filepath.EvalSymlinks(root); err == nil {
+		root = canonical
+	}
+	if absolute, err := filepath.Abs(root); err == nil {
+		root = absolute
+	}
+	return filepath.Clean(root)
 }
 
 // lookupSession 按 sessionID 取运行中的句柄；无实例返回 ErrSessionInstanceMissing。
@@ -504,20 +707,102 @@ func (r *SessionRunner) removeHandle(sessionID string) {
 // 退出路径：fwdCtx 取消（Close/会话回收）或 handle 事件流关闭。
 // handle.Dispose 由调用方（startSession 失败路径或 Close）负责，这里只负责停止转发。
 func (r *SessionRunner) forwardEvents(sessionID string, h adapter.Handle, fwdCtx context.Context, initial ...adapter.Event) {
+	r.forwardEventsWithReplay(sessionID, h, fwdCtx, nil, nil, initial...)
+}
+
+// forwardEventsWithReplay 转发事件，并在提供方宣布 load 响应完成后排空历史队列。
+// 回放状态只有在排空并写入本机摘要后才会变成 complete；后续实时事件仍继续转发。
+func (r *SessionRunner) forwardEventsWithReplay(sessionID string, h adapter.Handle, fwdCtx context.Context, replayDone <-chan struct{}, onReplayComplete func(), initial ...adapter.Event) {
 	terminalSeen := false
+	replaySignal := replayDone
+	replayMarked := replaySignal == nil
+	completeReplay := func() {
+		if replayMarked {
+			return
+		}
+		replayMarked = true
+		if onReplayComplete != nil {
+			onReplayComplete()
+		}
+	}
+	processEvent := func(ev adapter.Event) bool {
+		if ev.Type == adapter.EventTurnStarted {
+			// 新的忙碌标记开启新回合；上一回合的终态不能抑制本回合中断告警。
+			terminalSeen = false
+		}
+		if ev.Type == adapter.EventTurnCompleted {
+			terminalSeen = true
+		}
+		// 取消和事件同时就绪时，写入前再次检查上下文，避免旧句柄事件串入时间线。
+		if fwdCtx.Err() != nil {
+			return false
+		}
+		if ev.ReplayOrdinal > 0 {
+			// 回放帧没有稳定消息 ID；本机确定性序号用于重试去重，不暴露 DSH ID。
+			if r.replayCommitted(sessionID, ev.ReplayOrdinal) {
+				return true
+			}
+		}
+		if ev.ReplayOrdinal > 0 {
+			if err := r.writeEventResult(sessionID, ev); err != nil {
+				if r.logger != nil {
+					r.logger.Warn("回放事件未提交到本机出口", "session_id", sessionID, "error", err)
+				}
+				return false
+			}
+		} else {
+			r.writeEvent(sessionID, 0, ev)
+		}
+		if ev.ReplayOrdinal > 0 {
+			if err := r.markReplayCommitted(sessionID, ev.ReplayOrdinal); err != nil {
+				if r.logger != nil {
+					r.logger.Warn("回放 checkpoint 未提交", "session_id", sessionID, "error", err)
+				}
+				return false
+			}
+		}
+		return true
+	}
 	if len(initial) > 0 && initial[0].Type != "" {
 		terminalSeen = initial[0].Type == adapter.EventTurnCompleted
+		// startSession 已经在等待事件时确认了这条首帧；即使随后马上被
+		// 重复 start 回收，也要保留这条已确认的会话开始事件。
 		r.writeEvent(sessionID, 0, initial[0])
 	}
 	for {
+		if replaySignal != nil {
+			select {
+			case <-replaySignal:
+				replaySignal = nil
+				// load 响应到达前的历史帧已全部进入 events；在 complete 前
+				// 非阻塞排空，保证慢消费者也不会被过早标记为 complete。
+				for {
+					select {
+					case ev, ok := <-h.Events():
+						if !ok {
+							// 已收到 load 完成信号但事件流随即关闭时，队列中的历史
+							// 已排空，可以安全完成本轮回放；未收到信号的关闭会在
+							// 外层分支直接返回并保留 loading/pending。
+							completeReplay()
+							return
+						}
+						if !processEvent(ev) {
+							return
+						}
+					default:
+						completeReplay()
+						goto replayDrained
+					}
+				}
+			default:
+			}
+		}
+	replayDrained:
 		select {
 		case ev, ok := <-h.Events():
 			if !ok {
-				// A provider-owned event stream closing while the forwarding context is
-				// still live is an abnormal interruption (for example, a bridge crash).
-				// Emit one canonical terminal marker so Relay/Flutter cannot retain a
-				// stale generating state. Intentional Close/kill paths cancel fwdCtx
-				// first and must not manufacture a stopped event.
+				// 提供方事件流仍在运行时却提前关闭，视为异常中断；补一条终态，
+				// 防止客户端永久停留在生成中。主动关闭/强杀会先取消上下文，不补造终态。
 				if fwdCtx.Err() == nil && !terminalSeen {
 					r.writeEvent(sessionID, 0, adapter.Event{
 						Type: adapter.EventSessionError,
@@ -536,24 +821,117 @@ func (r *SessionRunner) forwardEvents(sessionID string, h adapter.Handle, fwdCtx
 				}
 				return
 			}
-			if ev.Type == adapter.EventTurnStarted {
-				// A new busy marker opens a fresh turn; a terminal from a prior
-				// turn must not suppress recovery if this one is interrupted.
-				terminalSeen = false
-			}
-			if ev.Type == adapter.EventTurnCompleted {
-				terminalSeen = true
-			}
-			// select 在取消与事件同时就绪时随机选择分支；写入前再校验一次，
-			// 保证重复 start 回收旧句柄后仍滞留在旧通道里的事件绝不串入时间线。
-			if fwdCtx.Err() != nil {
+			if !processEvent(ev) {
 				return
 			}
-			r.writeEvent(sessionID, 0, ev)
 		case <-fwdCtx.Done():
 			return
+		case <-replaySignal:
+			// 下一轮会先消费回放完成信号并排空事件队列。
 		}
 	}
+}
+
+func (r *SessionRunner) markReplayComplete(sessionID string) {
+	if r == nil || r.store == nil {
+		return
+	}
+	if err := r.setReplayState(sessionID, replayComplete); err != nil && r.logger != nil {
+		r.logger.Warn("记录 replay complete 状态失败", "error", err)
+	}
+}
+
+// beginResumeGeneration 为一次恢复分配单调代数。代数只保存在本机内存，不进入 Relay 或
+// 事件载荷；它仅用于屏蔽被替换句柄的迟到回调。
+func (r *SessionRunner) beginResumeGeneration(sessionID string) uint64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resumeGeneration == nil {
+		r.resumeGeneration = make(map[string]uint64)
+	}
+	r.resumeGeneration[sessionID]++
+	return r.resumeGeneration[sessionID]
+}
+
+// markReplayCompleteForGeneration 仅允许当前恢复代数推进 complete，避免旧回放协程覆盖
+// 新一轮恢复的 pending/loading 状态。
+func (r *SessionRunner) markReplayCompleteForGeneration(sessionID string, generation uint64) {
+	if r == nil || r.store == nil {
+		return
+	}
+	r.mu.Lock()
+	current, ok := r.resumeGeneration[sessionID]
+	if !ok || current != generation {
+		r.mu.Unlock()
+		return
+	}
+	// 在同一把锁内完成校验和写入，避免新一轮恢复在校验后抢先
+	// 设置 loading，随后又被旧协程的 complete 覆盖。
+	err := r.setReplayState(sessionID, replayComplete)
+	r.mu.Unlock()
+	if err != nil && r.logger != nil {
+		r.logger.Warn("记录 replay complete 状态失败", "error", err)
+	}
+}
+
+// setReplayState 写入并校验本机回放状态，避免出现无法被下一次恢复解释的任意字符串。
+func (r *SessionRunner) setReplayState(sessionID, state string) error {
+	if r == nil || r.store == nil {
+		return errors.New("daemon 本地状态存储不可用")
+	}
+	switch state {
+	case replayPending, replayLoading, replayComplete:
+	default:
+		return fmt.Errorf("非法 replay 状态 %q", state)
+	}
+	return r.store.Set(replayStateKey(sessionID), state)
+}
+
+// resetReplayStateAfterFailure 只有本轮确实尝试了回放时才回写 pending；已经 complete 的
+// session/resume 失败不应被误降级为 load，否则下一次恢复会重复投递整段历史。
+func (r *SessionRunner) resetReplayStateAfterFailure(sessionID string, replay bool) {
+	if !replay || r == nil || r.store == nil {
+		return
+	}
+	if err := r.setReplayState(sessionID, replayPending); err != nil && r.logger != nil {
+		r.logger.Warn("恢复失败后回写 replay pending 状态失败", "error", err)
+	}
+}
+
+func replaySourceKey(sessionID string, ordinal int64) string {
+	hash := sha256.Sum256([]byte("dsh-replay-v1\x00" + sessionID + "\x00" + fmt.Sprint(ordinal)))
+	return hex.EncodeToString(hash[:])
+}
+
+func replayCommittedKey(sessionID string, ordinal int64) string {
+	return instanceKey(sessionID) + ":replay:" + replaySourceKey(sessionID, ordinal)
+}
+
+func (r *SessionRunner) replayCommitted(sessionID string, ordinal int64) bool {
+	if r == nil || r.store == nil {
+		return false
+	}
+	_, err := r.store.Get(replayCommittedKey(sessionID, ordinal))
+	return err == nil
+}
+
+func (r *SessionRunner) markReplayCommitted(sessionID string, ordinal int64) error {
+	if r == nil || r.store == nil {
+		return errors.New("daemon 本地状态存储不可用")
+	}
+	if err := r.store.Set(replayCommittedKey(sessionID, ordinal), "1"); err != nil {
+		return err
+	}
+	checkpoint := ordinal
+	if raw, err := r.store.Get(replayCheckpointKey(sessionID)); err == nil {
+		if parsed, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && parsed > checkpoint {
+			checkpoint = parsed
+		}
+	}
+	return r.store.Set(replayCheckpointKey(sessionID), fmt.Sprint(checkpoint))
 }
 
 // emitEvent 将 runner 生成的规范化事件交给连接层；连接层负责编码和上传。
@@ -580,8 +958,8 @@ func (r *SessionRunner) normalizeEventSeq(sessionID string, ev adapter.Event) ad
 	r.eventSeqMu.Lock()
 	defer r.eventSeqMu.Unlock()
 	if r.eventSeq == nil {
-		// Keep zero-value SessionRunner fixtures safe; production constructors
-		// initialize this map eagerly, but tests and embedders may use a literal.
+		// 保证零值 SessionRunner fixture 也可用；生产构造函数会主动初始化该映射，
+		// 但测试和嵌入方可能直接使用结构体字面量。
 		r.eventSeq = make(map[string]int64)
 	}
 	if r.eventCount == nil {
@@ -597,8 +975,7 @@ func (r *SessionRunner) normalizeEventSeq(sessionID string, ev adapter.Event) ad
 		current = ev.Seq
 	} else {
 		if current == int64(^uint64(0)>>1) {
-			// Sequence exhaustion is unrecoverable; retain the highest valid value
-			// rather than wrapping into a negative number rejected by E2EE.
+			// 序号耗尽后无法恢复；保留最高合法值，不能回绕成会被 E2EE 拒绝的负数。
 			ev.Seq = current
 			return ev
 		}
@@ -615,12 +992,16 @@ func (r *SessionRunner) normalizeEventSeq(sessionID string, ev adapter.Event) ad
 // 可能先发出事件、后写旧摘要，导致重启后序号重用。sink 在摘要提交后
 // 顺序调用，保证同一 Runner 内观察到的事件顺序与摘要一致。
 func (r *SessionRunner) recordEvent(sessionID string, ev adapter.Event) {
+	_ = r.recordEventResult(sessionID, ev)
+}
+
+// recordEventResult 与 recordEvent 相同，但把事件出口的提交错误返回给回放调用方。
+func (r *SessionRunner) recordEventResult(sessionID string, ev adapter.Event) error {
 	if strings.TrimSpace(sessionID) == "" {
 		if ev.Seq <= 0 {
 			ev.Seq = 1
 		}
-		r.notifyEventSink(sessionID, ev)
-		return
+		return r.notifyEventSinkResult(sessionID, ev)
 	}
 
 	r.eventSeqMu.Lock()
@@ -642,12 +1023,11 @@ func (r *SessionRunner) recordEvent(sessionID string, ev adapter.Event) {
 	r.eventCount[sessionID]++
 	count := r.eventCount[sessionID]
 	r.persistEventSummary(sessionID, lastEvent{Count: count, Type: ev.Type, Seq: ev.Seq})
-	r.notifyEventSink(sessionID, ev)
+	return r.notifyEventSinkResult(sessionID, ev)
 }
 
-// nextEventSequence folds a provider-supplied sequence into the Runner-owned
-// canonical sequence. Provider gaps are preserved, while duplicate/late/zero
-// values advance by one. Saturation avoids wrapping into a negative sequence.
+// nextEventSequence 将 Provider 提供的序号折叠进 Runner 持有的规范序列。
+// Provider 的间隔会保留，重复、过晚或零值则递增一位；饱和处理避免回绕成负数。
 func nextEventSequence(current, supplied int64) int64 {
 	if supplied > current {
 		return supplied
@@ -659,12 +1039,21 @@ func nextEventSequence(current, supplied int64) int64 {
 }
 
 func (r *SessionRunner) notifyEventSink(sessionID string, ev adapter.Event) {
+	_ = r.notifyEventSinkResult(sessionID, ev)
+}
+
+func (r *SessionRunner) notifyEventSinkResult(sessionID string, ev adapter.Event) error {
 	r.eventSinkMu.RLock()
 	sink := r.eventSink
+	resultSink := r.eventSinkResult
 	r.eventSinkMu.RUnlock()
+	if resultSink != nil {
+		return resultSink(sessionID, ev)
+	}
 	if sink != nil {
 		sink(sessionID, ev)
 	}
+	return nil
 }
 
 func (r *SessionRunner) persistEventSummary(sessionID string, summary lastEvent) {
@@ -708,6 +1097,10 @@ func (r *SessionRunner) persistedEventSeq(sessionID string) int64 {
 // writeEvent 写最后一条 canonical 事件；失败只告警，不阻塞命令消费。
 func (r *SessionRunner) writeEvent(sessionID string, _ int, ev adapter.Event) {
 	r.recordEvent(sessionID, ev)
+}
+
+func (r *SessionRunner) writeEventResult(sessionID string, ev adapter.Event) error {
+	return r.recordEventResult(sessionID, ev)
 }
 
 // awaitFirstEvent 等待 handle 事件流的第一条事件；超时或提前关闭视为启动失败。

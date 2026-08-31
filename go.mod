@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/gin-gonic/gin v1.12.0
+	github.com/klauspost/compress v1.17.7
 	github.com/oapi-codegen/runtime v1.6.0
 	golang.org/x/crypto v0.55.0
 	modernc.org/sqlite v1.56.0

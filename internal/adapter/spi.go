@@ -89,6 +89,8 @@ type Event struct {
 	Type    EventType      `json:"type"`
 	Seq     int64          `json:"seq"`
 	Payload map[string]any `json:"payload"`
+	// ReplayOrdinal 是 Daemon 用于去重 ACP load 历史的内部字段，故意从公共 JSON 事件中省略。
+	ReplayOrdinal int64 `json:"-"`
 }
 
 // Adapter 是 Daemon 与某类 Provider 的统一接口。
@@ -118,12 +120,29 @@ type StartRequest struct {
 type ResumeRequest struct {
 	InstanceID    string
 	WorkspaceRoot string
+	// ReplayHistory 请求 ACP 使用 session/load 而不是 session/resume；这是 Daemon 内部提示，
+	// 故意不进入命令 JSON 载荷。
+	ReplayHistory bool `json:"-"`
 }
 
 // ResumeResult 明确区分唤醒结果，禁止伪装 resumed。
 type ResumeResult struct {
 	Result     string `json:"result"`
 	InstanceID string `json:"instance_id,omitempty"`
+}
+
+// ResumeStreamingAdapter 是可选扩展，适用于在 Resume RPC 响应前发送回放事件的 Provider。
+// 实现必须在传输初始化完成、load/resume 发出前调用 ready。回调让 Daemon 注册并消费事件流，
+// 而无需把 runtime Handle 放进 ResumeResult 或 local_state。
+type ResumeStreamingAdapter interface {
+	ResumeStreaming(ctx context.Context, req ResumeRequest, ready func(Handle) error) (ResumeResult, error)
+}
+
+// ReplayCompletionHandle 在提供方完成 load 回放时关闭通知通道。
+// Daemon 只有在收到该通知并排空已登记事件后，才能把本机回放状态标记为 complete。
+type ReplayCompletionHandle interface {
+	Handle
+	ReplayComplete() <-chan struct{}
 }
 
 // Handle 是运行中的会话实例句柄，承载发送/中止。

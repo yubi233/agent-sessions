@@ -26,7 +26,11 @@ const (
 	// EnvConfig 覆盖桥的 cordis 配置文件路径；未设置时缺省 P0 冒烟核实的路径。
 	EnvConfig = "AGENT_SESSIONS_DSH_CONFIG"
 	// EnvPersistRoot 是验证专用的 DSH session cache 保留根目录；未设置时仍使用临时目录并在关闭后删除。
+	// 它只影响 Detect/无 workspace 的隔离探测，不能覆盖生产 Start/Resume 的工作区根。
 	EnvPersistRoot = "AGENT_SESSIONS_DSH_PERSIST_ROOT"
+	// EnvPersistCompression 选择 DSH JSONL artifact 的物理编码；必须与 cordis.yml
+	// 中的 persistenceCompression 保持一致，迁移入口也使用同一值。
+	EnvPersistCompression = "AGENT_SESSIONS_DSH_PERSIST_COMPRESSION"
 )
 
 // 缺省桥路径（spec 冻结，与 e2e-verify/real/dsh-acp-smoke.mjs --dsh-root 一致）。
@@ -76,10 +80,21 @@ func binConfig() (bin string, config string, err error) {
 	return bin, config, nil
 }
 
-// newBinTransport 启动一个 dsh-acp-demo 子进程（每会话一个，Setpgid 独占进程组）。
+// newBinTransport 启动一个无工作区上下文的探测桥（每会话一个，Setpgid 独占进程组）。
+// 启动/恢复使用 newBinTransportForWorkspace，使 DSH persistenceRoot 与用户工作区绑定。
 func newBinTransport() (*dshBinTransport, error) {
+	return newBinTransportForWorkspace("")
+}
+
+// newBinTransportForWorkspace 启动一个 dsh-acp-demo 子进程。
+// workspaceRoot 非空时，持久化根固定为 <workspaceRoot>/.dsh-sessions，且不拥有/不清理该目录。
+// workspaceRoot 为空时才允许使用临时根或 EnvPersistRoot 隔离根。
+func newBinTransportForWorkspace(workspaceRoot string) (*dshBinTransport, error) {
 	bin, config, err := binConfig()
 	if err != nil {
+		return nil, err
+	}
+	if _, err := configuredPersistenceCompression(); err != nil {
 		return nil, err
 	}
 	node, err := exec.LookPath("node")
@@ -91,7 +106,7 @@ func newBinTransport() (*dshBinTransport, error) {
 	runRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(bin)))))
 	// 每次会话独立持久化目录：默认放入系统临时目录并在关闭后删除；验证时可通过
 	// AGENT_SESSIONS_DSH_PERSIST_ROOT 保留 cache，以把 DSH 原始会话日志与 Relay/Flutter 证据绑定。
-	persistRoot, retainPersistRoot, err := newPersistRoot()
+	persistRoot, retainPersistRoot, ownsPersistRoot, canonicalWorkspace, err := persistRootForWorkspace(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -100,22 +115,22 @@ func newBinTransport() (*dshBinTransport, error) {
 	cmd.Dir = runRoot
 	// 最小环境注入（ADR-013 §5）：只透传进程生存必需项并显式重定向持久化，
 	// scrub 掉其他 Provider 凭据变量；桥自身按设计加载 DSH 根 .env，本仓库不读取不转储。
-	cmd.Env = minimalEnv(persistRoot)
+	cmd.Env = minimalEnv(persistRoot, canonicalWorkspace)
 	// 独立进程组：Close/ForceKill 可对整个进程树（含子进程）发信号。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = ring
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		_ = os.RemoveAll(persistRoot)
+		cleanupPersistPath(persistRoot, ownsPersistRoot, retainPersistRoot, canonicalWorkspace)
 		return nil, fmt.Errorf("打开桥 stdin: %w", err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		_ = os.RemoveAll(persistRoot)
+		cleanupPersistPath(persistRoot, ownsPersistRoot, retainPersistRoot, canonicalWorkspace)
 		return nil, fmt.Errorf("打开桥 stdout: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		_ = os.RemoveAll(persistRoot)
+		cleanupPersistPath(persistRoot, ownsPersistRoot, retainPersistRoot, canonicalWorkspace)
 		return nil, fmt.Errorf("启动 dsh-acp-demo: %w", err)
 	}
 	t := &dshBinTransport{
@@ -124,12 +139,43 @@ func newBinTransport() (*dshBinTransport, error) {
 		stderr:            ring,
 		persistRoot:       persistRoot,
 		retainPersistRoot: retainPersistRoot,
+		ownsPersistRoot:   ownsPersistRoot,
+		workspaceRoot:     canonicalWorkspace,
 	}
 	// stdout 每行一帧；scanner 缓冲上限 1 MiB，容忍较大的助手文本块。
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	t.scanner = scanner
 	return t, nil
+}
+
+// persistRootForWorkspace 解析生产与探测两种持久化策略。
+func persistRootForWorkspace(workspaceRoot string) (path string, retain bool, owns bool, canonicalWorkspace string, err error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot != "" {
+		if !filepath.IsAbs(workspaceRoot) {
+			return "", false, false, "", errors.New("workspace root 必须是绝对路径")
+		}
+		canonicalWorkspace, err = filepath.EvalSymlinks(workspaceRoot)
+		if err != nil {
+			return "", false, false, "", fmt.Errorf("解析 workspace root: %w", err)
+		}
+		canonicalWorkspace, err = filepath.Abs(canonicalWorkspace)
+		if err != nil {
+			return "", false, false, "", fmt.Errorf("规约 workspace root: %w", err)
+		}
+		info, statErr := os.Stat(canonicalWorkspace)
+		if statErr != nil || !info.IsDir() {
+			return "", false, false, "", errors.New("workspace root 不是目录")
+		}
+		path = filepath.Join(canonicalWorkspace, ".dsh-sessions")
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return "", false, false, "", fmt.Errorf("创建 workspace DSH 持久化根: %w", err)
+		}
+		return path, true, false, canonicalWorkspace, nil
+	}
+	path, retain, err = newPersistRoot()
+	return path, retain, true, "", err
 }
 
 // newPersistRoot 创建桥持久化目录。默认使用系统临时目录并由 Close/ForceKill 清理；
@@ -161,8 +207,13 @@ func newPersistRoot() (path string, retain bool, err error) {
 	return path, false, nil
 }
 
-// minimalEnv 构造子进程最小环境：PATH/HOME/TMPDIR + 持久化重定向（DPO 冒烟口径）。
-func minimalEnv(persistRoot string) []string {
+// minimalEnv 构造子进程最小环境：PATH/HOME/TMPDIR、持久化根和会话工作区。
+// workspaceRoots 保留可选参数形状，兼容旧的探测 fixture 调用。
+func minimalEnv(persistRoot string, workspaceRoots ...string) []string {
+	workspaceRoot := ""
+	if len(workspaceRoots) > 0 {
+		workspaceRoot = workspaceRoots[0]
+	}
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
@@ -172,7 +223,19 @@ func minimalEnv(persistRoot string) []string {
 		"DSH_SNAPSHOT=record",
 	}
 	if persistRoot != "" {
-		env = append(env, "DSH_SNAPSHOT_SESSIONS_ROOT="+filepath.Join(persistRoot, "sessions"))
+		// persistenceRoot 本身就是 DSH backend root；再追加 /sessions 会把
+		// workspace/.dsh-sessions 错位到 workspace/.dsh-sessions/sessions。
+		env = append(env, "DSH_SNAPSHOT_SESSIONS_ROOT="+filepath.Clean(persistRoot))
+	}
+	compression, err := configuredPersistenceCompression()
+	if err == nil {
+		// 通过独立变量显式锁定桥配置，避免 DSH_SNAPSHOT/运行模式变化时
+		// cordis.yml 与迁移目标采用不同后缀。
+		env = append(env, "DSH_SNAPSHOT_COMPRESSION="+compression)
+	}
+	if strings.TrimSpace(workspaceRoot) != "" {
+		// 无会话的沙箱调用使用此回退根；普通会话仍由 session.header.cwd 决定边界。
+		env = append(env, "DSH_SESSION_CWD="+filepath.Clean(workspaceRoot))
 	}
 	return env
 }
@@ -185,6 +248,9 @@ type dshBinTransport struct {
 	stderr            *diagRing
 	persistRoot       string
 	retainPersistRoot bool
+	// ownsPersistRoot 只有临时探测根为 true；工作区根和显式取证根均不可由桥删除。
+	ownsPersistRoot bool
+	workspaceRoot   string
 
 	writeMu   sync.Mutex // stdin 写串行化（Send/通知/权限应答并发安全）
 	closeOnce sync.Once
@@ -282,10 +348,54 @@ func (t *dshBinTransport) close(force bool) error {
 
 // cleanupPersistRoot 保留验证显式指定的 DSH cache，默认仍清理临时目录。
 func (t *dshBinTransport) cleanupPersistRoot() {
-	if t.retainPersistRoot || t.persistRoot == "" {
+	// 兼容新增 ownsPersistRoot 前构造的旧 fixture transport：workspaceRoot 为空时
+	// 延续其历史临时根清理语义。
+	owns := t.ownsPersistRoot || (t.workspaceRoot == "" && !t.retainPersistRoot)
+	cleanupPersistPath(t.persistRoot, owns, t.retainPersistRoot, t.workspaceRoot)
+}
+
+// cleanupPersistPath 是 RemoveAll 的双重守卫：只有本实例拥有的临时根才可删除，
+// 且 canonical 路径必须位于系统临时目录内；workspace/.dsh-sessions 永远拒绝删除。
+func cleanupPersistPath(path string, owns, retain bool, workspaceRoot string) {
+	if !owns || retain || strings.TrimSpace(path) == "" {
 		return
 	}
-	_ = os.RemoveAll(t.persistRoot)
+	cleanPath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return
+	}
+	if workspaceRoot != "" {
+		cleanWorkspace, wsErr := filepath.Abs(filepath.Clean(workspaceRoot))
+		if wsErr == nil {
+			// 生产 workspace 根和其所有子路径都由用户所有；即使旧 fixture
+			// 错误地把 owns 标成 true，也不能清理工作区内容。
+			protected := filepath.Join(cleanWorkspace, ".dsh-sessions")
+			if pathWithin(cleanWorkspace, cleanPath) || pathWithin(protected, cleanPath) {
+				return
+			}
+			// 额外比较 realpath，拦截 workspace 符号链接别名形成的路径绕过。
+			if realWorkspace, realWorkspaceErr := filepath.EvalSymlinks(cleanWorkspace); realWorkspaceErr == nil {
+				if realPath, realPathErr := filepath.EvalSymlinks(cleanPath); realPathErr == nil &&
+					pathWithin(realWorkspace, realPath) {
+					return
+				}
+			}
+		}
+	}
+	tempRoot, err := filepath.Abs(filepath.Clean(os.TempDir()))
+	if err != nil || cleanPath == tempRoot || !pathWithin(tempRoot, cleanPath) {
+		return
+	}
+	_ = os.RemoveAll(cleanPath)
+}
+
+func pathWithin(root, candidate string) bool {
+	root = filepath.Clean(root)
+	candidate = filepath.Clean(candidate)
+	if root == candidate {
+		return true
+	}
+	return strings.HasPrefix(candidate, root+string(os.PathSeparator))
 }
 
 // effectiveGrace 返回本实例生效的宽限期：显式注入（grace>0）优先，否则回落到

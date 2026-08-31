@@ -136,6 +136,7 @@ Environment:
   AGENT_SESSIONS_DAEMON_SIGNING,
   AGENT_SESSIONS_DSH_BIN, AGENT_SESSIONS_DSH_CONFIG,
   AGENT_SESSIONS_DSH_PERSIST_ROOT,
+  AGENT_SESSIONS_DSH_PERSIST_COMPRESSION,
   AGENT_SESSIONS_CODEX_ENABLE, AGENT_SESSIONS_CODEX_BIN,
   AGENT_SESSIONS_LOCAL_DEV_PAIRING, FLUTTER_BIN
 
@@ -1010,6 +1011,7 @@ start_daemon() {
     args+=(AGENT_SESSIONS_DSH_CONFIG="$ROOT_DIR/cordis.yml")
   fi
   if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_ROOT:-}" ]]; then args+=(AGENT_SESSIONS_DSH_PERSIST_ROOT="$AGENT_SESSIONS_DSH_PERSIST_ROOT"); fi
+  if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_COMPRESSION:-}" ]]; then args+=(AGENT_SESSIONS_DSH_PERSIST_COMPRESSION="$AGENT_SESSIONS_DSH_PERSIST_COMPRESSION"); fi
   # Codex 适配器透传（非空才转发）：ENABLE 是 W4 灰度注册开关，BIN 指向被 --version
   # 探测的 codex CLI；任一缺失时 Daemon fail-closed，Codex 能力整体 unsupported。
   if [[ -n "${AGENT_SESSIONS_CODEX_ENABLE:-}" ]]; then args+=(AGENT_SESSIONS_CODEX_ENABLE="$AGENT_SESSIONS_CODEX_ENABLE"); fi
@@ -1168,7 +1170,7 @@ start_action() {
     if [[ -n "$dsh_bin" && ! -f "$dsh_bin" ]]; then
       echo "  dsh: bridge=$dsh_bin (路径不存在；provider 将以 unavailable 呈现)" >&2
     fi
-    echo "  dsh: bridge=${dsh_bin:-<unset>} (config=${AGENT_SESSIONS_DSH_CONFIG:-<unset>}; persist_root=${AGENT_SESSIONS_DSH_PERSIST_ROOT:-<temp-cleanup>}; per-session spawn)"
+    echo "  dsh: bridge=${dsh_bin:-<unset>} (config=${AGENT_SESSIONS_DSH_CONFIG:-<unset>}; persist_root=${AGENT_SESSIONS_DSH_PERSIST_ROOT:-<temp-cleanup>}; compression=${AGENT_SESSIONS_DSH_PERSIST_COMPRESSION:-none}; per-session spawn)"
   # codex 透传状态如实呈现：ENABLE 缺失 = 适配器不注册；BIN 缺失/不可执行 = 探测必败。
   local codex_bin="${AGENT_SESSIONS_CODEX_BIN:-}"
   if [[ -n "${AGENT_SESSIONS_CODEX_ENABLE:-}" && -z "$codex_bin" ]]; then

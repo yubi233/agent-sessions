@@ -20,8 +20,12 @@ type handle struct {
 	transport BridgeTransport
 	sessionID string
 	// nextID/nextSeq 分别是请求 id 与事件序号（单调递增）。
-	nextID  int64
-	nextSeq int64
+	nextID         int64
+	nextSeq        int64
+	replayMode     bool
+	replayOrdinal  int64
+	replayDone     chan struct{}
+	replayDoneOnce sync.Once
 	// pending 是等待响应的请求表；readLoop 按 id 回填。
 	pending map[int64]*pendingReq
 	// dropped 记录被丢弃/无法映射的入站帧与 update 变体计数（诊断用，不进公共协议）。
@@ -30,6 +34,11 @@ type handle struct {
 	events   chan adapter.Event
 	readDone chan struct{}
 	closed   bool
+	// eventMu/eventWG 协调事件入队和通道关闭，避免桥退出时并发写入已关闭通道。
+	eventMu     sync.Mutex
+	eventClosed bool
+	eventStop   chan struct{}
+	eventWG     sync.WaitGroup
 	// sendMu 串行化会话的 prompt 槽位：桥同一时刻只允许一个 in-flight prompt。
 	sendMu sync.Mutex
 }
@@ -49,11 +58,13 @@ type rpcResult struct {
 // newHandle 构造会话句柄（事件通道有界缓冲，读循环随后启动）。
 func newHandle(tr BridgeTransport) *handle {
 	return &handle{
-		transport: tr,
-		events:    make(chan adapter.Event, 256),
-		pending:   map[int64]*pendingReq{},
-		dropped:   map[string]int64{},
-		readDone:  make(chan struct{}),
+		transport:  tr,
+		events:     make(chan adapter.Event, 256),
+		pending:    map[int64]*pendingReq{},
+		dropped:    map[string]int64{},
+		readDone:   make(chan struct{}),
+		replayDone: make(chan struct{}),
+		eventStop:  make(chan struct{}),
 	}
 }
 
@@ -69,6 +80,25 @@ func (h *handle) setSessionID(id string) {
 	h.mu.Lock()
 	h.sessionID = id
 	h.mu.Unlock()
+}
+
+func (h *handle) setReplayMode(enabled bool) {
+	h.mu.Lock()
+	h.replayMode = enabled
+	h.replayOrdinal = 0
+	h.mu.Unlock()
+}
+
+// ReplayComplete 返回 DSH session/load 已收到响应的通知通道。
+func (h *handle) ReplayComplete() <-chan struct{} { return h.replayDone }
+
+func (h *handle) markReplayComplete() {
+	h.mu.Lock()
+	// ACP 保证回放通知先于 load 响应；响应返回后，后续实时事件不得再被标记为
+	// 回放事件或占用回放背压通道，否则恢复后的 send 会被错误去重。
+	h.replayMode = false
+	h.mu.Unlock()
+	h.replayDoneOnce.Do(func() { close(h.replayDone) })
 }
 
 // Send 把文本作为 session/prompt 单文本块发送，阻塞到该 turn 结束（桥返回 stopReason）。
@@ -100,9 +130,8 @@ func (h *handle) Send(ctx context.Context, text string) error {
 		})
 		return err
 	}
-	// ACP delivers assistant content as notifications before session/prompt
-	// resolves. Emit an explicit terminal marker after that response so the
-	// daemon can close the mobile generating state deterministically.
+	// ACP 会在 session/prompt 响应完成前以通知发送助手内容；响应到达后补发明确的
+	// 终止标记，让 daemon 可以确定性地结束移动端生成状态。
 	var response struct {
 		StopReason string `json:"stopReason"`
 	}
@@ -251,6 +280,32 @@ func (h *handle) newSession(ctx context.Context, cwd string) (string, error) {
 	return res.SessionID, nil
 }
 
+// loadSession 请求 ACP 恢复已有会话并回放持久化的用户/助手消息。桥保证回放通知
+// 先于响应，因此响应到达即可作为本轮回放完成边界。
+func (h *handle) loadSession(ctx context.Context, cwd string) error {
+	_, err := h.request(ctx, "session/load", map[string]any{
+		"sessionId":             h.sessionID,
+		"cwd":                   cwd,
+		"mcpServers":            []any{},
+		"additionalDirectories": []string{},
+	})
+	if err == nil {
+		h.markReplayComplete()
+	}
+	return err
+}
+
+// resumeSession 恢复已有会话但不回放历史。
+func (h *handle) resumeSession(ctx context.Context, cwd string) error {
+	_, err := h.request(ctx, "session/resume", map[string]any{
+		"sessionId":             h.sessionID,
+		"cwd":                   cwd,
+		"mcpServers":            []any{},
+		"additionalDirectories": []string{},
+	})
+	return err
+}
+
 // rpcMessage 是 JSON-RPC 帧的通用形状；ID 缺失表示通知，Method 非空表示"桥→客户端"请求。
 type rpcMessage struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -296,6 +351,14 @@ func (h *handle) readLoop() {
 		h.mu.Lock()
 		h.closed = true
 		h.mu.Unlock()
+		h.eventMu.Lock()
+		if !h.eventClosed {
+			h.eventClosed = true
+			close(h.eventStop)
+		}
+		h.eventMu.Unlock()
+		// 让已经开始入队的协程先退出，再关闭公共事件通道。
+		h.eventWG.Wait()
 		close(h.events)
 	}()
 	for {
@@ -444,7 +507,32 @@ func (h *handle) pushEvent(ev adapter.Event) {
 	}
 	h.nextSeq++
 	ev.Seq = h.nextSeq
+	replay := h.replayMode
+	if replay {
+		h.replayOrdinal++
+		ev.ReplayOrdinal = h.replayOrdinal
+	}
+	// 读循环关闭事件通道前会先设置 eventClosed 并等待 eventWG；持有 h.mu
+	// 直到完成登记，保证关闭路径不会漏等本次入队。
+	h.eventMu.Lock()
+	if h.eventClosed {
+		h.eventMu.Unlock()
+		h.mu.Unlock()
+		return
+	}
+	h.eventWG.Add(1)
+	h.eventMu.Unlock()
 	h.mu.Unlock()
+	defer h.eventWG.Done()
+	if replay {
+		// session/load 期间回放流必须无损：Runner 已在 load 发出前注册消费者，
+		// 此处阻塞即可形成背压，不会静默丢弃超过通道容量的历史。
+		select {
+		case h.events <- ev:
+		case <-h.eventStop:
+		}
+		return
+	}
 	select {
 	case h.events <- ev:
 	default:

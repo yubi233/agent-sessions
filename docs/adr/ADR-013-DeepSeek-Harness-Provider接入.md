@@ -39,7 +39,7 @@
 | assistant 文本增量/提交 | message_delta / message_completed | P0 未触发（无 prompt），P1 用假桥定帧形 |
 | 权限请求/一次性决策 | permission_request / permission_decision | 同上，P1 假桥先行，P4 真实链路复核 |
 | 工具调用明细 | tool_call / tool_result | **未在桥承诺面内**；P1 假桥按缺失设计，能力标 unsupported（除非后续上游扩展） |
-| `session/load` / `session/resume` | Resume 六态 | 当前 DSH checkout 已实现 load/resume（旧基线曾为 `-32601`）；本仓库 Adapter/Runner 目前仍返回 Resume=`unsupported`，必须完成 ready handle 交接、回放去重和恢复后 send 后才能升级 |
+| `session/load` / `session/resume` | Resume 六态 | 当前 DSH checkout 已实现 load/resume；本仓库已完成 ready handle 交接、回放去重和恢复后 send，Resume=`native`；真实模型往返仍由 P4 live gate 复核 |
 | `session/list` | 本地会话发现 | ACP 仍未提供 list；v0.8 只在已确认 workspace/legacy root 内扫描 JSONL，不把任意 DSH checkout 当作数据源 |
 | 进程组终止（stdin EOF + 信号） | Dispose / ForceKillHandle | native；EOF 后 exit 0 |
 
@@ -60,6 +60,6 @@
 - **持久化所有权。** Start/Resume 的 canonical `WorkspaceRoot` 对应 `<workspaceRoot>/.dsh-sessions`，由工作区拥有且 Close 永不删除；Detect 才能创建并清理自有临时根。`DSH_SNAPSHOT_SESSIONS_ROOT` 只接收本次桥实例的精确根，不能被旧的临时 `sessions/` 注入逻辑劫持。
 - **存量迁移。** P0 先对显式授权的旧 checkout/bridge/workspace roots 做只读预检，再按 JSONL header 的 `cwd` 归属复制或登记 legacy root。迁移保留源文件，不复制派生 query index；重复 ID、双编码、未知格式、header/path 不一致或源文件变化均 fail-closed。
 - **Resume 时序。** Adapter 必须在发出 `session/load` 或 `session/resume` 前将新 Handle 通过 typed ready callback 交给 Runner，由 Runner 原子登记并启动事件转发。回放状态 `pending/loading/complete` 和 checkpoint 只保存在 Daemon 本机；公共 command 不透传 `replay_history`。
-- **回放映射。** `user_message_chunk` 映射 `EventUserMessage`，`agent_message_chunk` 映射 `EventMessageCompleted`。source key 由 Relay session id + 回放 ordinal 的版本化哈希派生，只进入加密 outbox 去重元数据，不暴露 DSH session id。
+- **回放映射。** `user_message_chunk` 映射 `EventUserMessage`，`agent_message_chunk` 映射 `EventMessageCompleted`。source key 由 Relay session id + 回放 ordinal 的版本化哈希派生，只用于本机回放标记和稳定 outbox `event_id`，不进入事件正文或导入元数据，也不暴露 DSH session id。
 - **工作区/Terminal 边界。** DSH Workspace identity 为 `account + home Terminal + canonical root`；跨 Terminal 仅可查看安全投影，不能 scan/import/resume/send。Daemon 不持有 owner bearer，扫描/导入必须由 owner/write 通过专用 signed result 触发。
-- **能力真值。** 在 Resume 闭环通过前保持 `resume=unsupported`；未真正下发的 `model_select` 保持 `unsupported`；`policy: never` 正常路径不会向 Agent Sessions 发 permission request，异常桥请求仍以 `cancelled` fail-closed。
+- **能力真值。** Resume 的 ready/转发/继续发送闭环已通过契约测试，能力矩阵为 `native`；未真正下发的 `model_select` 保持 `unsupported`；`policy: never` 正常路径不会向 Agent Sessions 发 permission request，异常桥请求仍以 `cancelled` fail-closed。

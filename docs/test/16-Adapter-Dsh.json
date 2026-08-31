@@ -1,6 +1,6 @@
 {
   "suite": "adpt-dsh",
-  "suite_version": "1.1.0",
+  "suite_version": "1.2.0",
   "status": "in_progress",
   "plan_id": "ADAPTER-DSH",
   "description": "DeepSeek Harness Provider：ACP 桥 transport、能力矩阵、进程所有权、v0.8 Resume/回放契约与 Flutter 入口的分层回归。",
@@ -37,7 +37,7 @@
         "构造 protocolVersion=2 的假桥响应再执行 Detect",
         "校验能力矩阵三态与中文原因、Version 字段"
       ],
-      "expected": "握手成功时 start/abort/kill=native、resume=unsupported(实测-32601)、其余 unsupported 带原因且 Version=agentInfo.version；版本不符时全部 unsupported 且 Version 留空。",
+      "expected": "握手成功时 start/abort/kill/resume=native、model_select=unsupported（Go 侧尚未下发 set_config_option）、其余 unsupported 带原因且 Version=agentInfo.version；版本不符时全部 unsupported 且 Version 留空。",
       "cleanup": [
         "无外部资源，无需清理"
       ],
@@ -112,7 +112,7 @@
     {
       "id": "ADPT-DSH-05",
       "title": "session/update 白名单映射与私有 payload 剥离",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.8",
       "category": "DSH",
       "priority": "P0",
@@ -128,13 +128,14 @@
         "无"
       ],
       "evidence": [
-        "internal/adapter/dsh/fakebridge_test.go"
+        "internal/adapter/dsh/fakebridge_test.go",
+        "internal/adapter/dsh/mapper_test.go"
       ]
     },
     {
       "id": "ADPT-DSH-06",
       "title": "权限请求 fail-closed 决策往返",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.8",
       "category": "DSH",
       "priority": "P1",
@@ -171,13 +172,14 @@
         "测试内 t.Cleanup 兜底防孤儿"
       ],
       "evidence": [
-        "internal/adapter/dsh/process_test.go"
+        "internal/daemon/runner_test.go",
+        "internal/adapter/dsh/fakebridge_test.go"
       ]
     },
     {
       "id": "ADPT-DSH-08",
       "title": "Resume 流式句柄交接、回放状态与六态定级",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.8",
       "category": "DSH",
       "priority": "P1",
@@ -193,13 +195,14 @@
         "无"
       ],
       "evidence": [
-        "internal/adapter/dsh/process_test.go"
+        "internal/adapter/dsh/process_test.go",
+        "internal/daemon/runner_test.go"
       ]
     },
     {
       "id": "ADPT-DSH-09",
       "title": "能力矩阵与 ADR-013 附表一致性快照",
-      "status": "planned",
+      "status": "passed",
       "phase": "v0.8",
       "category": "DSH",
       "priority": "P1",
@@ -215,6 +218,7 @@
       ],
       "evidence": [
         "internal/adapter/dsh/fakebridge_test.go",
+        "internal/adapter/dsh/live_transport_test.go",
         "docs/adr/ADR-013-DeepSeek-Harness-Provider接入.md"
       ]
     },

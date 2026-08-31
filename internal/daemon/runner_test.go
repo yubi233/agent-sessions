@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,6 +33,74 @@ type fakeAdapter struct {
 	resumeResult  adapter.ResumeResult
 	startOverride adapter.Handle // 注入异常 handle（如事件流已关闭）
 	handles       []*fakeHandle
+}
+
+// streamingFakeAdapter 模拟 DSH 的 ResumeStreaming：ready 返回后才发送回放事件，
+// 并记录本次应该使用的 ACP 方法，供 Daemon 重启恢复契约测试使用。
+type streamingFakeAdapter struct {
+	*fakeAdapter
+	mu            sync.Mutex
+	resumeMethods []string
+	resumeHandles []*replayFakeHandle
+}
+
+// failingStreamingAdapter 在 ready 交接后模拟桥恢复失败，用于确认 replay 状态会回滚为
+// pending，且半开的句柄不会留在 Runner 中。
+type failingStreamingAdapter struct {
+	*fakeAdapter
+	result adapter.ResumeResult
+	err    error
+}
+
+func (a *failingStreamingAdapter) ResumeStreaming(ctx context.Context, req adapter.ResumeRequest, ready func(adapter.Handle) error) (adapter.ResumeResult, error) {
+	h := newReplayFakeHandle(req.InstanceID)
+	if err := ready(h); err != nil {
+		_ = h.Dispose(context.Background())
+		return adapter.ResumeResult{}, err
+	}
+	if a.err != nil {
+		return adapter.ResumeResult{}, a.err
+	}
+	return a.result, nil
+}
+
+type replayFakeHandle struct {
+	*fakeHandle
+	replayDone chan struct{}
+}
+
+func newReplayFakeHandle(id string) *replayFakeHandle {
+	return &replayFakeHandle{
+		fakeHandle: &fakeHandle{id: id, events: make(chan adapter.Event, 64), done: make(chan struct{})},
+		replayDone: make(chan struct{}),
+	}
+}
+
+func (h *replayFakeHandle) ReplayComplete() <-chan struct{} { return h.replayDone }
+
+func (a *streamingFakeAdapter) ResumeStreaming(ctx context.Context, req adapter.ResumeRequest, ready func(adapter.Handle) error) (adapter.ResumeResult, error) {
+	a.mu.Lock()
+	a.resumes = append(a.resumes, req)
+	method := "session/resume"
+	if req.ReplayHistory {
+		method = "session/load"
+	}
+	a.resumeMethods = append(a.resumeMethods, method)
+	h := newReplayFakeHandle(req.InstanceID)
+	a.resumeHandles = append(a.resumeHandles, h)
+	a.mu.Unlock()
+	if err := ready(h); err != nil {
+		_ = h.Dispose(context.Background())
+		return adapter.ResumeResult{}, err
+	}
+	if req.ReplayHistory {
+		h.emit(adapter.Event{Type: adapter.EventUserMessage, ReplayOrdinal: 1,
+			Payload: map[string]any{"instance_id": req.InstanceID, "text": "旧问题"}})
+		h.emit(adapter.Event{Type: adapter.EventMessageCompleted, ReplayOrdinal: 2,
+			Payload: map[string]any{"instance_id": req.InstanceID, "text": "旧回答"}})
+		close(h.replayDone)
+	}
+	return adapter.ResumeResult{Result: adapter.WakeResumed, InstanceID: req.InstanceID}, nil
 }
 
 func newFakeAdapter(provider string) *fakeAdapter {
@@ -385,9 +454,8 @@ func TestSessionRunnerSendAppliesStoredSessionModel(t *testing.T) {
 	}
 }
 
-// runner-generated user_message events share the Provider event sequence. They
-// must be positive for production E2EE and must not collide with the next
-// Provider event emitted by the handle.
+// Runner 生成的 user_message 事件与 Provider 事件共用同一序列；生产 E2EE 要求序号
+// 为正数，且不能与句柄随后发出的 Provider 事件冲突。
 func TestSessionRunnerUserMessageSequenceIsCanonical(t *testing.T) {
 	s, runner, _ := newRunnerFixture(t, "opencode")
 	observed := make(chan adapter.Event, 32)
@@ -411,8 +479,7 @@ func TestSessionRunnerUserMessageSequenceIsCanonical(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	// Wait until the first Provider delta has been forwarded so the allocator's
-	// current sequence is deterministic before sending the user message.
+	// 等待首个 Provider 增量转发完成，让分配器在发送用户消息前具有确定的当前序号。
 	var providerSeq int64
 	deadline := time.After(2 * time.Second)
 	for providerSeq == 0 {
@@ -467,9 +534,8 @@ func TestSessionRunnerUserMessageSequenceIsCanonical(t *testing.T) {
 	}
 }
 
-// The canonical sequence and count must survive a daemon restart. A provider
-// that restarts its own sequence at one must still be folded after the durable
-// local summary rather than reusing an earlier AAD sequence.
+// daemon 重启后规范序号和计数必须保留；即使 Provider 自身序号重新从一开始，
+// 也必须折叠到已持久化摘要之后，不能重用较早的 AAD 序号。
 func TestSessionRunnerEventSequenceResumesFromDurableSummary(t *testing.T) {
 	s, runner, _ := newRunnerFixture(t, "opencode")
 	runner.recordEvent("s-restart", adapter.Event{Type: adapter.EventMessageCompleted, Seq: 17})
@@ -502,9 +568,8 @@ func TestSessionRunnerEventSequenceResumesFromDurableSummary(t *testing.T) {
 	}
 }
 
-// Provider forwarding and runner-generated events can arrive concurrently. The
-// sink must observe one strict per-session order and the durable count must
-// match that order, with no duplicate sequence values.
+// Provider 转发和 Runner 生成事件可能并发到达；sink 必须观察到每个会话严格有序的
+// 事件，持久化计数也必须匹配该顺序，不能出现重复序号。
 func TestSessionRunnerConcurrentEventRecordingIsOrdered(t *testing.T) {
 	s, runner, _ := newRunnerFixture(t, "opencode")
 	const total = 64
@@ -831,8 +896,8 @@ func TestSessionRunnerForwardEventsClosesWithStoppedTerminal(t *testing.T) {
 	}
 }
 
-// Synthetic recovery events must continue after the highest provider sequence,
-// including when the first turn_started event is supplied through forwardEvents' initial argument.
+// 合成恢复事件必须接在最高 Provider 序号之后，即使首个 turn_started 事件通过
+// forwardEvents 的初始参数传入也应如此。
 func TestSessionRunnerForwardEventsSyntheticSequenceFollowsProvider(t *testing.T) {
 	_, runner, _ := newRunnerFixture(t, "opencode")
 	closed := make(chan adapter.Event)
@@ -846,8 +911,7 @@ func TestSessionRunnerForwardEventsSyntheticSequenceFollowsProvider(t *testing.T
 			got = append(got, event)
 		}
 	})
-	// The initial event is the path used by session.start when the adapter emits
-	// turn_started before the forwarding goroutine is launched.
+	// 该初始事件模拟 session.start：Adapter 在转发 goroutine 启动前先发出 turn_started。
 	runner.forwardEvents("s-sequence", h, fwdCtx, adapter.Event{
 		Type: adapter.EventTurnStarted, Seq: 41,
 		Payload: map[string]any{"instance_id": "s-sequence"},
@@ -873,8 +937,7 @@ func TestSessionRunnerForwardEventsSyntheticSequenceFollowsProvider(t *testing.T
 	}
 }
 
-// Intentional runner cancellation (Close/kill) must not manufacture an
-// abnormal stopped event after the caller has explicitly ended forwarding.
+// 调用方明确结束转发后（Close/kill），Runner 不应再补造异常 stopped 事件。
 func TestSessionRunnerForwardEventsCancellationSuppressesSyntheticTerminal(t *testing.T) {
 	s, runner, _ := newRunnerFixture(t, "opencode")
 	closed := make(chan adapter.Event)
@@ -895,8 +958,7 @@ func TestSessionRunnerForwardEventsCancellationSuppressesSyntheticTerminal(t *te
 	}
 }
 
-// A provider terminal event already closes the turn; an ensuing stream EOF
-// must not append a duplicate stopped marker.
+// Provider 的终态事件已经结束回合；随后出现的流 EOF 不应再追加重复的 stopped 标记。
 func TestSessionRunnerForwardEventsDoesNotDuplicateTerminalOnClose(t *testing.T) {
 	s, runner, _ := newRunnerFixture(t, "opencode")
 	closed := make(chan adapter.Event, 1)
@@ -1243,6 +1305,320 @@ func TestSessionRunnerResumeThenSendRemainsUsable(t *testing.T) {
 	live.mu.Unlock()
 	if len(sends) != 1 || sends[0] != "继续" {
 		t.Fatalf("send after resume got %v, want [继续]", sends)
+	}
+}
+
+func TestSessionRunnerStreamingResumeAfterRestartReplaysThenSends(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	base := newFakeAdapter("dsh")
+	streaming := &streamingFakeAdapter{fakeAdapter: base}
+	runner := NewSessionRunner(store, map[string]adapter.Adapter{"dsh": streaming}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
+	workspace := t.TempDir()
+	mapping, _ := json.Marshal(providerThread{Provider: "dsh", InstanceID: "dsh-session-1", WorkspaceRoot: workspace})
+	if err := store.Set(instanceKey("relay-1"), string(mapping)); err != nil {
+		t.Fatalf("写入 instance 映射: %v", err)
+	}
+	events := make(chan adapter.Event, 16)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "relay-1" {
+			events <- event
+		}
+	})
+
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.resume",
+		PayloadJSON: fmt.Sprintf(`{"session_id":"relay-1","workspace_root":%q}`, workspace),
+	}); err != nil {
+		t.Fatalf("重启后首次 resume: %v", err)
+	}
+	waitState := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			state, stateErr := store.Get(replayStateKey("relay-1"))
+			if stateErr == nil && state == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("等待 replay 状态 %q 超时，当前=%q err=%v", want, state, stateErr)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitState(replayComplete)
+	if checkpoint, err := store.Get(replayCheckpointKey("relay-1")); err != nil || checkpoint != "2" {
+		t.Fatalf("回放 checkpoint = %q, err=%v, want 2", checkpoint, err)
+	}
+	if _, err := store.Get(replayCommittedKey("relay-1", 1)); err != nil {
+		t.Fatalf("用户回放 source key 未提交: %v", err)
+	}
+	if _, err := store.Get(replayCommittedKey("relay-1", 2)); err != nil {
+		t.Fatalf("助手回放 source key 未提交: %v", err)
+	}
+	seenUser, seenAssistant := false, false
+	deadline := time.After(3 * time.Second)
+	for !(seenUser && seenAssistant) {
+		select {
+		case event := <-events:
+			if event.Type == adapter.EventUserMessage && event.Payload["text"] == "旧问题" {
+				seenUser = true
+			}
+			if event.Type == adapter.EventMessageCompleted && event.Payload["text"] == "旧回答" {
+				seenAssistant = true
+			}
+		case <-deadline:
+			t.Fatalf("回放事件不完整: user=%v assistant=%v", seenUser, seenAssistant)
+		}
+	}
+
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"relay-1","ciphertext":{"fixture_payload":{"message":"继续"}}}`,
+	}); err != nil {
+		t.Fatalf("回放后 send: %v", err)
+	}
+	streaming.mu.Lock()
+	methods := append([]string(nil), streaming.resumeMethods...)
+	handles := append([]*replayFakeHandle(nil), streaming.resumeHandles...)
+	streaming.mu.Unlock()
+	if len(methods) != 1 || methods[0] != "session/load" {
+		t.Fatalf("首次恢复方法 = %v, want [session/load]", methods)
+	}
+	if len(handles) != 1 {
+		t.Fatalf("恢复句柄数 = %d, want 1", len(handles))
+	}
+	handles[0].mu.Lock()
+	sends := append([]string(nil), handles[0].sends...)
+	handles[0].mu.Unlock()
+	if len(sends) != 1 || sends[0] != "继续" {
+		t.Fatalf("恢复后 send = %v, want [继续]", sends)
+	}
+
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.resume",
+		PayloadJSON: fmt.Sprintf(`{"session_id":"relay-1","workspace_root":%q}`, workspace),
+	}); err != nil {
+		t.Fatalf("完成回放后的 resume: %v", err)
+	}
+	streaming.mu.Lock()
+	methods = append([]string(nil), streaming.resumeMethods...)
+	streaming.mu.Unlock()
+	if len(methods) != 2 || methods[1] != "session/resume" {
+		t.Fatalf("完成回放后的恢复方法 = %v, want [session/load session/resume]", methods)
+	}
+}
+
+func TestSessionRunnerReplayCheckpointWaitsForEventCommit(t *testing.T) {
+	store, runner, _ := newRunnerFixture(t, "dsh")
+	h := newReplayFakeHandle("dsh-session")
+	h.emit(adapter.Event{Type: adapter.EventUserMessage, ReplayOrdinal: 1,
+		Payload: map[string]any{"instance_id": "dsh-session", "text": "待提交"}})
+	close(h.replayDone)
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	runner.SetEventSinkResult(func(string, adapter.Event) error {
+		return errors.New("模拟 outbox 写入失败")
+	})
+	done := make(chan struct{})
+	go func() {
+		runner.forwardEventsWithReplay("relay-replay", h, fwdCtx, h.ReplayComplete(), nil)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("回放出口失败后未退出")
+	}
+	if _, err := store.Get(replayCommittedKey("relay-replay", 1)); err == nil {
+		t.Fatal("outbox 提交失败时不得推进 replay checkpoint")
+	}
+}
+
+func TestReplayRelayEventIDIsStableAcrossRetries(t *testing.T) {
+	event := adapter.Event{Type: adapter.EventMessageCompleted, ReplayOrdinal: 7}
+	first := relayEventID("relay-session", event)
+	second := relayEventID("relay-session", event)
+	if first == "" || first != second {
+		t.Fatalf("回放事件 ID 不稳定: first=%q second=%q", first, second)
+	}
+	if first == relayEventID("relay-session", adapter.Event{Type: event.Type, ReplayOrdinal: 8}) {
+		t.Fatal("不同回放序号不得共享事件 ID")
+	}
+	if first == relayEventID("other-session", event) {
+		t.Fatal("不同 Relay 会话不得共享回放事件 ID")
+	}
+	if !strings.HasPrefix(first, "evt-replay-") {
+		t.Fatalf("回放事件 ID 前缀不符合约定: %q", first)
+	}
+}
+
+// adapter Resume 返回错误时，loading 不能残留为“已在恢复中”；下一次尝试必须重新走
+// session/load，而不是错误地切到 session/resume。
+func TestSessionRunnerResumeFailureRollsReplayBackToPending(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	workspace := t.TempDir()
+	mapping, _ := json.Marshal(providerThread{Provider: "dsh", InstanceID: "dsh-failing", WorkspaceRoot: workspace})
+	if err := store.Set(instanceKey("resume-failure"), string(mapping)); err != nil {
+		t.Fatalf("写入 instance 映射: %v", err)
+	}
+	base := newFakeAdapter("dsh")
+	streaming := &failingStreamingAdapter{fakeAdapter: base, err: errors.New("模拟 session/load 失败")}
+	runner := NewSessionRunner(store, map[string]adapter.Adapter{"dsh": streaming}, testLogger())
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
+
+	err = runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.resume",
+		PayloadJSON: fmt.Sprintf(`{"session_id":"resume-failure","workspace_root":%q}`, workspace),
+	})
+	if err == nil {
+		t.Fatal("adapter 恢复失败必须向调用方返回错误")
+	}
+	if state, stateErr := store.Get(replayStateKey("resume-failure")); stateErr != nil || state != replayPending {
+		t.Fatalf("恢复失败后的 replay 状态 = %q，err=%v，want pending", state, stateErr)
+	}
+	if _, lookupErr := runner.lookupSession("resume-failure"); !errors.Is(lookupErr, ErrSessionInstanceMissing) {
+		t.Fatalf("恢复失败不得保留半开句柄: %v", lookupErr)
+	}
+}
+
+// 非法唤醒结果同样必须回滚 replay 状态；Runner 不能把未知字符串当作成功或完成。
+func TestSessionRunnerInvalidResumeResultRollsReplayBackToPending(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	workspace := t.TempDir()
+	mapping, _ := json.Marshal(providerThread{Provider: "dsh", InstanceID: "dsh-invalid", WorkspaceRoot: workspace})
+	if err := store.Set(instanceKey("resume-invalid"), string(mapping)); err != nil {
+		t.Fatalf("写入 instance 映射: %v", err)
+	}
+	base := newFakeAdapter("dsh")
+	streaming := &failingStreamingAdapter{fakeAdapter: base, result: adapter.ResumeResult{Result: "unknown"}}
+	runner := NewSessionRunner(store, map[string]adapter.Adapter{"dsh": streaming}, testLogger())
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
+
+	err = runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.resume",
+		PayloadJSON: fmt.Sprintf(`{"session_id":"resume-invalid","workspace_root":%q}`, workspace),
+	})
+	if err == nil {
+		t.Fatal("非法唤醒结果必须失败")
+	}
+	if state, stateErr := store.Get(replayStateKey("resume-invalid")); stateErr != nil || state != replayPending {
+		t.Fatalf("非法结果后的 replay 状态 = %q，err=%v，want pending", state, stateErr)
+	}
+}
+
+// 回放事件流在 load 完成信号之前关闭时，不能把不完整历史标记为 complete。
+func TestSessionRunnerReplayStreamCloseBeforeCompletionStaysPending(t *testing.T) {
+	store, runner, _ := newRunnerFixture(t, "dsh")
+	h := newReplayFakeHandle("dsh-early-close")
+	if err := store.Set(replayStateKey("early-close"), replayLoading); err != nil {
+		t.Fatalf("记录 loading 状态: %v", err)
+	}
+	fwdCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	close(h.events)
+	done := make(chan struct{})
+	go func() {
+		runner.forwardEventsWithReplay("early-close", h, fwdCtx, h.ReplayComplete(), func() {
+			runner.markReplayComplete("early-close")
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("事件流提前关闭后转发协程未退出")
+	}
+	if state, err := store.Get(replayStateKey("early-close")); err == nil && state == replayComplete {
+		t.Fatal("未收到回放完成信号时不得标记 complete")
+	}
+}
+
+// 新一轮恢复开始后，旧代数的迟到完成回调必须被忽略。
+func TestSessionRunnerIgnoresStaleReplayCompletion(t *testing.T) {
+	store, runner, _ := newRunnerFixture(t, "dsh")
+	if err := runner.setReplayState("stale", replayLoading); err != nil {
+		t.Fatalf("记录 loading 状态: %v", err)
+	}
+	first := runner.beginResumeGeneration("stale")
+	second := runner.beginResumeGeneration("stale")
+	runner.markReplayCompleteForGeneration("stale", first)
+	if state, err := store.Get(replayStateKey("stale")); err != nil || state != replayLoading {
+		t.Fatalf("旧代数完成回调改写状态 = %q，err=%v", state, err)
+	}
+	runner.markReplayCompleteForGeneration("stale", second)
+	if state, err := store.Get(replayStateKey("stale")); err != nil || state != replayComplete {
+		t.Fatalf("当前代数完成回调状态 = %q，err=%v，want complete", state, err)
+	}
+}
+
+func TestSessionRunnerWorkspaceMovedDisposesExistingHandle(t *testing.T) {
+	store, runner, _ := newRunnerFixture(t, "dsh")
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	mapping, _ := json.Marshal(providerThread{Provider: "dsh", InstanceID: "dsh-moved", WorkspaceRoot: oldRoot})
+	if err := store.Set(instanceKey("moved-handle"), string(mapping)); err != nil {
+		t.Fatalf("写入 instance 映射: %v", err)
+	}
+	h := newFakeHandle("dsh-moved")
+	_, cancel := context.WithCancel(context.Background())
+	runner.mu.Lock()
+	runner.handles["moved-handle"] = &runningSession{handle: h, cancel: cancel}
+	runner.mu.Unlock()
+
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.resume",
+		PayloadJSON: fmt.Sprintf(`{"session_id":"moved-handle","workspace_root":%q}`, newRoot),
+	}); err != nil {
+		t.Fatalf("移动工作区 resume: %v", err)
+	}
+	if !h.wasDisposed() {
+		t.Fatal("工作区移动后旧句柄必须回收")
+	}
+	if _, err := runner.lookupSession("moved-handle"); !errors.Is(err, ErrSessionInstanceMissing) {
+		t.Fatalf("工作区移动后不得保留旧句柄: %v", err)
+	}
+}
+
+func TestSessionRunnerWorkspaceRemovedIsWorkspaceMoved(t *testing.T) {
+	store, runner, _ := newRunnerFixture(t, "dsh")
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	mapping, _ := json.Marshal(providerThread{Provider: "dsh", InstanceID: "dsh-removed", WorkspaceRoot: oldRoot})
+	if err := store.Set(instanceKey("removed-workspace"), string(mapping)); err != nil {
+		t.Fatalf("写入 instance 映射: %v", err)
+	}
+	if err := os.RemoveAll(oldRoot); err != nil {
+		t.Fatalf("删除旧工作区 fixture: %v", err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.resume",
+		PayloadJSON: fmt.Sprintf(`{"session_id":"removed-workspace","workspace_root":%q}`, newRoot),
+	}); err != nil {
+		t.Fatalf("旧工作区已删除时 resume: %v", err)
+	}
+	raw, err := store.Get(resumeResultKey("removed-workspace"))
+	if err != nil {
+		t.Fatalf("未记录 workspace moved 结果: %v", err)
+	}
+	var result adapter.ResumeResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("解析 workspace moved 结果: %v", err)
+	}
+	if result.Result != adapter.WakeWorkspaceMoved {
+		t.Fatalf("旧工作区删除后的结果 = %q, want %q", result.Result, adapter.WakeWorkspaceMoved)
 	}
 }
 

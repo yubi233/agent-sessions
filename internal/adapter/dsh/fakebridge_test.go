@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -172,6 +174,11 @@ func respondByMethod(t *testing.T, sessionID string) func(fb *fakeBridge, msg ma
 				"jsonrpc": "2.0", "id": id,
 				"result": map[string]any{"sessionId": sessionID},
 			})
+		case "session/load", "session/resume":
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": id,
+				"result": map[string]any{},
+			})
 		case "session/prompt":
 			fb.push(t, map[string]any{
 				"jsonrpc": "2.0", "id": id,
@@ -222,6 +229,77 @@ func TestDetectVersionMismatchFailClosed(t *testing.T) {
 		if c.Reason == "" {
 			t.Fatalf("%s 必须带中文原因", c.Name)
 		}
+	}
+}
+
+func TestCapabilitiesMatchResumeAndModelTruth(t *testing.T) {
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, "unused")
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	caps, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	byName := make(map[string]adapter.Capability, len(caps.Capabilities))
+	for _, capability := range caps.Capabilities {
+		byName[capability.Name] = capability
+	}
+	if byName["resume"].Status != adapter.CapabilityNative || byName["resume"].Reason != "" {
+		t.Fatalf("resume 能力不真实: %+v", byName["resume"])
+	}
+	if byName["model_select"].Status != adapter.CapabilityUnsupported || byName["model_select"].Reason == "" {
+		t.Fatalf("model_select 必须 truthful unsupported: %+v", byName["model_select"])
+	}
+}
+
+// 生产适配器必须把符号链接工作区规约为 realpath，再同时用于 transport、
+// session/new 和后续 resume；否则 DSH 会按不同 project key 写入并拒绝恢复。
+func TestProductionAdapterCanonicalizesWorkspaceCWD(t *testing.T) {
+	realRoot := t.TempDir()
+	aliasParent := t.TempDir()
+	alias := filepath.Join(aliasParent, "workspace-link")
+	if err := os.Symlink(realRoot, alias); err != nil {
+		t.Skipf("当前文件系统不支持符号链接: %v", err)
+	}
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, "canonical-session")
+	var transportRoot string
+	a := &Adapter{
+		production: true,
+		factory:    func() (BridgeTransport, error) { return fb, nil },
+		workspaceFactory: func(root string) (BridgeTransport, error) {
+			transportRoot = root
+			return fb, nil
+		},
+	}
+	// 禁止测试意外读取真实 checkout 的 legacy 根。
+	t.Setenv(EnvBin, filepath.Join(t.TempDir(), "bin.js"))
+	t.Setenv(EnvPersistCompression, PersistenceCompressionNone)
+	h, err := a.Start(context.Background(), adapter.StartRequest{WorkspaceRoot: alias})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Dispose(context.Background()) })
+	want, err := canonicalWorkspacePath(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transportRoot != want {
+		t.Fatalf("transport workspace root = %q, want %q", transportRoot, want)
+	}
+	var newFrame map[string]any
+	for _, frame := range fb.written() {
+		if methodOf(frame) == "session/new" {
+			newFrame = frame
+			break
+		}
+	}
+	if newFrame == nil {
+		t.Fatal("未发送 session/new")
+	}
+	params, _ := newFrame["params"].(map[string]any)
+	if params["cwd"] != want {
+		t.Fatalf("session/new cwd = %v, want %q", params["cwd"], want)
 	}
 }
 
@@ -320,6 +398,102 @@ func TestStartSendRoundTripAndMessageCompleted(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 turn_completed 事件超时")
+	}
+}
+
+// P1 Resume 时序：ready 回调返回前不得发出 load；回调接管事件流后可完整收到回放。
+func TestResumeStreamingSubscribesBeforeLoad(t *testing.T) {
+	const sessionID = "sess-resume"
+	fb := newFakeBridge()
+	fb.script = func(fb *fakeBridge, msg map[string]any) {
+		if methodOf(msg) == "session/load" {
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{
+					"sessionId": sessionID,
+					"update":    map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": "旧问题"}},
+				},
+			})
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{
+					"sessionId": sessionID,
+					"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "旧回答"}},
+				},
+			})
+			fb.push(t, map[string]any{"jsonrpc": "2.0", "id": frameID(msg), "result": map[string]any{}})
+			return
+		}
+		respondByMethod(t, sessionID)(fb, msg)
+	}
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	readyCalled := false
+	var resumed adapter.Handle
+	result, err := a.ResumeStreaming(context.Background(), adapter.ResumeRequest{
+		InstanceID: sessionID, WorkspaceRoot: "/tmp/dsh-ws", ReplayHistory: true,
+	}, func(h adapter.Handle) error {
+		readyCalled = true
+		resumed = h
+		for _, frame := range fb.written() {
+			if methodOf(frame) == "session/load" {
+				t.Fatalf("ready 回调返回前不得发送 session/load")
+			}
+		}
+		return nil
+	})
+	if err != nil || result.Result != adapter.WakeResumed || !readyCalled {
+		t.Fatalf("ResumeStreaming = %+v, %v, ready=%v", result, err, readyCalled)
+	}
+	t.Cleanup(func() { _ = resumed.Dispose(context.Background()) })
+	var got []adapter.EventType
+	for len(got) < 2 {
+		select {
+		case ev := <-resumed.Events():
+			got = append(got, ev.Type)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("等待回放事件超时，got=%v", got)
+		}
+	}
+	if got[0] != adapter.EventUserMessage || got[1] != adapter.EventMessageCompleted {
+		t.Fatalf("回放事件顺序 = %v", got)
+	}
+	fb.push(t, map[string]any{
+		"jsonrpc": "2.0", "method": "session/update",
+		"params": map[string]any{
+			"sessionId": sessionID,
+			"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "新回答"}},
+		},
+	})
+	select {
+	case event := <-resumed.Events():
+		if event.ReplayOrdinal != 0 || event.Payload["text"] != "新回答" {
+			t.Fatalf("回放完成后的实时事件被错误标记: %+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待回放完成后的实时事件超时")
+	}
+}
+
+// 回放背压期间桥退出时，事件推送必须被停止信号唤醒，不能向已关闭通道写入或遗留协程。
+func TestReplayEventPushStopsBeforeChannelClose(t *testing.T) {
+	fb := newFakeBridge()
+	h := newHandle(fb)
+	go h.readLoop()
+	h.setReplayMode(true)
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < cap(h.events)+32; i++ {
+			h.pushEvent(adapter.Event{Type: adapter.EventUserMessage, Payload: map[string]any{"text": "历史"}})
+		}
+		close(done)
+	}()
+	// 给推送协程一个机会填满回放缓冲，再触发桥退出。
+	time.Sleep(10 * time.Millisecond)
+	_ = h.Dispose(context.Background())
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("桥退出后回放推送协程未收敛")
 	}
 }
 

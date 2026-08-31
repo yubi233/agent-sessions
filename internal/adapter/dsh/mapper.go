@@ -30,11 +30,11 @@ type contentBlock struct {
 }
 
 // mapSessionUpdate 把 session/update 的 update 字段映射为 canonical 事件（纯函数，可单测）。
-// 白名单只放行桥承诺面内的变体；当前桥（acp-demo index.ts）只提交
-// agent_message_chunk。该帧在桥侧已等待 assistant/message 的完整 content block
-// 落地后才发送，因此映射为 message_completed，而不是原始 token delta；这样本地
-// 开发编码器与生产时间线都只消费完整助手文本。
-// 其余变体（user_message_chunk/agent_thought_chunk/tool_call/tool_call_update/
+// 白名单只放行桥承诺面内的变体；当前桥（acp-demo index.ts）在 session/load
+// 回放时提交 user_message_chunk，在助手历史/实时输出时提交 agent_message_chunk。
+// agent_message_chunk 在桥侧已等待 assistant/message 的完整 content block 落地，
+// 因此映射为 message_completed，而不是原始 token delta；用户回放映射为 user_message。
+// 其余变体（agent_thought_chunk/tool_call/tool_call_update/
 // plan/plan_update 等）与未知变体一律 ok=false，由调用方丢弃并计数；usage_update
 // 是桥为 usage 投影提供的受控扩展，不携带正文。
 // 返回的第三个值是变体名（含解析失败时的占位），供调用方按变体计数。
@@ -67,7 +67,7 @@ func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, 
 		}
 		return adapter.Event{Type: adapter.EventUsage, Payload: payload}, true, variant
 	}
-	if variant != "agent_message_chunk" {
+	if variant != "agent_message_chunk" && variant != "user_message_chunk" {
 		// 白名单外/未知变体：丢弃并计数，不产生事件。
 		return adapter.Event{}, false, variant
 	}
@@ -86,8 +86,12 @@ func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, 
 	if body.MessageID != "" {
 		payload["message_id"] = body.MessageID
 	}
+	eventType := adapter.EventMessageCompleted
+	if variant == "user_message_chunk" {
+		eventType = adapter.EventUserMessage
+	}
 	return adapter.Event{
-		Type:    adapter.EventMessageCompleted,
+		Type:    eventType,
 		Payload: payload,
 	}, true, variant
 }

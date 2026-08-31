@@ -3,6 +3,7 @@ package dsh
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestLiveBridgeLifecycle(t *testing.T) {
 	if caps.Version == "" {
 		t.Fatalf("live 桥握手后 Version 必须非空: %#v", caps)
 	}
-	// 能力矩阵抽查：start/abort/kill native；resume unsupported 带原因；permission emulated。
+	// 能力矩阵抽查：start/abort/kill/resume native；permission emulated。
 	byName := map[string]adapter.Capability{}
 	for _, cp := range caps.Capabilities {
 		byName[cp.Name] = cp
@@ -42,14 +43,15 @@ func TestLiveBridgeLifecycle(t *testing.T) {
 	if byName["kill"].Status != adapter.CapabilityNative {
 		t.Fatalf("kill status = %q, want native（per-session 进程组所有权）", byName["kill"].Status)
 	}
-	if byName["resume"].Status != adapter.CapabilityUnsupported || byName["resume"].Reason == "" {
-		t.Fatalf("resume 必须 unsupported 且带原因: %#v", byName["resume"])
+	if byName["resume"].Status != adapter.CapabilityNative || byName["resume"].Reason != "" {
+		t.Fatalf("resume 必须 native 且不带降级原因: %#v", byName["resume"])
 	}
 	if byName["permission"].Status != adapter.CapabilityEmulated {
 		t.Fatalf("permission status = %q, want emulated", byName["permission"].Status)
 	}
 
-	h, err := a.Start(ctx, adapter.StartRequest{WorkspaceRoot: t.TempDir()})
+	workspace := t.TempDir()
+	h, err := a.Start(ctx, adapter.StartRequest{WorkspaceRoot: workspace})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -61,6 +63,18 @@ func TestLiveBridgeLifecycle(t *testing.T) {
 	if idh.InstanceID() == "" {
 		t.Fatal("live sessionId 必须非空")
 	}
+	transport, ok := h.(*handle).transport.(*dshBinTransport)
+	if !ok {
+		t.Fatal("live handle 必须使用 dshBinTransport")
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := filepath.Join(canonicalWorkspace, ".dsh-sessions")
+	if transport.persistRoot != wantRoot || transport.workspaceRoot != canonicalWorkspace {
+		t.Fatalf("live 持久化/工作区根 = %q/%q, want %q/%q", transport.persistRoot, transport.workspaceRoot, wantRoot, canonicalWorkspace)
+	}
 
 	// 对空闲会话发 cancel：桥容错（P0 口径：进程存活、无应答帧）。
 	if err := h.Abort(context.Background()); err != nil {
@@ -70,6 +84,9 @@ func TestLiveBridgeLifecycle(t *testing.T) {
 	// Dispose 关桥后事件通道应自然关闭。
 	if err := h.Dispose(context.Background()); err != nil {
 		t.Fatalf("Dispose: %v", err)
+	}
+	if _, err := os.Stat(wantRoot); err != nil {
+		t.Fatalf("关闭桥后 workspace 持久化根必须保留: %v", err)
 	}
 	select {
 	case _, open := <-h.Events():

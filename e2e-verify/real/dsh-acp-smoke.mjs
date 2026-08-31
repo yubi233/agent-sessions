@@ -28,8 +28,9 @@ function argOf(flag) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 const dshRoot = resolve(argOf("--dsh-root") ?? "/Users/yubi/code/deepseek-harness");
-const configPath = argOf("--config") ?? join(dshRoot, "examples/acp-agent/cordis.yml");
-const binPath = argOf("--bin") ?? join(dshRoot, "packages/examples/acp-demo/lib/bin.js");
+// 在父进程中先规约路径，避免子进程切换到 DSH 检出根后把相对路径解析错。
+const configPath = resolve(argOf("--config") ?? join(dshRoot, "examples/acp-agent/cordis.yml"));
+const binPath = resolve(argOf("--bin") ?? join(dshRoot, "packages/examples/acp-demo/lib/bin.js"));
 const outDir = resolve(argOf("--out") ?? "e2e-verify/reports/ADAPTER-DSH");
 const timeoutMs = Number(argOf("--timeout-ms") ?? 120_000);
 

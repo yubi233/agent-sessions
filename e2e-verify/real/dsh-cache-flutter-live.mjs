@@ -31,8 +31,10 @@ mkdirSync(cacheRoot, { recursive: true });
 
 const relayBase = process.env.AGENT_SESSIONS_RELAY_BASE_URL ?? 'http://127.0.0.1:8787';
 const dshBin = process.env.AGENT_SESSIONS_DSH_BIN ?? '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/bin.js';
-const dshConfig = process.env.AGENT_SESSIONS_DSH_CONFIG ?? '/Users/yubi/code/deepseek-harness/examples/acp-agent/cordis-oxalpha.yml';
-const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? 'ox-alpha-free';
+// 默认使用仓库根的本地配置，避免继续调用已经下线的旧模型。
+const dshConfig = process.env.AGENT_SESSIONS_DSH_CONFIG ?? join(ROOT, 'cordis.yml');
+const model = process.env.AGENT_SESSIONS_DSH_MODEL ?? 'deepseek-v4-flash-free';
+const dshRouteProvider = process.env.AGENT_SESSIONS_DSH_PROVIDER ?? 'opencode-zen';
 const report = {
   suite: 'v0.5.next-dsh-cache-relay-flutter-live',
   report_kind: 'real_cache_relay_flutter_correlation',
@@ -46,6 +48,7 @@ const report = {
   local_test: true,
   headless: false,
   provider: 'dsh',
+  dsh_route_provider: dshRouteProvider,
   model,
   relay_base: relayBase,
   command: 'node e2e-verify/real/dsh-cache-flutter-live.mjs',

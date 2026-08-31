@@ -529,12 +529,12 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 		usageContextBySession: make(map[string]usageContext), eventWake: make(chan struct{}, 1),
 	}
 	if runner != nil {
-		runner.SetEventSink(loop.enqueueCanonicalEvent)
+		runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
 	}
 	return loop
 }
 
-// RunWithRetry keeps one real SSE connection at a time and reconnects with bounded exponential backoff.
+// RunWithRetry 保持每次只有一条真实 SSE 连接，并使用有界指数退避重连。
 // 在身份撤销、协议不兼容等不可恢复 HTTP 错误上直接退出，避免后台无意义重试。
 func (l *RelayLoop) RunWithRetry(ctx context.Context) error {
 	backoff := 100 * time.Millisecond
@@ -942,7 +942,7 @@ func (l *RelayLoop) enqueueCommandEvent(command RelayCommand, event adapter.Even
 		return newCommandExecutionError(protocol.ErrCapabilityUnsupported, err)
 	}
 	if err := l.Store.EnqueueRelayEvent(RelayEvent{
-		EventID: id.New("evt"), CommandID: command.CommandID, SessionID: command.SessionID,
+		EventID: relayEventID(command.SessionID, event), CommandID: command.CommandID, SessionID: command.SessionID,
 		EventType: relayEventType(event.Type), TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
 	}); err != nil {
 		return err
@@ -983,6 +983,23 @@ func (l *RelayLoop) bindUsageContext(command RelayCommand) {
 }
 
 func (l *RelayLoop) enqueueCanonicalEvent(sessionID string, event adapter.Event) {
+	if err := l.enqueueCanonicalEventResult(sessionID, event); err != nil {
+		l.Logger.Warn("daemon canonical event enqueue failed", "event_type", event.Type, "error", err)
+	}
+}
+
+// relayEventID 为回放事件生成跨重启稳定的 outbox 主键；普通实时事件继续使用随机 ID。
+// 回放序号本身不含 DSH 正文或路径，哈希只用于 Relay 幂等，不进入事件正文。
+func relayEventID(sessionID string, event adapter.Event) string {
+	if event.ReplayOrdinal > 0 {
+		return "evt-replay-" + replaySourceKey(sessionID, event.ReplayOrdinal)
+	}
+	return id.New("evt")
+}
+
+// enqueueCanonicalEventResult 把事件写入本机 outbox，并向回放调用方返回提交结果。
+// 回放 checkpoint 只能在此函数成功后推进；失败时保留 loading 状态，下一次恢复会重新回放。
+func (l *RelayLoop) enqueueCanonicalEventResult(sessionID string, event adapter.Event) error {
 	l.mu.RLock()
 	commandID := l.commandBySession[sessionID]
 	usageCtx := l.usageContextBySession[sessionID]
@@ -990,7 +1007,7 @@ func (l *RelayLoop) enqueueCanonicalEvent(sessionID string, event adapter.Event)
 	if event.Type == adapter.EventUsage {
 		if usage, ok := relayUsageFromAdapterEvent(sessionID, commandID, usageCtx, event); ok {
 			if err := l.Store.EnqueueRelayUsage(usage); err != nil {
-				l.Logger.Warn("daemon usage outbox enqueue failed", "error", err)
+				return err
 			} else {
 				select {
 				case l.eventWake <- struct{}{}:
@@ -1000,34 +1017,31 @@ func (l *RelayLoop) enqueueCanonicalEvent(sessionID string, event adapter.Event)
 		}
 	}
 	if l.Encoder == nil {
-		l.Logger.Warn("daemon event withheld: encryption encoder unavailable", "event_type", event.Type)
-		return
+		return errors.New("event encoder unavailable")
 	}
 	if commandID == "" {
-		l.Logger.Warn("daemon event withheld: no command correlation", "event_type", event.Type)
-		return
+		return errors.New("event command correlation unavailable")
 	}
 	envelope, err := l.Encoder.Encode(sessionID, event)
 	if err != nil {
-		l.Logger.Warn("daemon event withheld: encryption failed", "event_type", event.Type, "error", err)
-		return
+		return err
 	}
 	// 编码器契约：空 envelope 且无错误表示该事件类型不进入账号时间线
 	//（本地开发编码器据此过滤 delta/usage 等噪音）。
 	if strings.TrimSpace(envelope) == "" {
-		return
+		return nil
 	}
 	if err := l.Store.EnqueueRelayEvent(RelayEvent{
-		EventID: id.New("evt"), CommandID: commandID, SessionID: sessionID,
+		EventID: relayEventID(sessionID, event), CommandID: commandID, SessionID: sessionID,
 		EventType: relayEventType(event.Type), TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
 	}); err != nil {
-		l.Logger.Warn("daemon event outbox enqueue failed", "event_type", event.Type, "error", err)
-		return
+		return err
 	}
 	select {
 	case l.eventWake <- struct{}{}:
 	default:
 	}
+	return nil
 }
 
 func (l *RelayLoop) flushOutboxes(ctx context.Context) error {
@@ -1273,9 +1287,8 @@ func relayEventType(value adapter.EventType) string {
 	}
 }
 
-// terminalStatusForEvent projects only the lifecycle outcome needed by Relay. The
-// provider stop_reason remains inside the encrypted envelope; unknown reasons fail
-// closed to stopped so an interrupted turn cannot remain visibly running.
+// terminalStatusForEvent 只投影 Relay 所需的生命周期结果。Provider 的 stop_reason
+// 保留在加密 envelope 内；未知原因按 stopped 关闭，避免中断回合一直显示为运行中。
 func terminalStatusForEvent(event adapter.Event) string {
 	if event.Type != adapter.EventTurnCompleted {
 		return ""
