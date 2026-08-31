@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-// 设备角色。会话写权限只授予 android_owner/android；设备管理只授予 android_owner。
+// 设备角色。android_owner/android 是移动写端；web 在本地 LLM 会话场景也允许主动发起对话。
+// 设备管理仍只授予 android_owner。
 const (
 	RoleAndroidOwner = "android_owner"
 	RoleAndroid      = "android"
@@ -103,8 +104,9 @@ type AuthSubject struct {
 }
 
 // CanWrite 判断该角色是否可提交会话写命令。
+// 在本地单租户 LLM 会话场景，web 登录也被授权主动发起对话。
 func (s AuthSubject) CanWrite() bool {
-	return s.Role == RoleAndroidOwner || s.Role == RoleAndroid
+	return s.Role == RoleAndroidOwner || s.Role == RoleAndroid || s.Role == RoleWeb
 }
 
 // IsOwner 判断是否 owner 角色。

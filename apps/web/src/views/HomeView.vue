@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// 首页：Relay 健康检查 + 只读登录 + 设备/会话/能力摘要。
-// 登录后展示能力列表摘要；完整三态矩阵在独立只读视图（/capabilities）。
-// 页面不提供任何会话写控件（docs/zh/项目文档.md「Vue Web App」章节）。
+// 首页：Relay 健康检查 + 登录 + 设备/会话/能力摘要。
+// 登录后展示能力列表摘要；完整三态矩阵在独立视图（/capabilities）。
+// 主动 LLM 对话在 /chat 页面，通过本地 DSH 桥发起。
 import { onMounted, ref } from "vue";
 import { sessionState } from "../session";
 import type { ProviderCapabilities } from "../types";
@@ -29,7 +29,7 @@ async function refreshHealth(): Promise<void> {
   }
 }
 
-// ---- 只读登录与设备查看（P1 headed 回归）----
+// ---- 登录与设备查看（P1 headed 回归）----
 const email = ref("");
 const password = ref("");
 const authState = ref<"idle" | "loading" | "ok" | "error">("idle");
@@ -45,7 +45,7 @@ type ReadState = "idle" | "loading" | "ready" | "error";
 const readState = ref<ReadState>("idle");
 const readMessage = ref("");
 
-// 只读读取：设备、会话与能力矩阵；Web 不提供任何会话写控件。
+// 读取设备、会话与能力矩阵；会话写入口在 /chat 页面。
 async function loadReadOnly(): Promise<void> {
   readState.value = "loading";
   readMessage.value = "正在读取只读摘要…";
@@ -71,7 +71,7 @@ async function loadReadOnly(): Promise<void> {
   }
 }
 
-// 登录并拉取只读设备/会话/能力；Web 只读，不提供任何会话写控件。
+// 登录并拉取设备/会话/能力；主动 LLM 对话在 /chat 页面。
 async function login(): Promise<void> {
   authState.value = "loading";
   authMessage.value = "正在登录…";
@@ -88,7 +88,7 @@ async function login(): Promise<void> {
     sessionState.token = data.access_token;
     await loadReadOnly();
     authState.value = "ok";
-    authMessage.value = "已登录（只读）。";
+    authMessage.value = "已登录。";
   } catch (err) {
     authState.value = "error";
     authMessage.value = `登录失败：${err instanceof Error ? err.message : String(err)}`;
@@ -103,7 +103,7 @@ onMounted(refreshHealth);
     <header class="page-intro">
       <p class="eyebrow">Agent Sessions</p>
       <h1 id="page-title">本地 Relay 状态</h1>
-      <p class="intro-copy">查看连接、账户与已授权设备的只读摘要。</p>
+      <p class="intro-copy">查看连接、账户与已授权设备，并可进入 LLM 对话。</p>
     </header>
 
     <section class="page-section health-section" aria-labelledby="health-title">
@@ -134,7 +134,7 @@ onMounted(refreshHealth);
       <div class="section-heading">
         <div>
           <p class="section-kicker">账户</p>
-          <h2 id="login-title">只读登录</h2>
+          <h2 id="login-title">登录</h2>
         </div>
       </div>
       <form

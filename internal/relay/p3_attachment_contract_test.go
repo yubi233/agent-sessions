@@ -144,19 +144,19 @@ func TestP3ATTACH01RejectsUnsafeUploadPaths(t *testing.T) {
 		t.Fatalf("filename injection status=%d want 400 body=%s", response.Code, response.Body.String())
 	}
 
-	webLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
-		"email": "p3-attachment-reject@test.dev", "password": "test-pass-123",
+	adminLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
+		"email": "p3-attachment-reject@test.dev", "password": "test-pass-123", "device_role": "admin",
 	}, "")
-	if webLogin.Code != http.StatusOK {
-		t.Fatalf("web login status=%d body=%s", webLogin.Code, webLogin.Body.String())
+	if adminLogin.Code != http.StatusOK {
+		t.Fatalf("admin login status=%d body=%s", adminLogin.Code, adminLogin.Body.String())
 	}
-	var web struct {
+	var admin struct {
 		AccessToken string `json:"access_token"`
 	}
-	decodeP3(t, webLogin.Body.Bytes(), &web)
+	decodeP3(t, adminLogin.Body.Bytes(), &admin)
 	if response := env.do(t, http.MethodPost, "/v1/attachments/chunks", p3ChunkRequest(
 		"att_p3_readonly", sessionID, staleEpoch+1, 0, 1, "readonly", "readonly-a",
-	), web.AccessToken); response.Code != http.StatusForbidden {
+	), admin.AccessToken); response.Code != http.StatusForbidden {
 		t.Fatalf("readonly upload status=%d want 403 body=%s", response.Code, response.Body.String())
 	}
 }

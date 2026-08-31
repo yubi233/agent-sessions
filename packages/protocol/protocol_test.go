@@ -50,7 +50,7 @@ func TestRejectUnknownPayloadVersion(t *testing.T) {
 }
 
 func TestDeviceRoleCanWrite(t *testing.T) {
-	if !DeviceRoleCanWrite(RoleAndroidOwner) || DeviceRoleCanWrite(RoleWeb) || DeviceRoleCanWrite(RoleAdmin) {
+	if !DeviceRoleCanWrite(RoleAndroidOwner) || !DeviceRoleCanWrite(RoleWeb) || DeviceRoleCanWrite(RoleAdmin) {
 		t.Fatal("write role contract broken")
 	}
 }

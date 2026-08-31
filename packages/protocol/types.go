@@ -1,6 +1,7 @@
 package protocol
 
-// 设备角色。只有 android_owner / android 可以持有写租约。
+// 设备角色。android_owner / android 是移动写端；web 在本地 LLM 会话场景也被允许
+// 提交会话写命令（主动发起对话），但仅限同账号单租户本地 Web 使用。
 const (
 	RoleAndroidOwner = "android_owner"
 	RoleAndroid      = "android"
@@ -47,7 +48,7 @@ var CapabilityNames = []string{
 
 // DeviceRoleCanWrite 判断该角色是否允许提交会话写命令。
 func DeviceRoleCanWrite(role string) bool {
-	return role == RoleAndroidOwner || role == RoleAndroid
+	return role == RoleAndroidOwner || role == RoleAndroid || role == RoleWeb
 }
 
 // KnownWakeOutcomes 返回全部合法唤醒结果，供测试与 mock 注入。

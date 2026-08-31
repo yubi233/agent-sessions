@@ -1,6 +1,6 @@
 # ADR-013：DeepSeek Harness 作为第五类 Provider 的接入契约
 
-- 状态：Proposed（v0.5.next P0 冻结版；P1–P4 实施中如有修订必须更新本 ADR）
+- 状态：Proposed（v0.8 开工准备修订；Resume/迁移/同步实现完成前仍不得把相关能力标为 native）
 - 关联：迭代计划 v0.5.next、`internal/adapter/spi.go`、`e2e-verify/real/dsh-acp-smoke.mjs`
 
 ## 1. 决策
@@ -39,7 +39,8 @@
 | assistant 文本增量/提交 | message_delta / message_completed | P0 未触发（无 prompt），P1 用假桥定帧形 |
 | 权限请求/一次性决策 | permission_request / permission_decision | 同上，P1 假桥先行，P4 真实链路复核 |
 | 工具调用明细 | tool_call / tool_result | **未在桥承诺面内**；P1 假桥按缺失设计，能力标 unsupported（除非后续上游扩展） |
-| `session/load` / `session/list` | Resume 六态 | **wire 级证据：`-32601 Method not found`**（桥处理面仅 initialize/authenticate/newSession/prompt/cancel）→ Resume=`unsupported` |
+| `session/load` / `session/resume` | Resume 六态 | 当前 DSH checkout 已实现 load/resume（旧基线曾为 `-32601`）；本仓库 Adapter/Runner 目前仍返回 Resume=`unsupported`，必须完成 ready handle 交接、回放去重和恢复后 send 后才能升级 |
+| `session/list` | 本地会话发现 | ACP 仍未提供 list；v0.8 只在已确认 workspace/legacy root 内扫描 JSONL，不把任意 DSH checkout 当作数据源 |
 | 进程组终止（stdin EOF + 信号） | Dispose / ForceKillHandle | native；EOF 后 exit 0 |
 
 ## 5. 安全与凭据边界
@@ -53,3 +54,12 @@
 
 - 影响面：新增 `internal/adapter/dsh/`、registry 第五 kind `"dsh"`、Flutter provider 入口展示；无 SQLite 迁移、无公开 API 破坏性变更。
 - 回滚：registry 移除 `"dsh"` 即整体下线，客户端按未知 provider fail-closed；不需要数据动作。
+
+## 7. v0.8 开工前修订决策
+
+- **持久化所有权。** Start/Resume 的 canonical `WorkspaceRoot` 对应 `<workspaceRoot>/.dsh-sessions`，由工作区拥有且 Close 永不删除；Detect 才能创建并清理自有临时根。`DSH_SNAPSHOT_SESSIONS_ROOT` 只接收本次桥实例的精确根，不能被旧的临时 `sessions/` 注入逻辑劫持。
+- **存量迁移。** P0 先对显式授权的旧 checkout/bridge/workspace roots 做只读预检，再按 JSONL header 的 `cwd` 归属复制或登记 legacy root。迁移保留源文件，不复制派生 query index；重复 ID、双编码、未知格式、header/path 不一致或源文件变化均 fail-closed。
+- **Resume 时序。** Adapter 必须在发出 `session/load` 或 `session/resume` 前将新 Handle 通过 typed ready callback 交给 Runner，由 Runner 原子登记并启动事件转发。回放状态 `pending/loading/complete` 和 checkpoint 只保存在 Daemon 本机；公共 command 不透传 `replay_history`。
+- **回放映射。** `user_message_chunk` 映射 `EventUserMessage`，`agent_message_chunk` 映射 `EventMessageCompleted`。source key 由 Relay session id + 回放 ordinal 的版本化哈希派生，只进入加密 outbox 去重元数据，不暴露 DSH session id。
+- **工作区/Terminal 边界。** DSH Workspace identity 为 `account + home Terminal + canonical root`；跨 Terminal 仅可查看安全投影，不能 scan/import/resume/send。Daemon 不持有 owner bearer，扫描/导入必须由 owner/write 通过专用 signed result 触发。
+- **能力真值。** 在 Resume 闭环通过前保持 `resume=unsupported`；未真正下发的 `model_select` 保持 `unsupported`；`policy: never` 正常路径不会向 Agent Sessions 发 permission request，异常桥请求仍以 `cancelled` fail-closed。

@@ -127,16 +127,16 @@ func TestV07WorkspaceCreateWithFolderAuthorizationAndValidation(t *testing.T) {
 		t.Fatalf("offline status=%d body=%s", offline.Code, offline.Body.String())
 	}
 
-	webLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
-		"email": "v07-workspace-auth@test.dev", "password": "test-pass-123", "device_role": "web",
+	adminLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
+		"email": "v07-workspace-auth@test.dev", "password": "test-pass-123", "device_role": "admin",
 	}, "")
-	var web struct {
+	var admin struct {
 		AccessToken string `json:"access_token"`
 	}
-	decodeW1(t, webLogin.Body.Bytes(), &web)
-	denied := env.do(t, http.MethodPost, "/v1/workspaces/create-with-folder", map[string]any{"name": "web-attempt"}, web.AccessToken)
+	decodeW1(t, adminLogin.Body.Bytes(), &admin)
+	denied := env.do(t, http.MethodPost, "/v1/workspaces/create-with-folder", map[string]any{"name": "admin-attempt"}, admin.AccessToken)
 	if denied.Code != http.StatusForbidden {
-		t.Fatalf("web create status=%d body=%s", denied.Code, denied.Body.String())
+		t.Fatalf("admin create status=%d body=%s", denied.Code, denied.Body.String())
 	}
 }
 

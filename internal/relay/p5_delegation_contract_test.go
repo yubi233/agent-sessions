@@ -163,19 +163,19 @@ func TestDelegationRejectsUnsafeBoundariesAndReadOnlyWrites(t *testing.T) {
 	parentID, workspaceID := env.createSession(t, pair.AccessToken, pair.AccountID)
 	firstEpoch := sessionLeaseEpoch(t, env, pair.AccessToken, parentID)
 
-	webLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
-		"email": "delegation-boundary@fixture.test", "password": "test-pass-123", "device_role": "web",
+	adminLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
+		"email": "delegation-boundary@fixture.test", "password": "test-pass-123", "device_role": "admin",
 	}, "")
-	if webLogin.Code != http.StatusOK {
-		t.Fatalf("web login status=%d", webLogin.Code)
+	if adminLogin.Code != http.StatusOK {
+		t.Fatalf("admin login status=%d", adminLogin.Code)
 	}
-	var web struct {
+	var admin struct {
 		AccessToken string `json:"access_token"`
 	}
-	_ = json.Unmarshal(webLogin.Body.Bytes(), &web)
+	_ = json.Unmarshal(adminLogin.Body.Bytes(), &admin)
 	readOnly := env.do(t, http.MethodPost, "/v1/sessions/"+parentID+"/delegations", delegationCreatePayload(
-		workspaceID, "codex", "delegation-web-write", firstEpoch,
-	), web.AccessToken)
+		workspaceID, "codex", "delegation-admin-write", firstEpoch,
+	), admin.AccessToken)
 	if readOnly.Code != http.StatusForbidden || relayErrorCode(t, readOnly.Body.Bytes()) != "READ_ONLY_DEVICE" {
 		t.Fatalf("read-only delegation write status=%d body=%s", readOnly.Code, readOnly.Body.String())
 	}

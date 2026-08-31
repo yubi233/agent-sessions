@@ -135,6 +135,51 @@ tasks:
       - node e2e-verify/real/v07-full-gate.mjs
       - HEADLESS=false node e2e-verify/suites/v07-headed-readonly.mjs
 
+  test:v08:preflight:
+    desc: v0.8 DSH 历史存储只读预检（不迁移、不删除、不调用模型；需显式授权根变量）
+    cmds:
+      - node --test e2e-verify/real/dsh-v08-preflight.test.mjs
+      - |
+        if [[ -z "${AGENT_SESSIONS_DSH_V08_WORKSPACE_ROOTS:-}" && -z "${AGENT_SESSIONS_DSH_V08_LEGACY_ROOTS:-}" ]]; then
+          echo "test:v08:preflight: local fixture passed; set AGENT_SESSIONS_DSH_V08_WORKSPACE_ROOTS or AGENT_SESSIONS_DSH_V08_LEGACY_ROOTS to run authorized inventory" >&2
+          exit 0
+        fi
+        args=()
+        if [[ -n "${AGENT_SESSIONS_DSH_V08_WORKSPACE_ROOTS:-}" ]]; then
+          IFS=',' read -r -a roots <<< "$AGENT_SESSIONS_DSH_V08_WORKSPACE_ROOTS"
+          for root in "${roots[@]}"; do args+=(--workspace-root "$root"); done
+        fi
+        if [[ -n "${AGENT_SESSIONS_DSH_V08_LEGACY_ROOTS:-}" ]]; then
+          IFS=',' read -r -a roots <<< "$AGENT_SESSIONS_DSH_V08_LEGACY_ROOTS"
+          for root in "${roots[@]}"; do args+=(--legacy-root "$root"); done
+        fi
+        node e2e-verify/real/dsh-v08-preflight.mjs "${args[@]}"
+
+  test:v08:local:
+    desc: v0.8 开工前本地门（文档/生成物、现有协议/Relay/Daemon/Adapter 回归与 DSH 只读预检）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - task: test:protocol
+      - task: test:relay
+      - task: test:daemon
+      - task: test:e2e:relay
+      - task: test:contract
+      - task: test:v08:preflight
+      - node --test e2e-verify/real/dsh-live-result.test.mjs
+      - git diff --check
+
+  test:v08:real:
+    desc: v0.8 真实 DSH 恢复门（Zen 测试池：mimo-v2.5-free、big-pickle、ling-3.0-flash-fin-free；429 按约定通过）
+    cmds:
+      - |
+        if [[ "${AGENT_SESSIONS_DSH_REAL:-}" != "1" ]]; then
+          echo "test:v08:real blocked: set AGENT_SESSIONS_DSH_REAL=1 after confirming local history/model scope" >&2
+          exit 2
+        fi
+        echo "test:v08:real blocked: DSH Resume implementation and live runner are not available yet; prepared provider=opencode-zen models=mimo-v2.5-free,big-pickle,ling-3.0-flash-fin-free, no model request started" >&2
+        exit 2
+
   record:v07:
     desc: v0.7 录屏入口（必须分别提供 Flutter macOS 与 headed Web passed gate 报告）
     cmds:

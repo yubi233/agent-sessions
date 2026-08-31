@@ -18,7 +18,11 @@ const handshakeTimeout = 30 * time.Second
 // dshKnownModels 是桥 llm-pi-ai provider 的已知模型 roster（cordis.yml models 列表）。
 // 新增模型时需同步更新此处；运行期模型目录以桥实际探测结果为准（此处仅供能力矩阵 UI 渲染）。
 var dshKnownModels = []string{
+	"deepseek-v4-flash-free",
 	"deepseek-v4-flash",
+	"mimo-v2.5-free",
+	"big-pickle",
+	"ling-3.0-flash-fin-free",
 	"deepseek-v4-pro",
 }
 

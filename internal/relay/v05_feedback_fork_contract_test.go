@@ -115,17 +115,17 @@ func TestV05MessageFeedbackHTTPContract(t *testing.T) {
 		t.Fatalf("feedback list after delete must be empty: %+v", listBody.Items)
 	}
 
-	webLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
-		"email": "v05-feedback-owner@test.dev", "password": "test-pass-123",
+	adminLogin := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
+		"email": "v05-feedback-owner@test.dev", "password": "test-pass-123", "device_role": "admin",
 	}, "")
-	if webLogin.Code != http.StatusOK {
-		t.Fatalf("web login status=%d body=%s", webLogin.Code, webLogin.Body.String())
+	if adminLogin.Code != http.StatusOK {
+		t.Fatalf("admin login status=%d body=%s", adminLogin.Code, adminLogin.Body.String())
 	}
-	var webTokens w1TokenPair
-	decodeW1(t, webLogin.Body.Bytes(), &webTokens)
+	var adminTokens w1TokenPair
+	decodeW1(t, adminLogin.Body.Bytes(), &adminTokens)
 	if denied := env.do(t, http.MethodPut, "/v1/sessions/"+sessionID+"/feedback/msg-1", map[string]any{
 		"rating": "positive",
-	}, webTokens.AccessToken); denied.Code != http.StatusForbidden {
+	}, adminTokens.AccessToken); denied.Code != http.StatusForbidden {
 		t.Fatalf("readonly feedback write status=%d want 403", denied.Code)
 	}
 

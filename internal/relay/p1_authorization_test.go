@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// CTRL-01：非 Android（Web/Admin）写命令被拒绝。
-func TestCTRL01WebCannotWrite(t *testing.T) {
+// CTRL-01：本地 LLM 场景下 web 被授权创建会话/工作区并提交写命令。
+func TestCTRL01WebCanWriteForLocalLLM(t *testing.T) {
 	env := newTestEnv(t)
-	pair := env.registerAs(t, "web@test.dev")
+	_ = env.registerAs(t, "web@test.dev")
 
-	// 构造一个未绑定设备的 Web 只读 token。
+	// Web 登录；未绑定 Android 设备，但 role=web 已允许主动发起本地 LLM 会话。
 	login := env.do(t, http.MethodPost, "/v1/auth/login", map[string]any{
 		"email": "web@test.dev", "password": "test-pass-123", "device_role": "web",
 	}, "")
@@ -23,25 +23,52 @@ func TestCTRL01WebCannotWrite(t *testing.T) {
 	}
 	_ = json.Unmarshal(login.Body.Bytes(), &w)
 
-	// Session 创建也是写路径，前置数据必须由 Android owner 创建。
-	sessID, _ := env.createSession(t, pair.AccessToken, pair.AccountID)
-	// Web 设备不能写命令。
-	submit := env.do(t, http.MethodPost, "/v1/sessions/"+sessID+"/commands", map[string]any{
-		"kind": "session.abort", "idempotency_key": "ik-web", "lease_epoch": 0,
+	// Web 可以直接创建工作区并创建会话。
+	ws := env.do(t, http.MethodPost, "/v1/workspaces", map[string]any{
+		"project_id": "web-write-attempt", "canonical_root": "/tmp/web-write-attempt", "status": "active",
 	}, w.AccessToken)
-	if submit.Code != http.StatusForbidden {
-		t.Fatalf("web submit status=%d want 403 body=%s", submit.Code, submit.Body.String())
+	if ws.Code != http.StatusOK && ws.Code != http.StatusCreated {
+		t.Fatalf("web create workspace status=%d want 2xx body=%s", ws.Code, ws.Body.String())
 	}
-	// Web/Admin 只读 token 也不能借由创建元数据路径变更账号状态。
-	if createSession := env.do(t, http.MethodPost, "/v1/sessions", map[string]any{
-		"workspace_id": sessID, "provider": "codex",
-	}, w.AccessToken); createSession.Code != http.StatusForbidden {
-		t.Fatalf("web create session status=%d want 403", createSession.Code)
+	var workspace struct {
+		ID string `json:"id"`
 	}
-	if createWorkspace := env.do(t, http.MethodPost, "/v1/workspaces", map[string]any{
-		"project_id": "web-write-attempt", "canonical_root": "/fixture/web-write-attempt",
-	}, w.AccessToken); createWorkspace.Code != http.StatusForbidden {
-		t.Fatalf("web create workspace status=%d want 403", createWorkspace.Code)
+	_ = json.Unmarshal(ws.Body.Bytes(), &workspace)
+	if workspace.ID == "" {
+		t.Fatal("web create workspace missing id")
+	}
+	createSession := env.do(t, http.MethodPost, "/v1/sessions", map[string]any{
+		"workspace_id": workspace.ID, "provider": "mock",
+	}, w.AccessToken)
+	if createSession.Code != http.StatusCreated {
+		t.Fatalf("web create session status=%d want 201 body=%s", createSession.Code, createSession.Body.String())
+	}
+	var sess struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(createSession.Body.Bytes(), &sess)
+	if sess.ID == "" {
+		t.Fatal("web create session missing id")
+	}
+
+	// 获取 lease 后可以提交命令（主动发起对话的写路径）。
+	lease := env.do(t, http.MethodPost, "/v1/sessions/"+sess.ID+"/lease", nil, w.AccessToken)
+	if lease.Code != http.StatusOK {
+		t.Fatalf("web acquire lease status=%d want 200 body=%s", lease.Code, lease.Body.String())
+	}
+	var l struct {
+		Epoch int64 `json:"lease_epoch"`
+	}
+	_ = json.Unmarshal(lease.Body.Bytes(), &l)
+	submit := env.do(t, http.MethodPost, "/v1/sessions/"+sess.ID+"/commands", map[string]any{
+		"kind": "session.start", "idempotency_key": "ik-web-start", "lease_epoch": l.Epoch,
+		"ciphertext": map[string]any{
+			"session_id": sess.ID,
+			"ciphertext": map[string]any{"fixture_payload": map[string]any{"session_id": sess.ID, "provider": "mock"}},
+		},
+	}, w.AccessToken)
+	if submit.Code != http.StatusAccepted {
+		t.Fatalf("web submit status=%d want 202 body=%s", submit.Code, submit.Body.String())
 	}
 }
 

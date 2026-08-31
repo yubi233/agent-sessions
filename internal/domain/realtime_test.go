@@ -97,7 +97,7 @@ func TestAcquireLeaseFencing(t *testing.T) {
 	}
 }
 
-// 非 Android 写命令被拒绝。
+// 非 Android/web 写命令被拒绝（admin 仍保持只读）。
 func TestSubmitCommandReadOnly(t *testing.T) {
 	repo := newRepo(t)
 	svc := NewSessionService(repo)
@@ -105,7 +105,7 @@ func TestSubmitCommandReadOnly(t *testing.T) {
 	_, _ = svc.AcquireLease(context.Background(), sessID, "dev", "")
 
 	_, err := svc.SubmitCommand(context.Background(), CommandInput{
-		AccountID: "acct", DeviceID: "dev", Role: "web",
+		AccountID: "acct", DeviceID: "dev", Role: "admin",
 		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "ik", LeaseEpoch: 1,
 	})
 	if err != ErrReadOnlyDevice {
@@ -229,7 +229,7 @@ func TestArchiveSessionHidesFromDefaultListAndRestores(t *testing.T) {
 	svc := NewSessionService(repo)
 	sessID := newSession(t, repo)
 
-	if _, err := svc.ArchiveSession(ctx, "acct", "web", sessID); err != ErrReadOnlyDevice {
+	if _, err := svc.ArchiveSession(ctx, "acct", "admin", sessID); err != ErrReadOnlyDevice {
 		t.Fatalf("readonly archive error=%v want ErrReadOnlyDevice", err)
 	}
 
