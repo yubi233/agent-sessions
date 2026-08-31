@@ -422,8 +422,10 @@ func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if command.CommandID == "" || command.DeliverySeq <= 0 || command.Kind == "" ||
-		(command.SessionID == "" && command.Kind != "workspace.create") ||
-		(command.Kind == "workspace.create" && command.WorkspaceID == "") {
+		(command.SessionID == "" && command.Kind != "workspace.create" && command.Kind != "workspace.sync_dsh" && command.Kind != "session.import_dsh") ||
+		(command.Kind == "workspace.create" && command.WorkspaceID == "") ||
+		(command.Kind == "workspace.sync_dsh" && command.WorkspaceID != "") ||
+		(command.Kind == "session.import_dsh" && command.WorkspaceID == "") {
 		return false, errors.New("invalid relay command")
 	}
 	tx, err := s.db.Begin()

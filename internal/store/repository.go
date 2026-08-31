@@ -443,8 +443,9 @@ type DaemonEventReceiptRow struct {
 	CreatedAtUnixMS int64
 }
 
-// WorkspaceCommandResultRow 是 workspace.create 专用的 daemon 回执。
+// WorkspaceCommandResultRow 是 workspace.create/workspace.sync_dsh 专用的 daemon 回执。
 // canonical_root 只在 Relay 内部用于登记 Workspace，不得由普通命令接口返回。
+// 对 workspace.sync_dsh，CanonicalRoot 字段存放 JSON 编码的 workspace_ids 白名单。
 type WorkspaceCommandResultRow struct {
 	CommandID       string
 	AccountID       string

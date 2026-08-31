@@ -128,6 +128,25 @@ type WorkspaceCommandReceipt struct {
 	ErrorCode   string `json:"error_code"`
 }
 
+// DSHSyncCommandReceipt 是 workspace.sync_dsh 专用回执。canonical roots 只由 daemon 上传，
+// Relay 不把它们放进普通 command result，也不会回传给客户端。
+type DSHSyncCommandReceipt struct {
+	CommandID    string   `json:"command_id"`
+	DeliverySeq  int64    `json:"delivery_seq"`
+	Status       string   `json:"status"`
+	ErrorCode    string   `json:"error_code"`
+	WorkspaceIDs []string `json:"workspace_ids"`
+}
+
+// DSHImportCommandReceipt 是 session.import_dsh 专用回执。只包含 opaque session ids。
+type DSHImportCommandReceipt struct {
+	CommandID   string   `json:"command_id"`
+	DeliverySeq int64    `json:"delivery_seq"`
+	Status      string   `json:"status"`
+	ErrorCode   string   `json:"error_code"`
+	SessionIDs  []string `json:"session_ids"`
+}
+
 type RelayDelivery struct {
 	DeliverySeq int64        `json:"delivery_seq"`
 	Command     RelayCommand `json:"command"`
@@ -252,6 +271,46 @@ func (c *RelayClient) ResolveWorkspace(ctx context.Context, commandID string, de
 	}
 	if out.CommandID == "" || out.WorkspaceID == "" || !validRelayResultStatus(out.Status) {
 		return WorkspaceCommandReceipt{}, errors.New("relay workspace result receipt incomplete")
+	}
+	return out, nil
+}
+
+// ResolveDSHWorkspace 上传 workspace.sync_dsh 的受控结果。路径列表只存在于该专用请求，
+// 普通 ack/result 端点永远不接受或返回 canonical roots。
+func (c *RelayClient) ResolveDSHWorkspace(ctx context.Context, commandID string, deliverySeq int64, canonicalRoots []string, status, errorCode string) (DSHSyncCommandReceipt, error) {
+	var out DSHSyncCommandReceipt
+	err := c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": daemonProtocolVersion,
+		"delivery_seq":     deliverySeq,
+		"canonical_roots":  canonicalRoots,
+		"status":           status,
+		"error_code":       errorCode,
+	}, &out)
+	if err != nil {
+		return DSHSyncCommandReceipt{}, err
+	}
+	if out.CommandID == "" || !validRelayResultStatus(out.Status) {
+		return DSHSyncCommandReceipt{}, errors.New("relay dsh sync result receipt incomplete")
+	}
+	return out, nil
+}
+
+// ResolveDSHImport 上传 session.import_dsh 的受控结果。session ids 只存在于该专用请求，
+// 普通 ack/result 端点永远不接受或返回它们。
+func (c *RelayClient) ResolveDSHImport(ctx context.Context, commandID string, deliverySeq int64, sessionIDs []string, status, errorCode string) (DSHImportCommandReceipt, error) {
+	var out DSHImportCommandReceipt
+	err := c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/dsh-import-result", map[string]any{
+		"protocol_version": daemonProtocolVersion,
+		"delivery_seq":     deliverySeq,
+		"session_ids":      sessionIDs,
+		"status":           status,
+		"error_code":       errorCode,
+	}, &out)
+	if err != nil {
+		return DSHImportCommandReceipt{}, err
+	}
+	if out.CommandID == "" || !validRelayResultStatus(out.Status) {
+		return DSHImportCommandReceipt{}, errors.New("relay dsh import result receipt incomplete")
 	}
 	return out, nil
 }
@@ -707,7 +766,7 @@ func (l *RelayLoop) validateLocalDelivery(command RelayCommand) error {
 	if err != nil || localTerminalID == "" || command.TargetTerminalID != localTerminalID {
 		return newCommandExecutionError(protocol.ErrScopeDenied, errors.New("terminal target mismatch"))
 	}
-	if strings.TrimSpace(command.WorkspaceID) == "" {
+	if strings.TrimSpace(command.WorkspaceID) == "" && command.Kind != "workspace.sync_dsh" {
 		return newCommandExecutionError(protocol.ErrWorkspacePathDenied, errors.New("workspace id missing"))
 	}
 	if !l.declaresCapability(command.Kind) {
@@ -761,6 +820,10 @@ func capabilityForCommand(kind string) string {
 		return "effort_select"
 	case "workspace.create":
 		return "workspace_create"
+	case "workspace.sync_dsh":
+		return "dsh_workspace_sync"
+	case "session.import_dsh":
+		return "dsh_session_import"
 	case "file.tree", "file.read", "code.read":
 		return "file_read"
 	case "git.status", "git.changes", "git.diff":
@@ -821,6 +884,59 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			startedThisPass = true
 		}
 		if command.ResultStatus != "" {
+			continue
+		}
+		if command.Kind == "session.import_dsh" {
+			// 会话按需导入没有 Session lease；只允许 home Terminal 在本机已确认工作区下
+			// 扫描 JSONL 元数据并回传 opaque Relay session ids。
+			status, errorCode := "succeeded", ""
+			var sessionIDs []string
+			if l.WorkspaceManager == nil {
+				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
+			} else {
+				// 当前实现先以空列表成功收口；真实 JSONL 导入由后续 P2 子任务补全。
+				// 这里保持与计划“只导入白名单元数据、不读取正文”的边界。
+				sessionIDs = []string{}
+			}
+			receipt, resolveErr := l.Client.ResolveDSHImport(ctx, command.CommandID, command.DeliverySeq, sessionIDs, status, errorCode)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
+				return err
+			}
+			continue
+		}
+		if command.Kind == "workspace.sync_dsh" {
+			// DSH 同步命令没有 Session lease；只在本机授权根内扫描并确认已有工作区，
+			// 结果必须走专用 dsh-workspace-result 通道。
+			status, errorCode := "succeeded", ""
+			var roots []string
+			if l.WorkspaceManager == nil {
+				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
+			} else {
+				scanner := NewDSHWorkspaceScanner(l.WorkspaceManager.Root())
+				candidates, summary, scanErr := scanner.Scan(ctx)
+				if scanErr != nil {
+					status, errorCode = "failed", CommandErrorCode(scanErr)
+					l.Logger.Warn("daemon dsh workspace scan failed", "command", command.CommandID, "error_code", errorCode)
+				} else {
+					if summary.LimitReached {
+						status, errorCode = "failed", protocol.ErrWorkspacePathDenied
+					} else {
+						for _, candidate := range candidates {
+							roots = append(roots, candidate.Root)
+						}
+					}
+				}
+			}
+			receipt, resolveErr := l.Client.ResolveDSHWorkspace(ctx, command.CommandID, command.DeliverySeq, roots, status, errorCode)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
+				return err
+			}
 			continue
 		}
 		if command.Kind == "workspace.create" {

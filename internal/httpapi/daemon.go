@@ -288,6 +288,23 @@ type daemonWorkspaceResultRequest struct {
 	ErrorCode       string                  `json:"error_code"`
 	Signature       authz.TerminalSignature `json:"signature"`
 }
+type daemonDSHWorkspaceResultRequest struct {
+	ProtocolVersion int                     `json:"protocol_version"`
+	DeliverySeq     int64                   `json:"delivery_seq"`
+	CanonicalRoots  []string                `json:"canonical_roots"`
+	Status          string                  `json:"status"`
+	ErrorCode       string                  `json:"error_code"`
+	Signature       authz.TerminalSignature `json:"signature"`
+}
+
+type daemonDSHImportResultRequest struct {
+	ProtocolVersion int                     `json:"protocol_version"`
+	DeliverySeq     int64                   `json:"delivery_seq"`
+	SessionIDs      []string                `json:"session_ids"`
+	Status          string                  `json:"status"`
+	ErrorCode       string                  `json:"error_code"`
+	Signature       authz.TerminalSignature `json:"signature"`
+}
 
 func (a *API) handleDaemonCommandResult(c *gin.Context) {
 	var req daemonCommandResultRequest
@@ -331,6 +348,52 @@ func (a *API) handleDaemonWorkspaceResult(c *gin.Context) {
 		return
 	}
 	writeOK(c, newDaemonWorkspaceResultView(result))
+}
+
+// handleDaemonDSHWorkspaceResult 是 workspace.sync_dsh 的专用路径回执入口。canonical roots
+// 只用于 Relay 内部登记 Workspace，响应只返回 opaque workspace ids。
+func (a *API) handleDaemonDSHWorkspaceResult(c *gin.Context) {
+	var req daemonDSHWorkspaceResultRequest
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed dsh workspace command result"))
+		return
+	}
+	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
+		return
+	}
+	result, err := a.Daemons.ResolveDSHWorkspace(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
+		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.CanonicalRoots, req.Status, req.ErrorCode)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newDaemonDSHWorkspaceResultView(result))
+}
+
+// handleDaemonDSHImportResult 是 session.import_dsh 的专用路径回执入口。
+// session ids 只用于 Relay 内部登记 Session，响应不包含任何本地路径或正文。
+func (a *API) handleDaemonDSHImportResult(c *gin.Context) {
+	var req daemonDSHImportResultRequest
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed dsh import command result"))
+		return
+	}
+	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
+		return
+	}
+	result, err := a.Daemons.ResolveDSHImport(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
+		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.SessionIDs, req.Status, req.ErrorCode)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newDaemonDSHImportResultView(result))
 }
 
 type daemonWebReadResponseRequest struct {
@@ -468,6 +531,36 @@ func newDaemonWorkspaceResultView(result domain.WorkspaceCommandResult) daemonWo
 	return daemonWorkspaceResultView{
 		CommandID: result.CommandID, DeliverySeq: result.DeliverySeq, WorkspaceID: result.WorkspaceID,
 		Status: result.Status, ErrorCode: result.ErrorCode,
+	}
+}
+
+type daemonDSHWorkspaceResultView struct {
+	CommandID    string   `json:"command_id"`
+	DeliverySeq  int64    `json:"delivery_seq"`
+	Status       string   `json:"status"`
+	ErrorCode    string   `json:"error_code,omitempty"`
+	WorkspaceIDs []string `json:"workspace_ids,omitempty"`
+}
+
+func newDaemonDSHWorkspaceResultView(result domain.WorkspaceDSHSyncResult) daemonDSHWorkspaceResultView {
+	return daemonDSHWorkspaceResultView{
+		CommandID: result.CommandID, DeliverySeq: result.DeliverySeq, Status: result.Status,
+		ErrorCode: result.ErrorCode, WorkspaceIDs: result.WorkspaceIDs,
+	}
+}
+
+type daemonDSHImportResultView struct {
+	CommandID   string   `json:"command_id"`
+	DeliverySeq int64    `json:"delivery_seq"`
+	Status      string   `json:"status"`
+	ErrorCode   string   `json:"error_code,omitempty"`
+	SessionIDs  []string `json:"session_ids,omitempty"`
+}
+
+func newDaemonDSHImportResultView(result domain.WorkspaceDSHImportResult) daemonDSHImportResultView {
+	return daemonDSHImportResultView{
+		CommandID: result.CommandID, DeliverySeq: result.DeliverySeq, Status: result.Status,
+		ErrorCode: result.ErrorCode, SessionIDs: result.SessionIDs,
 	}
 }
 

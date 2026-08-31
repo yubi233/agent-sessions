@@ -82,6 +82,10 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		// 会话内新建工作区只提交名称；Terminal Daemon 根据本机授权根创建目录。
 		auth.POST("/workspaces/create-with-folder", a.RequireWrite(), a.handleCreateWorkspaceWithFolder)
 		auth.GET("/workspaces/create-with-folder/:commandID", a.handleGetWorkspaceCreateWithFolder)
+		auth.POST("/workspaces/sync-dsh", a.RequireWrite(), a.handleSyncDSHWorkspaces)
+		auth.GET("/workspaces/sync-dsh/:commandID", a.handleGetSyncDSHWorkspaces)
+		auth.POST("/workspaces/import-dsh", a.RequireWrite(), a.handleImportDSHSessions)
+		auth.GET("/workspaces/import-dsh/:commandID", a.handleGetImportDSHSessions)
 
 		owner := v1.Group("")
 		owner.Use(a.RequireAuth(), a.RequireOwner())
@@ -118,6 +122,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.POST("/commands/:id/ack", a.handleDaemonCommandAck)
 		daemon.POST("/commands/:id/result", a.handleDaemonCommandResult)
 		daemon.POST("/commands/:id/workspace-result", a.handleDaemonWorkspaceResult)
+		daemon.POST("/commands/:id/dsh-workspace-result", a.handleDaemonDSHWorkspaceResult)
+		daemon.POST("/commands/:id/dsh-import-result", a.handleDaemonDSHImportResult)
 		daemon.POST("/commands/:id/readonly-response", a.handleDaemonWebReadResponse)
 		daemon.POST("/events", a.handleDaemonEventUpload)
 
@@ -1395,6 +1401,118 @@ func (a *API) handleGetWorkspaceCreateWithFolder(c *gin.Context) {
 		return
 	}
 	writeOK(c, newWorkspaceCreateView(state))
+}
+
+type syncDSHWorkspacesRequest struct {
+	TerminalID string `json:"terminal_id,omitempty"`
+}
+
+type workspaceSyncDSHView struct {
+	Status       string   `json:"status"`
+	CommandID    string   `json:"command_id,omitempty"`
+	ErrorCode    string   `json:"error_code,omitempty"`
+	WorkspaceIDs []string `json:"workspace_ids,omitempty"`
+}
+
+func newWorkspaceSyncDSHView(state domain.WorkspaceSyncDSHState) workspaceSyncDSHView {
+	return workspaceSyncDSHView{
+		Status: state.Status, CommandID: state.CommandID, ErrorCode: state.ErrorCode,
+		WorkspaceIDs: state.WorkspaceIDs,
+	}
+}
+
+// handleSyncDSHWorkspaces 创建 workspace.sync_dsh 命令；响应不包含任何 canonical root。
+func (a *API) handleSyncDSHWorkspaces(c *gin.Context) {
+	var req syncDSHWorkspacesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed dsh sync request"))
+		return
+	}
+	subj := subject(c)
+	state, err := a.Workspaces.SyncDSHWorkspaces(c.Request.Context(), domain.WorkspaceSyncDSHInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role, TerminalID: req.TerminalID,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if state.CommandID != "" {
+		if delivery, deliveryErr := a.Repo.DaemonDeliveryByCommandID(c.Request.Context(), state.CommandID); deliveryErr == nil {
+			a.DaemonDeliveries.Publish(delivery.TerminalID, delivery)
+		}
+	}
+	view := newWorkspaceSyncDSHView(state)
+	if state.Status == domain.CommandSucceeded {
+		writeOK(c, view)
+		return
+	}
+	c.JSON(http.StatusAccepted, view)
+}
+
+// handleGetSyncDSHWorkspaces 返回同账号 workspace.sync_dsh 的脱敏状态。
+func (a *API) handleGetSyncDSHWorkspaces(c *gin.Context) {
+	state, err := a.Workspaces.GetSyncDSHWorkspaces(c.Request.Context(), subject(c).AccountID, c.Param("commandID"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newWorkspaceSyncDSHView(state))
+}
+
+type importDSHSessionsRequest struct {
+	WorkspaceID string `json:"workspace_id"`
+	TerminalID  string `json:"terminal_id,omitempty"`
+}
+
+type workspaceImportDSHView struct {
+	Status     string   `json:"status"`
+	CommandID  string   `json:"command_id,omitempty"`
+	ErrorCode  string   `json:"error_code,omitempty"`
+	SessionIDs []string `json:"session_ids,omitempty"`
+}
+
+func newWorkspaceImportDSHView(state domain.WorkspaceImportDSHState) workspaceImportDSHView {
+	return workspaceImportDSHView{
+		Status: state.Status, CommandID: state.CommandID, ErrorCode: state.ErrorCode, SessionIDs: state.SessionIDs,
+	}
+}
+
+// handleImportDSHSessions 创建 session.import_dsh 命令；响应不包含任何本地路径或正文。
+func (a *API) handleImportDSHSessions(c *gin.Context) {
+	var req importDSHSessionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.WorkspaceID == "" {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed dsh import request"))
+		return
+	}
+	subj := subject(c)
+	state, err := a.Workspaces.ImportDSHSessions(c.Request.Context(), domain.WorkspaceImportDSHInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role, WorkspaceID: req.WorkspaceID, TerminalID: req.TerminalID,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	if state.CommandID != "" {
+		if delivery, deliveryErr := a.Repo.DaemonDeliveryByCommandID(c.Request.Context(), state.CommandID); deliveryErr == nil {
+			a.DaemonDeliveries.Publish(delivery.TerminalID, delivery)
+		}
+	}
+	view := newWorkspaceImportDSHView(state)
+	if state.Status == domain.CommandSucceeded {
+		writeOK(c, view)
+		return
+	}
+	c.JSON(http.StatusAccepted, view)
+}
+
+// handleGetImportDSHSessions 返回同账号 session.import_dsh 的脱敏状态。
+func (a *API) handleGetImportDSHSessions(c *gin.Context) {
+	state, err := a.Workspaces.GetImportDSHSessions(c.Request.Context(), subject(c).AccountID, c.Param("commandID"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, newWorkspaceImportDSHView(state))
 }
 
 // 以下 DTO 是 REST 白名单投影，避免直接序列化 store/domain 行而泄露账号、公钥或密文参数。

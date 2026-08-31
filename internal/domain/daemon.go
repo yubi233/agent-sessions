@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -85,6 +86,25 @@ type WorkspaceCommandResult struct {
 	ErrorCode    string
 	Workspace    store.WorkspaceRow
 	HasWorkspace bool
+}
+
+// WorkspaceDSHSyncResult 是 workspace.sync_dsh 的专用回执。canonical roots 只在 Relay
+// 内部用于登记 Workspace，普通 command result 不会携带路径。
+type WorkspaceDSHSyncResult struct {
+	CommandID    string
+	DeliverySeq  int64
+	Status       string
+	ErrorCode    string
+	WorkspaceIDs []string
+}
+
+// WorkspaceDSHImportResult 是 session.import_dsh 的专用回执。只返回 Relay opaque session ids。
+type WorkspaceDSHImportResult struct {
+	CommandID   string
+	DeliverySeq int64
+	Status      string
+	ErrorCode   string
+	SessionIDs  []string
 }
 
 type DaemonEventInput struct {
@@ -275,6 +295,21 @@ func (s *DaemonService) DeliveryCommandForTerminal(ctx context.Context, terminal
 		}
 		return command, strings.TrimSpace(payload.WorkspaceID), nil
 	}
+	if isDSHSyncCommand(command) {
+		// workspace.sync_dsh 没有 Session，也不绑定具体 Workspace ID；Daemon 在授权根内
+		// 扫描后再通过专用 dsh-workspace-result 回传多个候选，因此这里 workspace_id 为空。
+		return command, "", nil
+	}
+	if isDSHImportCommand(command) {
+		// session.import_dsh 没有 Session，但绑定 Workspace；Workspace ID 从 payload 复核。
+		var payload struct {
+			WorkspaceID string `json:"workspace_id"`
+		}
+		if err := json.Unmarshal([]byte(command.CiphertextJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
+			return store.CommandRow{}, "", ErrScopeDenied
+		}
+		return command, strings.TrimSpace(payload.WorkspaceID), nil
+	}
 	session, err := s.repo.SessionByID(ctx, command.SessionID)
 	if err != nil {
 		return store.CommandRow{}, "", err
@@ -420,6 +455,249 @@ func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, 
 }
 
 // ResolveWorkspace 收口 workspace.create 的 daemon 回执，并在同一事务内登记 Relay Workspace。
+// ResolveDSHWorkspace 收口 workspace.sync_dsh 的 daemon 回执，并在同一事务内登记多个 DSH Workspace。
+// canonicalRoots 只用于 Relay 内部登记，客户端和普通 result 均不返回路径。
+func (s *DaemonService) ResolveDSHWorkspace(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, canonicalRoots []string, status, errorCode string) (WorkspaceDSHSyncResult, error) {
+	if err := validateDaemonProtocol(protocolVersion); err != nil {
+		return WorkspaceDSHSyncResult{}, err
+	}
+	if deliverySeq <= 0 || !validWorkspaceResultStatus(status) {
+		return WorkspaceDSHSyncResult{}, protocol.NewError(protocol.ErrInvalidRequest, "invalid dsh sync result")
+	}
+	for _, root := range canonicalRoots {
+		if status == CommandSucceeded && (!filepath.IsAbs(root) || hasControlCharacter(root)) {
+			return WorkspaceDSHSyncResult{}, protocol.NewError(protocol.ErrInvalidRequest, "dsh sync path is invalid")
+		}
+	}
+	terminal, err := s.TerminalForDevice(ctx, accountID, deviceID, role)
+	if err != nil {
+		return WorkspaceDSHSyncResult{}, err
+	}
+	var result WorkspaceDSHSyncResult
+	err = s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		cmd, delivery, err := daemonCommandForTerminal(ctx, tx, terminal, commandID, deliverySeq)
+		if err != nil {
+			return err
+		}
+		if !isDSHSyncCommand(cmd) {
+			return ErrScopeDenied
+		}
+		if existing, lookupErr := tx.WorkspaceCommandResultByCommandID(ctx, cmd.ID); lookupErr == nil {
+			if existing.AccountID != accountID {
+				return ErrScopeDenied
+			}
+			result = dshSyncResultFromRow(ctx, tx, existing)
+			result.DeliverySeq = delivery.DeliverySeq
+			return nil
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		}
+		if delivery.ResultStatus != "" || isTerminal(cmd.Status) {
+			return ErrDaemonCommandState
+		}
+		var workspaceIDs []string
+		if status == CommandSucceeded {
+			// 同一 Terminal 的每个 canonical root 都生成稳定 Workspace/Project ID。
+			// 已有 Workspace 只确认归属，不覆盖 TerminalID/CanonicalRoot。
+			for _, root := range canonicalRoots {
+				if root == "" {
+					return ErrScopeDenied
+				}
+				workspaceID, projectID := stableDSHWorkspaceIDs(accountID, terminal.ID, root)
+				projects, projErr := tx.ListProjects(ctx, accountID)
+				if projErr != nil {
+					return projErr
+				}
+				projectOwned := false
+				for _, project := range projects {
+					if project.ID == projectID && project.AccountID == accountID {
+						projectOwned = true
+						break
+					}
+				}
+				if !projectOwned {
+					if err := tx.CreateProject(ctx, store.ProjectRow{ID: projectID, AccountID: accountID, Fingerprint: "fp_" + projectID}); err != nil {
+						return err
+					}
+				}
+				workspace, lookupErr := tx.WorkspaceByID(ctx, workspaceID)
+				if lookupErr == nil {
+					if workspace.ProjectID != projectID || workspace.TerminalID != terminal.ID {
+						return ErrScopeDenied
+					}
+				} else if errors.Is(lookupErr, sql.ErrNoRows) {
+					workspace = store.WorkspaceRow{ID: workspaceID, ProjectID: projectID, TerminalID: terminal.ID, CanonicalRoot: root, Status: "active"}
+					if err := tx.CreateWorkspace(ctx, workspace); err != nil {
+						return err
+					}
+				} else {
+					return lookupErr
+				}
+				workspaceIDs = append(workspaceIDs, workspaceID)
+			}
+		}
+		if err := tx.UpdateCommandStatus(ctx, cmd.ID, status); err != nil {
+			return err
+		}
+		cmd.Status = status
+		delivery.ResultStatus = status
+		delivery.ErrorCode = safeErrorCode(errorCode)
+		delivery.UpdatedAtUnixMS = s.now().UnixMilli()
+		if err := tx.UpdateDaemonDelivery(ctx, delivery); err != nil {
+			return err
+		}
+		workspaceIDsJSON, _ := json.Marshal(struct {
+			WorkspaceIDs []string `json:"workspace_ids"`
+		}{WorkspaceIDs: workspaceIDs})
+		if err := tx.UpsertWorkspaceCommandResult(ctx, store.WorkspaceCommandResultRow{
+			CommandID: cmd.ID, AccountID: accountID, WorkspaceID: "", CanonicalRoot: string(workspaceIDsJSON),
+			Status: status, ErrorCode: safeErrorCode(errorCode), CreatedAtUnixMS: s.now().UnixMilli(),
+		}); err != nil {
+			return err
+		}
+		if err := tx.AppendAudit(ctx, accountID, "workspace.sync_dsh.resolved", `{"command_id":"`+cmd.ID+`","status":"`+status+`","count":`+fmt.Sprint(len(workspaceIDs))+`}`); err != nil {
+			return err
+		}
+		if err := tx.EnqueueOutbox(ctx, store.OutboxRow{Kind: "command.updated", PayloadJSON: `{"command_id":"` + cmd.ID + `"}`, Status: "pending"}); err != nil {
+			return err
+		}
+		result = WorkspaceDSHSyncResult{CommandID: cmd.ID, DeliverySeq: delivery.DeliverySeq, Status: status, ErrorCode: safeErrorCode(errorCode), WorkspaceIDs: workspaceIDs}
+		return nil
+	})
+	if err != nil {
+		return WorkspaceDSHSyncResult{}, err
+	}
+	return result, nil
+}
+
+func dshSyncResultFromRow(ctx context.Context, repo store.Repository, row store.WorkspaceCommandResultRow) WorkspaceDSHSyncResult {
+	result := WorkspaceDSHSyncResult{CommandID: row.CommandID, Status: row.Status, ErrorCode: row.ErrorCode}
+	if row.Status == CommandSucceeded {
+		var payload struct {
+			WorkspaceIDs []string `json:"workspace_ids"`
+		}
+		_ = json.Unmarshal([]byte(row.CanonicalRoot), &payload)
+		result.WorkspaceIDs = payload.WorkspaceIDs
+	}
+	return result
+}
+
+// ResolveDSHImport 收口 session.import_dsh 的 daemon 回执，并在同一事务内登记 Relay Session。
+// sessionIDs 是 Relay opaque session id 白名单；cwd、DSH id、路径和正文都不进入该回执。
+func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, sessionIDs []string, status, errorCode string) (WorkspaceDSHImportResult, error) {
+	if err := validateDaemonProtocol(protocolVersion); err != nil {
+		return WorkspaceDSHImportResult{}, err
+	}
+	if deliverySeq <= 0 || !validWorkspaceResultStatus(status) {
+		return WorkspaceDSHImportResult{}, protocol.NewError(protocol.ErrInvalidRequest, "invalid dsh import result")
+	}
+	terminal, err := s.TerminalForDevice(ctx, accountID, deviceID, role)
+	if err != nil {
+		return WorkspaceDSHImportResult{}, err
+	}
+	var result WorkspaceDSHImportResult
+	err = s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		cmd, delivery, err := daemonCommandForTerminal(ctx, tx, terminal, commandID, deliverySeq)
+		if err != nil {
+			return err
+		}
+		if !isDSHImportCommand(cmd) {
+			return ErrScopeDenied
+		}
+		if existing, lookupErr := tx.WorkspaceCommandResultByCommandID(ctx, cmd.ID); lookupErr == nil {
+			if existing.AccountID != accountID {
+				return ErrScopeDenied
+			}
+			result = dshImportResultFromRow(ctx, tx, existing)
+			result.DeliverySeq = delivery.DeliverySeq
+			return nil
+		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+			return lookupErr
+		}
+		if delivery.ResultStatus != "" || isTerminal(cmd.Status) {
+			return ErrDaemonCommandState
+		}
+		var payload struct {
+			WorkspaceID string `json:"workspace_id"`
+		}
+		if err := json.Unmarshal([]byte(cmd.CiphertextJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
+			return ErrScopeDenied
+		}
+		if status == CommandSucceeded {
+			for _, sessionID := range sessionIDs {
+				if strings.TrimSpace(sessionID) == "" {
+					return ErrScopeDenied
+				}
+				if err := tx.CreateSession(ctx, store.SessionRow{
+					ID: sessionID, WorkspaceID: payload.WorkspaceID, AccountID: accountID,
+					Status: SessionIdle, Provider: "dsh",
+				}); err != nil {
+					// 已存在的同 id 会话视为幂等确认，不覆盖归属。
+					if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "constraint") {
+						return err
+					}
+				}
+				// 直接插入的导入会话没有活动时间，会被默认列表休眠自动归档；这里补一个
+				// 当前活动时间，保证导入后立即可见且不被 AutoArchiveStaleIdleSessions 隐藏。
+				if err := tx.SetSessionStatusAt(ctx, sessionID, SessionIdle, s.now().UnixMilli()); err != nil {
+					return err
+				}
+			}
+		}
+		if err := tx.UpdateCommandStatus(ctx, cmd.ID, status); err != nil {
+			return err
+		}
+		cmd.Status = status
+		delivery.ResultStatus = status
+		delivery.ErrorCode = safeErrorCode(errorCode)
+		delivery.UpdatedAtUnixMS = s.now().UnixMilli()
+		if err := tx.UpdateDaemonDelivery(ctx, delivery); err != nil {
+			return err
+		}
+		sessionIDsJSON, _ := json.Marshal(struct {
+			SessionIDs []string `json:"session_ids"`
+		}{SessionIDs: sessionIDs})
+		if err := tx.UpsertWorkspaceCommandResult(ctx, store.WorkspaceCommandResultRow{
+			CommandID: cmd.ID, AccountID: accountID, WorkspaceID: payload.WorkspaceID, CanonicalRoot: string(sessionIDsJSON),
+			Status: status, ErrorCode: safeErrorCode(errorCode), CreatedAtUnixMS: s.now().UnixMilli(),
+		}); err != nil {
+			return err
+		}
+		if err := tx.AppendAudit(ctx, accountID, "session.import_dsh.resolved", `{"command_id":"`+cmd.ID+`","status":"`+status+`","count":`+fmt.Sprint(len(sessionIDs))+`}`); err != nil {
+			return err
+		}
+		if err := tx.EnqueueOutbox(ctx, store.OutboxRow{Kind: "command.updated", PayloadJSON: `{"command_id":"` + cmd.ID + `"}`, Status: "pending"}); err != nil {
+			return err
+		}
+		result = WorkspaceDSHImportResult{CommandID: cmd.ID, DeliverySeq: delivery.DeliverySeq, Status: status, ErrorCode: safeErrorCode(errorCode), SessionIDs: sessionIDs}
+		return nil
+	})
+	if err != nil {
+		return WorkspaceDSHImportResult{}, err
+	}
+	return result, nil
+}
+
+func dshImportResultFromRow(ctx context.Context, repo store.Repository, row store.WorkspaceCommandResultRow) WorkspaceDSHImportResult {
+	result := WorkspaceDSHImportResult{CommandID: row.CommandID, Status: row.Status, ErrorCode: row.ErrorCode}
+	if row.Status == CommandSucceeded {
+		var payload struct {
+			SessionIDs []string `json:"session_ids"`
+		}
+		_ = json.Unmarshal([]byte(row.CanonicalRoot), &payload)
+		result.SessionIDs = payload.SessionIDs
+	}
+	return result
+}
+
+func isDSHSyncCommand(command store.CommandRow) bool {
+	return command.Kind == "workspace.sync_dsh" && command.SessionID == ""
+}
+
+func isDSHImportCommand(command store.CommandRow) bool {
+	return command.Kind == "session.import_dsh" && command.SessionID == ""
+}
+
 // canonicalRoot 仅写入 workspace_command_results/workspaces，普通 command receipt 不会携带它。
 func (s *DaemonService) ResolveWorkspace(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, workspaceID, canonicalRoot, status, errorCode string) (WorkspaceCommandResult, error) {
 	if err := validateDaemonProtocol(protocolVersion); err != nil {
