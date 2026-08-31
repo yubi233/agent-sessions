@@ -698,7 +698,7 @@
         "WEB",
         "ANDROID"
       ],
-      "status": "planned",
+      "status": "in_progress",
       "allow_real_upstream": true,
       "uniqueness_rule": "v0.8 的 DSH 持久化、迁移、Resume/回放、工作区同步、Terminal 归属与客户端投影端到端验收由此 suite 定义；根因测试仍归各领域 suite。"
     },
