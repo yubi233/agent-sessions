@@ -362,6 +362,27 @@ class _ListOverridingRelay implements RelayRepository {
   Future<List<MobileWorkspace>> listWorkspaces() => _delegate.listWorkspaces();
 
   @override
+  Future<WorkspaceSyncState> syncDSHWorkspaces({String terminalId = ''}) =>
+      _delegate.syncDSHWorkspaces(terminalId: terminalId);
+
+  @override
+  Future<WorkspaceSyncState> getDSHWorkspaceSyncState(String commandId) =>
+      _delegate.getDSHWorkspaceSyncState(commandId);
+
+  @override
+  Future<WorkspaceImportState> importDSHSessions({
+    required String workspaceId,
+    String terminalId = '',
+  }) => _delegate.importDSHSessions(
+    workspaceId: workspaceId,
+    terminalId: terminalId,
+  );
+
+  @override
+  Future<WorkspaceImportState> getDSHImportState(String commandId) =>
+      _delegate.getDSHImportState(commandId);
+
+  @override
   Future<MobileWorkspace> createWorkspace(CreateMobileWorkspaceInput input) =>
       _delegate.createWorkspace(input);
 

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -295,6 +296,17 @@ func TestV08DSHImportAuthorizationAndResult(t *testing.T) {
 	owner := env.registerAs(t, "v08-dsh-import@test.dev")
 	terminal := env.pairTerminal(t, owner, "v08-dsh-import-terminal")
 	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync", "dsh_session_import"})
+	// 客户端详情页只从 Terminal 安全投影判断导入按钮；漏掉该能力会导致
+	// 服务端已支持的导入路径永久不可达。未知能力仍不得借此投影出去。
+	var terminals struct {
+		Terminals []struct {
+			Capabilities []string `json:"capabilities"`
+		} `json:"terminals"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/terminals", nil, owner.AccessToken).Body.Bytes(), &terminals)
+	if len(terminals.Terminals) != 1 || !slices.Equal(terminals.Terminals[0].Capabilities, []string{"dsh_session_import", "dsh_workspace_sync"}) {
+		t.Fatalf("unexpected public terminal capabilities: %+v", terminals)
+	}
 
 	// 先同步一个 DSH Workspace，取得 workspace_id。
 	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)

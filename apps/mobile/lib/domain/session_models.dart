@@ -234,6 +234,97 @@ class MobileWorkspace {
   }
 }
 
+/// workspace.sync_dsh 的脱敏状态；客户端不接触 canonical root 或 Daemon 回执正文。
+class WorkspaceSyncState {
+  const WorkspaceSyncState({
+    required this.status,
+    this.commandId,
+    this.errorCode,
+    this.workspaceIds = const [],
+  });
+
+  factory WorkspaceSyncState.fromRelayJson(Map<String, dynamic> json) {
+    final status = json['status'];
+    if (status is! String || status.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.protocol, '工作区同步状态格式错误。');
+    }
+    final rawIds = json['workspace_ids'];
+    final ids = rawIds is List
+        ? rawIds
+              .whereType<String>()
+              .where((id) => id.trim().isNotEmpty)
+              .toList(growable: false)
+        : const <String>[];
+    return WorkspaceSyncState(
+      status: status,
+      commandId: _nullableString(json['command_id']),
+      errorCode: _nullableString(json['error_code']),
+      workspaceIds: ids,
+    );
+  }
+
+  final String status;
+  final String? commandId;
+  final String? errorCode;
+  final List<String> workspaceIds;
+
+  bool get isPending => status == 'pending' || status == 'accepted';
+  bool get isSucceeded => status == 'succeeded';
+  bool get isTerminal => const {
+    'succeeded',
+    'failed',
+    'rejected',
+    'cancelled',
+    'expired',
+  }.contains(status);
+}
+
+/// session.import_dsh 的脱敏状态；仅包含命令状态与导入后的 opaque 会话 ID。
+/// 客户端不解析本地 JSONL，也不接收路径或消息正文。
+class WorkspaceImportState {
+  const WorkspaceImportState({
+    required this.status,
+    this.commandId,
+    this.errorCode,
+    this.sessionIds = const [],
+  });
+
+  factory WorkspaceImportState.fromRelayJson(Map<String, dynamic> json) {
+    final status = json['status'];
+    if (status is! String || status.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.protocol, '历史会话导入状态格式错误。');
+    }
+    final rawIds = json['session_ids'];
+    final ids = rawIds is List
+        ? rawIds
+              .whereType<String>()
+              .where((id) => id.trim().isNotEmpty)
+              .toList(growable: false)
+        : const <String>[];
+    return WorkspaceImportState(
+      status: status,
+      commandId: _nullableString(json['command_id']),
+      errorCode: _nullableString(json['error_code']),
+      sessionIds: ids,
+    );
+  }
+
+  final String status;
+  final String? commandId;
+  final String? errorCode;
+  final List<String> sessionIds;
+
+  bool get isPending => status == 'pending' || status == 'accepted';
+  bool get isSucceeded => status == 'succeeded';
+  bool get isTerminal => const {
+    'succeeded',
+    'failed',
+    'rejected',
+    'cancelled',
+    'expired',
+  }.contains(status);
+}
+
 class CreateMobileWorkspaceInput {
   const CreateMobileWorkspaceInput({
     required this.projectId,

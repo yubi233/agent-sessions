@@ -66,6 +66,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const RecentSessionsScreen(),
       ),
       GoRoute(
+        path: '/workspaces/:id',
+        builder: (context, state) =>
+            DSHWorkspaceDetailScreen(workspaceId: state.pathParameters['id']!),
+      ),
+      GoRoute(
         path: '/sessions/new',
         builder: (context, state) => const NewSessionScreen(),
       ),

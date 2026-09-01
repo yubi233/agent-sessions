@@ -57,6 +57,21 @@ abstract interface class RelayRepository {
   /// absent from the response.
   Future<List<MobileWorkspace>> listWorkspaces();
 
+  /// 显式请求 Daemon 扫描授权根中的 DSH 工作区；响应只包含脱敏状态。
+  Future<WorkspaceSyncState> syncDSHWorkspaces({String terminalId = ''});
+
+  /// 轮询 workspace.sync_dsh 的最终状态；停止客户端等待不会取消 Daemon 命令。
+  Future<WorkspaceSyncState> getDSHWorkspaceSyncState(String commandId);
+
+  /// 按工作区导入 DSH 历史会话的安全元数据；不返回 transcript 或路径。
+  Future<WorkspaceImportState> importDSHSessions({
+    required String workspaceId,
+    String terminalId = '',
+  });
+
+  /// 轮询 session.import_dsh 的脱敏状态。
+  Future<WorkspaceImportState> getDSHImportState(String commandId);
+
   /// Register a directory selected by the composed host directory flow.
   Future<MobileWorkspace> createWorkspace(CreateMobileWorkspaceInput input);
 

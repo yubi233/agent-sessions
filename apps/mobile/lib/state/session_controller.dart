@@ -46,6 +46,11 @@ class SessionController extends ChangeNotifier {
   String? _pendingWorkspaceId;
   String? _pendingWorkspaceCommandId;
   bool _workspaceSettling = false;
+  WorkspaceSyncState? _workspaceSyncState;
+  bool _workspaceSyncWaiting = false;
+  WorkspaceImportState? _workspaceImportState;
+  bool _workspaceImportWaiting = false;
+  String? _workspaceImportWorkspaceId;
   String? _selectedSessionId;
   List<SessionTimelineEvent> _timeline = const [];
   final Map<String, List<SessionTimelineEvent>> _timelineWindows = {};
@@ -61,8 +66,9 @@ class SessionController extends ChangeNotifier {
   final Map<String, String> _pendingOutgoingBySession = <String, String>{};
 
   /// 当前选中会话尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
-  String? get pendingOutgoingMessage =>
-      _selectedSessionId == null ? null : _pendingOutgoingBySession[_selectedSessionId!];
+  String? get pendingOutgoingMessage => _selectedSessionId == null
+      ? null
+      : _pendingOutgoingBySession[_selectedSessionId!];
   SkillConfirmation? _skillConfirmation;
   List<AttachmentTransfer> _attachments = const [];
   List<AttachmentRejection> _attachmentRejections = const [];
@@ -97,6 +103,11 @@ class SessionController extends ChangeNotifier {
   String? get pendingWorkspaceId => _pendingWorkspaceId;
   String? get pendingWorkspaceCommandId => _pendingWorkspaceCommandId;
   bool get workspaceSettling => _workspaceSettling;
+  WorkspaceSyncState? get workspaceSyncState => _workspaceSyncState;
+  bool get workspaceSyncWaiting => _workspaceSyncWaiting;
+  WorkspaceImportState? get workspaceImportState => _workspaceImportState;
+  bool get workspaceImportWaiting => _workspaceImportWaiting;
+  String? get workspaceImportWorkspaceId => _workspaceImportWorkspaceId;
   List<SessionTimelineEvent> get timeline =>
       List<SessionTimelineEvent>.unmodifiable(_timeline);
 
@@ -209,6 +220,139 @@ class SessionController extends ChangeNotifier {
       _workspacePhase = WorkspaceListPhase.error;
       _workspaceErrorMessage = '工作区列表暂时不可用，请稍后重试。';
     }
+    notifyListeners();
+  }
+
+  /// 工作区操作错误只属于当前客户端提示，关闭后不影响已投递的 Daemon 命令。
+  void clearWorkspaceError() {
+    if (_workspaceErrorMessage == null) return;
+    _workspaceErrorMessage = null;
+    notifyListeners();
+  }
+
+  /// 显式发起 DSH 同步并有限轮询；离开页面只停止等待，不撤销已提交命令。
+  Future<WorkspaceSyncState?> syncDSHWorkspaces({
+    String terminalId = '',
+  }) async {
+    if (_workspaceSyncWaiting) return _workspaceSyncState;
+    _workspaceSyncWaiting = true;
+    _workspaceSyncState = null;
+    _workspaceErrorMessage = null;
+    notifyListeners();
+    try {
+      var state = await _relay.syncDSHWorkspaces(terminalId: terminalId);
+      _workspaceSyncState = state;
+      notifyListeners();
+      final commandId = state.commandId;
+      for (
+        var attempt = 0;
+        state.isPending &&
+            commandId != null &&
+            attempt < 20 &&
+            _workspaceSyncWaiting;
+        attempt += 1
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        if (!_workspaceSyncWaiting) break;
+        state = await _relay.getDSHWorkspaceSyncState(commandId);
+        _workspaceSyncState = state;
+        notifyListeners();
+      }
+      if (state.isSucceeded && _workspaceSyncWaiting) {
+        await refreshWorkspaces();
+        await refreshSessions();
+      }
+      return state;
+    } on RelayFailure catch (failure) {
+      _workspaceErrorMessage = failure.message;
+      _workspaceSyncState = const WorkspaceSyncState(status: 'failed');
+      return _workspaceSyncState;
+    } catch (_) {
+      _workspaceErrorMessage = 'DSH 工作区同步暂时不可用，请稍后重试。';
+      _workspaceSyncState = const WorkspaceSyncState(status: 'failed');
+      return _workspaceSyncState;
+    } finally {
+      _workspaceSyncWaiting = false;
+      notifyListeners();
+    }
+  }
+
+  /// 停止本地状态等待；Relay/Daemon 命令继续按原幂等键收口。
+  void stopWaitingForDSHWorkspaceSync() {
+    if (!_workspaceSyncWaiting) return;
+    _workspaceSyncWaiting = false;
+    notifyListeners();
+  }
+
+  /// 在工作区详情中按需导入历史会话；只轮询元数据命令，不读取消息正文。
+  Future<WorkspaceImportState?> importDSHSessions({
+    required String workspaceId,
+    required String? deviceId,
+    required bool canWrite,
+    String terminalId = '',
+  }) async {
+    if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
+      return null;
+    }
+    if (_workspaceImportWaiting) return _workspaceImportState;
+    final normalized = workspaceId.trim();
+    final workspace = _workspaces
+        .where((item) => item.id == normalized)
+        .firstOrNull;
+    if (workspace == null || !workspace.isDsh) {
+      _workspaceErrorMessage = '只能从已同步的 DSH 工作区导入历史会话。';
+      notifyListeners();
+      return null;
+    }
+    _workspaceImportWaiting = true;
+    _workspaceImportWorkspaceId = normalized;
+    _workspaceImportState = null;
+    _workspaceErrorMessage = null;
+    notifyListeners();
+    try {
+      var state = await _relay.importDSHSessions(
+        workspaceId: normalized,
+        terminalId: terminalId,
+      );
+      _workspaceImportState = state;
+      notifyListeners();
+      final commandId = state.commandId;
+      for (
+        var attempt = 0;
+        state.isPending &&
+            commandId != null &&
+            attempt < 20 &&
+            _workspaceImportWaiting;
+        attempt += 1
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        if (!_workspaceImportWaiting) break;
+        state = await _relay.getDSHImportState(commandId);
+        _workspaceImportState = state;
+        notifyListeners();
+      }
+      if (state.isSucceeded && _workspaceImportWaiting) {
+        await refreshSessions();
+      }
+      return state;
+    } on RelayFailure catch (failure) {
+      _workspaceErrorMessage = failure.message;
+      _workspaceImportState = const WorkspaceImportState(status: 'failed');
+      return _workspaceImportState;
+    } catch (_) {
+      _workspaceErrorMessage = '历史 DSH 会话导入暂时不可用，请稍后重试。';
+      _workspaceImportState = const WorkspaceImportState(status: 'failed');
+      return _workspaceImportState;
+    } finally {
+      _workspaceImportWaiting = false;
+      notifyListeners();
+    }
+  }
+
+  /// 停止客户端等待而不取消已投递的 import 命令。
+  void stopWaitingForDSHImport() {
+    if (!_workspaceImportWaiting) return;
+    _workspaceImportWaiting = false;
     notifyListeners();
   }
 
@@ -571,17 +715,21 @@ class SessionController extends ChangeNotifier {
       'lease:$sessionId',
       reportFailure: reportFailure,
       () async {
-      final lease = await _relay.acquireSessionLease(sessionId);
-      if (lease.sessionId != sessionId || lease.epoch <= 0) {
-        throw const RelayFailure(RelayFailureKind.protocol, 'Relay 返回了无效可操作状态。');
-      }
-      // 后台/离线后才返回的旧 lease 不能重新解锁 composer；用户必须显式获取新的 fencing epoch。
-      if (runtimeLeaseGeneration != _runtimeLeaseGeneration ||
-          _selectedSessionId != sessionId) {
-        return;
-      }
-      _selectedLease = lease;
-    });
+        final lease = await _relay.acquireSessionLease(sessionId);
+        if (lease.sessionId != sessionId || lease.epoch <= 0) {
+          throw const RelayFailure(
+            RelayFailureKind.protocol,
+            'Relay 返回了无效可操作状态。',
+          );
+        }
+        // 后台/离线后才返回的旧 lease 不能重新解锁 composer；用户必须显式获取新的 fencing epoch。
+        if (runtimeLeaseGeneration != _runtimeLeaseGeneration ||
+            _selectedSessionId != sessionId) {
+          return;
+        }
+        _selectedLease = lease;
+      },
+    );
   }
 
   Future<bool> startSelectedSession({
@@ -800,7 +948,7 @@ class SessionController extends ChangeNotifier {
     required bool canWrite,
   }) async {
     final sessionId = _selectedSessionId;
-    final blocked = controlBlockedReason('resume', canWrite: canWrite);
+    final blocked = resumeBlockedReason(canWrite: canWrite);
     if (sessionId == null || blocked != null) {
       if (blocked != null) _setError(blocked);
       return;
@@ -815,6 +963,11 @@ class SessionController extends ChangeNotifier {
 
   /// resume 入口的阻断原因；离线状态也允许发起（与发送不同），只要求 capability 与 lease。
   String? resumeBlockedReason({required bool canWrite}) {
+    // V08-12 的真实 DSH load/resume/send gate 尚未通过。历史元数据可浏览，
+    // 但任何 DSH 会话都不能把未证实的恢复能力展示成可用。
+    if (selectedSession?.provider == 'dsh') {
+      return 'DSH 历史会话恢复暂不可用。';
+    }
     final declared = selectedProviderCapabilities.capability('resume');
     if (!declared.isSupported) {
       return declared.reason ?? '恢复会话当前不可用。';
@@ -1782,11 +1935,14 @@ class SessionController extends ChangeNotifier {
   /// 流式合并：连续的 assistant 流式增量坍缩为单个生长节点；非流式的
   /// message.completed 全文替换其前的流式节点，避免"生长气泡 + 完整气泡"并排。
   /// completed_turn 终态标记不参与替换（投影层本就不渲染空文本标记）。
-  List<SessionTimelineEvent> _coalesceStreaming(List<SessionTimelineEvent> events) {
+  List<SessionTimelineEvent> _coalesceStreaming(
+    List<SessionTimelineEvent> events,
+  ) {
     final out = <SessionTimelineEvent>[];
     for (final event in events) {
       final last = out.isEmpty ? null : out.last;
-      final replacesStreaming = last != null &&
+      final replacesStreaming =
+          last != null &&
           last.kind == SessionTimelineKind.assistantMessage &&
           last.isStreaming &&
           event.kind == SessionTimelineKind.assistantMessage &&
@@ -1802,11 +1958,12 @@ class SessionController extends ChangeNotifier {
 
   void _mergeSnapshot(SessionSnapshot snapshot, {bool appendTimeline = false}) {
     // 以 sequence 为唯一序：重复投递去重、乱序排序，replace 与 append 两条路径同规。
-    final incoming = <int, SessionTimelineEvent>{
-      for (final event in snapshot.events)
-        event.sequence: SessionTimelineEvent.fromRelayEvent(event),
-    }.values.toList()
-      ..sort((left, right) => left.sequence.compareTo(right.sequence));
+    final incoming =
+        <int, SessionTimelineEvent>{
+            for (final event in snapshot.events)
+              event.sequence: SessionTimelineEvent.fromRelayEvent(event),
+          }.values.toList()
+          ..sort((left, right) => left.sequence.compareTo(right.sequence));
     final session =
         incoming.any((event) => event.completedTurn) &&
             snapshot.session.status == MobileSessionStatus.streaming

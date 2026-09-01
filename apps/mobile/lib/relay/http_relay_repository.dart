@@ -21,7 +21,12 @@ class HttpRelayRepository implements RelayRepository {
     DateTime Function()? clock,
   }) : this._(dio, readTokens, clock ?? DateTime.now, writeTokens);
 
-  HttpRelayRepository._(this._dio, this._readTokens, this._clock, this._writeTokens);
+  HttpRelayRepository._(
+    this._dio,
+    this._readTokens,
+    this._clock,
+    this._writeTokens,
+  );
 
   final Dio _dio;
   final Future<AuthTokens?> Function() _readTokens;
@@ -280,6 +285,62 @@ class HttpRelayRepository implements RelayRepository {
       response.data,
       wrappedKey: 'workspaces',
     ).map(MobileWorkspace.fromRelayJson).toList(growable: false);
+  }
+
+  @override
+  Future<WorkspaceSyncState> syncDSHWorkspaces({String terminalId = ''}) async {
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/workspaces/sync-dsh',
+      data: {
+        if (terminalId.trim().isNotEmpty) 'terminal_id': terminalId.trim(),
+      },
+    );
+    return WorkspaceSyncState.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<WorkspaceSyncState> getDSHWorkspaceSyncState(String commandId) async {
+    if (commandId.trim().isEmpty) {
+      throw const RelayFailure.validation('工作区同步命令标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/workspaces/sync-dsh/${commandId.trim()}',
+    );
+    return WorkspaceSyncState.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<WorkspaceImportState> importDSHSessions({
+    required String workspaceId,
+    String terminalId = '',
+  }) async {
+    final normalized = workspaceId.trim();
+    if (normalized.isEmpty) {
+      throw const RelayFailure.validation('工作区标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/workspaces/import-dsh',
+      data: {
+        'workspace_id': normalized,
+        if (terminalId.trim().isNotEmpty) 'terminal_id': terminalId.trim(),
+      },
+    );
+    return WorkspaceImportState.fromRelayJson(_asMap(response.data));
+  }
+
+  @override
+  Future<WorkspaceImportState> getDSHImportState(String commandId) async {
+    if (commandId.trim().isEmpty) {
+      throw const RelayFailure.validation('历史会话导入命令标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/workspaces/import-dsh/${commandId.trim()}',
+    );
+    return WorkspaceImportState.fromRelayJson(_asMap(response.data));
   }
 
   @override

@@ -13,6 +13,7 @@ class TerminalSummary {
     required this.protocolVersion,
     this.daemonVersion,
     this.lastSeen,
+    this.capabilities = const [],
   });
 
   factory TerminalSummary.fromRelayJson(Map<String, dynamic> json) {
@@ -38,6 +39,7 @@ class TerminalSummary {
       lastSeen: lastSeenUnixMs != null
           ? DateTime.fromMillisecondsSinceEpoch(lastSeenUnixMs)
           : null,
+      capabilities: _capabilityNames(json['capabilities']),
     );
   }
 
@@ -49,6 +51,9 @@ class TerminalSummary {
   final int protocolVersion;
   final String? daemonVersion;
   final DateTime? lastSeen;
+  final List<String> capabilities;
+
+  bool hasCapability(String capability) => capabilities.contains(capability);
 
   /// 仅以 Relay 白名单元数据推导展示状态；不把本地路径或 Daemon 日志带进 Android。
   TerminalAvailability availabilityAt(
@@ -70,6 +75,17 @@ class TerminalSummary {
     }
     return TerminalAvailability.online;
   }
+}
+
+List<String> _capabilityNames(Object? value) {
+  if (value is! List) return const [];
+  final names = value
+      .whereType<String>()
+      .map((name) => name.trim())
+      .where((name) => name.isNotEmpty)
+      .toSet()
+      .toList(growable: false);
+  return names;
 }
 
 /// 当前 Android 只认识 ADR-009 的 v1 Terminal 协议。未来版本必须明确降级，不能假定兼容。

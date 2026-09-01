@@ -12,6 +12,7 @@ import '../domain/delegation_models.dart';
 import '../domain/session_input_grammar.dart';
 import '../domain/session_models.dart';
 import '../domain/session_projection_models.dart';
+import '../domain/terminal_models.dart';
 import '../relay/fixture_relay_repository.dart';
 import '../state/app_controller.dart';
 import '../state/delegation_controller.dart';
@@ -21,6 +22,7 @@ import '../state/session_controller.dart';
 import '../state/session_message_feedback_controller.dart';
 import '../state/session_projection_controller.dart';
 import '../state/session_view_controller.dart';
+import '../state/terminal_status_controller.dart';
 import 'appearance_controls.dart';
 import 'app_theme.dart';
 import 'session/chat/session_chat_node_seat.dart';
@@ -47,23 +49,16 @@ class SessionHomeScreen extends ConsumerStatefulWidget {
 }
 
 class _SessionHomeScreenState extends ConsumerState<SessionHomeScreen> {
-  bool _dshMode = false;
-
   @override
   Widget build(BuildContext context) {
     final app = ref.watch(appControllerProvider);
     final sessions = ref.watch(sessionControllerProvider);
+    final terminals = ref.watch(terminalStatusControllerProvider);
     return Scaffold(
       key: const Key('session-home-screen'),
       appBar: AppBar(
-        title: const _SessionHeaderTitle(title: 'Sessions'),
+        title: const _SessionHeaderTitle(title: 'DSH 工作区'),
         actions: [
-          IconButton(
-            key: const Key('session-dsh-mode-button'),
-            tooltip: _dshMode ? '退出 DSH 模式' : 'DSH 模式',
-            onPressed: () => setState(() => _dshMode = !_dshMode),
-            icon: Icon(_dshMode ? Icons.science_outlined : Icons.science),
-          ),
           const AppearanceMenu(),
           IconButton(
             key: const Key('session-command-palette-button'),
@@ -78,14 +73,6 @@ class _SessionHomeScreenState extends ConsumerState<SessionHomeScreen> {
             icon: const Icon(Icons.history),
           ),
           IconButton(
-            key: const Key('session-new-button'),
-            tooltip: '新建会话',
-            onPressed: app.canManageDevices && !app.isBusy
-                ? () => context.push('/sessions/new')
-                : null,
-            icon: const Icon(Icons.add),
-          ),
-          IconButton(
             key: const Key('signout-button'),
             tooltip: '断开此设备',
             onPressed: app.isBusy ? null : app.signOut,
@@ -98,16 +85,20 @@ class _SessionHomeScreenState extends ConsumerState<SessionHomeScreen> {
         child: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480),
+            constraints: const BoxConstraints(maxWidth: 1280),
             child: RefreshIndicator(
-              onRefresh: sessions.refreshSessions,
-              child: _SessionHomeBody(
+              onRefresh: () async {
+                await Future.wait([
+                  sessions.refreshSessions(),
+                  sessions.refreshWorkspaces(),
+                  ref.read(terminalStatusControllerProvider).refresh(),
+                ]);
+              },
+              child: _DSHWorkspaceHome(
                 app: app,
                 sessions: sessions,
                 deviceId: app.currentDevice?.id,
-                fixtureMode:
-                    ref.read(relayRepositoryProvider) is FixtureRelayRepository,
-                dshMode: _dshMode,
+                terminalStatus: terminals,
               ),
             ),
           ),
@@ -117,50 +108,97 @@ class _SessionHomeScreenState extends ConsumerState<SessionHomeScreen> {
   }
 }
 
-class _SessionHomeBody extends StatelessWidget {
-  const _SessionHomeBody({
+class _DSHWorkspaceHome extends StatefulWidget {
+  const _DSHWorkspaceHome({
     required this.app,
     required this.sessions,
     required this.deviceId,
-    required this.fixtureMode,
-    required this.dshMode,
+    required this.terminalStatus,
   });
 
   final AppController app;
   final SessionController sessions;
   final String? deviceId;
-  final bool fixtureMode;
-  final bool dshMode;
+  final TerminalStatusController terminalStatus;
+
+  @override
+  State<_DSHWorkspaceHome> createState() => _DSHWorkspaceHomeState();
+}
+
+class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
+  final Set<String> _expandedWorkspaceIds = <String>{};
+  final TextEditingController _searchController = TextEditingController();
+  String _workspaceSearch = '';
+  String? _selectedWorkspaceId;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final app = widget.app;
+    final sessions = widget.sessions;
+    final terminalStatus = widget.terminalStatus;
+    final dshWorkspaces =
+        sessions.workspaces.where((workspace) => workspace.isDsh).toList()
+          ..sort(
+            (left, right) =>
+                left.label.toLowerCase().compareTo(right.label.toLowerCase()),
+          );
     if (sessions.phase == SessionListPhase.loading &&
-        sessions.sessions.isEmpty) {
+        sessions.workspacePhase == WorkspaceListPhase.loading &&
+        sessions.sessions.isEmpty &&
+        sessions.workspaces.isEmpty) {
       return const Center(
-        key: Key('session-list-loading'),
+        key: Key('dsh-workspace-loading'),
         child: CircularProgressIndicator(),
       );
     }
-    if (sessions.phase == SessionListPhase.error && sessions.sessions.isEmpty) {
+    if (sessions.workspacePhase == WorkspaceListPhase.error &&
+        sessions.workspaces.isEmpty) {
       return ListView(
         padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
         children: [
           _InlineError(
-            key: const Key('session-list-error'),
-            message: sessions.errorMessage ?? '会话列表暂时不可用。',
-            onRetry: sessions.refreshSessions,
+            key: const Key('dsh-workspace-list-error'),
+            message: sessions.workspaceErrorMessage ?? '工作区列表暂时不可用。',
+            onRetry: sessions.refreshWorkspaces,
           ),
-          const SizedBox(height: 16),
-          _SecurityControls(app: app),
         ],
       );
     }
 
-    final groups = dshMode
-        ? _groupDSHSessions(sessions.sessions)
-        : _groupSessions(sessions.sessions);
+    final filteredWorkspaces = dshWorkspaces
+        .where((workspace) {
+          final sessionItems = _dshSessionsForWorkspace(
+            sessions.sessions,
+            workspace.id,
+          );
+          return _matchesWorkspaceSearch(
+            workspace: workspace,
+            sessions: sessionItems,
+            query: _workspaceSearch,
+          );
+        })
+        .toList(growable: false);
+
+    final isWide = MediaQuery.sizeOf(context).width >= 900;
+    if (isWide) {
+      return _buildWideWorkspaceView(
+        context,
+        app: app,
+        sessions: sessions,
+        terminalStatus: terminalStatus,
+        dshWorkspaces: dshWorkspaces,
+        filteredWorkspaces: filteredWorkspaces,
+      );
+    }
+
     return ListView(
-      key: const Key('session-list-scroll'),
+      key: const Key('dsh-workspace-list-scroll'),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
         if (sessions.errorMessage != null) ...[
@@ -175,68 +213,1253 @@ class _SessionHomeBody extends StatelessWidget {
           const _ReadOnlyBanner(),
           const SizedBox(height: 12),
         ],
-        if (dshMode) ...[
-          const _SectionLabel('DSH 工作区'),
-          if (sessions.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('暂无 DSH 会话。', key: Key('dsh-session-empty')),
-            ),
-        ] else if (sessions.isEmpty)
-          _SessionEmptyState(
-            sessions: sessions,
-            canWrite: app.canManageDevices,
-            deviceId: deviceId,
-            fixtureMode: fixtureMode,
+        _DSHWorkspaceToolbar(
+          searchController: _searchController,
+          canSync: app.canManageDevices && !app.isBusy,
+          syncing: sessions.workspaceSyncWaiting,
+          onSearchChanged: (value) => setState(() => _workspaceSearch = value),
+          onSync: () => _openSyncSheet(terminalStatus),
+        ),
+        const SizedBox(height: 12),
+        if (sessions.workspaceSyncState != null ||
+            sessions.workspaceSyncWaiting)
+          _DSHWorkspaceSyncNotice(
+            state: sessions.workspaceSyncState,
+            waiting: sessions.workspaceSyncWaiting,
+            error: sessions.workspaceErrorMessage,
+            onStopWaiting: sessions.stopWaitingForDSHWorkspaceSync,
           ),
-        if (!sessions.isEmpty)
-          for (final group in groups.entries) ...[
-            _ProjectGroupHeader(
-              key: Key(dshMode ? 'dsh-group-${group.key}' : 'project-group-${group.key}'),
-              title: dshMode ? group.key : group.key,
-              dsh: dshMode,
-            ),
-            for (final session in group.value)
-              _SessionListItem(
-                session: session,
-                selected: session.id == sessions.selectedSessionId,
-                onTap: () async {
-                  await sessions.selectSession(session.id);
-                  if (!context.mounted) return;
-                  context.push('/sessions/${session.id}');
-                },
+        if (sessions.workspaceSyncState != null ||
+            sessions.workspaceSyncWaiting)
+          const SizedBox(height: 12),
+        if (dshWorkspaces.isEmpty)
+          _DSHWorkspaceEmptyState(canSync: app.canManageDevices)
+        else if (filteredWorkspaces.isEmpty)
+          const _DSHWorkspaceSearchEmptyState()
+        else
+          for (final workspace in filteredWorkspaces) ...[
+            _DSHWorkspaceGroup(
+              workspace: workspace,
+              sessions: _dshSessionsForWorkspace(
+                sessions.sessions,
+                workspace.id,
               ),
+              expanded: _expandedWorkspaceIds.contains(workspace.id),
+              selected: _selectedWorkspaceId == workspace.id,
+              selectedSessionId: sessions.selectedSessionId,
+              onToggle: () => setState(() {
+                if (!_expandedWorkspaceIds.add(workspace.id)) {
+                  _expandedWorkspaceIds.remove(workspace.id);
+                }
+              }),
+              onSelectWorkspace: () {
+                if (isWide) {
+                  setState(() => _selectedWorkspaceId = workspace.id);
+                } else if (GoRouter.maybeOf(context) != null) {
+                  context.push('/workspaces/${workspace.id}');
+                } else {
+                  // 纯 widget fixture 没有路由宿主时仍保留选中态，便于测试交互契约。
+                  setState(() => _selectedWorkspaceId = workspace.id);
+                }
+              },
+              onOpenSession: (session) async {
+                await sessions.selectSession(session.id);
+                if (!context.mounted) return;
+                context.push('/sessions/${session.id}');
+              },
+            ),
+            const SizedBox(height: 8),
           ],
-        const SizedBox(height: 16),
-        _SecurityControls(app: app),
       ],
+    );
+  }
+
+  Widget _buildWideWorkspaceView(
+    BuildContext context, {
+    required AppController app,
+    required SessionController sessions,
+    required TerminalStatusController terminalStatus,
+    required List<MobileWorkspace> dshWorkspaces,
+    required List<MobileWorkspace> filteredWorkspaces,
+  }) {
+    final panelHeight = (MediaQuery.sizeOf(context).height - 120)
+        .clamp(600.0, 960.0)
+        .toDouble();
+    final selected = _selectedWorkspaceId == null
+        ? null
+        : dshWorkspaces
+              .where((workspace) => workspace.id == _selectedWorkspaceId)
+              .firstOrNull;
+    final visibleSelection = selected ?? filteredWorkspaces.firstOrNull;
+    if (visibleSelection != null && _selectedWorkspaceId == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedWorkspaceId == null) {
+          setState(() => _selectedWorkspaceId = visibleSelection.id);
+        }
+      });
+    }
+    return ListView(
+      key: const Key('dsh-workspace-master-detail-scroll'),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      children: [
+        SizedBox(
+          height: panelHeight,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 344,
+                child: Material(
+                  color: Theme.of(context).colorScheme.surface,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: ListView(
+                      children: [
+                        if (sessions.errorMessage != null) ...[
+                          _InlineError(
+                            key: const Key('session-error-message'),
+                            message: sessions.errorMessage!,
+                            onRetry: sessions.clearError,
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        if (!app.canManageDevices) ...[
+                          const _ReadOnlyBanner(),
+                          const SizedBox(height: 12),
+                        ],
+                        _DSHWorkspaceToolbar(
+                          searchController: _searchController,
+                          canSync: app.canManageDevices && !app.isBusy,
+                          syncing: sessions.workspaceSyncWaiting,
+                          onSearchChanged: (value) =>
+                              setState(() => _workspaceSearch = value),
+                          onSync: () => _openSyncSheet(terminalStatus),
+                        ),
+                        const SizedBox(height: 12),
+                        if (sessions.workspaceSyncState != null ||
+                            sessions.workspaceSyncWaiting)
+                          _DSHWorkspaceSyncNotice(
+                            state: sessions.workspaceSyncState,
+                            waiting: sessions.workspaceSyncWaiting,
+                            error: sessions.workspaceErrorMessage,
+                            onStopWaiting:
+                                sessions.stopWaitingForDSHWorkspaceSync,
+                          ),
+                        if (sessions.workspaceSyncState != null ||
+                            sessions.workspaceSyncWaiting)
+                          const SizedBox(height: 12),
+                        if (dshWorkspaces.isEmpty)
+                          _DSHWorkspaceEmptyState(canSync: app.canManageDevices)
+                        else if (filteredWorkspaces.isEmpty)
+                          const _DSHWorkspaceSearchEmptyState()
+                        else
+                          for (final workspace in filteredWorkspaces) ...[
+                            _DSHWorkspaceGroup(
+                              workspace: workspace,
+                              sessions: _dshSessionsForWorkspace(
+                                sessions.sessions,
+                                workspace.id,
+                              ),
+                              expanded: _expandedWorkspaceIds.contains(
+                                workspace.id,
+                              ),
+                              selected: _selectedWorkspaceId == workspace.id,
+                              selectedSessionId: sessions.selectedSessionId,
+                              onToggle: () => setState(() {
+                                if (!_expandedWorkspaceIds.add(workspace.id)) {
+                                  _expandedWorkspaceIds.remove(workspace.id);
+                                }
+                              }),
+                              onSelectWorkspace: () => setState(
+                                () => _selectedWorkspaceId = workspace.id,
+                              ),
+                              onOpenSession: (session) async {
+                                await sessions.selectSession(session.id);
+                                if (!context.mounted) return;
+                                context.push('/sessions/${session.id}');
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const VerticalDivider(width: 24, thickness: 1),
+              Expanded(
+                child: visibleSelection == null
+                    ? const _DSHWorkspaceNoSelectionPane()
+                    : _DSHWorkspaceDetailPane(
+                        workspace: visibleSelection,
+                        sessions: _dshSessionsForWorkspace(
+                          sessions.sessions,
+                          visibleSelection.id,
+                        ),
+                        app: app,
+                        terminals: terminalStatus,
+                        importState:
+                            sessions.workspaceImportWorkspaceId ==
+                                visibleSelection.id
+                            ? sessions.workspaceImportState
+                            : null,
+                        importWaiting:
+                            sessions.workspaceImportWaiting &&
+                            sessions.workspaceImportWorkspaceId ==
+                                visibleSelection.id,
+                        busy: sessions.isBusy,
+                        error: sessions.workspaceErrorMessage,
+                        onCreate: () => _createDshSession(
+                          context,
+                          app,
+                          sessions,
+                          visibleSelection,
+                        ),
+                        onImport: () => _confirmImport(
+                          context,
+                          app,
+                          sessions,
+                          visibleSelection,
+                        ),
+                        onStopImportWaiting: sessions.stopWaitingForDSHImport,
+                        onDismissError: sessions.clearWorkspaceError,
+                        onOpenSession: (session) async {
+                          await sessions.selectSession(session.id);
+                          if (!context.mounted) return;
+                          context.push('/sessions/${session.id}');
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _createDshSession(
+    BuildContext context,
+    AppController app,
+    SessionController sessions,
+    MobileWorkspace workspace,
+  ) async {
+    final created = await sessions.createSession(
+      workspaceId: workspace.id,
+      provider: 'dsh',
+      deviceId: app.currentDevice?.id,
+      canWrite: app.canManageDevices,
+      autoStart: false,
+    );
+    if (!mounted || created == null) return;
+    this.context.push('/sessions/${created.id}');
+  }
+
+  Future<void> _confirmImport(
+    BuildContext context,
+    AppController app,
+    SessionController sessions,
+    MobileWorkspace workspace,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导入历史 DSH 会话？'),
+        content: const Text('仅导入会话元数据，不读取或上传消息正文。导入结果会按当前工作区显示。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('dsh-workspace-import-confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('确认导入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await sessions.importDSHSessions(
+      workspaceId: workspace.id,
+      deviceId: app.currentDevice?.id,
+      canWrite: app.canManageDevices,
+      terminalId: workspace.terminalId,
+    );
+  }
+
+  Future<void> _openSyncSheet(TerminalStatusController terminalStatus) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => _DSHWorkspaceSyncSheet(
+        sessions: widget.sessions,
+        terminals: terminalStatus,
+      ),
     );
   }
 }
 
-Map<String, List<MobileSession>> _groupSessions(List<MobileSession> sessions) {
-  final groups = <String, List<MobileSession>>{};
-  for (final session in sessions) {
-    final project = session.projectName?.trim().isNotEmpty == true
-        ? session.projectName!.trim()
-        : '未命名项目';
-    groups.putIfAbsent(project, () => []).add(session);
-  }
-  return groups;
+List<MobileSession> _dshSessionsForWorkspace(
+  List<MobileSession> sessions,
+  String workspaceId,
+) => sessions
+    .where(
+      (session) =>
+          session.workspaceId == workspaceId && session.provider == 'dsh',
+    )
+    .toList(growable: false);
+
+bool _matchesWorkspaceSearch({
+  required MobileWorkspace workspace,
+  required List<MobileSession> sessions,
+  required String query,
+}) {
+  final normalized = query.trim().toLowerCase();
+  if (normalized.isEmpty) return true;
+  return workspace.label.toLowerCase().contains(normalized) ||
+      sessions.any(
+        (session) => session.title.toLowerCase().contains(normalized),
+      );
 }
 
-/// DSH 模式按 workspace_id 分组；工作区名称优先使用白名单 workspaceName。
-Map<String, List<MobileSession>> _groupDSHSessions(
-  List<MobileSession> sessions,
-) {
-  final groups = <String, List<MobileSession>>{};
-  for (final session in sessions) {
-    final workspace = session.workspaceName?.trim().isNotEmpty == true
-        ? session.workspaceName!.trim()
-        : session.workspaceId;
-    groups.putIfAbsent(workspace, () => []).add(session);
+class _DSHWorkspaceToolbar extends StatelessWidget {
+  const _DSHWorkspaceToolbar({
+    required this.searchController,
+    required this.canSync,
+    required this.syncing,
+    required this.onSearchChanged,
+    required this.onSync,
+  });
+
+  final TextEditingController searchController;
+  final bool canSync;
+  final bool syncing;
+  final ValueChanged<String> onSearchChanged;
+  final VoidCallback onSync;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: TextField(
+          key: const Key('dsh-workspace-search-input'),
+          controller: searchController,
+          onChanged: onSearchChanged,
+          maxLines: 1,
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search),
+            hintText: '搜索工作区或会话',
+            isDense: true,
+          ),
+        ),
+      ),
+      if (canSync) ...[
+        const SizedBox(width: 8),
+        IconButton(
+          key: const Key('dsh-workspace-sync-button'),
+          tooltip: syncing ? '正在同步 DSH 工作区' : '同步本机 DSH 项目',
+          onPressed: syncing ? null : onSync,
+          icon: syncing
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.sync),
+        ),
+      ],
+    ],
+  );
+}
+
+class _DSHWorkspaceGroup extends StatelessWidget {
+  const _DSHWorkspaceGroup({
+    required this.workspace,
+    required this.sessions,
+    required this.expanded,
+    required this.selected,
+    required this.selectedSessionId,
+    required this.onToggle,
+    required this.onSelectWorkspace,
+    required this.onOpenSession,
+  });
+
+  final MobileWorkspace workspace;
+  final List<MobileSession> sessions;
+  final bool expanded;
+  final bool selected;
+  final String? selectedSessionId;
+  final VoidCallback onToggle;
+  final VoidCallback onSelectWorkspace;
+  final ValueChanged<MobileSession> onOpenSession;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final sessionCount = sessions.length;
+    final statusLabel = sessionCount == 0 ? '尚无会话' : '$sessionCount 个 DSH 会话';
+    return Semantics(
+      selected: selected,
+      label: '${workspace.label}，$statusLabel${selected ? '，已选中' : ''}',
+      child: Container(
+        key: Key('dsh-workspace-${workspace.id}'),
+        decoration: BoxDecoration(
+          color: selected
+              ? theme.colorScheme.surfaceContainerHigh
+              : Colors.transparent,
+          // Keep the workspace browser as a continuous sidebar list rather
+          // than turning every local project into an isolated card.
+          border: Border(
+            left: BorderSide(
+              color: selected ? theme.colorScheme.primary : Colors.transparent,
+              width: 3,
+            ),
+            bottom: BorderSide(color: theme.dividerColor),
+          ),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Semantics(
+                  button: true,
+                  expanded: expanded,
+                  label: expanded
+                      ? '收起 ${workspace.label}'
+                      : '展开 ${workspace.label}',
+                  child: IconButton(
+                    key: Key('dsh-workspace-expand-${workspace.id}'),
+                    tooltip: expanded
+                        ? '收起 ${workspace.label}'
+                        : '展开 ${workspace.label}',
+                    onPressed: onToggle,
+                    icon: Icon(
+                      expanded ? Icons.expand_more : Icons.chevron_right,
+                    ),
+                  ),
+                ),
+                const Icon(Icons.folder_outlined, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Semantics(
+                    button: true,
+                    selected: selected,
+                    child: InkWell(
+                      key: Key('dsh-workspace-select-${workspace.id}'),
+                      borderRadius: BorderRadius.circular(4),
+                      onTap: onSelectWorkspace,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              workspace.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              statusLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (selected)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Icon(
+                      Icons.check_circle_outline,
+                      color: theme.colorScheme.primary,
+                      semanticLabel: '已选中工作区',
+                    ),
+                  ),
+              ],
+            ),
+            if (expanded) ...[
+              const Divider(height: 1),
+              if (sessions.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(52, 14, 12, 14),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('尚无 DSH 会话'),
+                  ),
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
+                  child: Column(
+                    children: [
+                      for (final session in sessions)
+                        _DSHWorkspaceSessionItem(
+                          session: session,
+                          selected: session.id == selectedSessionId,
+                          onTap: () => onOpenSession(session),
+                        ),
+                    ],
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
-  return groups;
+}
+
+class _DSHWorkspaceSessionItem extends StatelessWidget {
+  const _DSHWorkspaceSessionItem({
+    required this.session,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final MobileSession session;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _sessionStatusPresentation(session);
+    return Material(
+      color: Colors.transparent,
+      child: ListTile(
+        key: Key('dsh-workspace-session-${session.id}'),
+        dense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+          side: BorderSide(
+            color: selected
+                ? Theme.of(context).colorScheme.primary
+                : Colors.transparent,
+          ),
+        ),
+        selected: selected,
+        selectedTileColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+        leading: const Icon(Icons.terminal_outlined, size: 18),
+        title: Text(
+          session.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(
+          _sessionStatusLineText(session),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: Semantics(
+          label: status.label,
+          child: Icon(
+            Icons.circle,
+            size: 10,
+            color: _sessionStatusColor(context, status.tone),
+          ),
+        ),
+        onTap: onTap,
+      ),
+    );
+  }
+}
+
+class _DSHWorkspaceEmptyState extends StatelessWidget {
+  const _DSHWorkspaceEmptyState({required this.canSync});
+
+  final bool canSync;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('dsh-workspace-empty'),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      border: Border.all(color: Theme.of(context).dividerColor),
+      borderRadius: BorderRadius.circular(AppRadius.card),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.folder_off_outlined),
+        const SizedBox(height: 10),
+        Text('尚未同步本机 DSH 项目', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 4),
+        Text(
+          canSync ? '选择在线终端后同步其已授权的项目。' : '当前设备只读，无法请求同步。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    ),
+  );
+}
+
+class _DSHWorkspaceSearchEmptyState extends StatelessWidget {
+  const _DSHWorkspaceSearchEmptyState();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    key: Key('dsh-workspace-search-empty'),
+    padding: EdgeInsets.symmetric(vertical: 24),
+    child: Center(child: Text('没有匹配的工作区或会话。')),
+  );
+}
+
+TerminalSummary? _homeTerminalForWorkspace(
+  MobileWorkspace workspace,
+  TerminalStatusController terminals,
+) {
+  for (final terminal in terminals.terminals) {
+    if (terminal.id == workspace.terminalId) return terminal;
+  }
+  return null;
+}
+
+String _terminalAvailabilityLabel(
+  TerminalSummary? terminal,
+  TerminalAvailability? availability,
+) => switch ((terminal, availability)) {
+  (null, _) => '未找到归属 Terminal',
+  (_, TerminalAvailability.online) => '在线',
+  (_, TerminalAvailability.offline) => '离线',
+  (_, TerminalAvailability.stale) => '状态过期',
+  (_, TerminalAvailability.unsupported) => '协议不兼容',
+  _ => '状态未知',
+};
+
+class _DSHWorkspaceNoSelectionPane extends StatelessWidget {
+  const _DSHWorkspaceNoSelectionPane();
+
+  @override
+  Widget build(BuildContext context) => Center(
+    key: const Key('dsh-workspace-no-selection'),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.folder_open_outlined,
+          size: 48,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+        const SizedBox(height: 12),
+        const Text('选择一个工作区查看详情'),
+      ],
+    ),
+  );
+}
+
+class _DSHWorkspaceDetailPane extends StatelessWidget {
+  const _DSHWorkspaceDetailPane({
+    required this.workspace,
+    required this.sessions,
+    required this.app,
+    required this.terminals,
+    required this.importState,
+    required this.importWaiting,
+    required this.busy,
+    required this.error,
+    required this.onCreate,
+    required this.onImport,
+    required this.onStopImportWaiting,
+    required this.onDismissError,
+    required this.onOpenSession,
+  });
+
+  final MobileWorkspace workspace;
+  final List<MobileSession> sessions;
+  final AppController app;
+  final TerminalStatusController terminals;
+  final WorkspaceImportState? importState;
+  final bool importWaiting;
+  final bool busy;
+  final String? error;
+  final VoidCallback onCreate;
+  final VoidCallback onImport;
+  final VoidCallback onStopImportWaiting;
+  final VoidCallback onDismissError;
+  final ValueChanged<MobileSession> onOpenSession;
+
+  @override
+  Widget build(BuildContext context) {
+    final terminal = _homeTerminalForWorkspace(workspace, terminals);
+    final availability = terminal == null
+        ? null
+        : terminals.availabilityFor(terminal);
+    final terminalOnline = availability == TerminalAvailability.online;
+    final canCreate =
+        app.canManageDevices &&
+        terminalOnline &&
+        terminal!.hasCapability('start') &&
+        !busy;
+    final canImport =
+        app.canManageDevices &&
+        terminalOnline &&
+        terminal!.hasCapability('dsh_session_import') &&
+        !busy;
+    final createReason = !app.canManageDevices
+        ? '当前设备只读，无法创建会话。'
+        : terminal == null
+        ? '未找到工作区归属 Terminal。'
+        : !terminalOnline
+        ? 'home Terminal 当前${_terminalAvailabilityLabel(terminal, availability)}。'
+        : !terminal.hasCapability('start')
+        ? 'home Terminal 未声明 DSH 启动能力。'
+        : busy
+        ? '正在处理工作区操作。'
+        : null;
+    final importReason = !app.canManageDevices
+        ? '当前设备只读，无法导入。'
+        : terminal == null
+        ? '未找到工作区归属 Terminal。'
+        : !terminalOnline
+        ? 'home Terminal 当前${_terminalAvailabilityLabel(terminal, availability)}。'
+        : !terminal.hasCapability('dsh_session_import')
+        ? 'home Terminal 未声明历史会话导入能力。'
+        : busy
+        ? '正在处理工作区操作。'
+        : null;
+    final importTerminalState =
+        importState?.isTerminal == true && !importWaiting;
+
+    return SingleChildScrollView(
+      key: const Key('dsh-workspace-detail-pane'),
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      workspace.label,
+                      key: const Key('dsh-workspace-detail-title'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'DSH 工作区',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuButton<String>(
+                key: const Key('dsh-workspace-more-menu'),
+                tooltip: '工作区更多操作',
+                onSelected: (value) {
+                  if (value == 'import') onImport();
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem<String>(
+                    key: const Key('dsh-workspace-import-button'),
+                    value: 'import',
+                    enabled: canImport && !importWaiting,
+                    child: ListTile(
+                      leading: const Icon(Icons.history),
+                      title: const Text('导入历史会话'),
+                      subtitle: importReason == null
+                          ? null
+                          : Text(importReason),
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Container(
+            key: const Key('dsh-workspace-terminal-status'),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(AppRadius.card),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  terminalOnline
+                      ? Icons.computer_outlined
+                      : Icons.computer_outlined,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('home Terminal'),
+                      const SizedBox(height: 2),
+                      Text(
+                        terminal == null
+                            ? '未连接'
+                            : '${terminal.hostname} · ${_terminalAvailabilityLabel(terminal, availability)}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          if (createReason != null && !canCreate)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                createReason,
+                key: const Key('dsh-workspace-create-disabled-reason'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              key: const Key('dsh-workspace-create-session-button'),
+              onPressed: canCreate ? onCreate : null,
+              icon: const Icon(Icons.add_comment_outlined),
+              label: const Text('新建 DSH 会话'),
+            ),
+          ),
+          if (error != null) ...[
+            const SizedBox(height: 12),
+            _InlineError(message: error!, onRetry: onDismissError),
+          ],
+          if (importWaiting || importState != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              key: const Key('dsh-workspace-import-status'),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                border: Border.all(color: Theme.of(context).dividerColor),
+                borderRadius: BorderRadius.circular(AppRadius.card),
+              ),
+              child: Row(
+                children: [
+                  if (importWaiting)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(
+                      importState?.isSucceeded == true
+                          ? Icons.check_circle_outline
+                          : Icons.error_outline,
+                    ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      importWaiting
+                          ? '正在导入历史会话…'
+                          : importState?.isSucceeded == true
+                          ? importState!.sessionIds.isEmpty
+                                ? '未发现可导入会话。'
+                                : '已导入 ${importState!.sessionIds.length} 个会话。'
+                          : '历史会话导入未完成。',
+                    ),
+                  ),
+                  if (importWaiting)
+                    TextButton(
+                      key: const Key('dsh-workspace-import-stop-waiting'),
+                      onPressed: onStopImportWaiting,
+                      child: const Text('停止等待'),
+                    ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          Text('会话', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          if (sessions.isEmpty)
+            Container(
+              key: const Key('dsh-workspace-detail-empty'),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 28),
+              child: const Column(
+                children: [
+                  Icon(Icons.chat_bubble_outline),
+                  SizedBox(height: 8),
+                  Text('尚无 DSH 会话'),
+                  SizedBox(height: 4),
+                  Text('从上方创建会话，或在更多操作中导入历史元数据。'),
+                ],
+              ),
+            )
+          else
+            for (final session in sessions) ...[
+              _DSHWorkspaceSessionItem(
+                session: session,
+                selected: false,
+                onTap: () => onOpenSession(session),
+              ),
+              const SizedBox(height: 4),
+            ],
+          if (!canImport &&
+              importTerminalState == false &&
+              importReason != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                importReason,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 窄屏工作区详情页；工作区 ID 只来自已同步的 DSH 投影，不能由输入框改写。
+class DSHWorkspaceDetailScreen extends ConsumerWidget {
+  const DSHWorkspaceDetailScreen({required this.workspaceId, super.key});
+
+  final String workspaceId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final app = ref.watch(appControllerProvider);
+    final sessionsController = ref.watch(sessionControllerProvider);
+    final terminals = ref.watch(terminalStatusControllerProvider);
+    MobileWorkspace? workspace;
+    for (final candidate in sessionsController.workspaces) {
+      if (candidate.id == workspaceId && candidate.isDsh) {
+        workspace = candidate;
+        break;
+      }
+    }
+    if (workspace == null) {
+      return Scaffold(
+        appBar: AppBar(title: const _SessionHeaderTitle(title: 'DSH 工作区')),
+        body: const Center(child: Text('工作区不存在或尚未同步。')),
+      );
+    }
+    final selectedWorkspace = workspace;
+    final workspaceSessions = _dshSessionsForWorkspace(
+      sessionsController.sessions,
+      selectedWorkspace.id,
+    );
+    return Scaffold(
+      key: const Key('dsh-workspace-detail-screen'),
+      appBar: AppBar(
+        title: Text(selectedWorkspace.label),
+        leading: IconButton(
+          key: const Key('dsh-workspace-detail-back'),
+          tooltip: '返回工作区',
+          onPressed: () => context.pop(),
+          icon: const Icon(Icons.arrow_back),
+        ),
+      ),
+      body: _DSHWorkspaceDetailPane(
+        workspace: selectedWorkspace,
+        sessions: workspaceSessions,
+        app: app,
+        terminals: terminals,
+        importState:
+            sessionsController.workspaceImportWorkspaceId ==
+                selectedWorkspace.id
+            ? sessionsController.workspaceImportState
+            : null,
+        importWaiting:
+            sessionsController.workspaceImportWaiting &&
+            sessionsController.workspaceImportWorkspaceId ==
+                selectedWorkspace.id,
+        busy: sessionsController.isBusy,
+        error: sessionsController.workspaceErrorMessage,
+        onCreate: () => _createSession(
+          context,
+          ref,
+          app,
+          sessionsController,
+          selectedWorkspace,
+        ),
+        onImport: () => _confirmImport(
+          context,
+          ref,
+          app,
+          sessionsController,
+          selectedWorkspace,
+        ),
+        onStopImportWaiting: sessionsController.stopWaitingForDSHImport,
+        onDismissError: sessionsController.clearWorkspaceError,
+        onOpenSession: (session) async {
+          await sessionsController.selectSession(session.id);
+          if (!context.mounted) return;
+          if (GoRouter.maybeOf(context) != null) {
+            context.go('/sessions/${session.id}');
+          }
+        },
+      ),
+    );
+  }
+
+  Future<void> _createSession(
+    BuildContext context,
+    WidgetRef ref,
+    AppController app,
+    SessionController sessions,
+    MobileWorkspace workspace,
+  ) async {
+    final created = await sessions.createSession(
+      workspaceId: workspace.id,
+      provider: 'dsh',
+      deviceId: app.currentDevice?.id,
+      canWrite: app.canManageDevices,
+      autoStart: false,
+    );
+    if (!context.mounted || created == null) return;
+    if (GoRouter.maybeOf(context) != null) {
+      context.go('/sessions/${created.id}');
+    }
+  }
+
+  Future<void> _confirmImport(
+    BuildContext context,
+    WidgetRef ref,
+    AppController app,
+    SessionController sessions,
+    MobileWorkspace workspace,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导入历史 DSH 会话？'),
+        content: const Text('仅导入会话元数据，不读取或上传消息正文。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('dsh-workspace-import-confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('确认导入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    await sessions.importDSHSessions(
+      workspaceId: workspace.id,
+      deviceId: app.currentDevice?.id,
+      canWrite: app.canManageDevices,
+      terminalId: workspace.terminalId,
+    );
+  }
+}
+
+class _DSHWorkspaceSyncNotice extends StatelessWidget {
+  const _DSHWorkspaceSyncNotice({
+    required this.state,
+    required this.waiting,
+    required this.error,
+    required this.onStopWaiting,
+  });
+
+  final WorkspaceSyncState? state;
+  final bool waiting;
+  final String? error;
+  final VoidCallback onStopWaiting;
+
+  @override
+  Widget build(BuildContext context) {
+    final succeeded = state?.isSucceeded == true;
+    final message = waiting
+        ? '正在同步本机 DSH 项目…'
+        : succeeded
+        ? '已同步 ${state!.workspaceIds.length} 个 DSH 工作区。'
+        : error ?? 'DSH 工作区同步未完成。';
+    return Container(
+      key: const Key('dsh-workspace-sync-pending'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: succeeded
+            ? Theme.of(context).colorScheme.secondaryContainer
+            : Theme.of(context).colorScheme.surfaceContainerHigh,
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+      ),
+      child: Row(
+        children: [
+          if (waiting)
+            const SizedBox(
+              height: 16,
+              width: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Icon(succeeded ? Icons.check_circle_outline : Icons.error_outline),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message)),
+          if (waiting)
+            TextButton(
+              key: const Key('dsh-workspace-sync-stop-waiting'),
+              onPressed: onStopWaiting,
+              child: const Text('停止等待'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DSHWorkspaceSyncSheet extends StatefulWidget {
+  const _DSHWorkspaceSyncSheet({
+    required this.sessions,
+    required this.terminals,
+  });
+
+  final SessionController sessions;
+  final TerminalStatusController terminals;
+
+  @override
+  State<_DSHWorkspaceSyncSheet> createState() => _DSHWorkspaceSyncSheetState();
+}
+
+class _DSHWorkspaceSyncSheetState extends State<_DSHWorkspaceSyncSheet> {
+  String? _terminalId;
+
+  List<TerminalSummary> get _eligibleTerminals => widget.terminals.terminals
+      .where(
+        (terminal) =>
+            widget.terminals.availabilityFor(terminal) ==
+                TerminalAvailability.online &&
+            terminal.hasCapability('dsh_workspace_sync'),
+      )
+      .toList(growable: false);
+
+  @override
+  Widget build(BuildContext context) {
+    final candidates = _eligibleTerminals;
+    TerminalSummary? selected;
+    for (final terminal in candidates) {
+      if (terminal.id == _terminalId) {
+        selected = terminal;
+        break;
+      }
+    }
+    return AnimatedBuilder(
+      animation: widget.sessions,
+      builder: (context, _) {
+        final waiting = widget.sessions.workspaceSyncWaiting;
+        final state = widget.sessions.workspaceSyncState;
+        final completed = state?.isTerminal == true && !waiting;
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              20,
+              20,
+              20 + MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: Column(
+              key: const Key('dsh-workspace-sync-sheet'),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '同步 DSH 工作区',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                const SizedBox(height: 6),
+                const Text('只会同步终端已授权的工作区名称和状态。'),
+                const SizedBox(height: 16),
+                if (candidates.isEmpty)
+                  const Text(
+                    '没有可用终端。终端需要在线并声明 DSH 工作区同步能力。',
+                    key: Key('dsh-workspace-sync-no-terminal'),
+                  )
+                else ...[
+                  RadioGroup<String>(
+                    groupValue: _terminalId,
+                    onChanged: (value) {
+                      if (!waiting) setState(() => _terminalId = value);
+                    },
+                    child: Column(
+                      children: [
+                        for (final terminal in candidates)
+                          RadioListTile<String>(
+                            key: Key(
+                              'dsh-workspace-terminal-option-${terminal.id}',
+                            ),
+                            value: terminal.id,
+                            enabled: !waiting,
+                            title: Text(
+                              terminal.hostname,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text('${terminal.platform} · 在线'),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (selected != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('将从 ${selected.hostname} 同步。'),
+                    ),
+                ],
+                if (waiting) ...[
+                  const SizedBox(height: 8),
+                  const Text('同步请求已提交，正在等待终端响应。'),
+                ] else if (completed) ...[
+                  const SizedBox(height: 8),
+                  Text(state!.isSucceeded ? '同步完成。' : '同步未完成，请检查终端状态。'),
+                ],
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      key: const Key('dsh-workspace-sync-cancel'),
+                      onPressed: waiting
+                          ? widget.sessions.stopWaitingForDSHWorkspaceSync
+                          : () => Navigator.of(context).pop(),
+                      child: Text(waiting ? '停止等待' : '取消'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      key: const Key('dsh-workspace-sync-confirm'),
+                      onPressed:
+                          candidates.isEmpty || _terminalId == null || waiting
+                          ? null
+                          : () => widget.sessions.syncDSHWorkspaces(
+                              terminalId: _terminalId!,
+                            ),
+                      child: const Text('确认同步'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class NewSessionScreen extends ConsumerStatefulWidget {
@@ -554,7 +1777,8 @@ class _SessionChatView extends StatelessWidget {
     return SessionChatView(
       nodes: chatNodes,
       // 乐观回显挂出即视为进行中：状态行立刻出现，不等 daemon 事件回传。
-      running: sessions.isStreaming || (sessions.pendingOutgoingMessage != null),
+      running:
+          sessions.isStreaming || (sessions.pendingOutgoingMessage != null),
       leading: _SessionRecoveryStrip(
         controller: recovery,
         sessionId: sessionId,
@@ -4016,315 +5240,6 @@ class _AttachmentRejectedChip extends StatelessWidget {
   );
 }
 
-class _SecurityControls extends StatelessWidget {
-  const _SecurityControls({required this.app});
-
-  final AppController app;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      const _SectionLabel('控制端'),
-      Container(
-        key: const Key('mobile-control-status'),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: app.requiresRecovery
-            ? const ListTile(
-                key: Key('identity-recovery-required-state'),
-                leading: Icon(Icons.key_off_outlined),
-                title: Text('需要恢复本机身份'),
-              )
-            : app.needsOwnerBootstrap
-            ? ListTile(
-                leading: const Icon(Icons.admin_panel_settings_outlined),
-                title: const Text('完成此设备的 owner 安全初始化'),
-                subtitle: const Text('Relay 已建立 owner 绑定，等待写入此设备公钥。'),
-                trailing: IconButton(
-                  key: const Key('owner-bootstrap-button'),
-                  tooltip: '建立 owner',
-                  onPressed: app.isBusy ? null : app.bootstrapOwner,
-                  icon: const Icon(Icons.verified_user_outlined),
-                ),
-              )
-            : app.canManageDevices
-            ? const ListTile(
-                key: Key('owner-ready-state'),
-                leading: Icon(Icons.verified_user_outlined),
-                title: Text('Owner 设备已连接'),
-                subtitle: Text('此 Android 可操作已连接会话。'),
-              )
-            : app.hasOwner
-            ? const ListTile(
-                key: Key('readonly-auth-state'),
-                leading: Icon(Icons.lock_outline),
-                title: Text('当前设备没有 Android 写权限'),
-                subtitle: Text('使用恢复码接管此设备。'),
-              )
-            : const ListTile(
-                key: Key('unprovisioned-auth-state'),
-                leading: Icon(Icons.info_outline),
-                title: Text('尚未连接 Android owner'),
-                subtitle: Text('初始化此设备或使用恢复码接管。'),
-              ),
-      ),
-      const SizedBox(height: 4),
-      ListTile(
-        key: const Key('recovery-code-page-link'),
-        enabled: app.canManageDevices && !app.isBusy,
-        leading: const Icon(Icons.password_outlined),
-        title: const Text('恢复码'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: app.canManageDevices && !app.isBusy
-            ? () => context.go('/recovery-code')
-            : null,
-      ),
-      const Divider(height: 1),
-      ListTile(
-        key: const Key('pairing-page-link'),
-        enabled: app.canManageDevices && !app.isBusy,
-        leading: const Icon(Icons.qr_code_scanner),
-        title: const Text('二维码配对'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: app.canManageDevices && !app.isBusy
-            ? () => context.go('/pairing')
-            : null,
-      ),
-      const Divider(height: 1),
-      ListTile(
-        key: const Key('devices-page-link'),
-        enabled: app.canManageDevices && !app.isBusy,
-        leading: const Icon(Icons.devices_other_outlined),
-        title: const Text('设备管理'),
-        trailing: Text('${app.devices.length}'),
-        onTap: app.canManageDevices && !app.isBusy
-            ? () => context.go('/devices')
-            : null,
-      ),
-      const Divider(height: 1),
-      ListTile(
-        key: const Key('terminal-status-page-link'),
-        enabled: !app.isBusy,
-        leading: const Icon(Icons.terminal_outlined),
-        title: const Text('终端状态'),
-        subtitle: const Text('查看已确认终端的在线状态与版本'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: app.isBusy ? null : () => context.go('/terminals'),
-      ),
-      if (app.requiresRecovery) ...[
-        const Divider(height: 1),
-        ListTile(
-          key: const Key('identity-recovery-page-link'),
-          leading: const Icon(Icons.restore_outlined),
-          title: const Text('使用恢复码'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => context.go('/recovery'),
-        ),
-      ],
-    ],
-  );
-}
-
-class _SessionListItem extends StatelessWidget {
-  const _SessionListItem({
-    required this.session,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final MobileSession session;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final status = _sessionStatusPresentation(session);
-    final statusColor = _sessionStatusColor(context, status.tone);
-    final theme = Theme.of(context);
-    return Container(
-      key: Key('session-row-${session.id}'),
-      margin: const EdgeInsets.only(bottom: 6),
-      decoration: BoxDecoration(
-        color: selected
-            ? theme.colorScheme.surfaceContainerHigh
-            : theme.colorScheme.surface,
-        border: Border.all(
-          color: selected ? theme.colorScheme.primary : theme.dividerColor,
-        ),
-        borderRadius: BorderRadius.circular(AppRadius.card),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              Container(
-                width: AppSizes.avatarMedium,
-                height: AppSizes.avatarMedium,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.secondaryContainer,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  _sessionProviderIcon(session.provider),
-                  size: 18,
-                  color: theme.colorScheme.onSecondaryContainer,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            session.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.titleMedium,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _relativeTime(
-                            session.lastActivityAt ?? session.updatedAt,
-                          ),
-                          style: theme.textTheme.labelMedium,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      session.workspaceLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Container(
-                          key: Key('session-status-dot-${session.id}'),
-                          width: AppSizes.statusDot,
-                          height: AppSizes.statusDot,
-                          decoration: BoxDecoration(
-                            color: statusColor,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _sessionStatusLineText(session),
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: statusColor,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(
-                Icons.chevron_right,
-                size: 20,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SessionEmptyState extends StatefulWidget {
-  const _SessionEmptyState({
-    required this.sessions,
-    required this.canWrite,
-    required this.deviceId,
-    required this.fixtureMode,
-  });
-
-  final SessionController sessions;
-  final bool canWrite;
-  final String? deviceId;
-  final bool fixtureMode;
-
-  @override
-  State<_SessionEmptyState> createState() => _SessionEmptyStateState();
-}
-
-class _SessionEmptyStateState extends State<_SessionEmptyState> {
-  String _agentPresetId = fixtureAgentPresetOptions.first.id;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      key: const Key('session-empty-state'),
-      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
-      child: Column(
-        children: [
-          Icon(
-            Icons.forum_outlined,
-            size: 42,
-            color: theme.colorScheme.secondary,
-          ),
-          const SizedBox(height: 12),
-          Text('还没有会话', style: theme.textTheme.titleLarge),
-          const SizedBox(height: 6),
-          Text(
-            widget.canWrite ? '选择工作区开始一个会话。' : '恢复 Android owner 后可创建会话。',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodyMedium,
-          ),
-          const SizedBox(height: 18),
-          if (widget.fixtureMode)
-            SessionAgentPresetSeat(
-              options: fixtureAgentPresetOptions,
-              selectedId: _agentPresetId,
-              enabled: widget.canWrite,
-              onSelected: (value) => setState(() => _agentPresetId = value),
-            ),
-          if (widget.fixtureMode) const SizedBox(height: 10),
-          KeyedSubtree(
-            key: const Key('session-resident-workspace-seat'),
-            child: SessionWorkspacePicker(
-              controller: widget.sessions,
-              selectedId: null,
-              canWrite: widget.canWrite,
-              deviceId: widget.deviceId,
-              directoryFlow: widget.fixtureMode
-                  ? showFixtureWorkspaceDirectoryFlow
-                  : null,
-              label: '选择工作区开始会话',
-              onPick: (workspaceId) async {
-                final opened = await widget.sessions.openWorkspace(
-                  workspaceId: workspaceId,
-                  provider: 'codex',
-                  deviceId: widget.deviceId,
-                  canWrite: widget.canWrite,
-                  agentPresetId: widget.fixtureMode ? _agentPresetId : null,
-                );
-                return opened != null;
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _ReadOnlyBanner extends StatelessWidget {
   const _ReadOnlyBanner();
 
@@ -4647,39 +5562,6 @@ class _InlineError extends StatelessWidget {
   );
 }
 
-class _SectionLabel extends StatelessWidget {
-  const _SectionLabel(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 10, bottom: 6),
-    child: Text(text, style: Theme.of(context).textTheme.labelMedium),
-  );
-}
-
-class _ProjectGroupHeader extends StatelessWidget {
-  const _ProjectGroupHeader({super.key, required this.title, this.dsh = false});
-
-  final String title;
-  final bool dsh;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 6, bottom: 6),
-    child: Row(
-      children: [
-        if (dsh) ...[
-          const Icon(Icons.science_outlined, size: 16),
-          const SizedBox(width: 4),
-        ],
-        Text(title, style: Theme.of(context).textTheme.labelLarge),
-      ],
-    ),
-  );
-}
-
 class _SessionHeaderTitle extends StatelessWidget {
   const _SessionHeaderTitle({required this.title});
 
@@ -4982,12 +5864,3 @@ String _relativeTime(DateTime? value) {
   if (difference.inDays < 1) return '${difference.inHours} 小时';
   return '${difference.inDays} 天';
 }
-
-IconData _sessionProviderIcon(String provider) =>
-    switch (provider.toLowerCase()) {
-      'codex' => Icons.auto_awesome,
-      'claude' => Icons.psychology_outlined,
-      'opencode' => Icons.terminal_outlined,
-      'dsh' => Icons.hub_outlined,
-      _ => Icons.smart_toy_outlined,
-    };

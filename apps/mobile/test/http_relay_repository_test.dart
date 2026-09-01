@@ -340,6 +340,77 @@ void main() {
       expect(state.workspace, isNull);
     });
 
+    test('V081 DSH 同步与导入只传 opaque ID，并解析脱敏轮询状态', () async {
+      var call = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        call += 1;
+        switch (call) {
+          case 1:
+            expect(options.method, 'POST');
+            expect(options.path, '/v1/workspaces/sync-dsh');
+            expect(options.data, {'terminal_id': 'term_dsh'});
+            return _jsonResponse({
+              'status': 'pending',
+              'command_id': 'cmd_sync_dsh',
+              // 非白名单私有字段不能进入客户端 DTO。
+              'canonical_root': '/Users/private/agent-sessions',
+            });
+          case 2:
+            expect(options.method, 'GET');
+            expect(options.path, '/v1/workspaces/sync-dsh/cmd_sync_dsh');
+            expect(options.data, isNull);
+            return _jsonResponse({
+              'status': 'succeeded',
+              'command_id': 'cmd_sync_dsh',
+              'workspace_ids': ['ws_dsh'],
+            });
+          case 3:
+            expect(options.method, 'POST');
+            expect(options.path, '/v1/workspaces/import-dsh');
+            expect(options.data, {
+              'workspace_id': 'ws_dsh',
+              'terminal_id': 'term_dsh',
+            });
+            return _jsonResponse({
+              'status': 'pending',
+              'command_id': 'cmd_import_dsh',
+              'jsonl_path': '/Users/private/.dsh/history.jsonl',
+            });
+          case 4:
+            expect(options.method, 'GET');
+            expect(options.path, '/v1/workspaces/import-dsh/cmd_import_dsh');
+            expect(options.data, isNull);
+            return _jsonResponse({
+              'status': 'succeeded',
+              'command_id': 'cmd_import_dsh',
+              'session_ids': ['session_dsh_1'],
+            });
+        }
+        fail('unexpected request $call');
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      final syncPending = await repository.syncDSHWorkspaces(
+        terminalId: 'term_dsh',
+      );
+      final syncCompleted = await repository.getDSHWorkspaceSyncState(
+        'cmd_sync_dsh',
+      );
+      final importPending = await repository.importDSHSessions(
+        workspaceId: 'ws_dsh',
+        terminalId: 'term_dsh',
+      );
+      final importCompleted = await repository.getDSHImportState(
+        'cmd_import_dsh',
+      );
+
+      expect(syncPending.isPending, isTrue);
+      expect(syncCompleted.workspaceIds, ['ws_dsh']);
+      expect(importPending.isPending, isTrue);
+      expect(importCompleted.sessionIds, ['session_dsh_1']);
+      expect(call, 4);
+    });
+
     test('V07 workspace.create 非法名称在客户端校验，不发 HTTP 请求', () async {
       var calls = 0;
       final adapter = _FixtureHttpAdapter((_) {

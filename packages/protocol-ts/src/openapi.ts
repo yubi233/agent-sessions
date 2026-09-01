@@ -955,6 +955,10 @@ export interface components {
             hostname?: string;
             platform?: string;
             status: string;
+            protocol_version?: number;
+            daemon_version?: string;
+            /** @description 公开的能力名称白名单；不包含路径、命令正文或日志。 */
+            capabilities?: string[];
             /** Format: int64 */
             last_seen_unix_ms?: number;
         };

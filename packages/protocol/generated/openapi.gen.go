@@ -1509,12 +1509,16 @@ type SubmitCommandRequest struct {
 
 // Terminal defines model for Terminal.
 type Terminal struct {
-	DeviceId       string  `json:"device_id"`
-	Hostname       *string `json:"hostname,omitempty"`
-	Id             string  `json:"id"`
-	LastSeenUnixMs *int64  `json:"last_seen_unix_ms,omitempty"`
-	Platform       *string `json:"platform,omitempty"`
-	Status         string  `json:"status"`
+	// Capabilities 公开的能力名称白名单；不包含路径、命令正文或日志。
+	Capabilities    *[]string `json:"capabilities,omitempty"`
+	DaemonVersion   *string   `json:"daemon_version,omitempty"`
+	DeviceId        string    `json:"device_id"`
+	Hostname        *string   `json:"hostname,omitempty"`
+	Id              string    `json:"id"`
+	LastSeenUnixMs  *int64    `json:"last_seen_unix_ms,omitempty"`
+	Platform        *string   `json:"platform,omitempty"`
+	ProtocolVersion *int      `json:"protocol_version,omitempty"`
+	Status          string    `json:"status"`
 }
 
 // TerminalIdentityKeyList defines model for TerminalIdentityKeyList.

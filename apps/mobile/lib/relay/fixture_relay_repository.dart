@@ -22,6 +22,8 @@ class FixtureRelayRepository implements RelayRepository {
   final Map<String, _FixtureSessionState> _sessions = {};
   final Map<String, MobileWorkspace> _workspaces = {};
   final Map<String, WorkspaceCreateState> _workspaceCreateStates = {};
+  final Map<String, WorkspaceSyncState> _workspaceSyncStates = {};
+  final Map<String, WorkspaceImportState> _workspaceImportStates = {};
   final Map<String, _FixtureAttachmentState> _attachments = {};
   final Map<String, _FixtureDelegationState> _delegations = {};
   final Map<String, Map<String, ConversationFeedbackItem>> _feedback = {};
@@ -105,6 +107,19 @@ class FixtureRelayRepository implements RelayRepository {
     _terminals
       ..clear()
       ..addAll(terminals);
+  }
+
+  /// 仅供 P1 deterministic UI fixture 注入已同步的安全 DSH 工作区投影。
+  void replaceWorkspaces(Iterable<MobileWorkspace> workspaces) {
+    _workspaces
+      ..clear()
+      ..addEntries(
+        workspaces.map((workspace) => MapEntry(workspace.id, workspace)),
+      );
+  }
+
+  void setWorkspaceSyncState(String commandId, WorkspaceSyncState state) {
+    _workspaceSyncStates[commandId] = state;
   }
 
   List<int> snapshotAfterSequencesFor(String sessionId) =>
@@ -368,6 +383,82 @@ class FixtureRelayRepository implements RelayRepository {
   Future<List<MobileWorkspace>> listWorkspaces() async {
     _requireFixtureNetwork();
     return List<MobileWorkspace>.unmodifiable(_workspaces.values);
+  }
+
+  @override
+  Future<WorkspaceSyncState> syncDSHWorkspaces({String terminalId = ''}) async {
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final commandId = 'fixture-dsh-sync';
+    final existing = _workspaceSyncStates[commandId];
+    if (existing != null) return existing;
+    final dsh = _workspaces.values
+        .where((workspace) => workspace.isDsh)
+        .toList(growable: false);
+    final state = WorkspaceSyncState(
+      status: 'succeeded',
+      commandId: commandId,
+      workspaceIds: dsh
+          .map((workspace) => workspace.id)
+          .toList(growable: false),
+    );
+    _workspaceSyncStates[commandId] = state;
+    return state;
+  }
+
+  @override
+  Future<WorkspaceSyncState> getDSHWorkspaceSyncState(String commandId) async {
+    _requireFixtureNetwork();
+    final state = _workspaceSyncStates[commandId.trim()];
+    if (state == null) {
+      throw const RelayFailure.validation('工作区同步命令不存在。');
+    }
+    return state;
+  }
+
+  @override
+  Future<WorkspaceImportState> importDSHSessions({
+    required String workspaceId,
+    String terminalId = '',
+  }) async {
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final workspace = _workspaces[workspaceId.trim()];
+    if (workspace == null || !workspace.isDsh) {
+      throw const RelayFailure.validation('只能导入 DSH 工作区的历史会话。');
+    }
+    if (terminalId.trim().isNotEmpty &&
+        terminalId.trim() != workspace.terminalId) {
+      throw const RelayFailure(RelayFailureKind.forbidden, '导入必须使用工作区归属终端。');
+    }
+    final commandId = 'fixture-dsh-import-${workspace.id}';
+    final existing = _workspaceImportStates[commandId];
+    if (existing != null) return existing;
+    final state = WorkspaceImportState(
+      status: 'succeeded',
+      commandId: commandId,
+      sessionIds: _sessions.values
+          .map((item) => item.session)
+          .where(
+            (session) =>
+                session.workspaceId == workspace.id &&
+                session.provider == 'dsh',
+          )
+          .map((session) => session.id)
+          .toList(growable: false),
+    );
+    _workspaceImportStates[commandId] = state;
+    return state;
+  }
+
+  @override
+  Future<WorkspaceImportState> getDSHImportState(String commandId) async {
+    _requireFixtureNetwork();
+    final state = _workspaceImportStates[commandId.trim()];
+    if (state == null) {
+      throw const RelayFailure.validation('历史会话导入命令不存在。');
+    }
+    return state;
   }
 
   @override

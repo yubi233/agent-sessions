@@ -32,6 +32,173 @@ void main() {
     expect(controller.timeline.any((event) => event.label == '会话已启动'), isTrue);
   });
 
+  group('V081 DSH 工作区同步与历史元数据导入', () {
+    test('同步完成后刷新安全工作区和会话投影', () async {
+      final relay = _CompletingDSHWorkspaceSyncRelay(clock: () => _now);
+      await _prepareOwner(relay);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-dsh',
+          projectId: 'fixture-dsh',
+          terminalId: 'term-dsh',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'fixture-dsh',
+          status: 'active',
+        ),
+      ]);
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+
+      final state = await controller.syncDSHWorkspaces(terminalId: 'term-dsh');
+
+      expect(state?.isSucceeded, isTrue);
+      expect(controller.workspaceSyncState?.workspaceIds, ['ws-dsh']);
+      expect(controller.workspaceSyncWaiting, isFalse);
+      expect(relay.pollCount, 1);
+      expect(controller.workspaces.single.isDsh, isTrue);
+    });
+
+    test('同步失败保留终态且不会刷新为伪造工作区', () async {
+      final relay = _FailedDSHWorkspaceSyncRelay(clock: () => _now);
+      await _prepareOwner(relay);
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+
+      final state = await controller.syncDSHWorkspaces(terminalId: 'term-dsh');
+
+      expect(state?.status, 'failed');
+      expect(controller.workspaceSyncState?.status, 'failed');
+      expect(controller.workspaceSyncWaiting, isFalse);
+      expect(
+        controller.workspaces.where((workspace) => workspace.isDsh),
+        isEmpty,
+      );
+    });
+
+    test('停止等待只终止客户端同步轮询，不撤销已提交命令', () async {
+      final relay = _PendingDSHWorkspaceSyncRelay(clock: () => _now);
+      await _prepareOwner(relay);
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+
+      final pending = controller.syncDSHWorkspaces(terminalId: 'term-dsh');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(controller.workspaceSyncWaiting, isTrue);
+      controller.stopWaitingForDSHWorkspaceSync();
+      final state = await pending;
+
+      expect(state?.isPending, isTrue);
+      expect(controller.workspaceSyncWaiting, isFalse);
+      expect(relay.pollCount, 0);
+    });
+
+    test('DSH 历史元数据可读，但 V08-12 未通过前拒绝恢复', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      await _prepareOwner(relay);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-dsh',
+          projectId: 'fixture-dsh',
+          terminalId: 'term-dsh',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'fixture-dsh',
+          status: 'active',
+        ),
+      ]);
+      final imported = await relay.createSession(
+        const CreateMobileSessionInput(
+          workspaceId: 'ws-dsh',
+          provider: 'dsh',
+          deviceId: _ownerDeviceId,
+        ),
+      );
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+      await controller.selectSession(imported.id);
+
+      expect(controller.resumeBlockedReason(canWrite: true), 'DSH 历史会话恢复暂不可用。');
+      await controller.resumeSelectedSession(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      expect(controller.errorMessage, 'DSH 历史会话恢复暂不可用。');
+    });
+
+    test('导入成功后只刷新会话元数据，并保留 DSH workspace 边界', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      await _prepareOwner(relay);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-dsh',
+          projectId: 'fixture-dsh',
+          terminalId: 'term-dsh',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'fixture-dsh',
+          status: 'active',
+        ),
+      ]);
+      await relay.createSession(
+        const CreateMobileSessionInput(
+          workspaceId: 'ws-dsh',
+          provider: 'dsh',
+          deviceId: _ownerDeviceId,
+        ),
+      );
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+
+      final state = await controller.importDSHSessions(
+        workspaceId: 'ws-dsh',
+        terminalId: 'term-dsh',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(state?.isSucceeded, isTrue);
+      expect(state?.sessionIds, hasLength(1));
+      expect(controller.workspaceImportState?.isSucceeded, isTrue);
+      expect(
+        controller.sessions.every(
+          (session) =>
+              session.workspaceId != 'ws-dsh' || session.provider == 'dsh',
+        ),
+        isTrue,
+      );
+    });
+
+    test('停止等待只终止客户端轮询，不撤销已提交的导入命令', () async {
+      final relay = _PendingDSHImportRelay(clock: () => _now);
+      await _prepareOwner(relay);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-dsh',
+          projectId: 'fixture-dsh',
+          terminalId: 'term-dsh',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'fixture-dsh',
+          status: 'active',
+        ),
+      ]);
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+
+      final pending = controller.importDSHSessions(
+        workspaceId: 'ws-dsh',
+        terminalId: 'term-dsh',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(controller.workspaceImportWaiting, isTrue);
+      controller.stopWaitingForDSHImport();
+      final state = await pending;
+
+      expect(state?.isPending, isTrue);
+      expect(controller.workspaceImportWaiting, isFalse);
+      expect(relay.pollCount, 0);
+    });
+  });
+
   test('MOBILE-V07 发送密文携带当前生效模型，避免服务端回退到配置默认', () async {
     final relay = _CapturingControlsRelay(clock: () => _now);
     await _prepareOwner(relay);
@@ -55,10 +222,10 @@ void main() {
       canWrite: true,
     );
 
-    final send = relay.submitted
-        .lastWhere((command) => command.kind == SessionCommandKind.send);
-    final payload =
-        send.ciphertext?['fixture_payload'] as Map<String, dynamic>;
+    final send = relay.submitted.lastWhere(
+      (command) => command.kind == SessionCommandKind.send,
+    );
+    final payload = send.ciphertext?['fixture_payload'] as Map<String, dynamic>;
     expect(payload['message'], '你好');
     expect(payload['model'], 'opencode/big-pickle');
   });
@@ -209,9 +376,11 @@ void main() {
 
     // completed_turn 空标记也属 assistantMessage，但投影层不渲染；只统计真实气泡。
     final assistantNodes = controller.timeline
-        .where((event) =>
-            event.kind == SessionTimelineKind.assistantMessage &&
-            !event.completedTurn)
+        .where(
+          (event) =>
+              event.kind == SessionTimelineKind.assistantMessage &&
+              !event.completedTurn,
+        )
         .toList();
     // 三条流式增量被全文 completed 替换，最终只剩单一完整节点。
     expect(assistantNodes.length, 1);
@@ -236,13 +405,14 @@ void main() {
       autoStart: true,
     );
 
-    final sequences = controller.timeline.map((event) => event.sequence).toList();
+    final sequences = controller.timeline
+        .map((event) => event.sequence)
+        .toList();
     expect(sequences, isNotEmpty);
     final sorted = [...sequences]..sort();
     expect(sequences, sorted);
     expect(sequences.toSet().length, sequences.length);
   });
-
 
   test('MOBILE-V07 发送后乐观回显用户气泡，canonical 事件到达后清账', () async {
     final relay = _DelayedEchoRelay(clock: () => _now);
@@ -862,6 +1032,87 @@ class _TurnCompletedRelay extends FixtureRelayRepository {
         lastSequence: event.sequence,
       ),
       events: [...snapshot.events, event],
+    );
+  }
+}
+
+class _PendingDSHImportRelay extends FixtureRelayRepository {
+  _PendingDSHImportRelay({required super.clock});
+
+  var pollCount = 0;
+
+  @override
+  Future<WorkspaceImportState> importDSHSessions({
+    required String workspaceId,
+    String terminalId = '',
+  }) async => const WorkspaceImportState(
+    status: 'pending',
+    commandId: 'cmd-import-pending',
+  );
+
+  @override
+  Future<WorkspaceImportState> getDSHImportState(String commandId) async {
+    pollCount += 1;
+    return const WorkspaceImportState(
+      status: 'pending',
+      commandId: 'cmd-import-pending',
+    );
+  }
+}
+
+class _CompletingDSHWorkspaceSyncRelay extends FixtureRelayRepository {
+  _CompletingDSHWorkspaceSyncRelay({required super.clock});
+
+  var pollCount = 0;
+
+  @override
+  Future<WorkspaceSyncState> syncDSHWorkspaces({
+    String terminalId = '',
+  }) async => const WorkspaceSyncState(
+    status: 'pending',
+    commandId: 'cmd-sync-pending',
+  );
+
+  @override
+  Future<WorkspaceSyncState> getDSHWorkspaceSyncState(String commandId) async {
+    pollCount += 1;
+    return const WorkspaceSyncState(
+      status: 'succeeded',
+      commandId: 'cmd-sync-pending',
+      workspaceIds: ['ws-dsh'],
+    );
+  }
+}
+
+class _FailedDSHWorkspaceSyncRelay extends FixtureRelayRepository {
+  _FailedDSHWorkspaceSyncRelay({required super.clock});
+
+  @override
+  Future<WorkspaceSyncState> syncDSHWorkspaces({
+    String terminalId = '',
+  }) async =>
+      const WorkspaceSyncState(status: 'failed', errorCode: 'fixture_failed');
+}
+
+class _PendingDSHWorkspaceSyncRelay extends FixtureRelayRepository {
+  _PendingDSHWorkspaceSyncRelay({required super.clock});
+
+  var pollCount = 0;
+
+  @override
+  Future<WorkspaceSyncState> syncDSHWorkspaces({
+    String terminalId = '',
+  }) async => const WorkspaceSyncState(
+    status: 'pending',
+    commandId: 'cmd-sync-pending',
+  );
+
+  @override
+  Future<WorkspaceSyncState> getDSHWorkspaceSyncState(String commandId) async {
+    pollCount += 1;
+    return const WorkspaceSyncState(
+      status: 'pending',
+      commandId: 'cmd-sync-pending',
     );
   }
 }

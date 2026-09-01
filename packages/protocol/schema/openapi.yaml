@@ -1607,6 +1607,18 @@ components:
           type: string
         status:
           type: string
+        protocol_version:
+          type: integer
+          minimum: 0
+        daemon_version:
+          type: string
+        capabilities:
+          type: array
+          maxItems: 32
+          items:
+            type: string
+            maxLength: 96
+          description: 公开的能力名称白名单；不包含路径、命令正文或日志。
         last_seen_unix_ms:
           type: integer
           format: int64

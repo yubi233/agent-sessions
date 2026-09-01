@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -1564,22 +1565,54 @@ func newPairingView(pairing domain.PairingRequest) pairingView {
 }
 
 type terminalView struct {
-	ID              string `json:"id"`
-	DeviceID        string `json:"device_id"`
-	Hostname        string `json:"hostname,omitempty"`
-	Platform        string `json:"platform,omitempty"`
-	Status          string `json:"status"`
-	LastSeenUnixMS  int64  `json:"last_seen_unix_ms,omitempty"`
-	ProtocolVersion int    `json:"protocol_version,omitempty"`
-	DaemonVersion   string `json:"daemon_version,omitempty"`
+	ID              string   `json:"id"`
+	DeviceID        string   `json:"device_id"`
+	Hostname        string   `json:"hostname,omitempty"`
+	Platform        string   `json:"platform,omitempty"`
+	Status          string   `json:"status"`
+	LastSeenUnixMS  int64    `json:"last_seen_unix_ms,omitempty"`
+	ProtocolVersion int      `json:"protocol_version,omitempty"`
+	DaemonVersion   string   `json:"daemon_version,omitempty"`
+	Capabilities    []string `json:"capabilities,omitempty"`
 }
 
 func newTerminalView(terminal store.TerminalRow) terminalView {
+	var capabilities []string
+	if err := json.Unmarshal([]byte(terminal.CapabilitiesJSON), &capabilities); err != nil {
+		capabilities = nil
+	}
+	// 只公开能力名称；路径、命令正文和 daemon 日志永远不进入移动端投影。
+	capabilities = uniquePublicTerminalCapabilities(capabilities)
 	return terminalView{
 		ID: terminal.ID, DeviceID: terminal.DeviceID, Hostname: terminal.Hostname,
 		Platform: terminal.Platform, Status: terminal.Status, LastSeenUnixMS: terminal.LastSeenUnixMS,
 		ProtocolVersion: terminal.ProtocolVersion, DaemonVersion: terminal.DaemonVersion,
+		Capabilities: capabilities,
 	}
+}
+
+func uniquePublicTerminalCapabilities(values []string) []string {
+	allowed := map[string]struct{}{
+		"dsh_workspace_sync": {},
+		"dsh_session_import": {},
+		"workspace_create":   {},
+		"start":              {},
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if _, ok := allowed[value]; !ok {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 type projectView struct {
