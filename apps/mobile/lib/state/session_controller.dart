@@ -594,12 +594,30 @@ class SessionController extends ChangeNotifier {
     if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
       return null;
     }
-    final actionKey = 'create:${workspaceId.trim()}:${provider.trim()}';
+    final normalizedWorkspaceId = workspaceId.trim();
+    final normalizedProvider = provider.trim();
+    if (normalizedWorkspaceId.isEmpty || normalizedProvider.isEmpty) {
+      _workspaceErrorMessage = '工作区或 Provider 无效，无法创建会话。';
+      notifyListeners();
+      return null;
+    }
+    if (normalizedProvider.toLowerCase() == 'dsh' &&
+        !_workspaces.any(
+          (workspace) =>
+              workspace.id == normalizedWorkspaceId && workspace.isDsh,
+        )) {
+      // UI 只能在 DSH Workspace detail 调用此路径。客户端提前拒绝错误归属，
+      // Relay 仍会以 origin/home Terminal/capability fence 作为最终授权判断。
+      _workspaceErrorMessage = 'DSH 会话必须在已同步的 DSH 工作区内创建。';
+      notifyListeners();
+      return null;
+    }
+    final actionKey = 'create:$normalizedWorkspaceId:$normalizedProvider';
     return _runAction<MobileSession?>(actionKey, () async {
       final created = await _relay.createSession(
         CreateMobileSessionInput(
-          workspaceId: workspaceId,
-          provider: provider,
+          workspaceId: normalizedWorkspaceId,
+          provider: normalizedProvider,
           deviceId: deviceId!,
           agentPresetId: agentPresetId,
         ),

@@ -33,6 +33,33 @@ void main() {
   });
 
   group('V081 DSH 工作区同步与历史元数据导入', () {
+    test('客户端拒绝在非 DSH 工作区直接创建 DSH 会话', () async {
+      final relay = FixtureRelayRepository(clock: () => _now);
+      await _prepareOwner(relay);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-managed',
+          projectId: 'fixture-managed',
+          terminalId: 'term-managed',
+          origin: MobileWorkspaceOrigin.managed,
+          status: 'active',
+        ),
+      ]);
+      final controller = SessionController(relay: relay, clock: () => _now);
+      await controller.initialize();
+
+      final created = await controller.createSession(
+        workspaceId: 'ws-managed',
+        provider: 'dsh',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(created, isNull);
+      expect(controller.sessions, isEmpty);
+      expect(controller.workspaceErrorMessage, 'DSH 会话必须在已同步的 DSH 工作区内创建。');
+    });
+
     test('同步完成后刷新安全工作区和会话投影', () async {
       final relay = _CompletingDSHWorkspaceSyncRelay(clock: () => _now);
       await _prepareOwner(relay);
