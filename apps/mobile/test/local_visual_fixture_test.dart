@@ -10,6 +10,22 @@ import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('V081-10：DSH 工作区视觉场景只预置安全元数据和空工作区', () async {
+    final fixture = await LocalVisualFixture.create('dsh-workspace-home');
+
+    expect(fixture, isNotNull);
+    expect(fixture!.scenario, LocalVisualScenario.dshWorkspaceHome);
+    final workspaces = await fixture.relay.listWorkspaces();
+    expect(workspaces.where((workspace) => workspace.isDsh), hasLength(2));
+    expect(
+      workspaces.map((workspace) => workspace.displayName),
+      containsAll(<String>['agent-sessions', '网游风格小说']),
+    );
+    final sessions = await fixture.relay.listSessions();
+    expect(sessions.single.provider, 'dsh');
+    expect(sessions.single.workspaceId, 'ws-dsh-visual-alpha');
+  });
+
   group('MOBILE-02 本地可见 fixture', () {
     test('会话列表场景预置分组会话、当前选择所需的流式事件和无敏感展示数据', () async {
       final fixture = await LocalVisualFixture.create('session-list');

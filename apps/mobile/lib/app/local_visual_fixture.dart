@@ -16,6 +16,8 @@ import '../storage/secure_token_store.dart';
 enum LocalVisualScenario {
   none,
   ownerReady,
+  // v0.8.1：DSH 工作区主模式，只注入安全 display name 与会话元数据。
+  dshWorkspaceHome,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -57,6 +59,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   String value,
 ) => switch (value) {
   'owner-ready' => LocalVisualScenario.ownerReady,
+  'dsh-workspace-home' => LocalVisualScenario.dshWorkspaceHome,
   'pairing-pending' => LocalVisualScenario.pairingPending,
   'session-list' => LocalVisualScenario.sessionList,
   'session-detail' => LocalVisualScenario.sessionDetail,
@@ -259,6 +262,50 @@ class LocalVisualFixture {
         ),
       );
       pairingRequestId = pairing.id;
+    }
+
+    if (scenario == LocalVisualScenario.dshWorkspaceHome) {
+      relay.replaceTerminals([
+        TerminalSummary(
+          id: 'term-dsh-visual',
+          hostname: 'DSH Mac Fixture',
+          platform: 'macos',
+          status: TerminalConnectionStatus.online,
+          protocolVersion: 1,
+          daemonVersion: 'v081-fixture',
+          lastSeen: relay.fixtureNow(),
+          capabilities: const [
+            'dsh_workspace_sync',
+            'dsh_session_import',
+            'start',
+          ],
+        ),
+      ]);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-dsh-visual-alpha',
+          projectId: 'dsh-visual-alpha',
+          terminalId: 'term-dsh-visual',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'agent-sessions',
+          status: 'active',
+        ),
+        MobileWorkspace(
+          id: 'ws-dsh-visual-empty',
+          projectId: 'dsh-visual-empty',
+          terminalId: 'term-dsh-visual',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: '网游风格小说',
+          status: 'active',
+        ),
+      ]);
+      await relay.createSession(
+        CreateMobileSessionInput(
+          workspaceId: 'ws-dsh-visual-alpha',
+          provider: 'dsh',
+          deviceId: ownerDeviceId,
+        ),
+      );
     }
 
     final sessionId = await _seedSessionScenario(

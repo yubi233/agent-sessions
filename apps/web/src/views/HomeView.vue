@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // 首页：Relay 健康检查 + 登录 + 设备/会话/能力摘要。
 // 登录后展示能力列表摘要；完整三态矩阵在独立视图（/capabilities）。
-// 主动 LLM 对话在 /chat 页面，通过本地 DSH 桥发起。
 import { onMounted, ref } from "vue";
 import { sessionState } from "../session";
 import type { ProviderCapabilities } from "../types";
@@ -45,7 +44,7 @@ type ReadState = "idle" | "loading" | "ready" | "error";
 const readState = ref<ReadState>("idle");
 const readMessage = ref("");
 
-// 读取设备、会话与能力矩阵；会话写入口在 /chat 页面。
+// 读取设备、会话与能力矩阵的安全只读投影。
 async function loadReadOnly(): Promise<void> {
   readState.value = "loading";
   readMessage.value = "正在读取只读摘要…";
@@ -71,7 +70,7 @@ async function loadReadOnly(): Promise<void> {
   }
 }
 
-// 登录并拉取设备/会话/能力；主动 LLM 对话在 /chat 页面。
+// 登录并拉取设备、会话与能力投影。
 async function login(): Promise<void> {
   authState.value = "loading";
   authMessage.value = "正在登录…";

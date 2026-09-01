@@ -112,6 +112,19 @@ describe("Relay 状态页", () => {
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(document.documentElement.dataset.themePreference).toBe("dark");
   });
+
+  it("V081-08：Web 不注册对话写入路由或导航入口", async () => {
+    await router.push("/");
+    await router.isReady();
+    const wrapper = mount(App, { global: { plugins: [router] } });
+    await flushPromises();
+
+    expect(wrapper.find('a[href="#/chat"]').exists()).toBe(false);
+    expect(wrapper.get('a[href="#/sessions"]').text()).toBe("工作区");
+    expect(router.getRoutes().some((route) => route.path === "/chat")).toBe(
+      false,
+    );
+  });
 });
 
 describe("能力矩阵视图", () => {

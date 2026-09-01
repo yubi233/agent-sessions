@@ -88,6 +88,13 @@ class CommandPaletteController extends ChangeNotifier {
       // 导航：只索引已注册路由，不索引未实现的页面。
       const PaletteCommand(
         kind: PaletteCommandKind.navigate,
+        title: 'DSH 工作区',
+        subtitle: '/home',
+        icon: Icons.folder_open_outlined,
+        route: '/home',
+      ),
+      const PaletteCommand(
+        kind: PaletteCommandKind.navigate,
         title: '设置',
         subtitle: '/settings',
         icon: Icons.settings_outlined,
@@ -120,13 +127,6 @@ class CommandPaletteController extends ChangeNotifier {
         subtitle: '/pairing',
         icon: Icons.qr_code_scanner_outlined,
         route: '/pairing',
-      ),
-      const PaletteCommand(
-        kind: PaletteCommandKind.navigate,
-        title: '新建会话',
-        subtitle: '/sessions/new',
-        icon: Icons.add,
-        route: '/sessions/new',
       ),
       // 控制：capability 门控（fail-closed）。
       PaletteCommand(

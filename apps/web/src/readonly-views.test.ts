@@ -42,33 +42,7 @@ describe("P4 会话列表页", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("WEB-01：登录后展示会话白名单列表并可刷新", async () => {
-    sessionState.token = "tok";
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        sessions: [
-          { id: "s1", workspace_id: "w1", status: "streaming", provider: "codex", last_seq: 12 },
-          { id: "s2", workspace_id: "w2", status: "idle", provider: "claude", last_seq: 3 },
-        ],
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const wrapper = mount(SessionsView, { global: { plugins: [router] } });
-    await flushPromises();
-    expect(wrapper.find('[data-testid="sessions-list"]').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="session-link-s1"]').text()).toContain(
-      "codex",
-    );
-    expect(wrapper.get('[data-testid="session-link-s2"]').text()).toContain(
-      "claude",
-    );
-    // 无写入口：列表页不渲染任何按钮（除刷新）或表单。
-    expect(wrapper.find("input").exists()).toBe(false);
-    expect(wrapper.find("textarea").exists()).toBe(false);
-  });
-
-  it("V08-11/V08-15：DSH 模式按工作区分组且无写入口", async () => {
+  it("V081-04：登录后默认展示 DSH 工作区，普通会话是次级只读视图", async () => {
     sessionState.token = "tok";
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url.includes("/v1/workspaces")) {
@@ -76,8 +50,64 @@ describe("P4 会话列表页", () => {
           ok: true,
           json: async () => ({
             workspaces: [
-              { id: "w-dsh-1", project_id: "project-alpha", terminal_id: "t1" },
-              { id: "w-dsh-2", project_id: "project-beta", terminal_id: "t1" },
+              {
+                id: "w-dsh",
+                project_id: "opaque-project",
+                terminal_id: "t1",
+                origin: "dsh",
+                display_name: "agent-sessions",
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          sessions: [
+            { id: "s-dsh", workspace_id: "w-dsh", status: "streaming", provider: "dsh", last_seq: 12 },
+            { id: "s-normal", workspace_id: "w-normal", status: "idle", provider: "codex", last_seq: 3 },
+          ],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const wrapper = mount(SessionsView, { global: { plugins: [router] } });
+    await flushPromises();
+    expect(wrapper.find('[data-testid="dsh-workspaces-list"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dsh-mode-toggle"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="dsh-workspace-select-w-dsh"]').text()).toContain(
+      "agent-sessions",
+    );
+    await wrapper.get('[data-testid="dsh-workspace-expand-w-dsh"]').trigger("click");
+    expect(wrapper.get('[data-testid="session-link-s-dsh"]').text()).toContain("streaming");
+    await wrapper.get('[data-testid="dsh-workspace-search"]').setValue("agent");
+    expect(wrapper.find('[data-testid="dsh-workspace-select-w-dsh"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="dsh-workspace-search"]').setValue("not-found");
+    expect(wrapper.find('[data-testid="dsh-workspaces-search-empty"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="dsh-workspace-search"]').setValue("");
+    await wrapper.get('[data-testid="secondary-sessions-toggle"]').trigger("click");
+    expect(wrapper.find('[data-testid="secondary-sessions-list"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="session-link-s-normal"]').text()).toContain("codex");
+    // 无写入口：列表页不渲染输入、发送、导入或同步控件。
+    expect(wrapper.find('[data-testid="dsh-workspace-search"]').exists()).toBe(false);
+    expect(wrapper.find("textarea").exists()).toBe(false);
+    expect(wrapper.find('[data-testid*="import"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid*="sync"]').exists()).toBe(false);
+  });
+
+  it("V081-03/V081-04：默认保留空 DSH 工作区，组选中和展开互不冲突", async () => {
+    sessionState.token = "tok";
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("/v1/workspaces")) {
+        return {
+          ok: true,
+          json: async () => ({
+            workspaces: [
+              { id: "w-dsh-1", project_id: "opaque-alpha", terminal_id: "t1", origin: "dsh", display_name: "project-alpha" },
+              { id: "w-dsh-2", project_id: "opaque-beta", terminal_id: "t1", origin: "dsh", display_name: "project-beta" },
+              { id: "w-dsh-empty", project_id: "opaque-empty", terminal_id: "t1", origin: "dsh", display_name: "empty-project" },
+              { id: "w-managed", project_id: "normal-project", terminal_id: "t1", origin: "managed" },
             ],
           }),
         };
@@ -97,20 +127,26 @@ describe("P4 会话列表页", () => {
     vi.stubGlobal("fetch", fetchMock);
     const wrapper = mount(SessionsView, { global: { plugins: [router] } });
     await flushPromises();
-    expect(wrapper.find('[data-testid="sessions-list"]').exists()).toBe(true);
-    await wrapper.get('[data-testid="dsh-mode-toggle"]').trigger("click");
-    await flushPromises();
-    expect(wrapper.find('[data-testid="dsh-sessions-list"]').exists()).toBe(true);
-    const titles = wrapper.findAll('[data-testid="dsh-group-title"]').map((n) => n.text());
-    expect(titles).toEqual(["project-alpha", "project-beta"]);
+    expect(wrapper.find('[data-testid="dsh-workspaces-list"]').exists()).toBe(true);
+    const workspaceLabels = wrapper.findAll(".workspace-label").map((n) => n.text());
+    expect(workspaceLabels).toEqual(["empty-project", "project-alpha", "project-beta"]);
+    await wrapper.get('[data-testid="dsh-workspace-expand-w-dsh-1"]').trigger("click");
+    expect(wrapper.find('[data-testid="session-link-s1"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="dsh-workspace-select-w-dsh-1"]').trigger("click");
+    expect(wrapper.find('[data-testid="dsh-workspace-readonly-detail"]').text()).toContain(
+      "project-alpha",
+    );
+    expect(wrapper.get('[data-testid="dsh-workspace-expand-w-dsh-1"]').attributes("aria-expanded")).toBe("true");
+    await wrapper.get('[data-testid="dsh-workspace-expand-w-dsh-empty"]').trigger("click");
+    expect(wrapper.text()).toContain("尚无 DSH 会话");
     // 非 dsh 会话不进入 DSH 分组。
     expect(wrapper.text()).not.toContain("s4");
-    // 只读：没有输入框/写按钮。
-    expect(wrapper.find("input").exists()).toBe(false);
+    // 本地安全搜索可输入，但不提供会改变 Relay 状态的写入口。
+    expect(wrapper.find('[data-testid="dsh-workspace-search"]').exists()).toBe(true);
     expect(wrapper.find("textarea").exists()).toBe(false);
   });
 
-  it("WEB-01：空列表显示空态", async () => {
+  it("V081-03：没有已同步工作区时显示 DSH 空态", async () => {
     sessionState.token = "tok";
     vi.stubGlobal(
       "fetch",
@@ -118,7 +154,7 @@ describe("P4 会话列表页", () => {
     );
     const wrapper = mount(SessionsView, { global: { plugins: [router] } });
     await flushPromises();
-    expect(wrapper.find('[data-testid="sessions-empty"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="dsh-workspaces-empty"]').exists()).toBe(true);
   });
 
   it("WEB-01：读取失败显示可重试错误", async () => {
@@ -127,7 +163,7 @@ describe("P4 会话列表页", () => {
     const wrapper = mount(SessionsView, { global: { plugins: [router] } });
     await flushPromises();
     expect(wrapper.get('[data-testid="sessions-error"]').text()).toContain(
-      "无法读取会话列表",
+      "无法读取工作区列表",
     );
   });
 });

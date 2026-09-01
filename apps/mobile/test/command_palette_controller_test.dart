@@ -68,14 +68,19 @@ void main() {
       expect(
         navigate.map((command) => command.route),
         containsAll([
+          '/home',
           '/settings',
           '/terminals',
           '/sessions/recent',
           '/devices',
           '/pairing',
-          '/sessions/new',
         ]),
       );
+      expect(
+        navigate.map((command) => command.route),
+        isNot(contains('/sessions/new')),
+      );
+      expect(navigate.map((command) => command.title), isNot(contains('新建会话')));
     });
 
     test('无选中会话时 resume/stop/openFiles/openGit 全部 blocked', () async {
