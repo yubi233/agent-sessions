@@ -1017,6 +1017,13 @@ export interface components {
             id: string;
             project_id: string;
             terminal_id: string;
+            /**
+             * @description 工作区来源；只有 dsh 可作为 DSH 建会话入口。
+             * @enum {string}
+             */
+            origin: "managed" | "dsh";
+            /** @description 经 Daemon 校验的单段项目显示名；绝不包含本机路径。 */
+            display_name?: string;
             branch?: string;
             status?: string;
         };

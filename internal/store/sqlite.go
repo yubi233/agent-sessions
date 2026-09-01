@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/yubi233/agent-sessions/packages/protocol"
@@ -516,17 +517,28 @@ func (r *sqliteRepo) ListProjects(ctx context.Context, accountID string) ([]Proj
 }
 
 func (r *sqliteRepo) CreateWorkspace(ctx context.Context, w WorkspaceRow) error {
+	// 旧调用方没有 origin 时保守写成 managed，避免历史 Workspace 被误当作 DSH。
+	w.Origin = workspaceOriginOrManaged(w.Origin)
+	w.DisplayName = strings.TrimSpace(w.DisplayName)
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO workspaces(id,project_id,terminal_id,canonical_root,branch,status) VALUES(?,?,?,?,?,?)`,
-		w.ID, w.ProjectID, w.TerminalID, w.CanonicalRoot, w.Branch, w.Status)
+		`INSERT INTO workspaces(id,project_id,terminal_id,canonical_root,branch,status,origin,display_name) VALUES(?,?,?,?,?,?,?,?)`,
+		w.ID, w.ProjectID, w.TerminalID, w.CanonicalRoot, w.Branch, w.Status, w.Origin, w.DisplayName)
+	return err
+}
+
+// UpdateWorkspaceDSHMetadata 只更新经 Daemon 回执确认的公开投影；根路径与 Terminal 归属不变。
+func (r *sqliteRepo) UpdateWorkspaceDSHMetadata(ctx context.Context, id, displayName string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE workspaces SET origin=?,display_name=? WHERE id=?`,
+		WorkspaceOriginDSH, strings.TrimSpace(displayName), id)
 	return err
 }
 
 func (r *sqliteRepo) WorkspaceByID(ctx context.Context, id string) (WorkspaceRow, error) {
 	var w WorkspaceRow
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT id,project_id,terminal_id,canonical_root,branch,status FROM workspaces WHERE id=?`, id).
-		Scan(&w.ID, &w.ProjectID, &w.TerminalID, &w.CanonicalRoot, &w.Branch, &w.Status); err != nil {
+		`SELECT id,project_id,terminal_id,canonical_root,branch,status,origin,display_name FROM workspaces WHERE id=?`, id).
+		Scan(&w.ID, &w.ProjectID, &w.TerminalID, &w.CanonicalRoot, &w.Branch, &w.Status, &w.Origin, &w.DisplayName); err != nil {
 		return WorkspaceRow{}, err
 	}
 	return w, nil
@@ -534,7 +546,7 @@ func (r *sqliteRepo) WorkspaceByID(ctx context.Context, id string) (WorkspaceRow
 
 func (r *sqliteRepo) ListWorkspaces(ctx context.Context, accountID string) ([]WorkspaceRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT w.id,w.project_id,w.terminal_id,w.canonical_root,w.branch,w.status
+		`SELECT w.id,w.project_id,w.terminal_id,w.canonical_root,w.branch,w.status,w.origin,w.display_name
 		 FROM workspaces w JOIN projects p ON p.id=w.project_id
 		 WHERE p.account_id=? ORDER BY w.id`, accountID)
 	if err != nil {
@@ -544,12 +556,19 @@ func (r *sqliteRepo) ListWorkspaces(ctx context.Context, accountID string) ([]Wo
 	var out []WorkspaceRow
 	for rows.Next() {
 		var w WorkspaceRow
-		if err := rows.Scan(&w.ID, &w.ProjectID, &w.TerminalID, &w.CanonicalRoot, &w.Branch, &w.Status); err != nil {
+		if err := rows.Scan(&w.ID, &w.ProjectID, &w.TerminalID, &w.CanonicalRoot, &w.Branch, &w.Status, &w.Origin, &w.DisplayName); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
 	}
 	return out, rows.Err()
+}
+
+func workspaceOriginOrManaged(origin string) string {
+	if strings.TrimSpace(origin) == WorkspaceOriginDSH {
+		return WorkspaceOriginDSH
+	}
+	return WorkspaceOriginManaged
 }
 
 func (r *sqliteRepo) CreateSession(ctx context.Context, s SessionRow) error {

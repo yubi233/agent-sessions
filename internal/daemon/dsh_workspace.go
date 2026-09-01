@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
 	"github.com/yubi233/agent-sessions/internal/id"
@@ -39,7 +40,8 @@ type DSHScanSummary struct {
 
 // DSHWorkspaceCandidate 是扫描器返回的本机候选；Root 只在本机使用，不能进入 Relay 普通响应。
 type DSHWorkspaceCandidate struct {
-	Root string
+	Root        string `json:"canonical_root"`
+	DisplayName string `json:"display_name"`
 }
 
 // DSHWorkspaceScanner 在授权根内发现已有 DSH 工作区。它不修改文件系统。
@@ -123,7 +125,14 @@ func (s *DSHWorkspaceScanner) Scan(ctx context.Context) ([]DSHWorkspaceCandidate
 			key := filepath.Clean(cur.path)
 			if !seen[key] {
 				seen[key] = true
-				candidates = append(candidates, DSHWorkspaceCandidate{Root: key})
+				displayName, nameErr := dshWorkspaceDisplayName(key)
+				if nameErr != nil {
+					summary.Skipped++
+					summary.SkippedReasons["unsafe_display_name"]++
+					continue
+				}
+				// 名称在 Daemon 的扫描边界派生；Relay 只校验并投影，不能从根路径再推导用户文案。
+				candidates = append(candidates, DSHWorkspaceCandidate{Root: key, DisplayName: displayName})
 				summary.Candidates++
 			}
 			// 已确认的项目不再深入其子目录，避免把项目内的嵌套 DSH 仓库重复登记。
@@ -147,6 +156,25 @@ func (s *DSHWorkspaceScanner) Scan(ctx context.Context) ([]DSHWorkspaceCandidate
 	// 输出稳定排序，便于幂等与测试。
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Root < candidates[j].Root })
 	return candidates, summary, nil
+}
+
+// dshWorkspaceDisplayName 只接受 canonical root 的最后一个目录名，防止路径、驱动器前缀或
+// 控制字符作为公开 Workspace 文案跨出 Daemon 边界。中文等合法 UTF-8 项目名保持原样。
+func dshWorkspaceDisplayName(root string) (string, error) {
+	name := strings.TrimSpace(filepath.Base(filepath.Clean(root)))
+	if name == "" || name == "." || name == ".." || len(name) > 128 || !utf8.ValidString(name) ||
+		strings.ContainsAny(name, `/\\`) || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return "", errors.New("unsafe DSH workspace display name")
+	}
+	if len(name) >= 2 && name[1] == ':' && ((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z')) {
+		return "", errors.New("unsafe DSH workspace display name")
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return "", errors.New("unsafe DSH workspace display name")
+		}
+	}
+	return name, nil
 }
 
 // hasDSHEvidence 检查目录下是否存在 DSH 持久化证据：

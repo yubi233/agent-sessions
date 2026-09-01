@@ -1309,6 +1309,8 @@ func (a *API) handleCreateWorkspace(c *gin.Context) {
 	ws := store.WorkspaceRow{
 		ID: "ws_" + projID, ProjectID: projID, TerminalID: req.TerminalID,
 		CanonicalRoot: req.CanonicalRoot, Branch: req.Branch, Status: req.Status,
+		// 手工登记的既有流程不是 DSH 同步；公开投影必须显式返回保守来源。
+		Origin: store.WorkspaceOriginManaged,
 	}
 	if ws.Status == "" {
 		ws.Status = "active"
@@ -1596,12 +1598,15 @@ type workspaceView struct {
 	TerminalID string `json:"terminal_id"`
 	Branch     string `json:"branch,omitempty"`
 	Status     string `json:"status,omitempty"`
+	// Origin 与 DisplayName 是经白名单验证的安全投影；不可将 CanonicalRoot 加入此 view。
+	Origin      string `json:"origin"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 func newWorkspaceView(workspace store.WorkspaceRow) workspaceView {
 	return workspaceView{
 		ID: workspace.ID, ProjectID: workspace.ProjectID, TerminalID: workspace.TerminalID,
-		Branch: workspace.Branch, Status: workspace.Status,
+		Branch: workspace.Branch, Status: workspace.Status, Origin: workspace.Origin, DisplayName: workspace.DisplayName,
 	}
 }
 

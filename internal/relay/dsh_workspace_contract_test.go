@@ -71,8 +71,11 @@ func TestV08DSHWorkspaceSyncResultRegistersOpaqueWorkspaces(t *testing.T) {
 	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.CommandID+"/dsh-workspace-result", map[string]any{
 		"protocol_version": 1,
 		"delivery_seq":     1,
-		"canonical_roots":  []string{"/Users/test/code/proj-a", "/Users/test/code/proj-b"},
-		"status":           "succeeded",
+		"candidates": []map[string]string{
+			{"canonical_root": "/Users/test/code/proj-a", "display_name": "proj-a"},
+			{"canonical_root": "/Users/test/code/proj-b", "display_name": "proj-b"},
+		},
+		"status": "succeeded",
 	}, terminal.AccessToken)
 	if result.Code != http.StatusOK {
 		t.Fatalf("dsh result status=%d body=%s", result.Code, result.Body.String())
@@ -95,8 +98,10 @@ func TestV08DSHWorkspaceSyncResultRegistersOpaqueWorkspaces(t *testing.T) {
 	}
 	var listed struct {
 		Workspaces []struct {
-			ID         string `json:"id"`
-			TerminalID string `json:"terminal_id"`
+			ID          string `json:"id"`
+			TerminalID  string `json:"terminal_id"`
+			Origin      string `json:"origin"`
+			DisplayName string `json:"display_name"`
 		} `json:"workspaces"`
 	}
 	decodeW1(t, list.Body.Bytes(), &listed)
@@ -104,7 +109,7 @@ func TestV08DSHWorkspaceSyncResultRegistersOpaqueWorkspaces(t *testing.T) {
 		t.Fatalf("expected 2 workspaces, got %+v", listed.Workspaces)
 	}
 	for _, ws := range listed.Workspaces {
-		if ws.TerminalID == "" {
+		if ws.TerminalID == "" || ws.Origin != "dsh" || (ws.DisplayName != "proj-a" && ws.DisplayName != "proj-b") {
 			t.Fatalf("workspace missing home terminal: %+v", ws)
 		}
 	}
@@ -112,8 +117,11 @@ func TestV08DSHWorkspaceSyncResultRegistersOpaqueWorkspaces(t *testing.T) {
 	// 重复 result 幂等，不新增 Workspace。
 	repeat := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.CommandID+"/dsh-workspace-result", map[string]any{
 		"protocol_version": 1, "delivery_seq": 1,
-		"canonical_roots": []string{"/Users/test/code/proj-a", "/Users/test/code/proj-b"},
-		"status":          "succeeded",
+		"candidates": []map[string]string{
+			{"canonical_root": "/Users/test/code/proj-a", "display_name": "proj-a"},
+			{"canonical_root": "/Users/test/code/proj-b", "display_name": "proj-b"},
+		},
+		"status": "succeeded",
 	}, terminal.AccessToken)
 	if repeat.Code != http.StatusOK {
 		t.Fatalf("repeat dsh result status=%d body=%s", repeat.Code, repeat.Body.String())
@@ -122,6 +130,162 @@ func TestV08DSHWorkspaceSyncResultRegistersOpaqueWorkspaces(t *testing.T) {
 	decodeW1(t, listAfter.Body.Bytes(), &listed)
 	if len(listed.Workspaces) != 2 {
 		t.Fatalf("repeat result created duplicate workspaces: %d", len(listed.Workspaces))
+	}
+}
+
+// V081-01：私有回执必须拒绝路径式 display name，避免路径经 Workspace 公开投影泄露。
+func TestV081DSHWorkspaceResultRejectsUnsafeDisplayName(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v081-dsh-display-name@test.dev")
+	terminal := env.pairTerminal(t, owner, "v081-dsh-display-name-terminal")
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync"})
+
+	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	var state struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, sync.Body.Bytes(), &state)
+	unsafe := env.do(t, http.MethodPost, "/v1/daemon/commands/"+state.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1,
+		"delivery_seq":     1,
+		"candidates":       []map[string]string{{"canonical_root": "/fixture/project", "display_name": "../project"}},
+		"status":           "succeeded",
+	}, terminal.AccessToken)
+	if unsafe.Code != http.StatusBadRequest || strings.Contains(unsafe.Body.String(), "/fixture/project") {
+		t.Fatalf("unsafe display name status=%d body=%s", unsafe.Code, unsafe.Body.String())
+	}
+	list := env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken)
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), "project") {
+		t.Fatalf("unsafe result created or leaked a workspace: %d %s", list.Code, list.Body.String())
+	}
+}
+
+// V081-09：相同 basename 仍然按 canonical root + home Terminal 保持不同 identity，不能合并。
+func TestV081DSHWorkspaceSameDisplayNameKeepsDistinctIdentities(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v081-dsh-same-name@test.dev")
+	terminal := env.pairTerminal(t, owner, "v081-dsh-same-name-terminal")
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync"})
+	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	var state struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, sync.Body.Bytes(), &state)
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+state.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1,
+		"delivery_seq":     1,
+		"candidates": []map[string]string{
+			{"canonical_root": "/fixture/one/project", "display_name": "project"},
+			{"canonical_root": "/fixture/two/project", "display_name": "project"},
+		},
+		"status": "succeeded",
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("sync same-name workspaces: %d %s", result.Code, result.Body.String())
+	}
+	var list struct {
+		Workspaces []struct {
+			ID          string `json:"id"`
+			Origin      string `json:"origin"`
+			DisplayName string `json:"display_name"`
+		} `json:"workspaces"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken).Body.Bytes(), &list)
+	if len(list.Workspaces) != 2 || list.Workspaces[0].ID == list.Workspaces[1].ID {
+		t.Fatalf("same display name identities merged: %+v", list)
+	}
+	for _, workspace := range list.Workspaces {
+		if workspace.Origin != "dsh" || workspace.DisplayName != "project" {
+			t.Fatalf("unexpected same-name workspace projection: %+v", workspace)
+		}
+	}
+}
+
+// V081-05/06：DSH 建会话的服务端 fence 必须阻断 managed、无 start capability 和离线终端，
+// 且所有拒绝发生在 Session 持久化之前。
+func TestV081CreateDSHSessionRequiresOriginAndHomeTerminalCapability(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v081-dsh-create@test.dev")
+	terminal := env.pairTerminal(t, owner, "v081-dsh-create-terminal")
+	terminalID := daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync"})
+
+	managed := env.do(t, http.MethodPost, "/v1/workspaces", map[string]any{
+		"project_id": "v081-managed", "terminal_id": terminalID, "canonical_root": "/fixture/managed", "status": "active",
+	}, owner.AccessToken)
+	if managed.Code != http.StatusCreated {
+		t.Fatalf("create managed workspace: %d %s", managed.Code, managed.Body.String())
+	}
+	var managedView struct {
+		ID     string `json:"id"`
+		Origin string `json:"origin"`
+	}
+	decodeW1(t, managed.Body.Bytes(), &managedView)
+	if managedView.Origin != "managed" {
+		t.Fatalf("managed workspace origin=%q", managedView.Origin)
+	}
+	deniedManaged := env.do(t, http.MethodPost, "/v1/sessions", map[string]any{"workspace_id": managedView.ID, "provider": "dsh"}, owner.AccessToken)
+	if deniedManaged.Code != http.StatusForbidden {
+		t.Fatalf("managed DSH create status=%d body=%s", deniedManaged.Code, deniedManaged.Body.String())
+	}
+
+	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	var syncState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, sync.Body.Bytes(), &syncState)
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncState.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1,
+		"delivery_seq":     1,
+		"candidates":       []map[string]string{{"canonical_root": "/fixture/dsh-project", "display_name": "dsh-project"}},
+		"status":           "succeeded",
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("sync dsh workspace: %d %s", result.Code, result.Body.String())
+	}
+	var list struct {
+		Workspaces []struct {
+			ID     string `json:"id"`
+			Origin string `json:"origin"`
+		} `json:"workspaces"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken).Body.Bytes(), &list)
+	var dshWorkspaceID string
+	for _, workspace := range list.Workspaces {
+		if workspace.Origin == "dsh" {
+			dshWorkspaceID = workspace.ID
+		}
+	}
+	if dshWorkspaceID == "" {
+		t.Fatalf("missing dsh workspace: %+v", list)
+	}
+
+	deniedCapability := env.do(t, http.MethodPost, "/v1/sessions", map[string]any{"workspace_id": dshWorkspaceID, "provider": "dsh"}, owner.AccessToken)
+	if deniedCapability.Code != http.StatusConflict {
+		t.Fatalf("DSH create without start capability status=%d body=%s", deniedCapability.Code, deniedCapability.Body.String())
+	}
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync", "start"})
+	created := env.do(t, http.MethodPost, "/v1/sessions", map[string]any{"workspace_id": dshWorkspaceID, "provider": "dsh"}, owner.AccessToken)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("DSH create with start capability status=%d body=%s", created.Code, created.Body.String())
+	}
+	// 第二台在线且支持 start 的 Terminal 不能代替失联的 home Terminal。
+	otherTerminal := env.pairTerminal(t, owner, "v081-dsh-create-other-terminal")
+	_ = daemonHelloWithCapabilities(t, env, otherTerminal.AccessToken, []string{"start"})
+	if _, err := env.db.Exec(`UPDATE terminals SET status='offline' WHERE id=?`, terminalID); err != nil {
+		t.Fatalf("take home terminal offline: %v", err)
+	}
+	deniedOffline := env.do(t, http.MethodPost, "/v1/sessions", map[string]any{"workspace_id": dshWorkspaceID, "provider": "dsh"}, owner.AccessToken)
+	if deniedOffline.Code != http.StatusConflict {
+		t.Fatalf("DSH create with offline home terminal status=%d body=%s", deniedOffline.Code, deniedOffline.Body.String())
+	}
+	var sessions struct {
+		Sessions []struct {
+			Provider string `json:"provider"`
+		} `json:"sessions"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/sessions", nil, owner.AccessToken).Body.Bytes(), &sessions)
+	if len(sessions.Sessions) != 1 || sessions.Sessions[0].Provider != "dsh" {
+		t.Fatalf("rejected DSH create persisted a session: %+v", sessions)
 	}
 }
 
@@ -140,8 +304,8 @@ func TestV08DSHImportAuthorizationAndResult(t *testing.T) {
 	decodeW1(t, sync.Body.Bytes(), &syncState)
 	_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncState.CommandID+"/dsh-workspace-result", map[string]any{
 		"protocol_version": 1, "delivery_seq": 1,
-		"canonical_roots": []string{"/Users/test/code/import-proj"},
-		"status":          "succeeded",
+		"candidates": []map[string]string{{"canonical_root": "/Users/test/code/import-proj", "display_name": "import-proj"}},
+		"status":     "succeeded",
 	}, terminal.AccessToken)
 	var list struct {
 		Workspaces []struct {

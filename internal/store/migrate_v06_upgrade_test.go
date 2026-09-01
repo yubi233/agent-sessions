@@ -4,13 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
-
-// v0.6MigrationAddedStatements 是本迭代在 migrations 尾部追加的语句数：
-// terminal_auth_challenges 表+索引、terminal_identity_keys 表+索引、outbox 退避列。
-const v06MigrationAddedStatements = 5
 
 // TestMigrateV06LegacyUpgradePreservesData 演练"上一版本数据库升级"：
 // 以不含 v0.6 迁移的旧 schema 建库并写入历史数据，然后执行完整迁移。
@@ -19,7 +16,7 @@ func TestMigrateV06LegacyUpgradePreservesData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "relay-upgrade.db")
 
 	// 用旧版迁移集在全新库上建出"上一版本"数据库。
-	legacyCount := len(migrations) - v06MigrationAddedStatements
+	legacyCount := migrationIndexForTest(t, "CREATE TABLE IF NOT EXISTS terminal_auth_challenges")
 	if legacyCount <= 0 || legacyCount >= len(migrations) {
 		t.Fatalf("migration split invalid: %d/%d", legacyCount, len(migrations))
 	}
@@ -107,4 +104,15 @@ func TestMigrateV06LegacyUpgradePreservesData(t *testing.T) {
 		t.Fatalf("second migration must be idempotent: %v", err)
 	}
 	_ = db.Close()
+}
+
+func migrationIndexForTest(t *testing.T, fragment string) int {
+	t.Helper()
+	for index, migration := range migrations {
+		if strings.Contains(migration, fragment) {
+			return index
+		}
+	}
+	t.Fatalf("migration fragment %q not found", fragment)
+	return -1
 }

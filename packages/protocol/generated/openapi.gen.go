@@ -823,6 +823,24 @@ func (e WebReadTransportAlgorithm) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceOrigin.
+const (
+	Dsh     WorkspaceOrigin = "dsh"
+	Managed WorkspaceOrigin = "managed"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceOrigin enum.
+func (e WorkspaceOrigin) Valid() bool {
+	switch e {
+	case Dsh:
+		return true
+	case Managed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceCreateResponseStatus.
 const (
 	WorkspaceCreateResponseStatusCancelled WorkspaceCreateResponseStatus = "cancelled"
@@ -1678,12 +1696,21 @@ type WebReadTransportAlgorithm string
 
 // Workspace defines model for Workspace.
 type Workspace struct {
-	Branch     *string `json:"branch,omitempty"`
-	Id         string  `json:"id"`
-	ProjectId  string  `json:"project_id"`
-	Status     *string `json:"status,omitempty"`
-	TerminalId string  `json:"terminal_id"`
+	Branch *string `json:"branch,omitempty"`
+
+	// DisplayName 经 Daemon 校验的单段项目显示名；绝不包含本机路径。
+	DisplayName *string `json:"display_name,omitempty"`
+	Id          string  `json:"id"`
+
+	// Origin 工作区来源；只有 dsh 可作为 DSH 建会话入口。
+	Origin     WorkspaceOrigin `json:"origin"`
+	ProjectId  string          `json:"project_id"`
+	Status     *string         `json:"status,omitempty"`
+	TerminalId string          `json:"terminal_id"`
 }
+
+// WorkspaceOrigin 工作区来源；只有 dsh 可作为 DSH 建会话入口。
+type WorkspaceOrigin string
 
 // WorkspaceCreateResponse defines model for WorkspaceCreateResponse.
 type WorkspaceCreateResponse struct {

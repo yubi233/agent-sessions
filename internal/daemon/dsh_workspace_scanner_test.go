@@ -56,11 +56,24 @@ func TestDSHWorkspaceScannerFindsOnlyDSHGitRoots(t *testing.T) {
 	}
 	canonicalValid, _ := filepath.EvalSymlinks(valid)
 	canonicalValid, _ = filepath.Abs(canonicalValid)
-	if len(candidates) != 1 || candidates[0].Root != filepath.Clean(canonicalValid) {
+	if len(candidates) != 1 || candidates[0].Root != filepath.Clean(canonicalValid) || candidates[0].DisplayName != "valid" {
 		t.Fatalf("candidates=%+v want only %s", candidates, canonicalValid)
 	}
 	if summary.Candidates != 1 || summary.Ignored < 2 {
 		t.Fatalf("unexpected summary: %+v", summary)
+	}
+}
+
+// V081-01：公开显示名只能是 Daemon 从项目 basename 派生的单段 UTF-8 文案。
+func TestDSHWorkspaceDisplayNameRejectsPathFragments(t *testing.T) {
+	valid, err := dshWorkspaceDisplayName("/fixture/中文项目")
+	if err != nil || valid != "中文项目" {
+		t.Fatalf("valid display name=%q err=%v", valid, err)
+	}
+	for _, raw := range []string{"", "/", "/fixture/../", "/fixture/bad\\name", "/fixture/\x00name", "/fixture/C:drive"} {
+		if _, err := dshWorkspaceDisplayName(raw); err == nil {
+			t.Fatalf("unsafe root %q produced a display name", raw)
+		}
 	}
 }
 

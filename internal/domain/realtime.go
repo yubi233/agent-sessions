@@ -97,14 +97,36 @@ func (s *SessionService) CreateSession(ctx context.Context, accountID, workspace
 		return store.SessionRow{}, err
 	}
 	owned := false
+	var selectedWorkspace store.WorkspaceRow
 	for _, workspace := range workspaces {
 		if workspace.ID == workspaceID {
 			owned = true
+			selectedWorkspace = workspace
 			break
 		}
 	}
 	if !owned {
 		return store.SessionRow{}, ErrWorkspaceNotFound
+	}
+	if provider == store.WorkspaceOriginDSH {
+		// DSH 建会话不能只依赖 UI 路由：手工 HTTP 请求也必须经过 Workspace origin、
+		// home Terminal 在线和 start capability 三道服务端门，且失败时尚未写 Session。
+		if selectedWorkspace.Origin != store.WorkspaceOriginDSH || strings.TrimSpace(selectedWorkspace.TerminalID) == "" {
+			return store.SessionRow{}, ErrScopeDenied
+		}
+		terminal, terminalErr := s.repo.TerminalByID(ctx, selectedWorkspace.TerminalID)
+		if terminalErr != nil {
+			if errors.Is(terminalErr, sql.ErrNoRows) {
+				return store.SessionRow{}, ErrTerminalOffline
+			}
+			return store.SessionRow{}, terminalErr
+		}
+		if terminal.AccountID != accountID {
+			return store.SessionRow{}, ErrScopeDenied
+		}
+		if !terminalCanStartDSH(terminal) {
+			return store.SessionRow{}, ErrTerminalOffline
+		}
 	}
 	sess := store.SessionRow{
 		ID: id.New("sess"), WorkspaceID: workspaceID, AccountID: accountID,
@@ -129,6 +151,23 @@ func (s *SessionService) CreateSession(ctx context.Context, accountID, workspace
 	}
 	sess.LastSeq = initialSeq
 	return sess, nil
+}
+
+// terminalCanStartDSH 复用 Daemon hello 声明的白名单能力；解析失败一律按不可用处理。
+func terminalCanStartDSH(terminal store.TerminalRow) bool {
+	if terminal.Status != "online" {
+		return false
+	}
+	var capabilities []string
+	if json.Unmarshal([]byte(terminal.CapabilitiesJSON), &capabilities) != nil {
+		return false
+	}
+	for _, capability := range capabilities {
+		if strings.TrimSpace(capability) == "start" {
+			return true
+		}
+	}
+	return false
 }
 
 // ForkSession 创建一个真实持久化 child Session，并在 parent/child 流中记录白名单 fork 事件。

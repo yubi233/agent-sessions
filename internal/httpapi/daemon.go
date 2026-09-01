@@ -289,12 +289,12 @@ type daemonWorkspaceResultRequest struct {
 	Signature       authz.TerminalSignature `json:"signature"`
 }
 type daemonDSHWorkspaceResultRequest struct {
-	ProtocolVersion int                     `json:"protocol_version"`
-	DeliverySeq     int64                   `json:"delivery_seq"`
-	CanonicalRoots  []string                `json:"canonical_roots"`
-	Status          string                  `json:"status"`
-	ErrorCode       string                  `json:"error_code"`
-	Signature       authz.TerminalSignature `json:"signature"`
+	ProtocolVersion int                                `json:"protocol_version"`
+	DeliverySeq     int64                              `json:"delivery_seq"`
+	Candidates      []domain.WorkspaceDSHSyncCandidate `json:"candidates"`
+	Status          string                             `json:"status"`
+	ErrorCode       string                             `json:"error_code"`
+	Signature       authz.TerminalSignature            `json:"signature"`
 }
 
 type daemonDSHImportResultRequest struct {
@@ -365,7 +365,7 @@ func (a *API) handleDaemonDSHWorkspaceResult(c *gin.Context) {
 		return
 	}
 	result, err := a.Daemons.ResolveDSHWorkspace(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
-		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.CanonicalRoots, req.Status, req.ErrorCode)
+		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.Candidates, req.Status, req.ErrorCode)
 	if err != nil {
 		writeError(c, err)
 		return

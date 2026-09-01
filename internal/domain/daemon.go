@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/internal/store"
@@ -96,6 +97,13 @@ type WorkspaceDSHSyncResult struct {
 	Status       string
 	ErrorCode    string
 	WorkspaceIDs []string
+}
+
+// WorkspaceDSHSyncCandidate 是 Daemon 扫描结果的私有回执字段。CanonicalRoot 只用于 Relay
+// 计算稳定 identity；DisplayName 已在 Daemon 从 basename 派生，Relay 仅做边界校验。
+type WorkspaceDSHSyncCandidate struct {
+	CanonicalRoot string `json:"canonical_root"`
+	DisplayName   string `json:"display_name"`
 }
 
 // WorkspaceDSHImportResult 是 session.import_dsh 的专用回执。只返回 Relay opaque session ids。
@@ -456,16 +464,16 @@ func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, 
 
 // ResolveWorkspace 收口 workspace.create 的 daemon 回执，并在同一事务内登记 Relay Workspace。
 // ResolveDSHWorkspace 收口 workspace.sync_dsh 的 daemon 回执，并在同一事务内登记多个 DSH Workspace。
-// canonicalRoots 只用于 Relay 内部登记，客户端和普通 result 均不返回路径。
-func (s *DaemonService) ResolveDSHWorkspace(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, canonicalRoots []string, status, errorCode string) (WorkspaceDSHSyncResult, error) {
+// candidate 的 root 只用于 Relay 内部登记，客户端和普通 result 均不返回路径。
+func (s *DaemonService) ResolveDSHWorkspace(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, candidates []WorkspaceDSHSyncCandidate, status, errorCode string) (WorkspaceDSHSyncResult, error) {
 	if err := validateDaemonProtocol(protocolVersion); err != nil {
 		return WorkspaceDSHSyncResult{}, err
 	}
 	if deliverySeq <= 0 || !validWorkspaceResultStatus(status) {
 		return WorkspaceDSHSyncResult{}, protocol.NewError(protocol.ErrInvalidRequest, "invalid dsh sync result")
 	}
-	for _, root := range canonicalRoots {
-		if status == CommandSucceeded && (!filepath.IsAbs(root) || hasControlCharacter(root)) {
+	for _, candidate := range candidates {
+		if status == CommandSucceeded && (!filepath.IsAbs(candidate.CanonicalRoot) || hasControlCharacter(candidate.CanonicalRoot) || !validDSHWorkspaceDisplayName(candidate.DisplayName)) {
 			return WorkspaceDSHSyncResult{}, protocol.NewError(protocol.ErrInvalidRequest, "dsh sync path is invalid")
 		}
 	}
@@ -499,10 +507,17 @@ func (s *DaemonService) ResolveDSHWorkspace(ctx context.Context, accountID, devi
 		if status == CommandSucceeded {
 			// 同一 Terminal 的每个 canonical root 都生成稳定 Workspace/Project ID。
 			// 已有 Workspace 只确认归属，不覆盖 TerminalID/CanonicalRoot。
-			for _, root := range canonicalRoots {
+			seenRoots := map[string]struct{}{}
+			for _, candidate := range candidates {
+				root := candidate.CanonicalRoot
 				if root == "" {
 					return ErrScopeDenied
 				}
+				if _, exists := seenRoots[root]; exists {
+					// Daemon 重试或故障重复候选不能制造重复 Workspace，也不能改变结果计数。
+					continue
+				}
+				seenRoots[root] = struct{}{}
 				workspaceID, projectID := stableDSHWorkspaceIDs(accountID, terminal.ID, root)
 				projects, projErr := tx.ListProjects(ctx, accountID)
 				if projErr != nil {
@@ -522,11 +537,17 @@ func (s *DaemonService) ResolveDSHWorkspace(ctx context.Context, accountID, devi
 				}
 				workspace, lookupErr := tx.WorkspaceByID(ctx, workspaceID)
 				if lookupErr == nil {
-					if workspace.ProjectID != projectID || workspace.TerminalID != terminal.ID {
+					if workspace.ProjectID != projectID || workspace.TerminalID != terminal.ID || workspace.CanonicalRoot != root {
 						return ErrScopeDenied
 					}
+					if err := tx.UpdateWorkspaceDSHMetadata(ctx, workspaceID, candidate.DisplayName); err != nil {
+						return err
+					}
 				} else if errors.Is(lookupErr, sql.ErrNoRows) {
-					workspace = store.WorkspaceRow{ID: workspaceID, ProjectID: projectID, TerminalID: terminal.ID, CanonicalRoot: root, Status: "active"}
+					workspace = store.WorkspaceRow{
+						ID: workspaceID, ProjectID: projectID, TerminalID: terminal.ID, CanonicalRoot: root, Status: "active",
+						Origin: store.WorkspaceOriginDSH, DisplayName: candidate.DisplayName,
+					}
 					if err := tx.CreateWorkspace(ctx, workspace); err != nil {
 						return err
 					}
@@ -568,6 +589,25 @@ func (s *DaemonService) ResolveDSHWorkspace(ctx context.Context, accountID, devi
 		return WorkspaceDSHSyncResult{}, err
 	}
 	return result, nil
+}
+
+// validDSHWorkspaceDisplayName 是 Relay 的 fail-closed 校验，不从 root 重新推导显示名。
+// 这样即使私有 Daemon 请求被伪造，也不会把路径片段放进公开 Workspace view。
+func validDSHWorkspaceDisplayName(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "." || value == ".." || len(value) > 128 || !utf8.ValidString(value) ||
+		strings.ContainsAny(value, `/\\`) || filepath.IsAbs(value) || filepath.VolumeName(value) != "" {
+		return false
+	}
+	if len(value) >= 2 && value[1] == ':' && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func dshSyncResultFromRow(ctx context.Context, repo store.Repository, row store.WorkspaceCommandResultRow) WorkspaceDSHSyncResult {

@@ -177,6 +177,21 @@ class MobileSession {
   );
 }
 
+/// Workspace 来源只使用 Relay 的白名单值。未知值按 managed 处理，不能借新来源绕过 DSH 建会话门。
+enum MobileWorkspaceOrigin {
+  managed('managed'),
+  dsh('dsh');
+
+  const MobileWorkspaceOrigin(this.wireValue);
+
+  final String wireValue;
+
+  static MobileWorkspaceOrigin fromRelayJson(Object? value) => switch (value) {
+    'dsh' => MobileWorkspaceOrigin.dsh,
+    _ => MobileWorkspaceOrigin.managed,
+  };
+}
+
 /// Relay workspace whitelist projection. Canonical roots never come back from
 /// the list endpoint, so the mobile client cannot expose a host path.
 class MobileWorkspace {
@@ -186,6 +201,8 @@ class MobileWorkspace {
     required this.terminalId,
     this.branch,
     this.status,
+    this.origin = MobileWorkspaceOrigin.managed,
+    this.displayName,
   });
 
   factory MobileWorkspace.fromRelayJson(Map<String, dynamic> json) =>
@@ -195,6 +212,8 @@ class MobileWorkspace {
         terminalId: _nullableString(json['terminal_id']) ?? '',
         branch: _nullableString(json['branch']),
         status: _nullableString(json['status']),
+        origin: MobileWorkspaceOrigin.fromRelayJson(json['origin']),
+        displayName: _nullableString(json['display_name']),
       );
 
   final String id;
@@ -202,8 +221,17 @@ class MobileWorkspace {
   final String terminalId;
   final String? branch;
   final String? status;
+  final MobileWorkspaceOrigin origin;
+  // 仅由 Daemon scanner 派生的安全单段显示名；不能用 projectId 反推路径或项目标题。
+  final String? displayName;
 
-  String get label => projectId.trim().isNotEmpty ? projectId.trim() : id;
+  bool get isDsh => origin == MobileWorkspaceOrigin.dsh;
+
+  String get label {
+    final safeDisplayName = displayName?.trim() ?? '';
+    if (isDsh && safeDisplayName.isNotEmpty) return safeDisplayName;
+    return projectId.trim().isNotEmpty ? projectId.trim() : id;
+  }
 }
 
 class CreateMobileWorkspaceInput {

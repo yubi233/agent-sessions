@@ -75,6 +75,9 @@ type Repository interface {
 	CreateProject(ctx context.Context, p ProjectRow) error
 	ListProjects(ctx context.Context, accountID string) ([]ProjectRow, error)
 	CreateWorkspace(ctx context.Context, w WorkspaceRow) error
+	// UpdateWorkspaceDSHMetadata 只由同步回执把已确认的同一 identity 升级为 DSH 投影。
+	// 它不改 canonical root 或 home Terminal，避免展示元数据反向改变权限边界。
+	UpdateWorkspaceDSHMetadata(ctx context.Context, id, displayName string) error
 	WorkspaceByID(ctx context.Context, id string) (WorkspaceRow, error)
 	ListWorkspaces(ctx context.Context, accountID string) ([]WorkspaceRow, error)
 
@@ -352,6 +355,13 @@ type ProjectRow struct {
 	EncryptedName string
 }
 
+const (
+	// WorkspaceOriginManaged 是既有受管工作区的保守默认值。
+	WorkspaceOriginManaged = "managed"
+	// WorkspaceOriginDSH 表示由受控 DSH 扫描确认的工作区。
+	WorkspaceOriginDSH = "dsh"
+)
+
 // WorkspaceRow 是 workspaces 表的行投影。
 type WorkspaceRow struct {
 	ID            string
@@ -360,6 +370,9 @@ type WorkspaceRow struct {
 	CanonicalRoot string
 	Branch        string
 	Status        string
+	// Origin 和 DisplayName 是可公开的安全投影；CanonicalRoot 永远不能映射到 HTTP view。
+	Origin      string
+	DisplayName string
 }
 
 // SessionRow 是 sessions 表的行投影。

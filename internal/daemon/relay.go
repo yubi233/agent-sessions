@@ -275,14 +275,14 @@ func (c *RelayClient) ResolveWorkspace(ctx context.Context, commandID string, de
 	return out, nil
 }
 
-// ResolveDSHWorkspace 上传 workspace.sync_dsh 的受控结果。路径列表只存在于该专用请求，
-// 普通 ack/result 端点永远不接受或返回 canonical roots。
-func (c *RelayClient) ResolveDSHWorkspace(ctx context.Context, commandID string, deliverySeq int64, canonicalRoots []string, status, errorCode string) (DSHSyncCommandReceipt, error) {
+// ResolveDSHWorkspace 上传 workspace.sync_dsh 的受控结果。候选路径只存在于该专用请求，
+// DisplayName 已由本机 scanner 派生；普通 ack/result 端点永远不接受或返回 canonical roots。
+func (c *RelayClient) ResolveDSHWorkspace(ctx context.Context, commandID string, deliverySeq int64, candidates []DSHWorkspaceCandidate, status, errorCode string) (DSHSyncCommandReceipt, error) {
 	var out DSHSyncCommandReceipt
 	err := c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/dsh-workspace-result", map[string]any{
 		"protocol_version": daemonProtocolVersion,
 		"delivery_seq":     deliverySeq,
-		"canonical_roots":  canonicalRoots,
+		"candidates":       candidates,
 		"status":           status,
 		"error_code":       errorCode,
 	}, &out)
@@ -924,12 +924,12 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			// DSH 同步命令没有 Session lease；只在本机授权根内扫描并确认已有工作区，
 			// 结果必须走专用 dsh-workspace-result 通道。
 			status, errorCode := "succeeded", ""
-			var roots []string
+			var candidates []DSHWorkspaceCandidate
 			if l.WorkspaceManager == nil {
 				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
 			} else {
 				scanner := NewDSHWorkspaceScanner(l.WorkspaceManager.Root())
-				candidates, summary, scanErr := scanner.Scan(ctx)
+				scannedCandidates, summary, scanErr := scanner.Scan(ctx)
 				if scanErr != nil {
 					status, errorCode = "failed", CommandErrorCode(scanErr)
 					l.Logger.Warn("daemon dsh workspace scan failed", "command", command.CommandID, "error_code", errorCode)
@@ -937,13 +937,11 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 					if summary.LimitReached {
 						status, errorCode = "failed", protocol.ErrWorkspacePathDenied
 					} else {
-						for _, candidate := range candidates {
-							roots = append(roots, candidate.Root)
-						}
+						candidates = scannedCandidates
 					}
 				}
 			}
-			receipt, resolveErr := l.Client.ResolveDSHWorkspace(ctx, command.CommandID, command.DeliverySeq, roots, status, errorCode)
+			receipt, resolveErr := l.Client.ResolveDSHWorkspace(ctx, command.CommandID, command.DeliverySeq, candidates, status, errorCode)
 			if resolveErr != nil {
 				return resolveErr
 			}

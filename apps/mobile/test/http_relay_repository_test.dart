@@ -235,6 +235,7 @@ void main() {
                 'id': 'workspace_1',
                 'project_id': 'project_1',
                 'terminal_id': 'terminal_1',
+                'origin': 'managed',
                 'branch': 'main',
                 'status': 'active',
               },
@@ -255,6 +256,7 @@ void main() {
           'id': 'workspace_2',
           'project_id': 'project_2',
           'terminal_id': 'terminal_2',
+          'origin': 'managed',
           'branch': 'feature/v05',
           'status': 'active',
         }, statusCode: 201);
@@ -1199,7 +1201,9 @@ void main() {
             idempotencyKey: 'idem-409',
             leaseEpoch: 7,
             deviceId: 'android-owner-fixture',
-            ciphertext: {'fixture_payload': {'message': 'hi'}},
+            ciphertext: {
+              'fixture_payload': {'message': 'hi'},
+            },
           ),
         ),
         throwsA(
@@ -1271,10 +1275,11 @@ void main() {
       final devices = await repository.listDevices();
 
       expect(devices, isEmpty);
-      expect(
-        calls.map((call) => call.path).toList(),
-        ['/v1/devices', '/v1/auth/refresh', '/v1/devices'],
-      );
+      expect(calls.map((call) => call.path).toList(), [
+        '/v1/devices',
+        '/v1/auth/refresh',
+        '/v1/devices',
+      ]);
       expect(written.single.accessToken, 'access-fresh');
       expect(written.single.refreshToken, 'refresh-rotated');
       // 存储已被更新：后续请求不会携带被轮换的旧 refresh token。

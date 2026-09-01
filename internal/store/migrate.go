@@ -376,6 +376,10 @@ var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN archived_at_unix_ms INTEGER NOT NULL DEFAULT 0;`,
 	// 会话活动时间只保存状态机活动的时间戳，供 stale-running 对账使用；不保存正文。
 	`ALTER TABLE sessions ADD COLUMN last_activity_at_unix_ms INTEGER NOT NULL DEFAULT 0;`,
+	// v0.8.1：历史 Workspace 一律保守标记为 managed；只有 Daemon 同步回执可以升级为 dsh。
+	`ALTER TABLE workspaces ADD COLUMN origin TEXT NOT NULL DEFAULT 'managed';`,
+	// display_name 是从 Daemon 扫描项目 basename 派生的安全投影，绝不保存完整 root。
+	`ALTER TABLE workspaces ADD COLUMN display_name TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。
@@ -408,6 +412,14 @@ func Open(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if err := ensureLastActivityColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := ensureWorkspaceOriginColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := ensureWorkspaceDisplayNameColumn(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -450,6 +462,16 @@ func ensureLastActivityColumn(db *sql.DB) error {
 	}
 	_, err = db.Exec(`ALTER TABLE sessions ADD COLUMN last_activity_at_unix_ms INTEGER NOT NULL DEFAULT 0`)
 	return err
+}
+
+// ensureWorkspaceOriginColumn 兼容历史 migration 编号漂移，缺失时以 fail-closed 的 managed 补齐。
+func ensureWorkspaceOriginColumn(db *sql.DB) error {
+	return ensureTableColumn(db, "workspaces", "origin", `ALTER TABLE workspaces ADD COLUMN origin TEXT NOT NULL DEFAULT 'managed'`)
+}
+
+// ensureWorkspaceDisplayNameColumn 只补空安全显示名；真实名称只能由后续 DSH 同步回执写入。
+func ensureWorkspaceDisplayNameColumn(db *sql.DB) error {
+	return ensureTableColumn(db, "workspaces", "display_name", `ALTER TABLE workspaces ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`)
 }
 
 // ensureSessionEventTerminalStatusColumn 为 session_events 补齐非敏感终态投影。
@@ -497,6 +519,30 @@ func ensureUsageContextWindowColumn(db *sql.DB) error {
 		return err
 	}
 	_, err = db.Exec(`ALTER TABLE usage_events ADD COLUMN context_window_tokens INTEGER NOT NULL DEFAULT 0`)
+	return err
+}
+
+func ensureTableColumn(db *sql.DB, table, column, alter string) error {
+	// 极简漂移库可能尚未建到目标表；由后续编号 migration 创建，不能让兼容守卫抢先失败。
+	var tableCount int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&tableCount); err != nil {
+		return err
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('`+table+`') WHERE name=?`, column)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return rows.Err()
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(alter)
 	return err
 }
 
