@@ -197,6 +197,12 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
       - node e2e-verify/mobile/run-macos.mjs --test test/dsh_mode_test.dart --test test/local_visual_fixture_test.dart --case V081-10 --visual-scenario VISUAL-MOBILE-33
 
+  test:v082:flutter:
+    desc: v0.8.2 DSH 工具时间线的 macOS 可见窗口 targeted gate（需先关闭用户正在使用的 Agent Sessions 窗口）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs --test test/local_visual_fixture_test.dart --case V082-P3 --visual-scenario VISUAL-MOBILE-34
+
   record:v081:
     desc: v0.8.1 DSH 工作区 macOS fixture 录屏（需 V081-10 可见 Flutter gate 报告）
     cmds:

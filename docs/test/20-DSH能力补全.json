@@ -199,7 +199,8 @@
    ],
    "evidence": [
     "e2e-verify/suites/v082-dsh-capability-web.mjs",
-    "e2e-verify/reports/<ts>/V082/"
+    "e2e-verify/reports/<ts>/V082/",
+    "e2e-verify/mobile/run-macos.mjs（VISUAL-MOBILE-34 macOS 可见采样，100 帧）"
    ]
   },
   {
