@@ -1,357 +1,447 @@
 {
-  "suite": "v082-dsh-capability-lifecycle",
-  "suite_version": "1.0.0",
-  "status": "in_progress",
-  "plan_id": "V082",
-  "description": "v0.8.2 DSH 能力补全：工具事件、effort、权限回流、模式、生命周期与多根目录。fixture 验证一律 local_test+fixture_data；桥未实现的 ACP 方法（set_mode/close/list/delete/fork/additionalDirectories）按动态 gate 保持条件式 unsupported，不伪造 native。",
-  "id_registry": {
-    "prefix": "V082",
-    "start": 1,
-    "end": 19
+ "suite": "v082-dsh-capability-lifecycle",
+ "suite_version": "1.0.0",
+ "status": "in_progress",
+ "plan_id": "V082",
+ "description": "v0.8.2 DSH 能力补全：工具事件、effort、权限回流、模式、生命周期与多根目录。fixture 验证一律 local_test+fixture_data；桥未实现的 ACP 方法（set_mode/close/list/delete/fork/additionalDirectories）按动态 gate 保持条件式 unsupported，不伪造 native。",
+ "id_registry": {
+  "prefix": "V082",
+  "start": 1,
+  "end": 19
+ },
+ "owner": "Agent Sessions v0.8.2",
+ "environment": {
+  "local": "隔离 SQLite、内存假桥（fakeBridge）、受控 cordis.yml fixture",
+  "browser": "系统 Chrome headed（P3 gate）",
+  "flutter": "macOS fixture 窗口（P3 gate，需没有用户正在使用的 Agent Sessions 窗口）"
+ },
+ "verification_defaults": {
+  "fixture_data": true,
+  "local_test": true,
+  "real_model": false,
+  "real_upstream": false,
+  "headless": false
+ },
+ "cases": [
+  {
+   "id": "V082-01",
+   "title": "工具事件映射：桥投影 → canonical 事件",
+   "status": "passed",
+   "phase": "P0",
+   "category": "tool_events",
+   "priority": "P0",
+   "test_layer": "unit/contract",
+   "precondition": "mapper 工具帧契约（tool_call/tool_call_update 变体已入白名单）。",
+   "steps": [
+    "注入 tool_call 打开帧（toolCallId/status/kind/title/rawInput）",
+    "注入 tool_call_update 关闭帧（toolCallId/status/content 数组）",
+    "断言 canonical 事件 EventToolCall / EventToolResult 载荷白名单"
+   ],
+   "expected": "EventToolCall 携带 tool_call_id/kind/title/raw_input/status；EventToolResult 两层解包 output_text；畸形帧丢弃计数、不伪造事件。",
+   "cleanup": [
+    "无（纯函数单测）。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/mapper.go",
+    "internal/adapter/dsh/mapper_test.go"
+   ]
   },
-  "owner": "Agent Sessions v0.8.2",
-  "environment": {
-    "local": "隔离 SQLite、内存假桥（fakeBridge）、受控 cordis.yml fixture",
-    "browser": "系统 Chrome headed（P3 gate）",
-    "flutter": "macOS fixture 窗口（P3 gate，需没有用户正在使用的 Agent Sessions 窗口）"
+  {
+   "id": "V082-02",
+   "title": "畸形工具帧容错",
+   "status": "passed",
+   "phase": "P0",
+   "category": "tool_events",
+   "priority": "P0",
+   "test_layer": "unit/contract",
+   "precondition": "缺 tool_call_id、孤儿 update、非法 rawInput 输入。",
+   "steps": [
+    "注入缺 tool_call_id 的打开/关闭帧",
+    "注入非法 JSON rawInput 与 shape 不符 content",
+    "断言丢弃计数与无伪造正文"
+   ],
+   "expected": "畸形/孤儿帧 ok=false 丢弃并按变体计数；事件载荷不含伪造 output_text/raw_input。",
+   "cleanup": [
+    "无（纯函数单测）。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/mapper_test.go"
+   ]
   },
-  "verification_defaults": {
-    "fixture_data": true,
-    "local_test": true,
-    "real_model": false,
-    "real_upstream": false,
-    "headless": false
+  {
+   "id": "V082-03",
+   "title": "effort_select 下发：SetEffort → thought_level",
+   "status": "passed",
+   "phase": "P1",
+   "category": "effort",
+   "priority": "P0",
+   "test_layer": "unit/contract",
+   "precondition": "handle 实现 EffortOverrideHandle；桥 setSessionConfigOption 接受 thought_level。",
+   "steps": [
+    "SetEffort 后 Send",
+    "断言 set_config_option(configId=thought_level) 先于 prompt",
+    "同一档位去重、变更再下发、空值忽略、桥拒绝 fail-closed"
+   ],
+   "expected": "下发顺序 model→effort→prompt；桥拒绝时整轮 fail-closed（无 prompt、补终态事件、客户端保留原档位）。",
+   "cleanup": [
+    "无（假桥单测）。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/handle.go",
+    "internal/adapter/dsh/fakebridge_test.go"
+   ]
   },
-  "cases": [
-    {
-      "id": "V082-01",
-      "title": "工具事件映射：桥投影 → canonical 事件",
-      "status": "passed",
-      "phase": "P0",
-      "category": "tool_events",
-      "priority": "P0",
-      "test_layer": "unit/contract",
-      "precondition": "mapper 工具帧契约（tool_call/tool_call_update 变体已入白名单）。",
-      "steps": [
-        "注入 tool_call 打开帧（toolCallId/status/kind/title/rawInput）",
-        "注入 tool_call_update 关闭帧（toolCallId/status/content 数组）",
-        "断言 canonical 事件 EventToolCall / EventToolResult 载荷白名单"
-      ],
-      "expected": "EventToolCall 携带 tool_call_id/kind/title/raw_input/status；EventToolResult 两层解包 output_text；畸形帧丢弃计数、不伪造事件。",
-      "cleanup": ["无（纯函数单测）。"],
-      "evidence": ["internal/adapter/dsh/mapper.go", "internal/adapter/dsh/mapper_test.go"]
-    },
-    {
-      "id": "V082-02",
-      "title": "畸形工具帧容错",
-      "status": "passed",
-      "phase": "P0",
-      "category": "tool_events",
-      "priority": "P0",
-      "test_layer": "unit/contract",
-      "precondition": "缺 tool_call_id、孤儿 update、非法 rawInput 输入。",
-      "steps": [
-        "注入缺 tool_call_id 的打开/关闭帧",
-        "注入非法 JSON rawInput 与 shape 不符 content",
-        "断言丢弃计数与无伪造正文"
-      ],
-      "expected": "畸形/孤儿帧 ok=false 丢弃并按变体计数；事件载荷不含伪造 output_text/raw_input。",
-      "cleanup": ["无（纯函数单测）。"],
-      "evidence": ["internal/adapter/dsh/mapper_test.go"]
-    },
-    {
-      "id": "V082-03",
-      "title": "effort_select 下发：SetEffort → thought_level",
-      "status": "passed",
-      "phase": "P1",
-      "category": "effort",
-      "priority": "P0",
-      "test_layer": "unit/contract",
-      "precondition": "handle 实现 EffortOverrideHandle；桥 setSessionConfigOption 接受 thought_level。",
-      "steps": [
-        "SetEffort 后 Send",
-        "断言 set_config_option(configId=thought_level) 先于 prompt",
-        "同一档位去重、变更再下发、空值忽略、桥拒绝 fail-closed"
-      ],
-      "expected": "下发顺序 model→effort→prompt；桥拒绝时整轮 fail-closed（无 prompt、补终态事件、客户端保留原档位）。",
-      "cleanup": ["无（假桥单测）。"],
-      "evidence": ["internal/adapter/dsh/handle.go", "internal/adapter/dsh/fakebridge_test.go"]
-    },
-    {
-      "id": "V082-04",
-      "title": "能力矩阵目录：Detect / controls",
-      "status": "passed",
-      "phase": "P0",
-      "category": "capability_matrix",
-      "priority": "P0",
-      "test_layer": "integration",
-      "precondition": "successMatrix 与 cordis.yml 同步维护的 roster。",
-      "steps": [
-        "读取成功握手后的能力矩阵",
-        "断言 effort_select 目录与档位真值一致（当前 Zen 池无档位 → unsupported）"
-      ],
-      "expected": "effort_select 目录为空时保持 unsupported 并带准确 Reason；不把空目录冒充 native。",
-      "cleanup": ["无（纯函数单测）。"],
-      "evidence": ["internal/adapter/dsh/consistency_guard_test.go", "internal/adapter/dsh/adapter.go"]
-    },
-    {
-      "id": "V082-05",
-      "title": "配置一致性：cordis.yml ↔ roster/矩阵",
-      "status": "passed",
-      "phase": "P0",
-      "category": "consistency",
-      "priority": "P0",
-      "test_layer": "unit",
-      "precondition": "仓库根 cordis.yml 为唯一配置真相源。",
-      "steps": [
-        "解析 cordis.yml acp-agent 段 modelProviders 与默认 model",
-        "断言与 dshKnownModels roster 双向一致、Default 对齐"
-      ],
-      "expected": "roster ⊆ modelProviders 且反向一致；Default ∈ Options；漂移即红（CI 层暴露配置漂移）。",
-      "cleanup": ["无（测试内 YAML 解析，生产零新依赖）。"],
-      "evidence": ["internal/adapter/dsh/consistency_guard_test.go"]
-    },
-    {
-      "id": "V082-06",
-      "title": "能力清单漂移守护：SPI ↔ 公共协议",
-      "status": "passed",
-      "phase": "P0",
-      "category": "consistency",
-      "priority": "P0",
-      "test_layer": "unit",
-      "precondition": "internal/adapter/spi.go 与 packages/protocol/types.go 能力清单。",
-      "steps": [
-        "逐项对比 SPI CapabilityNames 与 protocol CapabilityNames",
-        "断言完全一致"
-      ],
-      "expected": "两清单零漂移（v0.8.2 修复 types.go 缺 kill/permission_mode）。",
-      "cleanup": ["无。"],
-      "evidence": ["packages/protocol/types.go", "internal/adapter/dsh/consistency_guard_test.go"]
-    },
-    {
-      "id": "V082-07",
-      "title": "工具活动渲染：DSH 会话时间线同构",
-      "status": "passed",
-      "phase": "P2",
-      "category": "mobile_timeline",
-      "priority": "P0",
-      "test_layer": "widget/integration",
-      "precondition": "daemon localdev 投影兼容 DSH 工具载荷；移动端 toolActivity 渲染既有。",
-      "steps": [
-        "把 DSH 形状 tool_call/tool_result 事件经 LocalDevEventEncoder 投影",
-        "断言 fixture_payload kind=tool_activity、label/tool_input/tool_status 正确",
-        "移动端 widget 发送消息断言时间线出现工具卡片"
-      ],
-      "expected": "DSH 工具事件与其它 provider 同构渲染（tool 卡片含 input/output/inspect_target）。",
-      "cleanup": ["无（fixture 单测与既有 widget 测试）。"],
-      "evidence": ["internal/daemon/localdev_encoder.go", "apps/mobile/test/session_screens_test.dart"]
-    },
-    {
-      "id": "V082-08",
-      "title": "权限请求回流：ACP → registry → 决策回写",
-      "status": "passed",
-      "phase": "P1",
-      "category": "permission",
-      "priority": "P0",
-      "test_layer": "unit/integration",
-      "precondition": "handle 实现 PermissionDecisionHandle；pending registry 登记。",
-      "steps": [
-        "注入 session/request_permission 请求",
-        "ResolvePermission(allow/reject) 决策",
-        "断言桥收到 allowed-once/rejected、事件流 permission_decision"
-      ],
-      "expected": "request_id(=tool_call_id)/session 关联一一对应；one-shot 决策；重复/未知/畸形 fail-closed。",
-      "cleanup": ["无（假桥单测）。"],
-      "evidence": ["internal/adapter/dsh/handle.go", "internal/adapter/dsh/fakebridge_test.go"]
-    },
-    {
-      "id": "V082-09",
-      "title": "权限断线收口：Dispose/EOF fail-closed",
-      "status": "passed",
-      "phase": "P1",
-      "category": "permission",
-      "priority": "P0",
-      "test_layer": "unit",
-      "precondition": "存在未决权限请求时关闭句柄或桥退出。",
-      "steps": [
-        "注入未决 request_permission",
-        "Dispose 或桥 EOF",
-        "断言全部 pending 收口为 cancelled 应答"
-      ],
-      "expected": "断线不泄漏 pending；每个原始请求收到 cancelled；客户端不永久显示处理中。",
-      "cleanup": ["无（假桥单测）。"],
-      "evidence": ["internal/adapter/dsh/fakebridge_test.go"]
-    },
-    {
-      "id": "V082-10",
-      "title": "runner 权限分发：Relay 命令 → handle",
-      "status": "passed",
-      "phase": "P1",
-      "category": "permission",
-      "priority": "P0",
-      "test_layer": "integration",
-      "precondition": "daemon SessionRunner 分发 permission.respond/approve/reject。",
-      "steps": [
-        "start 会话后提交 permission.approve/reject 命令（ciphertext 带 request_id）",
-        "断言决策注入 handle；缺参/无 handle 失败"
-      ],
-      "expected": "approve→allow=true、reject→allow=false；缺 request_id/无运行 handle fail-closed。",
-      "cleanup": ["关闭 runner 与 store。"],
-      "evidence": ["internal/daemon/runner.go", "internal/daemon/runner_test.go"]
-    },
-    {
-      "id": "V082-11",
-      "title": "权限/工具事件上传类型映射",
-      "status": "passed",
-      "phase": "P2",
-      "category": "events",
-      "priority": "P0",
-      "test_layer": "unit",
-      "precondition": "relayEventType canonical 事件 → Relay event_type 映射。",
-      "steps": [
-        "遍历 canonical 事件类型断言映射",
-        "重点核对 permission.request/permission.decision/tool.call/tool.result"
-      ],
-      "expected": "事件类型映射无漂移；权限事件不再落入 command.updated 兜底。",
-      "cleanup": ["无（纯函数单测）。"],
-      "evidence": ["internal/daemon/relay.go", "internal/daemon/relay_event_type_test.go"]
-    },
-    {
-      "id": "V082-12",
-      "title": "能力清单：kill/permission_mode 补齐消费",
-      "status": "passed",
-      "phase": "P0",
-      "category": "capability_matrix",
-      "priority": "P1",
-      "test_layer": "unit",
-      "precondition": "packages/protocol/types.go 补齐 20 项能力清单。",
-      "steps": [
-        "运行协议生成与静态检查",
-        "断言客户端协议能力清单与 SPI 一致"
-      ],
-      "expected": "kill/permission_mode 可被客户端消费；task check 全绿。",
-      "cleanup": ["无。"],
-      "evidence": ["packages/protocol/types.go", "Taskfile.yml"]
-    },
-    {
-      "id": "V082-13",
-      "title": "permission_mode 动态门控：桥未广告保持 unsupported",
-      "status": "blocked_on_bridge",
-      "phase": "P1",
-      "category": "permission_mode",
-      "priority": "P1",
-      "test_layer": "unit/contract",
-      "precondition": "桥（deepseek-harness acp/src/index.ts）未实现 session/set_mode 与 modes 广播。",
-      "steps": [
-        "核对桥源码方法清单（initialize/new/load/resume/set_config_option/prompt/cancel）",
-        "断言能力矩阵 permission_mode=unsupported 且 Reason 与桥事实一致"
-      ],
-      "expected": "桥未实现 ACP mode 目录 → 矩阵如实 unsupported（不伪造 native）；桥升级后由动态 gate 自动升 native。",
-      "cleanup": ["无。"],
-      "evidence": ["internal/adapter/dsh/adapter.go", "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"]
-    },
-    {
-      "id": "V082-14",
-      "title": "生命周期门控：close/list/delete/fork 保持条件式 unsupported",
-      "status": "blocked_on_bridge",
-      "phase": "P1",
-      "category": "lifecycle",
-      "priority": "P1",
-      "test_layer": "contract",
-      "precondition": "桥无 session/close、list、delete、fork handler。",
-      "steps": [
-        "核对桥源码方法清单",
-        "断言 Go 侧对未实现方法的 fail-closed 路径（-32601 拒绝）与矩阵 unsupported"
-      ],
-      "expected": "桥未提供 handler 前能力保持 unsupported；一旦桥实现并广告，adapter 动态 gate 更新矩阵。",
-      "cleanup": ["无。"],
-      "evidence": ["internal/adapter/dsh/adapter.go", "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"]
-    },
-    {
-      "id": "V082-15",
-      "title": "附件/image 门控：text-only 拒绝路径",
-      "status": "blocked_on_bridge",
-      "phase": "P1",
-      "category": "attachments",
-      "priority": "P1",
-      "test_layer": "contract",
-      "precondition": "当前桥 prompt 仅接受 text 块（无 image admission）。",
-      "steps": [
-        "核对桥 supportsAcpImagePrompts 门控条件",
-        "断言 attachments 矩阵按动态 gate 保持 unsupported"
-      ],
-      "expected": "text-only 路由明确拒绝并保持 unsupported；image-capable overlay 另行验证。",
-      "cleanup": ["无。"],
-      "evidence": ["internal/adapter/dsh/adapter.go"]
-    },
-    {
-      "id": "V082-16",
-      "title": "additionalDirectories 门控：非空数组拒绝",
-      "status": "passed",
-      "phase": "P1",
-      "category": "directories",
-      "priority": "P1",
-      "test_layer": "contract",
-      "precondition": "桥 validateSessionParams 对非空 additionalDirectories 抛 invalidParams。",
-      "steps": [
-        "核对桥拒绝逻辑",
-        "断言 Go 侧不发送非空 additionalDirectories（保持空数组）"
-      ],
-      "expected": "非空目录引用被桥拒绝时 Go 侧 fail-closed；多根目录授权仅在显式 capability gate 打开时生效。",
-      "cleanup": ["无。"],
-      "evidence": ["internal/adapter/dsh/handle.go", "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"]
-    },
-    {
-      "id": "V082-17",
-      "title": "prompt decode 失败补终态",
-      "status": "passed",
-      "phase": "P1",
-      "category": "reliability",
-      "priority": "P0",
-      "test_layer": "unit",
-      "precondition": "桥返回畸形 session/prompt 响应。",
-      "steps": [
-        "注入不可解码的 prompt 响应",
-        "断言补发 session_error + turn_completed(error)"
-      ],
-      "expected": "客户端不永久显示生成中；错误只留本机回执，公共事件脱敏。",
-      "cleanup": ["无（假桥单测）。"],
-      "evidence": ["internal/adapter/dsh/handle.go", "internal/adapter/dsh/fakebridge_test.go"]
-    },
-    {
-      "id": "V082-18",
-      "title": "effort 目录真值：无档位不冒充",
-      "status": "passed",
-      "phase": "P0",
-      "category": "consistency",
-      "priority": "P1",
-      "test_layer": "unit",
-      "precondition": "cordis.yml 模型档位声明（当前 Zen 免费池无 reasoningEfforts）。",
-      "steps": [
-        "提取 llm 段各模型 reasoningEfforts 声明",
-        "断言矩阵 effort_select 状态与声明一致"
-      ],
-      "expected": "无任何池内模型公布档位 → 保持 unsupported（计划风险条款），Reason 与桥事实一致。",
-      "cleanup": ["无。"],
-      "evidence": ["internal/adapter/dsh/consistency_guard_test.go"]
-    },
-    {
-      "id": "V082-19",
-      "title": "不回归：V081 与既有全量",
-      "status": "passed",
-      "phase": "P4",
-      "category": "regression",
-      "priority": "P0",
-      "test_layer": "regression",
-      "precondition": "既有 V081/V08 用例与核心包回归。",
-      "steps": [
-        "go test ./internal/adapter/... ./internal/daemon/... ./internal/relay/...",
-        "task check",
-        "Flutter 定向（dsh_mode/session_projection/capability/session_controller）"
-      ],
-      "expected": "全部既有用例全绿；V08-12 真实 gate 状态未被改写。",
-      "cleanup": ["无。"],
-      "evidence": ["本轮 go/flutter 测试报告", "git log"]
-    }
-  ]
+  {
+   "id": "V082-04",
+   "title": "能力矩阵目录：Detect / controls",
+   "status": "passed",
+   "phase": "P0",
+   "category": "capability_matrix",
+   "priority": "P0",
+   "test_layer": "integration",
+   "precondition": "successMatrix 与 cordis.yml 同步维护的 roster。",
+   "steps": [
+    "读取成功握手后的能力矩阵",
+    "断言 effort_select 目录与档位真值一致（当前 Zen 池无档位 → unsupported）"
+   ],
+   "expected": "effort_select 目录为空时保持 unsupported 并带准确 Reason；不把空目录冒充 native。",
+   "cleanup": [
+    "无（纯函数单测）。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/consistency_guard_test.go",
+    "internal/adapter/dsh/adapter.go"
+   ]
+  },
+  {
+   "id": "V082-05",
+   "title": "配置一致性：cordis.yml ↔ roster/矩阵",
+   "status": "passed",
+   "phase": "P0",
+   "category": "consistency",
+   "priority": "P0",
+   "test_layer": "unit",
+   "precondition": "仓库根 cordis.yml 为唯一配置真相源。",
+   "steps": [
+    "解析 cordis.yml acp-agent 段 modelProviders 与默认 model",
+    "断言与 dshKnownModels roster 双向一致、Default 对齐"
+   ],
+   "expected": "roster ⊆ modelProviders 且反向一致；Default ∈ Options；漂移即红（CI 层暴露配置漂移）。",
+   "cleanup": [
+    "无（测试内 YAML 解析，生产零新依赖）。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/consistency_guard_test.go"
+   ]
+  },
+  {
+   "id": "V082-06",
+   "title": "能力清单漂移守护：SPI ↔ 公共协议",
+   "status": "passed",
+   "phase": "P0",
+   "category": "consistency",
+   "priority": "P0",
+   "test_layer": "unit",
+   "precondition": "internal/adapter/spi.go 与 packages/protocol/types.go 能力清单。",
+   "steps": [
+    "逐项对比 SPI CapabilityNames 与 protocol CapabilityNames",
+    "断言完全一致"
+   ],
+   "expected": "两清单零漂移（v0.8.2 修复 types.go 缺 kill/permission_mode）。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "packages/protocol/types.go",
+    "internal/adapter/dsh/consistency_guard_test.go"
+   ]
+  },
+  {
+   "id": "V082-07",
+   "title": "工具活动渲染：DSH 会话时间线同构",
+   "status": "passed",
+   "phase": "P2",
+   "category": "mobile_timeline",
+   "priority": "P0",
+   "test_layer": "widget/integration",
+   "precondition": "daemon localdev 投影兼容 DSH 工具载荷；移动端 toolActivity 渲染既有。",
+   "steps": [
+    "把 DSH 形状 tool_call/tool_result 事件经 LocalDevEventEncoder 投影",
+    "断言 fixture_payload kind=tool_activity、label/tool_input/tool_status 正确",
+    "移动端 widget 发送消息断言时间线出现工具卡片"
+   ],
+   "expected": "DSH 工具事件与其它 provider 同构渲染（tool 卡片含 input/output/inspect_target）。",
+   "cleanup": [
+    "无（fixture 单测与既有 widget 测试）。"
+   ],
+   "evidence": [
+    "internal/daemon/localdev_encoder.go",
+    "apps/mobile/test/session_screens_test.dart",
+    "e2e-verify/suites/v082-dsh-capability-web.mjs"
+   ]
+  },
+  {
+   "id": "V082-08",
+   "title": "DSH 工具事件链路 headed Chrome 验收",
+   "status": "passed",
+   "phase": "P1",
+   "category": "e2e_visible",
+   "priority": "P0",
+   "test_layer": "e2e/browser",
+   "precondition": "handle 实现 PermissionDecisionHandle；pending registry 登记。",
+   "steps": [
+    "node e2e-verify/run.mjs --suite v082-dsh-capability-web",
+    "真实浏览器进入 DSH 会话详情断言事件序列"
+   ],
+   "expected": "fixture 注入的 user.message/tool.call/tool.result/message.completed/turn.completed 事件经 Relay 全链路在会话详情事件时间线完整可见（headed Chrome，real_browser=true）。",
+   "cleanup": [
+    "关闭浏览器与隔离 Relay。"
+   ],
+   "evidence": [
+    "e2e-verify/suites/v082-dsh-capability-web.mjs",
+    "e2e-verify/reports/<ts>/V082/"
+   ]
+  },
+  {
+   "id": "V082-09",
+   "title": "权限断线收口：Dispose/EOF fail-closed",
+   "status": "passed",
+   "phase": "P1",
+   "category": "permission",
+   "priority": "P0",
+   "test_layer": "unit",
+   "precondition": "存在未决权限请求时关闭句柄或桥退出。",
+   "steps": [
+    "注入未决 request_permission",
+    "Dispose 或桥 EOF",
+    "断言全部 pending 收口为 cancelled 应答"
+   ],
+   "expected": "断线不泄漏 pending；每个原始请求收到 cancelled；客户端不永久显示处理中。",
+   "cleanup": [
+    "无（假桥单测）。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/fakebridge_test.go"
+   ]
+  },
+  {
+   "id": "V082-10",
+   "title": "runner 权限分发：Relay 命令 → handle",
+   "status": "passed",
+   "phase": "P1",
+   "category": "permission",
+   "priority": "P0",
+   "test_layer": "integration",
+   "precondition": "daemon SessionRunner 分发 permission.respond/approve/reject。",
+   "steps": [
+    "start 会话后提交 permission.approve/reject 命令（ciphertext 带 request_id）",
+    "断言决策注入 handle；缺参/无 handle 失败"
+   ],
+   "expected": "approve→allow=true、reject→allow=false；缺 request_id/无运行 handle fail-closed。",
+   "cleanup": [
+    "关闭 runner 与 store。"
+   ],
+   "evidence": [
+    "internal/daemon/runner.go",
+    "internal/daemon/runner_test.go"
+   ]
+  },
+  {
+   "id": "V082-11",
+   "title": "权限/工具事件上传类型映射",
+   "status": "passed",
+   "phase": "P2",
+   "category": "events",
+   "priority": "P0",
+   "test_layer": "unit",
+   "precondition": "relayEventType canonical 事件 → Relay event_type 映射。",
+   "steps": [
+    "遍历 canonical 事件类型断言映射",
+    "重点核对 permission.request/permission.decision/tool.call/tool.result"
+   ],
+   "expected": "事件类型映射无漂移；权限事件不再落入 command.updated 兜底。",
+   "cleanup": [
+    "无（纯函数单测）。"
+   ],
+   "evidence": [
+    "internal/daemon/relay.go",
+    "internal/daemon/relay_event_type_test.go"
+   ]
+  },
+  {
+   "id": "V082-12",
+   "title": "能力清单：kill/permission_mode 补齐消费",
+   "status": "passed",
+   "phase": "P0",
+   "category": "capability_matrix",
+   "priority": "P1",
+   "test_layer": "unit",
+   "precondition": "packages/protocol/types.go 补齐 20 项能力清单。",
+   "steps": [
+    "运行协议生成与静态检查",
+    "断言客户端协议能力清单与 SPI 一致"
+   ],
+   "expected": "kill/permission_mode 可被客户端消费；task check 全绿。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "packages/protocol/types.go",
+    "Taskfile.yml"
+   ]
+  },
+  {
+   "id": "V082-13",
+   "title": "permission_mode 动态门控：桥未广告保持 unsupported",
+   "status": "blocked_on_bridge",
+   "phase": "P1",
+   "category": "permission_mode",
+   "priority": "P1",
+   "test_layer": "unit/contract",
+   "precondition": "桥（deepseek-harness acp/src/index.ts）未实现 session/set_mode 与 modes 广播。",
+   "steps": [
+    "核对桥源码方法清单（initialize/new/load/resume/set_config_option/prompt/cancel）",
+    "断言能力矩阵 permission_mode=unsupported 且 Reason 与桥事实一致"
+   ],
+   "expected": "桥未实现 ACP mode 目录 → 矩阵如实 unsupported（不伪造 native）；桥升级后由动态 gate 自动升 native。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/adapter.go",
+    "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"
+   ]
+  },
+  {
+   "id": "V082-14",
+   "title": "生命周期门控：close/list/delete/fork 保持条件式 unsupported",
+   "status": "blocked_on_bridge",
+   "phase": "P1",
+   "category": "lifecycle",
+   "priority": "P1",
+   "test_layer": "contract",
+   "precondition": "桥无 session/close、list、delete、fork handler。",
+   "steps": [
+    "核对桥源码方法清单",
+    "断言 Go 侧对未实现方法的 fail-closed 路径（-32601 拒绝）与矩阵 unsupported"
+   ],
+   "expected": "桥未提供 handler 前能力保持 unsupported；一旦桥实现并广告，adapter 动态 gate 更新矩阵。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/adapter.go",
+    "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"
+   ]
+  },
+  {
+   "id": "V082-15",
+   "title": "附件/image 门控：text-only 拒绝路径",
+   "status": "blocked_on_bridge",
+   "phase": "P1",
+   "category": "attachments",
+   "priority": "P1",
+   "test_layer": "contract",
+   "precondition": "当前桥 prompt 仅接受 text 块（无 image admission）。",
+   "steps": [
+    "核对桥 supportsAcpImagePrompts 门控条件",
+    "断言 attachments 矩阵按动态 gate 保持 unsupported"
+   ],
+   "expected": "text-only 路由明确拒绝并保持 unsupported；image-capable overlay 另行验证。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/adapter.go"
+   ]
+  },
+  {
+   "id": "V082-16",
+   "title": "additionalDirectories 门控：非空数组拒绝",
+   "status": "passed",
+   "phase": "P1",
+   "category": "directories",
+   "priority": "P1",
+   "test_layer": "contract",
+   "precondition": "桥 validateSessionParams 对非空 additionalDirectories 抛 invalidParams。",
+   "steps": [
+    "核对桥拒绝逻辑",
+    "断言 Go 侧不发送非空 additionalDirectories（保持空数组）"
+   ],
+   "expected": "非空目录引用被桥拒绝时 Go 侧 fail-closed；多根目录授权仅在显式 capability gate 打开时生效。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/handle.go",
+    "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"
+   ]
+  },
+  {
+   "id": "V082-17",
+   "title": "prompt decode 失败补终态",
+   "status": "passed",
+   "phase": "P1",
+   "category": "reliability",
+   "priority": "P0",
+   "test_layer": "unit",
+   "precondition": "桥返回畸形 session/prompt 响应。",
+   "steps": [
+    "注入不可解码的 prompt 响应",
+    "断言补发 session_error + turn_completed(error)"
+   ],
+   "expected": "客户端不永久显示生成中；错误只留本机回执，公共事件脱敏。",
+   "cleanup": [
+    "无（假桥单测）。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/handle.go",
+    "internal/adapter/dsh/fakebridge_test.go"
+   ]
+  },
+  {
+   "id": "V082-18",
+   "title": "effort 目录真值：无档位不冒充",
+   "status": "passed",
+   "phase": "P0",
+   "category": "consistency",
+   "priority": "P1",
+   "test_layer": "unit",
+   "precondition": "cordis.yml 模型档位声明（当前 Zen 免费池无 reasoningEfforts）。",
+   "steps": [
+    "提取 llm 段各模型 reasoningEfforts 声明",
+    "断言矩阵 effort_select 状态与声明一致"
+   ],
+   "expected": "无任何池内模型公布档位 → 保持 unsupported（计划风险条款），Reason 与桥事实一致。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/consistency_guard_test.go"
+   ]
+  },
+  {
+   "id": "V082-19",
+   "title": "不回归：V081 与既有全量",
+   "status": "passed",
+   "phase": "P4",
+   "category": "regression",
+   "priority": "P0",
+   "test_layer": "regression",
+   "precondition": "既有 V081/V08 用例与核心包回归。",
+   "steps": [
+    "go test ./internal/adapter/... ./internal/daemon/... ./internal/relay/...",
+    "task check",
+    "Flutter 定向（dsh_mode/session_projection/capability/session_controller）"
+   ],
+   "expected": "全部既有用例全绿；V08-12 真实 gate 状态未被改写。",
+   "cleanup": [
+    "无。"
+   ],
+   "evidence": [
+    "本轮 go/flutter 测试报告",
+    "git log"
+   ]
+  }
+ ]
 }

@@ -182,12 +182,13 @@ tasks:
       - git diff --check
 
   test:v082:local:
-    desc: v0.8.2 DSH 能力补全与生命周期本地 full gate（fixture + 定向回归；不调用模型、不扫描真实根）
+    desc: v0.8.2 DSH 能力补全与生命周期本地 full gate（fixture + headed Chrome；不调用模型、不扫描真实根）
     cmds:
       - task: docs:verify
       - task: check
       - go test ./internal/adapter/... ./internal/daemon ./internal/relay -run 'Test(V082|MapTool|MapSession|SendAppliesEffort|SetEffort|PermissionRequest|SessionRunnerRespondPermission|Cordis|EffortSelect|CapabilityLists|RelayEventType|LocalDevEventEncoder)' -count=1
       - cmd: cd apps/mobile && flutter analyze && flutter test test/session_projection_test.dart test/capability_controller_test.dart test/dsh_mode_test.dart test/session_controller_test.dart --concurrency=1
+      - node e2e-verify/run.mjs --suite v082-dsh-capability-web
       - git diff --check
 
   test:v081:flutter:
