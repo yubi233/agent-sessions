@@ -140,28 +140,59 @@ func (e *LocalDevEventEncoder) localDevFixturePayload(sessionID string, event ad
 			"copy_text": text,
 		}, true
 	case adapter.EventToolCall:
-		name := nonEmptyOr(event.Payload["tool_name"], "工具")
-		input, _ := event.Payload["input"].(string)
-		return map[string]any{
-			"kind":        "tool_activity",
-			"label":       name,
-			"tool_status": "运行中",
-			"tool_input":  input,
-		}, true
-	case adapter.EventToolResult:
-		name := nonEmptyOr(event.Payload["tool_name"], "工具")
-		output, _ := event.Payload["output"].(string)
-		state, _ := event.Payload["state"].(string)
-		status := "已完成"
-		if state == "error" || state == "aborted" {
-			status = "已中断"
+		// 兼容两类 canonical 载荷：
+		//   - opencode/codex 风格：tool_name/input（结构化字符串正文）；
+		//   - DSH（v0.8.2 mapper）风格：title + raw_input(结构化 JSON) + tool_call_kind。
+		// label 优先取 title（桥已生成单行展示标题），其次 tool_name。
+		name := nonEmptyOr(event.Payload["title"], nonEmptyOr(event.Payload["tool_name"], "工具"))
+		// raw_input 可能是 map（DSH）或字符串（其他 provider）：map 序列化为单行 JSON。
+		var input string
+		switch v := event.Payload["raw_input"].(type) {
+		case string:
+			input = v
+		default:
+			if v != nil {
+				if raw, err := json.Marshal(v); err == nil {
+					input = string(raw)
+				}
+			}
+		}
+		if input == "" {
+			input, _ = event.Payload["input"].(string)
 		}
 		return map[string]any{
+			"kind":           "tool_activity",
+			"label":          name,
+			"tool_status":    "运行中",
+			"tool_input":     input,
+			"inspect_target": nonEmptyOr(event.Payload["tool_call_id"], ""),
+		}, true
+	case adapter.EventToolResult:
+		// DSH 结果载荷用 output_text/status(completed|failed)，opencode 风格用
+		// tool_name/output/state；label 优先取 title/tool_name，保留 tool_call_id。
+		name := nonEmptyOr(event.Payload["title"], nonEmptyOr(event.Payload["tool_name"], "工具"))
+		output, _ := event.Payload["output"].(string)
+		if output == "" {
+			output, _ = event.Payload["output_text"].(string)
+		}
+		state, _ := event.Payload["state"].(string)
+		if state == "" {
+			state, _ = event.Payload["status"].(string)
+		}
+		status := "已完成"
+		if state == "error" || state == "aborted" || state == "failed" {
+			status = "已中断"
+		}
+		payload := map[string]any{
 			"kind":        "tool_activity",
 			"label":       name,
 			"tool_status": status,
 			"tool_output": output,
-		}, true
+		}
+		if toolCallID := nonEmptyOr(event.Payload["tool_call_id"], ""); toolCallID != "" {
+			payload["inspect_target"] = toolCallID
+		}
+		return payload, true
 	case adapter.EventSessionError:
 		message, _ := event.Payload["message"].(string)
 		if strings.TrimSpace(message) == "" {

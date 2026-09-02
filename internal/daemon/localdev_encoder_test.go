@@ -173,3 +173,47 @@ func TestLocalDevEventEncoderStreamsDeltaAccumulation(t *testing.T) {
 		t.Fatalf("turn fixture = %v", turnDone)
 	}
 }
+
+// v0.8.2 P2（G1）：DSH mapper 的工具事件载荷（title/raw_input/tool_call_id/output_text/
+// status=failed）也必须投影为移动端 tool_activity 时间线词汇，与 opencode 风格同构。
+func TestLocalDevEventEncoderMapsDSHToolPayloads(t *testing.T) {
+	// tool_call：DSH 风格 title + raw_input(对象) + tool_call_id。
+	call := localDevEvent(t, adapter.EventToolCall, map[string]any{
+		"instance_id":    "sess-1",
+		"tool_call_id":   "call-dsh-1",
+		"tool_call_kind": "execute",
+		"title":          "bash: ls -la",
+		"raw_input":      map[string]any{"command": "ls -la"},
+		"status":         "in_progress",
+	})
+	for _, want := range []string{
+		`"kind":"tool_activity"`,
+		`"label":"bash: ls -la"`,
+		`"tool_status":"运行中"`,
+		// raw_input(对象) 序列化为单行 JSON 字符串（tool_input 是字符串字段）。
+		`"tool_input":"{\"command\":\"ls -la\"}"`,
+		`"inspect_target":"call-dsh-1"`,
+	} {
+		if !strings.Contains(call, want) {
+			t.Fatalf("DSH tool_call fixture 缺少 %s: %s", want, call)
+		}
+	}
+	// tool_result：output_text + status=failed → 已中断；completed → 已完成。
+	done := localDevEvent(t, adapter.EventToolResult, map[string]any{
+		"instance_id":  "sess-1",
+		"tool_call_id": "call-dsh-1",
+		"output_text":  "done",
+		"status":       "completed",
+	})
+	if !strings.Contains(done, `"tool_status":"已完成"`) || !strings.Contains(done, `"tool_output":"done"`) {
+		t.Fatalf("DSH tool_result(completed) fixture = %s", done)
+	}
+	failed := localDevEvent(t, adapter.EventToolResult, map[string]any{
+		"instance_id":  "sess-1",
+		"tool_call_id": "call-dsh-1",
+		"status":       "failed",
+	})
+	if !strings.Contains(failed, `"tool_status":"已中断"`) {
+		t.Fatalf("DSH tool_result(failed) fixture = %s", failed)
+	}
+}
