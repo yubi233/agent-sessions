@@ -14,3 +14,5 @@ ADR 用来记录一旦改变就会影响协议、数据迁移、安全或多端�
 - [ADR-010：用量聚合与隐私边界](ADR-010-用量聚合与隐私边界.md)
 - [ADR-011：增强能力决策门](ADR-011-增强能力决策门.md)
 - [ADR-012：Terminal 认证的 TTL 桥接与设备密钥签名终态](ADR-012-Terminal认证的TTL桥接与设备密钥签名终态.md)
+- [ADR-013：DeepSeek Harness 作为第五类 Provider 的接入契约](ADR-013-DeepSeek-Harness-Provider接入.md)
+- [ADR-014：DSH ACP 扩展契约与 v0.8.2 遗留能力收口](ADR-014-DSH-ACP扩展与能力收口.md)
