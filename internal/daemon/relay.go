@@ -1406,6 +1406,13 @@ func relayEventType(value adapter.EventType) string {
 		return "tool.call"
 	case adapter.EventToolResult:
 		return "tool.result"
+	case adapter.EventPermissionRequest:
+		// v0.8.2：权限请求/决策是独立事件类型（openapi event enum 已定义
+		// permission.request/permission.decision），不能落入 command.updated 兜底，
+		// 否则移动端无法识别挂起的审批请求。
+		return "permission.request"
+	case adapter.EventPermissionDecision:
+		return "permission.decision"
 	case adapter.EventUsage:
 		return "usage.updated"
 	case adapter.EventFileChange:
