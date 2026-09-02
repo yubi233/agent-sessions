@@ -68,7 +68,13 @@ func TestV08DSHWorkspaceSyncResultRegistersOpaqueWorkspaces(t *testing.T) {
 	}
 	decodeW1(t, create.Body.Bytes(), &submitted)
 	// 同步命令没有 Session lease；Relay 接受 started ack 后由 Daemon 走专用 result。
-	// 这里直接模拟 Daemon 已完成扫描并回传 result（不依赖 ack）。
+	started := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.CommandID+"/ack", map[string]any{
+		"protocol_version": 1, "delivery_seq": 1, "ack_kind": "started",
+	}, terminal.AccessToken)
+	if started.Code != http.StatusOK {
+		t.Fatalf("dsh sync started ack status=%d body=%s", started.Code, started.Body.String())
+	}
+	// 模拟 Daemon 已完成扫描并回传专用 result。
 	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.CommandID+"/dsh-workspace-result", map[string]any{
 		"protocol_version": 1,
 		"delivery_seq":     1,
@@ -131,6 +137,65 @@ func TestV08DSHWorkspaceSyncResultRegistersOpaqueWorkspaces(t *testing.T) {
 	decodeW1(t, listAfter.Body.Bytes(), &listed)
 	if len(listed.Workspaces) != 2 {
 		t.Fatalf("repeat result created duplicate workspaces: %d", len(listed.Workspaces))
+	}
+}
+
+// V081-10：同步命令已终态后，下一次点击必须创建新的扫描。否则一次历史拒绝会把
+// 同账号永久锁在旧 command_id 上，客户端只能不断轮询已失败的结果。
+func TestV081DSHWorkspaceSyncRetriesAfterRejectedCommand(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v081-dsh-sync-retry@test.dev")
+	terminal := env.pairTerminal(t, owner, "v081-dsh-sync-retry-terminal")
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync"})
+
+	firstResponse := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	if firstResponse.Code != http.StatusAccepted {
+		t.Fatalf("first sync status=%d body=%s", firstResponse.Code, firstResponse.Body.String())
+	}
+	var first struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, firstResponse.Body.Bytes(), &first)
+	if first.CommandID == "" {
+		t.Fatalf("first sync missing command id: %s", firstResponse.Body.String())
+	}
+	if rejected := env.do(t, http.MethodPost, "/v1/daemon/commands/"+first.CommandID+"/ack", map[string]any{
+		"protocol_version": 1, "delivery_seq": 1, "ack_kind": "rejected", "error_code": "TARGET_STALE",
+	}, terminal.AccessToken); rejected.Code != http.StatusOK {
+		t.Fatalf("reject first sync status=%d body=%s", rejected.Code, rejected.Body.String())
+	}
+
+	secondResponse := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	if secondResponse.Code != http.StatusAccepted {
+		t.Fatalf("retry sync status=%d body=%s", secondResponse.Code, secondResponse.Body.String())
+	}
+	var second struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, secondResponse.Body.Bytes(), &second)
+	if second.CommandID == "" || second.CommandID == first.CommandID {
+		t.Fatalf("retry must create a replacement sync command: first=%q second=%q", first.CommandID, second.CommandID)
+	}
+	if started := env.do(t, http.MethodPost, "/v1/daemon/commands/"+second.CommandID+"/ack", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2, "ack_kind": "started",
+	}, terminal.AccessToken); started.Code != http.StatusOK {
+		t.Fatalf("replacement started ack status=%d body=%s", started.Code, started.Body.String())
+	}
+	if resolved := env.do(t, http.MethodPost, "/v1/daemon/commands/"+second.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2,
+		"candidates": []map[string]string{{"canonical_root": "/fixture/retried-project", "display_name": "retried-project"}},
+		"status":     "succeeded",
+	}, terminal.AccessToken); resolved.Code != http.StatusOK {
+		t.Fatalf("replacement dsh sync result status=%d body=%s", resolved.Code, resolved.Body.String())
+	}
+
+	oldState := env.do(t, http.MethodGet, "/v1/workspaces/sync-dsh/"+first.CommandID, nil, owner.AccessToken)
+	var oldView struct {
+		Status string `json:"status"`
+	}
+	decodeW1(t, oldState.Body.Bytes(), &oldView)
+	if oldState.Code != http.StatusOK || oldView.Status != "rejected" {
+		t.Fatalf("historical rejected sync must remain observable: status=%d view=%+v", oldState.Code, oldView)
 	}
 }
 
@@ -339,6 +404,12 @@ func TestV08DSHImportAuthorizationAndResult(t *testing.T) {
 		CommandID string `json:"command_id"`
 	}
 	decodeW1(t, importReq.Body.Bytes(), &importState)
+	startedImport := env.do(t, http.MethodPost, "/v1/daemon/commands/"+importState.CommandID+"/ack", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2, "ack_kind": "started",
+	}, terminal.AccessToken)
+	if startedImport.Code != http.StatusOK {
+		t.Fatalf("dsh import started ack status=%d body=%s", startedImport.Code, startedImport.Body.String())
+	}
 
 	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+importState.CommandID+"/dsh-import-result", map[string]any{
 		"protocol_version": 1, "delivery_seq": 2,

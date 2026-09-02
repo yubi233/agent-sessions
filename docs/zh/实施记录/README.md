@@ -18,3 +18,4 @@
 - [Happy Mobile 功能对比与 OpenCode 验证](07-HappyMobile功能对比与OpenCode验证.md)：固定上游版本对照、CLI live smoke、transport 优先级。
 - [v0.2 Android 会话能力对齐 Happy](08-v0.2-Android会话能力对齐Happy.md)：会话快捷操作、文件浏览、composer 控制面与 OpenCode 真实 transport。
 - [v0.8 DSH 持久化与 Resume 前置](16-v0.8-DSH持久化与Resume前置.md)：工作区持久化根、非破坏性迁移、Resume 句柄交接、回放契约与 Zen 测试池。
+- [v0.8.1 后续 DSH 模型选择接入](19-v0.8.1后续-DSH模型选择接入.md)：`session/set_config_option` 契约、能力矩阵模型目录与 `cordis.yml` 池同步。

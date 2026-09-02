@@ -17,16 +17,26 @@ import (
 // 30s 宽裕量足以覆盖慢速磁盘；无调用方截止时间时才套用。
 const handshakeTimeout = 30 * time.Second
 
-// dshKnownModels 是桥 llm-pi-ai provider 的已知模型 roster（cordis.yml models 列表）。
-// 新增模型时需同步更新此处；运行期模型目录以桥实际探测结果为准（此处仅供能力矩阵 UI 渲染）。
+// dshKnownModels 是能力矩阵向客户端暴露的模型目录（model_select Options）。
+// 它必须与仓库 cordis.yml 的 acp-agent.modelProviders + 对应 provider 的 models
+// 列表保持一致：桥的 set_config_option 按 modelProviders 路由并校验 provider
+// 目录，roster 之外的模型会被拒绝。gpt-5.5/gpt-5.6-terra 经 openai 路由
+// （用户自配凭据），默认模型是 Zen 免费池的 nemotron-3-ultra-free。
+// 新增/下线模型时需同步更新 cordis.yml 与此处。
 var dshKnownModels = []string{
 	"nemotron-3-ultra-free",
 	"nemotron-3.5-lightning-free",
 	"ling-3.0-flash-fin-free",
 	"mimo-v2.5-free",
 	"deepseek-v4-flash",
-	"deepseek-v4-pro",
+	"gpt-5.5",
+	"gpt-5.6-terra",
 }
+
+// dshDefaultModel 是能力矩阵的安全默认模型（model_select Default）。
+// 它必须存在于 dshKnownModels（spi.go 不变量），并与 cordis.yml 的
+// acp-agent.model 默认模型一致。
+const dshDefaultModel = "nemotron-3-ultra-free"
 
 // Adapter 是 DeepSeek Harness ACP 桥适配器（spi.Adapter 实现）。
 // Detect 做一次性真实握手（spawn 桥 + initialize）并缓存结果，之后不再触碰子进程；
@@ -202,8 +212,8 @@ func (a *Adapter) Capabilities() adapter.Capabilities {
 
 // Start 启动一个 DSH ACP 会话：spawn 桥 → initialize → session/new(cwd=WorkspaceRoot)，
 // 返回实现 InstanceIDHandle 的 handle（InstanceID()=桥返回的真实 sessionId）。
-// req.Model 不上 wire：模型由桥配置（cordis.yml 的 provider/model）承载，运行期不可选，
-// 对应能力矩阵 model_select=unsupported。
+// req.Model 登记为期望模型，首个 Send 前经 session/set_config_option 下发；
+// 未声明时沿用桥配置（cordis.yml acp-agent.model）的默认路由。
 func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.Handle, error) {
 	if strings.TrimSpace(req.WorkspaceRoot) == "" {
 		return nil, errors.New("Start 需要 workspace root")
@@ -248,6 +258,8 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 		return fail(fmt.Errorf("dsh session/new: %w", err))
 	}
 	h.setSessionID(sessionID)
+	// 会话创建时声明的模型在首个 Send 前经 set_config_option 生效；空值由 SetModel 忽略。
+	h.SetModel(req.Model)
 	return h, nil
 }
 
@@ -395,10 +407,10 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现技能调用方法"
 		case "model_select":
-			// ACP set_session_config_option 尚未接入 Go handle；仅配置文件中的
-			// modelProviders 能路由真实 Zen 模型，不能把 UI 选择伪装成 native。
-			status = adapter.CapabilityUnsupported
-			reason = "桥侧模型由配置承载，Go 侧尚未下发 set_config_option"
+			// ACP session/set_config_option(configId=model) 已接入 Go handle：
+			// send 前 fail-closed 下发，目录来自 dshKnownModels（与 cordis.yml
+			// modelProviders 同步维护），Default 为 Zen 免费池默认模型。
+			status = adapter.CapabilityNative
 		case "effort_select":
 			status = adapter.CapabilityUnsupported
 			reason = "桥不支持运行期 effort 选择"
@@ -423,7 +435,14 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现跨 Provider 委托"
 		}
-		caps = append(caps, adapter.Capability{Name: name, Status: status, Reason: reason})
+		capability := adapter.Capability{Name: name, Status: status, Reason: reason}
+		if name == "model_select" {
+			// Options/Default 是客户端渲染模型选择器的唯一来源；拷贝一份，
+			// 避免调用方改动切片影响后续矩阵。
+			capability.Options = append([]string(nil), dshKnownModels...)
+			capability.Default = dshDefaultModel
+		}
+		caps = append(caps, capability)
 	}
 	return adapter.Capabilities{Provider: "dsh", Version: version, Capabilities: caps}
 }

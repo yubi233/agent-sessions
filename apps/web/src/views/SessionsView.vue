@@ -44,7 +44,7 @@ const dshGroups = computed(() =>
     .filter((workspace) => workspace.origin === "dsh")
     .map((workspace) => ({
       workspace,
-      label: workspace.display_name?.trim() || "未命名 DSH 工作区",
+      label: dshWorkspaceLabel(workspace),
       items: sessions.value.filter(
         (session) =>
           session.workspace_id === workspace.id && session.provider === "dsh",
@@ -56,14 +56,40 @@ const dshGroups = computed(() =>
 const filteredDshGroups = computed(() => {
   const query = workspaceQuery.value.trim().toLocaleLowerCase("zh-CN");
   if (query.length === 0) return dshGroups.value;
-  return dshGroups.value.filter((group) =>
-    group.label.toLocaleLowerCase("zh-CN").includes(query),
+  return dshGroups.value.filter(
+    (group) =>
+      group.label.toLocaleLowerCase("zh-CN").includes(query) ||
+      group.items.some((session) =>
+        dshSessionLabel(session).toLocaleLowerCase("zh-CN").includes(query),
+      ),
   );
 });
 
 const secondarySessions = computed(() =>
   sessions.value.filter((session) => session.provider !== "dsh"),
 );
+
+function dshSessionLabel(session: SessionMeta): string {
+  const candidate = session.display_name?.trim() ?? "";
+  if (candidate.length === 0 || /[\\/]/u.test(candidate) || /[\u0000-\u001f\u007f]/u.test(candidate)) {
+    return "DSH 历史会话";
+  }
+  return candidate;
+}
+
+function dshWorkspaceLabel(workspace: WorkspaceMeta): string {
+  const candidate = workspace.display_name?.trim() ?? "";
+  if (candidate.length === 0 || /[\\/]/u.test(candidate) || /[\u0000-\u001f\u007f]/u.test(candidate)) {
+    return "未命名 DSH 工作区";
+  }
+  return candidate;
+}
+
+function sessionLabel(session: SessionMeta): string {
+  return session.provider === "dsh"
+    ? dshSessionLabel(session)
+    : `会话 ${session.id.slice(0, 8)}`;
+}
 
 const selectedWorkspace = computed(
   () =>
@@ -85,6 +111,9 @@ function toggleWorkspace(workspaceId: string): void {
 
 function selectWorkspace(workspaceId: string): void {
   selectedWorkspaceId.value = workspaceId;
+  if (!expandedWorkspaceIds.value.has(workspaceId)) {
+    expandedWorkspaceIds.value = new Set(expandedWorkspaceIds.value).add(workspaceId);
+  }
 }
 
 onMounted(() => {
@@ -178,7 +207,7 @@ onMounted(() => {
           class="readonly-item"
         >
           <a :href="`#/sessions/${item.id}`" :data-testid="`session-link-${item.id}`">
-            <span class="item-title">会话 {{ item.id.slice(0, 8) }}</span>
+            <span class="item-title">{{ sessionLabel(item) }}</span>
             <span class="item-sub">{{ item.provider }} · {{ item.status }}</span>
             <span class="item-sub">事件序号 {{ item.last_seq }}</span>
           </a>
@@ -225,9 +254,12 @@ onMounted(() => {
               :aria-pressed="selectedWorkspaceId === group.workspace.id"
               @click="selectWorkspace(group.workspace.id)"
             >
-              <span class="workspace-label">{{ group.label }}</span>
-              <span class="workspace-meta">
-                {{ group.items.length === 0 ? "尚无 DSH 会话" : `${group.items.length} 个 DSH 会话` }}
+              <span class="workspace-folder-icon" aria-hidden="true"></span>
+              <span class="workspace-copy">
+                <span class="workspace-label">{{ group.label }}</span>
+                <span class="workspace-meta">
+                  {{ group.items.length === 0 ? "尚无 DSH 会话" : `${group.items.length} 个 DSH 会话` }}
+                </span>
               </span>
             </button>
           </div>
@@ -237,7 +269,7 @@ onMounted(() => {
             </li>
             <li v-for="item in group.items" :key="item.id" class="readonly-item">
               <a :href="`#/sessions/${item.id}`" :data-testid="`session-link-${item.id}`">
-                <span class="item-title">会话 {{ item.id.slice(0, 8) }}</span>
+                <span class="item-title">{{ dshSessionLabel(item) }}</span>
                 <span class="item-sub">{{ item.status }} · 事件序号 {{ item.last_seq }}</span>
               </a>
             </li>

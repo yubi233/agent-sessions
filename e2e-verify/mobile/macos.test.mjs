@@ -170,12 +170,13 @@ test("macOS Flutter gate 锁拒绝并发执行并回收陈旧锁", () => {
   assert.equal(existsSync(file), false);
 });
 
-test("P2/P3/P4/P5 会话截图场景在 runner 中固定登记，避免录制前临时添加", () => {
+test("P2/P3/P4/P5/V081 截图场景在 runner 中固定登记，避免录制前临时添加", () => {
   assert.deepEqual(
     MACOS_SCREENSHOT_SCENARIOS.map((scenario) => scenario.id),
     [
       "VISUAL-MOBILE-01",
       "VISUAL-MOBILE-02",
+      "VISUAL-MOBILE-33",
       "VISUAL-PAIR-01",
       "VISUAL-MOBILE-03",
       "VISUAL-MOBILE-04",

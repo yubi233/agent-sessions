@@ -37,6 +37,7 @@ const SCREENCAST_ROOT = join(ROOT, "e2e-verify", "screencasts");
 export const FLUTTER_RECORDING_FPS = 5;
 export const FLUTTER_RECORDING_FRAME_COUNT = WINDOW_EVIDENCE_SELECTED_FRAME_COUNT;
 export const FLUTTER_RECORDING_SCENARIO_MAX_ATTEMPTS = 2;
+export const DEFAULT_FLUTTER_RECORDING_SCOPE = "v07";
 // 录屏范围：P6 生命周期恢复、v0.2 快捷菜单/Resume、文件浏览、composer 控制面、
 // P3 终端状态与 P3-A 设置中心/会话信息，以及 v0.5 resident shell / StatsLine / Trajectory / composer dock。
 export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
@@ -58,6 +59,26 @@ export const FLUTTER_RECORDING_SCENARIO_IDS = Object.freeze([
   "VISUAL-MOBILE-31",
   "VISUAL-MOBILE-32",
 ]);
+export const FLUTTER_RECORDING_SCOPES = Object.freeze({
+  v07: Object.freeze({
+    scenarioIds: FLUTTER_RECORDING_SCENARIO_IDS,
+    requiredTestIds: Object.freeze([]),
+  }),
+  v081: Object.freeze({
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-33"]),
+    requiredTestIds: Object.freeze(["V081-10"]),
+  }),
+});
+
+function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {
+  const selected = FLUTTER_RECORDING_SCOPES[scope];
+  if (selected == null) {
+    throw new RecordingError(
+      `未知 Flutter 录屏范围：${scope}。可用范围：${Object.keys(FLUTTER_RECORDING_SCOPES).join(", ")}。`,
+    );
+  }
+  return selected;
+}
 
 // 长期报告只存仓库内相对 artifact 引用，不能暴露执行主机目录。
 function evidenceReference(path) {
@@ -95,11 +116,17 @@ function positiveInteger(value, flag) {
 }
 
 export function parseRecordingArgs(argv) {
-  const args = { gateReport: null, help: false, fps: FLUTTER_RECORDING_FPS };
+  const args = {
+    gateReport: null,
+    help: false,
+    fps: FLUTTER_RECORDING_FPS,
+    scope: DEFAULT_FLUTTER_RECORDING_SCOPE,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--help" || value === "-h") args.help = true;
     else if (value === "--gate-report") args.gateReport = argv[++index] || "";
+    else if (value === "--scope") args.scope = argv[++index] || "";
     else if (value === "--fps")
       args.fps = positiveInteger(argv[++index], "--fps");
     else if (value === "--headless") {
@@ -126,6 +153,7 @@ export function parseRecordingArgs(argv) {
       `P6 Flutter 录屏固定为 ${FLUTTER_RECORDING_FPS}fps。`,
     );
   }
+  if (!args.help) recordingScope(args.scope);
   return args;
 }
 
@@ -133,6 +161,7 @@ export function recordingUsage() {
   return [
     "用法：node e2e-verify/mobile/record-macos.mjs --gate-report <MOBILE/mobile-01-macos.json>",
     "  --gate-report <path>  本轮已通过的 macOS Flutter full gate 报告",
+    "  --scope v07|v081     录制范围；默认 v07，v081 只录 DSH 工作区场景",
     "  --fps 5               固定 5fps；其他值会拒绝",
     "  --headless            明确拒绝；录屏必须观察可见 macOS 窗口",
   ].join("\n");
@@ -140,9 +169,10 @@ export function recordingUsage() {
 
 export function selectRecordingScenarios(
   scenarios = MACOS_SCREENSHOT_SCENARIOS,
+  scope = DEFAULT_FLUTTER_RECORDING_SCOPE,
 ) {
   const byId = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
-  return FLUTTER_RECORDING_SCENARIO_IDS.map((id) => {
+  return recordingScope(scope).scenarioIds.map((id) => {
     const scenario = byId.get(id);
     if (scenario == null) {
       throw new RecordingError(`录屏场景未在 macOS 截图清单登记：${id}`);
@@ -151,7 +181,17 @@ export function selectRecordingScenarios(
   });
 }
 
-export function validatePassedGateReport(report) {
+export function recordingScenarioIdsForScope(
+  scope = DEFAULT_FLUTTER_RECORDING_SCOPE,
+) {
+  return [...recordingScope(scope).scenarioIds];
+}
+
+export function validatePassedGateReport(
+  report,
+  scope = DEFAULT_FLUTTER_RECORDING_SCOPE,
+) {
+  const expected = recordingScope(scope);
   if (report == null || typeof report !== "object") {
     throw new RecordingError("full gate 报告不是有效 JSON 对象。", {
       failureClass: "checkpoint_mismatch",
@@ -174,7 +214,7 @@ export function validatePassedGateReport(report) {
     ? report.visual_scenario_runs
     : [];
   // 录屏范围内的每个场景都必须先通过连续 5fps 候选采集与筛选，缺任一场景都拒绝录屏。
-  const missing = FLUTTER_RECORDING_SCENARIO_IDS.filter((id) => {
+  const missing = expected.scenarioIds.filter((id) => {
     const run = visualRuns.find((item) => item?.id === id);
     return run?.frame_count !== FLUTTER_RECORDING_FRAME_COUNT
       || !Number.isInteger(run?.candidate_frame_count)
@@ -194,10 +234,25 @@ export function validatePassedGateReport(report) {
       },
     );
   }
+  const testIds = Array.isArray(report.test_ids) ? report.test_ids : [];
+  const missingTestIds = expected.requiredTestIds.filter(
+    (id) => !testIds.includes(id),
+  );
+  if (missingTestIds.length > 0) {
+    throw new RecordingError(
+      `full gate 不属于 ${scope} 录屏范围，缺少测试标识：${missingTestIds.join(", ")}`,
+      {
+        failureClass: "checkpoint_mismatch",
+      },
+    );
+  }
   return report;
 }
 
-function loadPassedGateReport(gateReportPath) {
+function loadPassedGateReport(
+  gateReportPath,
+  scope = DEFAULT_FLUTTER_RECORDING_SCOPE,
+) {
   const resolvedPath = resolve(gateReportPath);
   if (!existsSync(resolvedPath)) {
     throw new RecordingError(`找不到 full gate 报告：${resolvedPath}`, {
@@ -209,6 +264,7 @@ function loadPassedGateReport(gateReportPath) {
       path: resolvedPath,
       report: validatePassedGateReport(
         JSON.parse(readFileSync(resolvedPath, "utf-8")),
+        scope,
       ),
     };
   } catch (error) {
@@ -331,7 +387,7 @@ async function main() {
         failureClass: "environment_or_startup_failure",
       });
     }
-    gateReport = loadPassedGateReport(args.gateReport);
+    gateReport = loadPassedGateReport(args.gateReport, args.scope);
     mkdirSync(frameDirectory, { recursive: true });
     windowObserver = await createMacosWindowObserver();
     if ((await windowObserver.observe()).count > 0) {
@@ -356,7 +412,10 @@ async function main() {
       });
     }
 
-    for (const scenario of selectRecordingScenarios()) {
+    for (const scenario of selectRecordingScenarios(
+      MACOS_SCREENSHOT_SCENARIOS,
+      args.scope,
+    )) {
       let visualRun = null;
       const retryFailures = [];
       for (
@@ -463,7 +522,7 @@ async function main() {
         `${JSON.stringify(
           {
             command:
-              "node e2e-verify/mobile/record-macos.mjs --gate-report <passed-mobile-gate-report>",
+              "node e2e-verify/mobile/record-macos.mjs --scope <v07|v081> --gate-report <passed-mobile-gate-report>",
             completed_scenarios: completedScenarios,
             fixture_revision: "local-deterministic-fixture",
             fps: FLUTTER_RECORDING_FPS,
@@ -478,7 +537,8 @@ async function main() {
               : evidenceReference(gateReport.path),
             headless: false,
             host_platform: "macos",
-            recording_scenarios: FLUTTER_RECORDING_SCENARIO_IDS,
+            recording_scope: args.scope,
+            recording_scenarios: recordingScenarioIdsForScope(args.scope),
             timestamp,
             validation: {
               fixture_data: true,
@@ -512,12 +572,13 @@ async function main() {
           headless: false,
           browser: "n/a",
           command:
-            "node e2e-verify/mobile/record-macos.mjs --gate-report <passed-mobile-gate-report>",
+            "node e2e-verify/mobile/record-macos.mjs --scope <v07|v081> --gate-report <passed-mobile-gate-report>",
           artifacts,
           failure_class: failureClass,
           remaining_risk: remainingRisk,
         }),
         duration_ms: Date.now() - startedAt,
+        recording_scope: args?.scope ?? DEFAULT_FLUTTER_RECORDING_SCOPE,
         full_gate_report: gateReport == null
           ? null
           : evidenceReference(gateReport.path),
@@ -530,7 +591,9 @@ async function main() {
         collection_duration_limited: false,
         frame_interval_ms: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
         strict_frame_rate: true,
-        recording_scenario_ids: FLUTTER_RECORDING_SCENARIO_IDS,
+        recording_scenario_ids: recordingScenarioIdsForScope(
+          args?.scope ?? DEFAULT_FLUTTER_RECORDING_SCOPE,
+        ),
         visible_desktop_app: completedScenarios.length > 0,
       },
     });

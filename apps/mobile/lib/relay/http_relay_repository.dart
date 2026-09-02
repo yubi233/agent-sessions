@@ -843,6 +843,15 @@ class HttpRelayRepository implements RelayRepository {
       );
     } on DioException catch (error) {
       final status = error.response?.statusCode;
+      if (error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.sendTimeout ||
+          error.type == DioExceptionType.connectionError) {
+        throw const RelayFailure(
+          RelayFailureKind.unavailable,
+          'Relay 暂时不可用，请稍后重试。',
+        );
+      }
       if (status == 401 && accessToken != null && allowAuthRefresh) {
         final refreshed = await _refreshTokensOnce();
         if (refreshed != null) {

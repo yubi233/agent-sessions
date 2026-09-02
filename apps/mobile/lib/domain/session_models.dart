@@ -89,8 +89,7 @@ class MobileSession {
   final DateTime? updatedAt;
 
   /// Relay 最后一次状态/事件写入的活动时间（`last_activity_at_unix_ms`）。
-  /// 「最后消息时间」展示、列表排序与 idle 休眠衰减都只消费它；null 表示
-  /// 旧数据未知，排序沉底、展示按休眠处理。
+  /// 仅用于「最后消息时间」展示和列表排序；null 表示旧数据未知，排序沉底。
   final DateTime? lastActivityAt;
 
   /// Optional display projections. Production Relay may omit them; the UI must
@@ -116,18 +115,6 @@ class MobileSession {
   /// 最近活动时间戳：优先 Relay last_activity，退到本地 updatedAt；都缺失按 0。
   int get _activityEpochMS =>
       (lastActivityAt ?? updatedAt)?.millisecondsSinceEpoch ?? 0;
-
-  /// idle 会话在最后活动超过 10 分钟后视为「休眠」：本地开发里历史 idle 会话
-  /// 几乎永远存在，不能把「完成且陈旧」继续当作在线。活动时间未知（旧数据/
-  /// 旧 Relay）同样视为休眠——「在线」只能由确凿的新近活动支撑。
-  static const dormantAfter = Duration(minutes: 10);
-
-  bool isDormant({DateTime? now}) {
-    if (status != MobileSessionStatus.idle) return false;
-    final last = lastActivityAt ?? updatedAt;
-    if (last == null) return true;
-    return (now ?? DateTime.now()).difference(last).abs() > dormantAfter;
-  }
 
   /// 稳定排序：最后活动时间降序（未知沉底）；同时间按 lastSequence 降序，再按 id
   /// 字典序，避免刷新跳项。会话列表与最近会话页共用。
@@ -583,7 +570,7 @@ enum SessionCommandKind {
   // v0.3/P0：permission mode 选择与 goal 文本编辑（Happy sessionSetAgentModes / goal 编辑对齐）。
   permissionModeSelect('session.permission_mode'),
   goalEdit('goal.edit'),
-  // v0.5/P5-E2：GoalDock clear 仍走统一会话命令链路，不在 UI 直接清本地状态。
+  // v0.5/P5-E2：模型设置中的 Goal clear 仍走统一会话命令链路，不在 UI 直接清本地状态。
   goalClear('goal.clear'),
   // v0.5/P5-E3：`/goal ...` command-input 创建目标，同样不能走普通消息发送。
   goalCreate('goal.create');

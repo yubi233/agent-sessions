@@ -45,7 +45,7 @@ class FixtureRelayRepository implements RelayRepository {
   /// 仅供 deterministic fixture 控制器注入时钟；生产 Relay 不暴露该能力。
   DateTime fixtureNow() => _clock();
 
-  /// 视觉/测试专用：改写会话的最后活动时间，模拟历史会话的休眠衰减与排序。
+  /// 视觉/测试专用：改写会话的最后活动时间，模拟历史会话的排序。
   /// 真实 Relay 的 last_activity 只由状态/事件写入推导，不提供改写入口。
   void seedSessionActivity({
     required String sessionId,
@@ -1015,6 +1015,17 @@ class FixtureRelayRepository implements RelayRepository {
           emulated: const {'delegate_cross_provider'},
         ),
         _fixtureProvider(
+          'dsh',
+          native: const {
+            'start',
+            'kill',
+            'resume',
+            'abort',
+            'usage',
+            'model_select',
+          },
+        ),
+        _fixtureProvider(
           'claude',
           native: const {'skill_catalog', 'model_select'},
           emulated: const {'plan', 'goal'},
@@ -1622,7 +1633,7 @@ class FixtureRelayRepository implements RelayRepository {
       payload: const {
         'kind': 'system_notice',
         'label': 'Goal 已清除',
-        'text': 'fixture Goal 已从 input.dock 移除。',
+        'text': 'fixture Goal 已从模型设置任务控制区移除。',
       },
       now: _clock(),
     );
@@ -1665,7 +1676,7 @@ class FixtureRelayRepository implements RelayRepository {
       payload: const {
         'kind': 'system_notice',
         'label': 'Goal 已创建',
-        'text': 'fixture Goal 已加入 input.dock。',
+        'text': 'fixture Goal 已加入模型设置任务控制区。',
       },
       now: now,
     );

@@ -110,6 +110,9 @@ type Repository interface {
 	CreateCommand(ctx context.Context, c CommandRow) error
 	CommandByID(ctx context.Context, id string) (CommandRow, error)
 	CommandByScopeKey(ctx context.Context, scopeHash, idempotencyKey string) (CommandRow, error)
+	// ReleaseCommandIdempotencyKey 归档已终态命令的幂等键，使下一次独立操作可创建新命令。
+	// 调用方必须在事务内确认该命令允许重试，且 newKey 保持同一 scope 内唯一。
+	ReleaseCommandIdempotencyKey(ctx context.Context, id, newKey string) error
 	UpdateCommandStatus(ctx context.Context, id, status string) error
 	// ExpireStaleCommands 把会话内 lease_epoch 低于新 epoch 且仍未终态（accepted/running）
 	// 的命令收敛为 expired，返回受影响行数。必须在 AcquireLease 的同一事务内调用，

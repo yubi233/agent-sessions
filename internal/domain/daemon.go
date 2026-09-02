@@ -370,9 +370,10 @@ func (s *DaemonService) Acknowledge(ctx context.Context, accountID, deviceID, ro
 				return nil
 			}
 		case "started":
-			// browser 只读请求没有 Android lease；只有 lease_epoch=0 且固定 kind 的命令可走
-			// 该分支，其他命令仍必须经过既有 owner/instance fencing。
-			if !isWebReadCommand(cmd) && !isWorkspaceCreateCommand(cmd) {
+			// browser 只读请求和 workspace 专用命令没有 Android session lease；只有
+			// lease_epoch=0 且固定 kind 的命令可走该分支，其他命令仍必须经过既有
+			// owner/instance fencing。
+			if !isWebReadCommand(cmd) && !isWorkspaceCreateCommand(cmd) && !isDSHSyncCommand(cmd) && !isDSHImportCommand(cmd) {
 				if err := validateCommandFence(ctx, tx, cmd); err != nil {
 					return err
 				}
@@ -677,8 +678,7 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 						return err
 					}
 				}
-				// 直接插入的导入会话没有活动时间，会被默认列表休眠自动归档；这里补一个
-				// 当前活动时间，保证导入后立即可见且不被 AutoArchiveStaleIdleSessions 隐藏。
+				// 导入成功是可审计的会话状态写入，记录其真实写入时间以便列表排序。
 				if err := tx.SetSessionStatusAt(ctx, sessionID, SessionIdle, s.now().UnixMilli()); err != nil {
 					return err
 				}
@@ -1005,8 +1005,10 @@ func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (D
 			return err
 		}
 		status := sessionStatusForDaemonEvent(in.EventType, in.TerminalStatus)
-		if err := tx.SetSessionStatus(ctx, in.SessionID, status); err != nil {
-			return err
+		if status != "" {
+			if err := tx.SetSessionStatus(ctx, in.SessionID, status); err != nil {
+				return err
+			}
 		}
 		if err := tx.SetDaemonEventReceiptSeq(ctx, in.EventID, seq); err != nil {
 			return err
@@ -1166,15 +1168,20 @@ func validateDaemonTerminalStatus(eventType, terminalStatus string) error {
 }
 
 // sessionStatusForDaemonEvent 将公开生命周期投影收口为 Relay 会话状态。
-// 只有 turn.completed 能结束回合；其它 canonical event 仍表示活动中。
+// 只有真正开始回合的事件能进入 running，只有 turn.completed 能结束回合；消息、
+// 用量和 command.updated 等旁路事件必须返回空值，保留先前的生命周期终态。
 func sessionStatusForDaemonEvent(eventType, terminalStatus string) string {
-	if eventType != "turn.completed" {
+	switch eventType {
+	case "user.message", "turn.started":
 		return SessionRunning
+	case "turn.completed":
+		if strings.TrimSpace(terminalStatus) == SessionStopped {
+			return SessionStopped
+		}
+		return SessionIdle
+	default:
+		return ""
 	}
-	if strings.TrimSpace(terminalStatus) == SessionStopped {
-		return SessionStopped
-	}
-	return SessionIdle
 }
 
 // normalizeDaemonCipherEnvelope 只检查可转发的加密外形，不解析业务 payload。任何像正文、路径

@@ -9,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/app_harness.dart';
 
 void main() {
-  testWidgets('MOBILE-03：480x960 会话详情显示 capability 三态与 Plan/Goal 摘要', (
+  testWidgets('MOBILE-03：480x960 模型设置弹窗显示 capability 三态与 Plan/Goal 摘要', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(480, 960));
@@ -18,13 +18,30 @@ void main() {
     await tester.pumpWidget(harness.build());
     await _openWritableFixtureSession(tester, 'p3-panel@fixture.test');
 
-    expect(find.byKey(const Key('session-capability-panel')), findsOneWidget);
+    expect(find.byKey(const Key('session-capability-panel')), findsNothing);
+    expect(find.byKey(const Key('session-task-controls')), findsNothing);
+    expect(find.byKey(const Key('session-goal-dock')), findsNothing);
+    expect(find.byKey(const Key('session-capability-states')), findsNothing);
+    expect(find.byKey(const Key('session-capability-provider')), findsNothing);
+    expect(find.byKey(const Key('session-control-model')), findsNothing);
+    expect(find.byKey(const Key('session-control-effort')), findsNothing);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-seat-details')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-model-details-dialog')),
+    );
     expect(
-      find.byKey(const Key('session-capability-provider')),
+      find.byKey(const Key('session-model-details-capabilities')),
       findsOneWidget,
     );
     expect(find.text('codex'), findsOneWidget);
     expect(find.text('model_select 原生'), findsOneWidget);
+    expect(find.text('effort_select 原生'), findsOneWidget);
+    expect(find.text('plan 原生'), findsOneWidget);
+    expect(find.byKey(const Key('session-task-controls')), findsOneWidget);
     expect(find.byKey(const Key('session-plan-summary')), findsOneWidget);
     expect(find.byKey(const Key('session-goal-summary')), findsOneWidget);
     expect(
@@ -35,6 +52,11 @@ void main() {
           .onPressed,
       isNotNull,
     );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-details-close')),
+    );
+    expect(find.byKey(const Key('session-task-controls')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -44,6 +66,14 @@ void main() {
     await _openWritableFixtureSession(tester, 'p3-skill@fixture.test');
 
     expect(harness.relay.submittedCommandCount, 0);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-seat-details')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-model-details-dialog')),
+    );
     await _tapVisible(
       tester,
       find.byKey(const Key('session-skill-open-button')),
@@ -62,6 +92,14 @@ void main() {
     );
     expect(harness.relay.submittedCommandCount, 0);
 
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-seat-details')),
+    );
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-model-details-dialog')),
+    );
     await _tapVisible(
       tester,
       find.byKey(const Key('session-skill-open-button')),

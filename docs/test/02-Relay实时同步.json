@@ -632,7 +632,7 @@
         "断言列表顺序按活动时间倒序（新→旧）；确认 last_seq 作为会话内局部序号不参与跨会话排序",
         "确定性对账/启动清扫使用 SetSessionStatusKeepActivity 翻转状态，不把活动时间改写成收口时刻"
       ],
-      "expected": "客户端的「最后消息时间」展示、列表排序与 idle 休眠衰减只消费真实活动时间；历史收口不再伪造「刚刚活跃」；活动时间未知（0/缺省）的旧数据在客户端沉底并按休眠展示。",
+      "expected": "客户端的「最后消息时间」展示与列表排序只消费真实活动时间；历史收口不伪造「刚刚活跃」；活动时间未知（0/缺省）的旧数据在客户端沉底，但不会被推断为休眠。",
       "cleanup": [],
       "evidence": [
         "internal/relay/session_activity_order_contract_test.go#TestSessionListExposesActivityAndOrdersByIt",
@@ -641,24 +641,26 @@
     },
     {
       "id": "SESS-10",
-      "title": "休眠 idle 会话自动归档且归档列表可读、可恢复",
+      "title": "idle 会话永不因时长自动归档，显式归档仍可读、可恢复",
       "status": "passed",
       "phase": "v0.6/P5",
       "category": "会话",
       "priority": "P0",
       "test_layer": "Relay HTTP 契约",
-      "precondition": "账号下存在 idle 超过 24h、活动时间未知的 idle、fresh idle、stopped 四种会话（产品决策变更：休眠会话自动归档，替代早期「不自动 archive」约束；归档可逆且只影响默认列表可见性）。",
+      "precondition": "账号下存在 idle 超过 24h、活动时间未知的 idle、fresh idle、stopped 四种会话；没有任何会话预先归档。",
       "steps": [
-        "GET /v1/sessions 触发 ListSessions 内置 sweep",
-        "断言 idle>24h 与活动时间未知的 idle 进入归档；fresh idle 与 stopped 留在默认列表",
-        "GET /v1/sessions?archived=true 断言归档列表内容且携带 archived_at_unix_ms，并检查 session.auto_archived 审计",
-        "POST /v1/sessions/{id}/unarchive 恢复；确认回到默认列表且不会在下次列表读取时被立刻再次归档（unarchive 刷新活动时间）"
+        "GET /v1/sessions 读取列表，断言四种会话均保留在默认列表",
+        "GET /v1/sessions?archived=true 断言没有自动归档结果且没有 session.auto_archived 审计",
+        "POST /v1/sessions/{id}/archive 显式归档，再从默认列表和归档列表确认可见性变化",
+        "POST /v1/sessions/{id}/unarchive 恢复；确认回到默认列表且 last_activity 不被改写"
       ],
-      "expected": "自动归档只处理 idle，running/streaming/stopped/errored 永不被本策略隐藏；归档是可逆元数据操作，数据与事件保留；每次归档写审计。",
+      "expected": "会话永不因空闲时长自动休眠或归档；状态完全由 Relay/Terminal 上报。显式归档是可逆元数据操作，数据与事件保留。",
       "cleanup": [],
       "evidence": [
-        "internal/relay/idle_auto_archive_contract_test.go#TestIdleSessionsAutoArchiveAfterTTL",
-        "internal/domain/realtime.go#AutoArchiveStaleIdleSessions"
+        "internal/relay/idle_auto_archive_contract_test.go#TestIdleSessionsRemainVisibleWithoutAutomaticArchive",
+        "internal/domain/realtime.go#ListSessions",
+        "internal/domain/realtime.go#ArchiveSession",
+        "internal/domain/realtime.go#UnarchiveSession"
       ]
     }
   ]

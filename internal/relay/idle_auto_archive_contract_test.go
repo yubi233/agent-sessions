@@ -9,10 +9,9 @@ import (
 	"github.com/yubi233/agent-sessions/internal/domain"
 )
 
-// 休眠自动归档契约：idle 且最后活动超过 24h（或活动时间未知）的会话在读取列表时
-// 自动转入归档；fresh idle、streaming、stopped 不参与。归档可逆（unarchive 恢复），
-// 写审计；GET /v1/sessions?archived=true 读取归档列表且不触发 sweep。
-func TestIdleSessionsAutoArchiveAfterTTL(t *testing.T) {
+// 会话永不因空闲时长自动休眠或归档：默认列表始终保留 Relay/Terminal 上报的状态。
+// 归档仍是显式用户操作，GET /v1/sessions?archived=true 只读取显式归档结果。
+func TestIdleSessionsRemainVisibleWithoutAutomaticArchive(t *testing.T) {
 	env := newTestEnv(t)
 	owner := env.registerAs(t, "idle-auto-archive@test.dev")
 	terminal := env.pairTerminal(t, owner, "idle-auto-archive-terminal")
@@ -64,19 +63,15 @@ func TestIdleSessionsAutoArchiveAfterTTL(t *testing.T) {
 	}
 
 	defaultIDs := listIDs(false)
-	if defaultIDs[staleIdle] || defaultIDs[legacyIdle] {
-		t.Fatalf("stale/legacy idle sessions must be auto-archived out of the default list")
-	}
-	if !defaultIDs[freshIdle] || !defaultIDs[stoppedOld] {
-		t.Fatalf("fresh idle and stopped sessions must stay in the default list")
+	for _, id := range []string{staleIdle, legacyIdle, freshIdle, stoppedOld} {
+		if !defaultIDs[id] {
+			t.Fatalf("session %s must remain in the default list regardless of age", id)
+		}
 	}
 
 	archivedIDs := listIDs(true)
-	if !archivedIDs[staleIdle] || !archivedIDs[legacyIdle] {
-		t.Fatalf("archived list must contain the auto-archived sessions")
-	}
-	if archivedIDs[freshIdle] || archivedIDs[stoppedOld] {
-		t.Fatalf("fresh idle / stopped sessions must not be archived")
+	if len(archivedIDs) != 0 {
+		t.Fatalf("no session should be auto-archived, got %v", archivedIDs)
 	}
 
 	var auditCount int
@@ -89,11 +84,19 @@ func TestIdleSessionsAutoArchiveAfterTTL(t *testing.T) {
 			auditCount++
 		}
 	}
-	if auditCount < 2 {
-		t.Fatalf("auto_archived audit rows=%d, want at least 2", auditCount)
+	if auditCount != 0 {
+		t.Fatalf("auto_archived audit rows=%d, want 0", auditCount)
 	}
 
-	// 归档可逆：unarchive 后回到默认列表。
+	// 显式归档仍然可逆：归档后从默认列表隐藏，再恢复到默认列表。
+	archive := env.do(t, http.MethodPost, "/v1/sessions/"+staleIdle+"/archive", nil, owner.AccessToken)
+	if archive.Code != http.StatusOK {
+		t.Fatalf("archive status=%d body=%s", archive.Code, archive.Body.String())
+	}
+	defaultIDs = listIDs(false)
+	if defaultIDs[staleIdle] {
+		t.Fatalf("explicitly archived session must leave the default list")
+	}
 	unarchive := env.do(t, http.MethodPost, "/v1/sessions/"+staleIdle+"/unarchive", nil, owner.AccessToken)
 	if unarchive.Code != http.StatusOK {
 		t.Fatalf("unarchive status=%d body=%s", unarchive.Code, unarchive.Body.String())

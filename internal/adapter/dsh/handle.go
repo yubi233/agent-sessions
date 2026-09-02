@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
@@ -41,6 +43,11 @@ type handle struct {
 	eventWG     sync.WaitGroup
 	// sendMu 串行化会话的 prompt 槽位：桥同一时刻只允许一个 in-flight prompt。
 	sendMu sync.Mutex
+	// model 是用户通过 session.model_select / send 随行模型表达的期望模型；
+	// appliedModel 是桥上已通过 session/set_config_option 生效的模型，
+	// 两者共同保证每次变更只下发一次，绝不带着旧模型静默发送。
+	model        string
+	appliedModel string
 }
 
 // pendingReq 是等待中的请求记录。
@@ -101,11 +108,71 @@ func (h *handle) markReplayComplete() {
 	h.replayDoneOnce.Do(func() { close(h.replayDone) })
 }
 
+// SetModel 应用运行期模型覆盖（session.model_select / session.send 的随行模型）。
+// 空值忽略：与 opencode 口径一致，避免清空后桥回退到未受控的配置默认。
+// SetModel 无 ctx 与错误返回，真正的下发发生在下一次 Send 前（applyModel）；
+// 桥对不在目录内的模型会以 invalidParams 拒绝，失败在 Send 路径 fail-closed。
+func (h *handle) SetModel(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	h.mu.Lock()
+	h.model = model
+	h.mu.Unlock()
+}
+
+// applyModel 在 prompt 前把期望模型同步到桥（session/set_config_option，
+// configId=model，值为普通模型 id——桥按 modelProviders 路由并校验目录）。
+// 与上一次生效值相同则跳过；失败返回错误并交给 Send 的失败路径广播
+// session_error/turn_completed，绝不带着旧模型继续发送。
+func (h *handle) applyModel(ctx context.Context) error {
+	h.mu.Lock()
+	model := h.model
+	applied := h.appliedModel
+	h.mu.Unlock()
+	if model == "" || model == applied {
+		return nil
+	}
+	applyCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	if _, err := h.request(applyCtx, "session/set_config_option", map[string]any{
+		"sessionId": h.sessionID,
+		"configId":  "model",
+		"value":     model,
+	}); err != nil {
+		return fmt.Errorf("dsh set_config_option(model=%s): %w", model, err)
+	}
+	h.mu.Lock()
+	h.appliedModel = model
+	h.mu.Unlock()
+	return nil
+}
+
 // Send 把文本作为 session/prompt 单文本块发送，阻塞到该 turn 结束（桥返回 stopReason）。
 // 取消当前 turn 请调用 Abort（cancel 通知会让桥以 stopReason=cancelled 结算本请求）。
 func (h *handle) Send(ctx context.Context, text string) error {
 	h.sendMu.Lock()
 	defer h.sendMu.Unlock()
+	// 模型切换必须先于 prompt 落地：sendMu 保证 set_config_option 不会与
+	// in-flight prompt 并发；桥拒绝（未知模型/校验失败）时整轮 fail-closed。
+	if err := h.applyModel(ctx); err != nil {
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"message":     fmt.Sprintf("模型切换失败：%v", err),
+			},
+		})
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventTurnCompleted,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"stop_reason": "error",
+			},
+		})
+		return err
+	}
 	params := map[string]any{
 		"sessionId": h.sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": text}},
@@ -138,6 +205,12 @@ func (h *handle) Send(ctx context.Context, text string) error {
 	if decodeErr := json.Unmarshal(result, &response); decodeErr != nil {
 		return fmt.Errorf("解析 session/prompt 响应: %w", decodeErr)
 	}
+	// 实测桥可能先返回 stopReason 响应、再补发最后一条 message_completed 通知
+	// （同一连接按帧序，通知在响应帧之后到达）。若立刻发 turn_completed，daemon
+	// 的 canonical 事件会出现 turn 先于正文的乱序，客户端按 turn 收敛后会错过
+	// 回复正文。这里等待事件通道进入静默（或达到上限）再发终止标记，保证通知
+	// 先入队；Send 本就阻塞到回合结束，额外宽限不影响并发语义。
+	h.awaitInFlightNotifications(dshEventQuietWindow, dshEventDrainLimit)
 	h.pushEvent(adapter.Event{
 		Type: adapter.EventTurnCompleted,
 		Payload: map[string]any{
@@ -146,6 +219,32 @@ func (h *handle) Send(ctx context.Context, text string) error {
 		},
 	})
 	return nil
+}
+
+// dshEventQuietWindow 是判定"在途通知已收完"的静默窗口；dshEventDrainLimit 是总上限，
+// 即使桥持续补发通知也不会把 Send 卡死。
+const (
+	dshEventQuietWindow = 400 * time.Millisecond
+	dshEventDrainLimit  = 3 * time.Second
+)
+
+// awaitInFlightNotifications 阻塞直到事件通道在静默窗口内没有新入队，或达到总上限。
+// 消费者会实时排空通道，瞬时长度看不到波动；h.nextSeq 是 pushEvent 加锁递增的
+// 累计入队计数，以"连续一个静默窗口内计数无增长"作为收敛判定。
+func (h *handle) awaitInFlightNotifications(quiet, limit time.Duration) {
+	deadline := time.Now().Add(limit)
+	for {
+		h.mu.Lock()
+		before := h.nextSeq
+		h.mu.Unlock()
+		time.Sleep(quiet)
+		h.mu.Lock()
+		after := h.nextSeq
+		h.mu.Unlock()
+		if after == before || time.Now().After(deadline) {
+			return
+		}
+	}
 }
 
 // Abort 发送 session/cancel 通知（通知型无应答帧；幂等，对空闲会话桥容错）。

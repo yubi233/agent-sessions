@@ -828,6 +828,11 @@ func (r *sqliteRepo) CommandByScopeKey(ctx context.Context, scopeHash, idempoten
 		 FROM commands WHERE scope_hash=? AND idempotency_key=?`, scopeHash, idempotencyKey))
 }
 
+func (r *sqliteRepo) ReleaseCommandIdempotencyKey(ctx context.Context, id, newKey string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE commands SET idempotency_key=? WHERE id=?`, newKey, id)
+	return err
+}
+
 // UpdateCommandStatus 直接改写命令状态；状态机合法性由领域层校验。
 func (r *sqliteRepo) UpdateCommandStatus(ctx context.Context, id, status string) error {
 	_, err := r.db.ExecContext(ctx, `UPDATE commands SET status=? WHERE id=?`, status, id)

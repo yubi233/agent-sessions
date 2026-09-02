@@ -317,3 +317,35 @@ func sameCanonicalPath(left, right string) bool {
 	right = comparableWorkspacePath(right)
 	return left != "" && right != "" && left == right
 }
+
+// confirmDSHWorkspaceCandidates 把本次 sync_dsh 上报成功的候选在本机 confirmed_workspace
+// 落账。扫描出的 DSH 工作区若不写本机确认表，后续 session.start 解析不到 workspace root，
+// 会以 local_state_missing 语义 fail-closed。Relay 按去重后的候选顺序回传 workspace_ids，
+// 这里的去重规则（按 canonical root 保序）必须与其一致。候选根来自本机扫描器，
+// ConfirmExistingDSHWorkspace 仍会重验授权根边界、Git 根与 DSH 证据；单个候选确认失败只
+// 降级为告警，不能让已成功的同步整体失败。
+func (l *RelayLoop) confirmDSHWorkspaceCandidates(ctx context.Context, commandID string, candidates []DSHWorkspaceCandidate, receipt DSHSyncCommandReceipt) {
+	if receipt.Status != "succeeded" || l == nil || l.WorkspaceManager == nil || len(receipt.WorkspaceIDs) == 0 {
+		return
+	}
+	seenRoots := map[string]struct{}{}
+	orderedRoots := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, exists := seenRoots[candidate.Root]; exists {
+			continue
+		}
+		seenRoots[candidate.Root] = struct{}{}
+		orderedRoots = append(orderedRoots, candidate.Root)
+	}
+	if len(orderedRoots) != len(receipt.WorkspaceIDs) {
+		l.Logger.Warn("daemon dsh workspace receipt mismatch",
+			"command", commandID, "roots", len(orderedRoots), "ids", len(receipt.WorkspaceIDs))
+		return
+	}
+	for i, workspaceID := range receipt.WorkspaceIDs {
+		if _, err := l.WorkspaceManager.ConfirmExistingDSHWorkspace(ctx, workspaceID, orderedRoots[i]); err != nil {
+			l.Logger.Warn("daemon dsh workspace confirm failed",
+				"command", commandID, "workspace", workspaceID, "error", err)
+		}
+	}
+}

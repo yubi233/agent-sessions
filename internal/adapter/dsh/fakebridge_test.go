@@ -155,7 +155,7 @@ func methodOf(msg map[string]any) string {
 }
 
 // respondByMethod 是常用脚本：按请求 method 注入固定应答（id 回显请求 id）；
-// session/cancel 为通知，无应答。
+// session/cancel 为通知，无应答。set_config_option 按桥语义回成功空对象。
 func respondByMethod(t *testing.T, sessionID string) func(fb *fakeBridge, msg map[string]any) {
 	t.Helper()
 	return func(fb *fakeBridge, msg map[string]any) {
@@ -179,6 +179,11 @@ func respondByMethod(t *testing.T, sessionID string) func(fb *fakeBridge, msg ma
 				"jsonrpc": "2.0", "id": id,
 				"result": map[string]any{},
 			})
+		case "session/set_config_option":
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": id,
+				"result": map[string]any{},
+			})
 		case "session/prompt":
 			fb.push(t, map[string]any{
 				"jsonrpc": "2.0", "id": id,
@@ -186,6 +191,17 @@ func respondByMethod(t *testing.T, sessionID string) func(fb *fakeBridge, msg ma
 			})
 		}
 	}
+}
+
+// framesByMethod 返回某 method 的全部出站帧。
+func framesByMethod(frames []map[string]any, method string) []map[string]any {
+	var out []map[string]any
+	for _, frame := range frames {
+		if methodOf(frame) == method {
+			out = append(out, frame)
+		}
+	}
+	return out
 }
 
 // startWithFake 用假桥启动一个 DSH 会话句柄（契约测试公共脚手架）。
@@ -247,8 +263,50 @@ func TestCapabilitiesMatchResumeAndModelTruth(t *testing.T) {
 	if byName["resume"].Status != adapter.CapabilityNative || byName["resume"].Reason != "" {
 		t.Fatalf("resume 能力不真实: %+v", byName["resume"])
 	}
-	if byName["model_select"].Status != adapter.CapabilityUnsupported || byName["model_select"].Reason == "" {
-		t.Fatalf("model_select 必须 truthful unsupported: %+v", byName["model_select"])
+	// model_select 已接入 session/set_config_option：native 且必须携带完整目录。
+	modelSelect := byName["model_select"]
+	if modelSelect.Status != adapter.CapabilityNative || modelSelect.Reason != "" {
+		t.Fatalf("model_select 能力不真实: %+v", modelSelect)
+	}
+	if len(modelSelect.Options) != len(dshKnownModels) {
+		t.Fatalf("model_select Options 数量 = %d, want %d", len(modelSelect.Options), len(dshKnownModels))
+	}
+	seen := map[string]bool{}
+	for _, model := range modelSelect.Options {
+		seen[model] = true
+	}
+	for _, model := range dshKnownModels {
+		if !seen[model] {
+			t.Fatalf("model_select Options 缺少 %q: %v", model, modelSelect.Options)
+		}
+	}
+	// spi.go 不变量：Default 必须存在于 Options，客户端不得自行猜测默认模型。
+	if modelSelect.Default == "" || !seen[modelSelect.Default] {
+		t.Fatalf("model_select Default %q 必须存在于 Options %v", modelSelect.Default, modelSelect.Options)
+	}
+}
+
+// 修改返回的 Options 切片不得污染后续矩阵（successMatrix 每次拷贝目录）。
+func TestModelSelectOptionsAreCopiedPerMatrix(t *testing.T) {
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, "unused")
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	first, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	for _, capability := range first.Capabilities {
+		if capability.Name == "model_select" {
+			if len(capability.Options) == 0 {
+				t.Fatal("model_select 未暴露 Options")
+			}
+			capability.Options[0] = "mutated"
+		}
+	}
+	for _, capability := range a.Capabilities().Capabilities {
+		if capability.Name == "model_select" && capability.Options[0] != dshKnownModels[0] {
+			t.Fatalf("Options 被外部修改污染: %v", capability.Options)
+		}
 	}
 }
 
@@ -747,5 +805,174 @@ func TestFsRequestRejectedWithMethodNotFound(t *testing.T) {
 		case <-deadline:
 			t.Fatal("未收到 fs/* 的 -32601 应答")
 		}
+	}
+}
+
+// (f) 模型覆盖：SetModel 后 Send 必须先下发 session/set_config_option(configId=model)
+// 再发 prompt；同一模型不重复下发，变更后恰好再下发一次。
+func TestSendAppliesModelViaSetConfigOptionBeforePrompt(t *testing.T) {
+	const sessionID = "sess-model"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	h := startWithFake(t, fb)
+	setter, ok := h.(adapter.ModelOverrideHandle)
+	if !ok {
+		t.Fatal("DSH handle 必须实现 ModelOverrideHandle")
+	}
+
+	setter.SetModel("mimo-v2.5-free")
+	if err := h.Send(context.Background(), "第一轮"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	written := fb.written()
+	switches := framesByMethod(written, "session/set_config_option")
+	if len(switches) != 1 {
+		t.Fatalf("预期恰好 1 帧 set_config_option，实际 %d", len(switches))
+	}
+	p, _ := switches[0]["params"].(map[string]any)
+	if p["sessionId"] != sessionID || p["configId"] != "model" || p["value"] != "mimo-v2.5-free" {
+		t.Fatalf("set_config_option 形状不符: %#v", p)
+	}
+	// 时序：set_config_option 必须先于本轮 prompt。
+	switchIndex, promptIndex := -1, -1
+	for i, frame := range written {
+		switch methodOf(frame) {
+		case "session/set_config_option":
+			switchIndex = i
+		case "session/prompt":
+			if promptIndex < 0 {
+				promptIndex = i
+			}
+		}
+	}
+	if switchIndex == -1 || promptIndex == -1 || switchIndex > promptIndex {
+		t.Fatalf("set_config_option(idx=%d) 必须先于首个 prompt(idx=%d)", switchIndex, promptIndex)
+	}
+
+	// 同一模型再次 Send：不重复下发。
+	if err := h.Send(context.Background(), "第二轮"); err != nil {
+		t.Fatalf("第二次 Send: %v", err)
+	}
+	if got := len(framesByMethod(fb.written(), "session/set_config_option")); got != 1 {
+		t.Fatalf("同一模型不得重复下发 set_config_option，实际 %d 帧", got)
+	}
+
+	// 变更模型：恰好再下发一次新值。
+	setter.SetModel("gpt-5.5")
+	if err := h.Send(context.Background(), "第三轮"); err != nil {
+		t.Fatalf("第三次 Send: %v", err)
+	}
+	switches = framesByMethod(fb.written(), "session/set_config_option")
+	if len(switches) != 2 {
+		t.Fatalf("变更后预期共 2 帧 set_config_option，实际 %d", len(switches))
+	}
+	if p, _ := switches[1]["params"].(map[string]any); p["value"] != "gpt-5.5" {
+		t.Fatalf("第二次下发 value = %v, want gpt-5.5", p["value"])
+	}
+}
+
+// (f2) Start 时声明的模型（StartRequest.Model）同样在首个 Send 前下发。
+func TestStartRegistersRequestedModel(t *testing.T) {
+	const sessionID = "sess-start-model"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	h, err := a.Start(context.Background(), adapter.StartRequest{
+		WorkspaceRoot: "/tmp/dsh-ws",
+		Model:         "nemotron-3-ultra-free",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Dispose(context.Background()) })
+	if _, ok := h.(adapter.ModelOverrideHandle); !ok {
+		t.Fatal("DSH handle 必须实现 ModelOverrideHandle")
+	}
+	if err := h.Send(context.Background(), "首轮"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	switches := framesByMethod(fb.written(), "session/set_config_option")
+	if len(switches) != 1 {
+		t.Fatalf("预期恰好 1 帧 set_config_option，实际 %d", len(switches))
+	}
+	if p, _ := switches[0]["params"].(map[string]any); p["value"] != "nemotron-3-ultra-free" {
+		t.Fatalf("Start 模型未生效: %#v", p)
+	}
+}
+
+// (f3) SetModel 空值/纯空白忽略：不产生 set_config_option，prompt 直接发送。
+func TestSetModelEmptyIgnored(t *testing.T) {
+	const sessionID = "sess-empty-model"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	h := startWithFake(t, fb)
+	setter := h.(adapter.ModelOverrideHandle)
+	setter.SetModel("")
+	setter.SetModel("   ")
+	if err := h.Send(context.Background(), "无模型覆盖"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got := framesByMethod(fb.written(), "session/set_config_option"); len(got) != 0 {
+		t.Fatalf("空模型覆盖不得下发 set_config_option: %d 帧", len(got))
+	}
+}
+
+// (f4) 桥拒绝模型（未知模型/目录外）时整轮 fail-closed：不发送 prompt，
+// 补发 session_error + turn_completed 终止事件；恢复合法模型后可重试成功。
+func TestSetModelFailureFailsClosed(t *testing.T) {
+	const sessionID = "sess-model-fail"
+	fb := newFakeBridge()
+	reject := true
+	fb.script = func(fb *fakeBridge, msg map[string]any) {
+		if methodOf(msg) == "session/set_config_option" {
+			if reject {
+				fb.push(t, map[string]any{
+					"jsonrpc": "2.0", "id": frameID(msg),
+					"error": map[string]any{"code": -32602, "message": "no provider route for model: unknown-model"},
+				})
+				return
+			}
+			fb.push(t, map[string]any{"jsonrpc": "2.0", "id": frameID(msg), "result": map[string]any{}})
+			return
+		}
+		respondByMethod(t, sessionID)(fb, msg)
+	}
+	h := startWithFake(t, fb)
+	setter := h.(adapter.ModelOverrideHandle)
+	setter.SetModel("unknown-model")
+
+	if err := h.Send(context.Background(), "应当被拒绝"); err == nil {
+		t.Fatal("set_config_option 失败时 Send 必须返回错误")
+	}
+	if got := framesByMethod(fb.written(), "session/prompt"); len(got) != 0 {
+		t.Fatal("模型切换失败后绝不能发送 prompt（fail-closed）")
+	}
+	first := <-h.Events()
+	if first.Type != adapter.EventSessionError {
+		t.Fatalf("第一个事件 = %q, want session_error", first.Type)
+	}
+	second := <-h.Events()
+	if second.Type != adapter.EventTurnCompleted {
+		t.Fatalf("第二个事件 = %q, want turn_completed", second.Type)
+	}
+	if second.Payload["stop_reason"] != "error" {
+		t.Fatalf("stop_reason = %v, want error", second.Payload["stop_reason"])
+	}
+
+	// 期望模型保留：桥恢复后下一次 Send 重试下发并成功放行 prompt。
+	reject = false
+	if err := h.Send(context.Background(), "重试"); err != nil {
+		t.Fatalf("恢复后 Send: %v", err)
+	}
+	switches := framesByMethod(fb.written(), "session/set_config_option")
+	if len(switches) != 2 {
+		t.Fatalf("失败一次 + 重试一次应共 2 帧，实际 %d", len(switches))
+	}
+	if p, _ := switches[1]["params"].(map[string]any); p["value"] != "unknown-model" {
+		t.Fatalf("重试必须沿用期望模型: %#v", p)
+	}
+	prompts := framesByMethod(fb.written(), "session/prompt")
+	if len(prompts) != 1 {
+		t.Fatalf("恢复后 prompt 应发送一次，实际 %d", len(prompts))
 	}
 }

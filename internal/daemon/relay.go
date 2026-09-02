@@ -945,6 +945,7 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			if resolveErr != nil {
 				return resolveErr
 			}
+			l.confirmDSHWorkspaceCandidates(ctx, command.CommandID, candidates, receipt)
 			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
 				return err
 			}

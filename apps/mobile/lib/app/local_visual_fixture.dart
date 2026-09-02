@@ -402,31 +402,31 @@ class LocalVisualFixture {
     }
 
     if (scenario == LocalVisualScenario.sessionList) {
-      // 列表场景覆盖三种衰减形态：刚刚活跃（在线·刚刚）、2 小时前与 3 天前
-      // （休眠），同时验证列表按最后活动时间排序——新活动在前、陈旧沉底。
-      final dormantHours = await relay.createSession(
+      // 列表场景覆盖不同最后活动时间，同时验证列表按该时间排序——新活动在前、
+      // 陈旧沉底。状态仍完全由 Relay 事件提供，不随时间改写。
+      final oldHours = await relay.createSession(
         CreateMobileSessionInput(
           workspaceId: 'fixture-review-workspace',
           provider: 'claude',
           deviceId: ownerDeviceId,
         ),
       );
-      final dormantDays = await relay.createSession(
+      final oldDays = await relay.createSession(
         CreateMobileSessionInput(
           workspaceId: 'fixture-archive-workspace',
           provider: 'dsh',
           deviceId: ownerDeviceId,
         ),
       );
-      // 视觉 fixture 的时钟是固定的（保证帧确定性）；衰减基准必须用同一时钟，
+      // 视觉 fixture 的时钟是固定的（保证帧确定性）；时间排序基准必须用同一时钟，
       // 否则注入的活动时间会与主会话的固定时间线排序错乱。
       final now = relay.fixtureNow();
       relay.seedSessionActivity(
-        sessionId: dormantHours.id,
+        sessionId: oldHours.id,
         lastActivityAt: now.subtract(const Duration(hours: 2)),
       );
       relay.seedSessionActivity(
-        sessionId: dormantDays.id,
+        sessionId: oldDays.id,
         lastActivityAt: now.subtract(const Duration(days: 3)),
       );
     }

@@ -26,6 +26,7 @@ class _AcquireLeaseBlockingRelay extends FixtureRelayRepository {
     return super.acquireSessionLease(sessionId);
   }
 }
+
 void main() {
   testWidgets('MOBILE-02：owner 可完成新会话、lease、流式、确认、回答和停止', (tester) async {
     final harness = MobileAppHarness();
@@ -2065,73 +2066,66 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-V05-24/P5-E1：GoalDock 内联编辑、暂停和恢复走统一写入口', (tester) async {
+  testWidgets('MOBILE-V05-24/P5-E1：模型设置中的 Goal 编辑、暂停和恢复走统一写入口', (tester) async {
     final harness = await _openWritableSession(
       tester,
       'goal-dock-owner@fixture.test',
     );
-    await _waitForVisible(tester, find.byKey(const Key('session-goal-dock')));
+    await _openModelSettings(tester);
     expect(
       find.descendant(
-        of: find.byKey(const Key('session-goal-dock')),
+        of: find.byKey(const Key('session-task-controls')),
         matching: find.text('保持移动端控制链路可回归'),
       ),
       findsOneWidget,
     );
 
-    await _tapVisible(tester, find.byKey(const Key('session-goal-dock-edit')));
-    await _enterVisible(
-      tester,
-      find.byKey(const Key('session-goal-dock-input')),
-      '',
-    );
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-goal-dock-submit')),
+      find.byKey(const Key('session-goal-edit-button')),
     );
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('session-goal-dock-error')),
-    );
+    await _enterVisible(tester, find.byKey(const Key('goal-edit-input')), '');
+    await _tapVisible(tester, find.byKey(const Key('goal-edit-submit')));
 
     await _enterVisible(
       tester,
-      find.byKey(const Key('session-goal-dock-input')),
-      'P5-E GoalDock 回归目标',
+      find.byKey(const Key('goal-edit-input')),
+      'P5-E 模型设置 Goal 回归目标',
     );
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('session-goal-dock-submit')),
-    );
+    await _tapVisible(tester, find.byKey(const Key('goal-edit-submit')));
     await _waitForVisible(
       tester,
       find.descendant(
-        of: find.byKey(const Key('session-goal-dock')),
-        matching: find.text('P5-E GoalDock 回归目标'),
+        of: find.byKey(const Key('session-task-controls')),
+        matching: find.text('P5-E 模型设置 Goal 回归目标'),
       ),
     );
 
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-goal-dock-toggle')),
+      find.byKey(const Key('session-goal-toggle-button')),
     );
     await _waitForVisible(
       tester,
       find.descendant(
-        of: find.byKey(const Key('session-goal-dock')),
+        of: find.byKey(const Key('session-task-controls')),
         matching: find.textContaining('已暂停'),
       ),
     );
     await _tapVisible(
       tester,
-      find.byKey(const Key('session-goal-dock-toggle')),
+      find.byKey(const Key('session-goal-toggle-button')),
     );
     await _waitForVisible(
       tester,
       find.descendant(
-        of: find.byKey(const Key('session-goal-dock')),
+        of: find.byKey(const Key('session-task-controls')),
         matching: find.textContaining('进行中'),
       ),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-details-close')),
     );
 
     final snapshot = await harness.relay.getSessionSnapshot(
@@ -2147,15 +2141,24 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-V05-24/P5-E2：GoalDock clear 清除目标且不留下占位', (tester) async {
+  testWidgets('MOBILE-V05-24/P5-E2：模型设置中的 Goal clear 清除目标且不留下常驻面板', (
+    tester,
+  ) async {
     final harness = await _openWritableSession(
       tester,
       'goal-dock-clear-owner@fixture.test',
     );
-    await _waitForVisible(tester, find.byKey(const Key('session-goal-dock')));
-    await _tapVisible(tester, find.byKey(const Key('session-goal-dock-clear')));
-    await _waitForGone(tester, find.byKey(const Key('session-goal-dock')));
-    expect(find.byKey(const Key('session-goal-dock-title')), findsNothing);
+    await _openModelSettings(tester);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-goal-clear-button')),
+    );
+    await _waitForGone(tester, find.text('保持移动端控制链路可回归'));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-details-close')),
+    );
+    expect(find.byKey(const Key('session-goal-dock')), findsNothing);
 
     final snapshot = await harness.relay.getSessionSnapshot(
       (await harness.relay.listSessions()).single.id,
@@ -2166,15 +2169,23 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-V05-24/P5-E3：/goal command-input 创建 GoalDock', (
+  testWidgets('MOBILE-V05-24/P5-E3：/goal command-input 创建模型设置中的 Goal', (
     tester,
   ) async {
     final harness = await _openWritableSession(
       tester,
       'goal-command-owner@fixture.test',
     );
-    await _tapVisible(tester, find.byKey(const Key('session-goal-dock-clear')));
-    await _waitForGone(tester, find.byKey(const Key('session-goal-dock')));
+    await _openModelSettings(tester);
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-goal-clear-button')),
+    );
+    await _waitForGone(tester, find.text('保持移动端控制链路可回归'));
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-details-close')),
+    );
 
     await _enterVisible(
       tester,
@@ -2185,13 +2196,17 @@ void main() {
       tester,
       find.byKey(const Key('session-composer-primary-action')),
     );
-    await _waitForVisible(tester, find.byKey(const Key('session-goal-dock')));
+    await _openModelSettings(tester);
     await _waitForVisible(
       tester,
       find.descendant(
-        of: find.byKey(const Key('session-goal-dock')),
+        of: find.byKey(const Key('session-task-controls')),
         matching: find.text('用 slash command 创建目标'),
       ),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-model-details-close')),
     );
 
     final snapshot = await harness.relay.getSessionSnapshot(
@@ -2277,6 +2292,7 @@ void main() {
     await _waitForVisible(tester, find.text('可操作'));
 
     // 打开编辑对话框，修改目标文本并保存。
+    await _openModelSettings(tester);
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-goal-edit-button')),
@@ -2428,44 +2444,6 @@ void main() {
     );
     expect(clipboardValues, [sessionId, 'codex']);
   });
-  testWidgets('ADPT-DSH-11/P3：新建会话页展示 DeepSeek Harness 且 fixture 下可创建 dsh 会话', (
-    tester,
-  ) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('device-connect-submit')),
-    );
-    await _registerOwner(tester, 'dsh-entry-owner@fixture.test');
-
-    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('new-session-workspace-input')),
-    );
-    await _enterVisible(
-      tester,
-      find.byKey(const Key('new-session-workspace-input')),
-      'fixture-workspace',
-    );
-    // 第五类 Provider 入口必须在下拉中可见且可选（v0.5.next P3 验收）。
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('new-session-provider-select')),
-    );
-    await _waitForVisible(tester, find.text('DeepSeek Harness').last);
-    await tester.tap(find.text('DeepSeek Harness').last);
-    // fixture 仓库下创建 dsh 会话与既有流程一致：进入详情页即视为入口可用。
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('new-session-create-button')),
-    );
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('session-detail-screen')),
-    );
-  });
 }
 
 bool _snapshotContainsText(SessionSnapshot snapshot, String text) {
@@ -2523,6 +2501,18 @@ Future<MobileAppHarness> _openWritableSession(
   );
   await _waitForVisible(tester, find.text('可操作'));
   return harness;
+}
+
+Future<void> _openModelSettings(WidgetTester tester) async {
+  await _tapVisible(
+    tester,
+    find.byKey(const Key('session-model-seat-details')),
+  );
+  await _waitForVisible(
+    tester,
+    find.byKey(const Key('session-model-details-dialog')),
+  );
+  await _waitForVisible(tester, find.byKey(const Key('session-task-controls')));
 }
 
 Future<void> _registerOwner(WidgetTester tester, String _) async {

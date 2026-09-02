@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -206,4 +208,67 @@ func mustGitInit(t *testing.T, root string) {
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatalf("git init %s: %v", root, err)
 	}
+}
+
+// V081-后续：sync_dsh 上报成功后，扫描出的候选必须按 Relay 回传的 workspace_ids
+// 顺序写入本机 confirmed_workspace；否则 session.start 解析不到 workspace root，
+// 会以 local_state_missing 语义 fail-closed（实测 money 工作区首启即命中）。
+func TestRelayLoopConfirmDSHWorkspaceCandidatesPersistsConfirmedRoots(t *testing.T) {
+	root := t.TempDir()
+	state, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer state.Close()
+	manager, err := NewWorkspaceManager(state, root)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	loop := &RelayLoop{WorkspaceManager: manager, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	canonical := func(project string) string {
+		resolved, err := filepath.EvalSymlinks(project)
+		if err != nil {
+			t.Fatalf("eval %s: %v", project, err)
+		}
+		resolved, err = filepath.Abs(resolved)
+		if err != nil {
+			t.Fatalf("abs %s: %v", project, err)
+		}
+		return filepath.Clean(resolved)
+	}
+	alpha := filepath.Join(root, "alpha")
+	mustMkdirAll(t, filepath.Join(alpha, ".dsh-sessions"))
+	mustWriteDSHArtifact(t, alpha, "s-alpha")
+	mustGitInit(t, alpha)
+	beta := filepath.Join(root, "beta")
+	mustMkdirAll(t, filepath.Join(beta, ".dsh-sessions"))
+	mustWriteDSHArtifact(t, beta, "s-beta")
+	mustGitInit(t, beta)
+
+	candidates := []DSHWorkspaceCandidate{
+		{Root: canonical(alpha), DisplayName: "alpha"},
+		{Root: canonical(beta), DisplayName: "beta"},
+	}
+	receipt := DSHSyncCommandReceipt{CommandID: "cmd-1", Status: "succeeded", WorkspaceIDs: []string{"ws-alpha", "ws-beta"}}
+	loop.confirmDSHWorkspaceCandidates(context.Background(), "cmd-1", candidates, receipt)
+
+	for id, project := range map[string]string{"ws-alpha": alpha, "ws-beta": beta} {
+		confirmed, err := state.ConfirmedWorkspaceByID(id)
+		if err != nil {
+			t.Fatalf("confirm %s missing: %v", id, err)
+		}
+		if confirmed.Root != canonical(project) {
+			t.Fatalf("confirm %s root = %s, want %s", id, confirmed.Root, canonical(project))
+		}
+	}
+
+	// failed 同步不写确认；nil 管理器也不得 panic。
+	failed := DSHSyncCommandReceipt{CommandID: "cmd-2", Status: "failed", WorkspaceIDs: []string{"ws-failed"}}
+	loop.confirmDSHWorkspaceCandidates(context.Background(), "cmd-2", candidates, failed)
+	if _, err := state.ConfirmedWorkspaceByID("ws-failed"); err == nil {
+		t.Fatalf("failed sync 不得写 confirmed_workspace")
+	}
+	emptyLoop := &RelayLoop{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	emptyLoop.confirmDSHWorkspaceCandidates(context.Background(), "cmd-3", candidates, receipt)
 }

@@ -26,7 +26,7 @@ class _GitDiffScreenState extends ConsumerState<GitDiffScreen> {
   @override
   void initState() {
     super.initState();
-    // controller 也会在 provider 创建时加载；此处仅确保从休眠路由返回时能重新消费已有 snapshot。
+    // controller 也会在 provider 创建时加载；此处确保返回该路由时重新消费已有 snapshot。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(ref.read(gitDiffControllerProvider).initialize());
     });

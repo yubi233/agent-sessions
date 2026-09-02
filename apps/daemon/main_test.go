@@ -194,4 +194,24 @@ func TestCodexAdapterRegistrationFollowsFeatureFlag(t *testing.T) {
 	}
 }
 
+func TestDaemonCapabilitiesAdvertiseDSHWorkspaceOperations(t *testing.T) {
+	for _, fixture := range []bool{false, true} {
+		capabilities := daemonCapabilities(fixture)
+		for _, expected := range []string{"dsh_workspace_sync", "dsh_session_import"} {
+			if !containsCapability(capabilities, expected) {
+				t.Fatalf("fixture=%v capabilities=%v, missing %q", fixture, capabilities, expected)
+			}
+		}
+	}
+}
+
+func containsCapability(capabilities []string, expected string) bool {
+	for _, capability := range capabilities {
+		if capability == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func useFixtureAdapterForTest() bool { return false }

@@ -15,6 +15,10 @@ export interface SessionMeta {
   status: string;
   provider: string;
   last_seq: number;
+  // Optional safe label from a future Relay projection. DSH sessions without
+  // an Agent Sessions-owned label must never fall back to their opaque ID.
+  display_name?: string;
+  last_activity_at_unix_ms?: number;
 }
 
 // 会话事件只读投影只保留时间线元数据。snapshot 响应中的 envelope 会在映射时丢弃，

@@ -195,7 +195,8 @@ func (s *WorkspaceService) GetCreateWithFolder(ctx context.Context, accountID, c
 	return workspaceStateFromCommand(ctx, s.repo, command, workspaceID), nil
 }
 
-// SyncDSHWorkspaces 创建 workspace.sync_dsh 命令，或返回同账号已存在的同步命令。
+// SyncDSHWorkspaces 创建 workspace.sync_dsh 命令，或返回同账号进行中的同步命令。
+// 同步是可重复的刷新操作：已终态命令释放幂等键，下一次点击会创建新的扫描。
 // 幂等键绑定 account + "dsh_sync"（单 Terminal 场景）；只允许 write 角色发起。
 func (s *WorkspaceService) SyncDSHWorkspaces(ctx context.Context, in WorkspaceSyncDSHInput) (WorkspaceSyncDSHState, error) {
 	if !protocol.DeviceRoleCanWrite(in.Role) {
@@ -212,8 +213,13 @@ func (s *WorkspaceService) SyncDSHWorkspaces(ctx context.Context, in WorkspaceSy
 			if existing.AccountID != in.AccountID || existing.Kind != "workspace.sync_dsh" {
 				return ErrScopeDenied
 			}
-			state = dshSyncStateFromCommand(ctx, tx, existing)
-			return nil
+			if !isTerminal(existing.Status) {
+				state = dshSyncStateFromCommand(ctx, tx, existing)
+				return nil
+			}
+			if err := tx.ReleaseCommandIdempotencyKey(ctx, existing.ID, releasedWorkspaceCommandIdempotencyKey(idempotencyKey, existing.ID)); err != nil {
+				return err
+			}
 		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
 			return lookupErr
 		}
@@ -285,8 +291,13 @@ func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceIm
 			if existing.AccountID != in.AccountID || existing.Kind != "session.import_dsh" {
 				return ErrScopeDenied
 			}
-			state = dshImportStateFromCommand(ctx, tx, existing)
-			return nil
+			if !isTerminal(existing.Status) {
+				state = dshImportStateFromCommand(ctx, tx, existing)
+				return nil
+			}
+			if err := tx.ReleaseCommandIdempotencyKey(ctx, existing.ID, releasedWorkspaceCommandIdempotencyKey(idempotencyKey, existing.ID)); err != nil {
+				return err
+			}
 		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
 			return lookupErr
 		}
@@ -397,6 +408,12 @@ func dshSyncStateFromCommand(ctx context.Context, repo store.Repository, command
 		state.Status = command.Status
 	}
 	return state
+}
+
+// releasedWorkspaceCommandIdempotencyKey 保留终态命令的审计可读性，同时让基础幂等键
+// 只代表当前可合并的同步/导入操作。command ID 全局唯一，故同一 scope 内也保持唯一。
+func releasedWorkspaceCommandIdempotencyKey(baseKey, commandID string) string {
+	return baseKey + ":resolved:" + commandID
 }
 
 func selectDSHSyncTerminal(ctx context.Context, repo store.Repository, accountID, requestedID string) (store.TerminalRow, error) {

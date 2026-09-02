@@ -119,7 +119,7 @@ void main() {
       expect(relay.pollCount, 0);
     });
 
-    test('DSH 历史元数据可读，但 V08-12 未通过前拒绝恢复', () async {
+    test('DSH 历史会话在持有 lease 后按声明能力恢复', () async {
       final relay = FixtureRelayRepository(clock: () => _now);
       await _prepareOwner(relay);
       relay.replaceWorkspaces(const [
@@ -143,12 +143,17 @@ void main() {
       await controller.initialize();
       await controller.selectSession(imported.id);
 
-      expect(controller.resumeBlockedReason(canWrite: true), 'DSH 历史会话恢复暂不可用。');
+      await controller.acquireSelectedLease(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      expect(controller.resumeBlockedReason(canWrite: true), isNull);
       await controller.resumeSelectedSession(
         deviceId: _ownerDeviceId,
         canWrite: true,
       );
-      expect(controller.errorMessage, 'DSH 历史会话恢复暂不可用。');
+      expect(relay.submittedCommandCount, 1);
+      expect(controller.errorMessage, isNull);
     });
 
     test('导入成功后只刷新会话元数据，并保留 DSH workspace 边界', () async {
@@ -255,6 +260,38 @@ void main() {
     final payload = send.ciphertext?['fixture_payload'] as Map<String, dynamic>;
     expect(payload['message'], '你好');
     expect(payload['model'], 'opencode/big-pickle');
+  });
+
+  test('MOBILE-V081 send 命令执行端 failed 时浮出错误并清掉乐观回显', () async {
+    // 真实链路的 local_state_missing 场景：Daemon 以 failed 终态收口 send 命令。
+    // 客户端不能把受理当成功，否则乐观气泡与“生成中”指示会无限停留。
+    final relay = _FailingCommandRelay(clock: () => _now);
+    await _prepareOwner(relay);
+    final controller = SessionController(
+      relay: relay,
+      clock: () => _now,
+      random: _DeterministicRandom(),
+    );
+    await controller.initialize();
+    // autoStart 的 start 命令同样以 failed 收口，但 lease 已先行获取；
+    // 这里只依赖 lease 覆盖 sendMessage 的前置校验。
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+
+    await controller.sendMessage(
+      message: '你好',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+
+    expect(controller.errorMessage, '消息发送失败（命令 failed），请查看时间线中的失败提示。');
+    expect(controller.pendingOutgoingMessage, isNull);
+    expect(controller.isStreaming, isFalse);
   });
   group('MOBILE-V07 命令终态确认与乐观更新收口', () {
     test('selectModel 命令执行端 failed 时浮出错误且不更新 controls', () async {
@@ -760,6 +797,41 @@ void main() {
     },
   );
 
+  test('MOBILE-V06-TURN-IDLE-SNAPSHOT：空增量快照仍把 streaming 会话收敛为 idle', () async {
+    final relay = _EmptyDeltaIdleRelay(clock: () => _now);
+    await _prepareOwner(relay);
+    final controller = SessionController(
+      relay: relay,
+      clock: () => _now,
+      random: _DeterministicRandom(),
+    );
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+    await controller.acquireSelectedLease(
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+    await controller.startSelectedSession(
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+
+    await controller.sendMessage(
+      message: '空增量也要结束这一轮',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+
+    expect(relay.streamingSnapshots, greaterThanOrEqualTo(2));
+    expect(controller.selectedSession?.status, MobileSessionStatus.idle);
+    expect(controller.isStreaming, isFalse);
+  });
+
   test('归档会话从列表隐藏且保留数据，取消归档可恢复', () async {
     final relay = FixtureRelayRepository(clock: () => _now);
     await _prepareOwner(relay);
@@ -982,6 +1054,26 @@ class _FailingCommandRelay extends FixtureRelayRepository {
   final String terminalStatus;
 
   @override
+  Future<SessionSnapshot> getSessionSnapshot(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    final snapshot = await super.getSessionSnapshot(
+      sessionId,
+      afterSequence: afterSequence,
+    );
+    // A failed send is terminal from the client's perspective. Simulate the
+    // daemon's status projection arriving as idle during the compensating read.
+    if (snapshot.session.status != MobileSessionStatus.streaming) {
+      return snapshot;
+    }
+    return SessionSnapshot(
+      session: snapshot.session.copyWith(status: MobileSessionStatus.idle),
+      events: snapshot.events,
+    );
+  }
+
+  @override
   Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
     return SessionCommandReceipt(
       id: commandId,
@@ -1059,6 +1151,47 @@ class _TurnCompletedRelay extends FixtureRelayRepository {
         lastSequence: event.sequence,
       ),
       events: [...snapshot.events, event],
+    );
+  }
+}
+
+/// 首个 streaming 快照带事件，下一次仅返回 idle 状态和空增量，模拟事件已被
+/// 消费但 session 投影稍后才收口的真实执行端时序。
+class _EmptyDeltaIdleRelay extends FixtureRelayRepository {
+  _EmptyDeltaIdleRelay({required super.clock});
+
+  int streamingSnapshots = 0;
+
+  @override
+  Future<SessionSnapshot> getSessionSnapshot(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    final snapshot = await super.getSessionSnapshot(
+      sessionId,
+      afterSequence: afterSequence,
+    );
+    if (snapshot.session.status != MobileSessionStatus.streaming) {
+      return snapshot;
+    }
+    streamingSnapshots += 1;
+    if (streamingSnapshots >= 2) {
+      return SessionSnapshot(
+        session: snapshot.session.copyWith(status: MobileSessionStatus.idle),
+        events: const [],
+      );
+    }
+    // Hide the fixture's permission/question waits so the first snapshot really
+    // represents an in-progress turn and the second poll is exercised.
+    return SessionSnapshot(
+      session: snapshot.session,
+      events: snapshot.events
+          .where(
+            (event) =>
+                event.eventType != 'permission.requested' &&
+                event.eventType != 'question.requested',
+          )
+          .toList(growable: false),
     );
   }
 }

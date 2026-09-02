@@ -227,11 +227,7 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 	loop.Hostname = hostname
 	loop.Platform = runtime.GOOS
 	loop.WorkspaceManager = workspaceManager
-	if useFixtureAdapter {
-		loop.Capabilities = []string{"start", "send", "resume", "abort", "model_select", "effort_select", "file_read", "git_read", "workspace_create"}
-	} else {
-		loop.Capabilities = []string{"start", "send", "resume", "abort", "model_select", "effort_select", "workspace_create"}
-	}
+	loop.Capabilities = daemonCapabilities(useFixtureAdapter)
 	if webRead != nil {
 		// 只在私钥实际可用时声明 browser read capability；缺失配置时 Web endpoint 必须保持
 		// fail-closed，不能因为普通 file_read capability 误认为可加密响应。
@@ -243,6 +239,27 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter b
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return loop.RunWithRetry(ctx)
+}
+
+// daemonCapabilities 是 Relay 可安全路由到本机的命令能力。DSH 工作区同步和
+// 元数据导入在 RelayLoop 中已有受限执行器；若未在 hello 中声明，客户端会按
+// capability gate 正确隐藏同步目标，造成用户无法发起同步。
+func daemonCapabilities(useFixtureAdapter bool) []string {
+	capabilities := []string{
+		"start",
+		"send",
+		"resume",
+		"abort",
+		"model_select",
+		"effort_select",
+		"workspace_create",
+		"dsh_workspace_sync",
+		"dsh_session_import",
+	}
+	if useFixtureAdapter {
+		capabilities = append(capabilities, "file_read", "git_read")
+	}
+	return capabilities
 }
 
 // eventEncoderForRun 集中生产与 fixture 的加密边界：fixture 永远不接触生产 DEK；

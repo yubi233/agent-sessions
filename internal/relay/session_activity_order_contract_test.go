@@ -10,8 +10,8 @@ import (
 )
 
 // 会话列表契约：session 元数据必须携带 last_activity_at_unix_ms，且默认列表按
-// 真实活动时间倒序。Flutter 的「最后消息时间」展示、排序与 idle 休眠衰减都消费
-// 这个字段；last_seq 是会话内局部序号，不得作为跨会话排序依据。
+// 真实活动时间倒序。Flutter 的「最后消息时间」展示和排序消费这个字段；它不能
+// 参与会话状态推断。last_seq 是会话内局部序号，不得作为跨会话排序依据。
 func TestSessionListExposesActivityAndOrdersByIt(t *testing.T) {
 	env := newTestEnv(t)
 	owner := env.registerAs(t, "session-activity-order@test.dev")

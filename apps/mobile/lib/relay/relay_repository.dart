@@ -50,7 +50,7 @@ abstract interface class RelayRepository {
   /// 会话列表只返回 Relay 白名单元数据；标题等展示字段只能来自已解密缓存或 deterministic fixture。
   Future<List<MobileSession>> listSessions();
 
-  /// 已归档会话列表；归档读取不触发对账/自动归档 sweep。
+  /// 已归档会话列表；只包含显式归档的会话，读取不触发状态对账。
   Future<List<MobileSession>> listArchivedSessions();
 
   /// Workspace list is metadata-only; canonical host roots are intentionally

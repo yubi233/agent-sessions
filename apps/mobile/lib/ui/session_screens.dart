@@ -28,7 +28,6 @@ import 'app_theme.dart';
 import 'session/chat/session_chat_node_seat.dart';
 import 'session/chat/session_chat_view.dart';
 import 'session/trajectory/session_trajectory_view.dart';
-import 'session/composer/session_goal_dock.dart';
 import 'session/composer/session_queue_dock.dart';
 import 'session/composer/session_model_seat.dart';
 
@@ -130,6 +129,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
   final TextEditingController _searchController = TextEditingController();
   String _workspaceSearch = '';
   String? _selectedWorkspaceId;
+  bool _openingSyncSheet = false;
 
   @override
   void dispose() {
@@ -254,18 +254,26 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
               }),
               onSelectWorkspace: () {
                 if (isWide) {
-                  setState(() => _selectedWorkspaceId = workspace.id);
+                  setState(() {
+                    _selectedWorkspaceId = workspace.id;
+                    _expandedWorkspaceIds.add(workspace.id);
+                  });
                 } else if (GoRouter.maybeOf(context) != null) {
                   context.push('/workspaces/${workspace.id}');
                 } else {
                   // 纯 widget fixture 没有路由宿主时仍保留选中态，便于测试交互契约。
-                  setState(() => _selectedWorkspaceId = workspace.id);
+                  setState(() {
+                    _selectedWorkspaceId = workspace.id;
+                    _expandedWorkspaceIds.add(workspace.id);
+                  });
                 }
               },
               onOpenSession: (session) async {
                 await sessions.selectSession(session.id);
                 if (!context.mounted) return;
-                context.push('/sessions/${session.id}');
+                if (GoRouter.maybeOf(context) != null) {
+                  context.push('/sessions/${session.id}');
+                }
               },
             ),
             const SizedBox(height: 8),
@@ -294,7 +302,10 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
     if (visibleSelection != null && _selectedWorkspaceId == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _selectedWorkspaceId == null) {
-          setState(() => _selectedWorkspaceId = visibleSelection.id);
+          setState(() {
+            _selectedWorkspaceId = visibleSelection.id;
+            _expandedWorkspaceIds.add(visibleSelection.id);
+          });
         }
       });
     }
@@ -370,13 +381,16 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                                   _expandedWorkspaceIds.remove(workspace.id);
                                 }
                               }),
-                              onSelectWorkspace: () => setState(
-                                () => _selectedWorkspaceId = workspace.id,
-                              ),
+                              onSelectWorkspace: () => setState(() {
+                                _selectedWorkspaceId = workspace.id;
+                                _expandedWorkspaceIds.add(workspace.id);
+                              }),
                               onOpenSession: (session) async {
                                 await sessions.selectSession(session.id);
                                 if (!context.mounted) return;
-                                context.push('/sessions/${session.id}');
+                                if (GoRouter.maybeOf(context) != null) {
+                                  context.push('/sessions/${session.id}');
+                                }
                               },
                             ),
                             const SizedBox(height: 8),
@@ -443,12 +457,15 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
     SessionController sessions,
     MobileWorkspace workspace,
   ) async {
+    // 与通用新建表单同口径：dsh 为 per-session spawn ACP 桥（ADR-013 §3），
+    // 创建后必须立刻 acquire lease 并 session.start；否则首条 session.send
+    // 会被 Daemon 以 local_state_missing fail-closed，客户端无限停留在生成中。
     final created = await sessions.createSession(
       workspaceId: workspace.id,
       provider: 'dsh',
       deviceId: app.currentDevice?.id,
       canWrite: app.canManageDevices,
-      autoStart: false,
+      autoStart: true,
     );
     if (!mounted || created == null) return;
     this.context.push('/sessions/${created.id}');
@@ -488,14 +505,25 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
   }
 
   Future<void> _openSyncSheet(TerminalStatusController terminalStatus) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => _DSHWorkspaceSyncSheet(
-        sessions: widget.sessions,
-        terminals: terminalStatus,
-      ),
-    );
+    if (_openingSyncSheet) return;
+    setState(() => _openingSyncSheet = true);
+    // 终端 capability 会在 Daemon 重启后的 hello/heartbeat 中更新。同步弹窗必须
+    // 立即打开并在其中呈现刷新状态，不能把用户留在无反馈的图标按钮上等待网络。
+    unawaited(terminalStatus.refresh());
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (context) => _DSHWorkspaceSyncSheet(
+          sessions: widget.sessions,
+          terminals: terminalStatus,
+        ),
+      );
+    } finally {
+      if (mounted && _openingSyncSheet) {
+        setState(() => _openingSyncSheet = false);
+      }
+    }
   }
 }
 
@@ -518,8 +546,24 @@ bool _matchesWorkspaceSearch({
   if (normalized.isEmpty) return true;
   return workspace.label.toLowerCase().contains(normalized) ||
       sessions.any(
-        (session) => session.title.toLowerCase().contains(normalized),
+        (session) =>
+            _dshSessionLabel(session).toLowerCase().contains(normalized),
       );
+}
+
+/// DSH 导入回执只保证 session id；缺少由 Agent Sessions 主动命名的安全标题时，
+/// 统一使用固定标签，绝不把 DSH session id、路径或正文片段回退到 UI。
+String _dshSessionLabel(MobileSession session) {
+  final candidate = session.displayName?.trim() ?? '';
+  if (candidate.isEmpty ||
+      candidate.contains('/') ||
+      candidate.contains('\\')) {
+    return 'DSH 历史会话';
+  }
+  if (candidate.runes.any((rune) => rune < 0x20 || rune == 0x7f)) {
+    return 'DSH 历史会话';
+  }
+  return candidate;
 }
 
 class _DSHWorkspaceToolbar extends StatelessWidget {
@@ -538,37 +582,55 @@ class _DSHWorkspaceToolbar extends StatelessWidget {
   final VoidCallback onSync;
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Expanded(
-        child: TextField(
-          key: const Key('dsh-workspace-search-input'),
-          controller: searchController,
-          onChanged: onSearchChanged,
-          maxLines: 1,
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            hintText: '搜索工作区或会话',
-            isDense: true,
-          ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      // The desktop workspace sidebar is deliberately narrow.  Choose the
+      // toolbar arrangement from the viewport, not this local sidebar width.
+      final compact = MediaQuery.sizeOf(context).width < 600;
+      final search = TextField(
+        key: const Key('dsh-workspace-search-input'),
+        controller: searchController,
+        onChanged: onSearchChanged,
+        maxLines: 1,
+        decoration: const InputDecoration(
+          prefixIcon: Icon(Icons.search),
+          hintText: '搜索工作区或会话',
+          isDense: true,
         ),
-      ),
-      if (canSync) ...[
-        const SizedBox(width: 8),
-        IconButton(
-          key: const Key('dsh-workspace-sync-button'),
-          tooltip: syncing ? '正在同步 DSH 工作区' : '同步本机 DSH 项目',
-          onPressed: syncing ? null : onSync,
-          icon: syncing
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.sync),
-        ),
-      ],
-    ],
+      );
+      final sync = canSync
+          ? IconButton(
+              key: const Key('dsh-workspace-sync-button'),
+              tooltip: syncing ? '正在同步 DSH 工作区' : '同步本机 DSH 项目',
+              onPressed: syncing ? null : onSync,
+              icon: syncing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.sync),
+            )
+          : null;
+      if (compact) {
+        return Column(
+          key: const Key('dsh-workspace-toolbar-compact'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            search,
+            if (sync != null)
+              Align(alignment: Alignment.centerRight, child: sync),
+          ],
+        );
+      }
+      return Row(
+        key: const Key('dsh-workspace-toolbar-wide'),
+        children: [
+          Expanded(child: search),
+          if (sync != null) ...[const SizedBox(width: 8), sync],
+        ],
+      );
+    },
   );
 }
 
@@ -638,8 +700,6 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Icon(Icons.folder_outlined, size: 20),
-                const SizedBox(width: 8),
                 Expanded(
                   child: Semantics(
                     button: true,
@@ -650,21 +710,29 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                       onTap: onSelectWorkspace,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        child: Row(
                           children: [
-                            Text(
-                              workspace.label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              statusLabel,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall,
+                            const Icon(Icons.folder_outlined, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    workspace.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.titleSmall,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    statusLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
@@ -747,7 +815,7 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
         selectedTileColor: Theme.of(context).colorScheme.surfaceContainerHigh,
         leading: const Icon(Icons.terminal_outlined, size: 18),
         title: Text(
-          session.title,
+          _dshSessionLabel(session),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
@@ -982,38 +1050,53 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          Container(
-            key: const Key('dsh-workspace-terminal-status'),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(AppRadius.card),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  terminalOnline
-                      ? Icons.computer_outlined
-                      : Icons.computer_outlined,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          Semantics(
+            button: GoRouter.maybeOf(context) != null,
+            label:
+                'home Terminal，${terminal == null ? '未连接' : _terminalAvailabilityLabel(terminal, availability)}',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                key: const Key('dsh-workspace-terminal-status'),
+                borderRadius: BorderRadius.circular(AppRadius.card),
+                onTap: GoRouter.maybeOf(context) == null
+                    ? null
+                    : () => context.push('/terminals'),
+                child: Ink(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(AppRadius.card),
+                  ),
+                  child: Row(
                     children: [
-                      const Text('home Terminal'),
-                      const SizedBox(height: 2),
-                      Text(
-                        terminal == null
-                            ? '未连接'
-                            : '${terminal.hostname} · ${_terminalAvailabilityLabel(terminal, availability)}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      const Icon(Icons.computer_outlined),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('home Terminal'),
+                            const SizedBox(height: 2),
+                            Text(
+                              terminal == null
+                                  ? '未连接'
+                                  : '${terminal.hostname} · ${_terminalAvailabilityLabel(terminal, availability)}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
                       ),
+                      if (GoRouter.maybeOf(context) != null)
+                        const Icon(
+                          Icons.chevron_right,
+                          semanticLabel: '查看终端状态',
+                        ),
                     ],
                   ),
                 ),
-              ],
+              ),
             ),
           ),
           const SizedBox(height: 20),
@@ -1186,7 +1269,11 @@ class DSHWorkspaceDetailScreen extends ConsumerWidget {
             sessionsController.workspaceImportWorkspaceId ==
                 selectedWorkspace.id,
         busy: sessionsController.isBusy,
-        error: sessionsController.workspaceErrorMessage,
+        // autoStart 失败（lease/start 链路）写入 errorMessage 而非 workspaceErrorMessage；
+        // 详情页必须两者都浮出，否则创建失败会表现为“按钮无响应”。
+        error:
+            sessionsController.workspaceErrorMessage ??
+            sessionsController.errorMessage,
         onCreate: () => _createSession(
           context,
           ref,
@@ -1202,7 +1289,10 @@ class DSHWorkspaceDetailScreen extends ConsumerWidget {
           selectedWorkspace,
         ),
         onStopImportWaiting: sessionsController.stopWaitingForDSHImport,
-        onDismissError: sessionsController.clearWorkspaceError,
+        onDismissError: () {
+          sessionsController.clearWorkspaceError();
+          sessionsController.clearError();
+        },
         onOpenSession: (session) async {
           await sessionsController.selectSession(session.id);
           if (!context.mounted) return;
@@ -1221,12 +1311,15 @@ class DSHWorkspaceDetailScreen extends ConsumerWidget {
     SessionController sessions,
     MobileWorkspace workspace,
   ) async {
+    // 与通用新建表单同口径：dsh 为 per-session spawn ACP 桥（ADR-013 §3），
+    // 创建后必须立刻 acquire lease 并 session.start；否则首条 session.send
+    // 会被 Daemon 以 local_state_missing fail-closed，客户端无限停留在生成中。
     final created = await sessions.createSession(
       workspaceId: workspace.id,
       provider: 'dsh',
       deviceId: app.currentDevice?.id,
       canWrite: app.canManageDevices,
-      autoStart: false,
+      autoStart: true,
     );
     if (!context.mounted || created == null) return;
     if (GoRouter.maybeOf(context) != null) {
@@ -1285,10 +1378,13 @@ class _DSHWorkspaceSyncNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final succeeded = state?.isSucceeded == true;
+    final pending = state?.isPending == true;
     final message = waiting
         ? '正在同步本机 DSH 项目…'
         : succeeded
         ? '已同步 ${state!.workspaceIds.length} 个 DSH 工作区。'
+        : pending
+        ? error ?? '同步请求仍在等待终端响应。'
         : error ?? 'DSH 工作区同步未完成。';
     return Container(
       key: const Key('dsh-workspace-sync-pending'),
@@ -1309,7 +1405,13 @@ class _DSHWorkspaceSyncNotice extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           else
-            Icon(succeeded ? Icons.check_circle_outline : Icons.error_outline),
+            Icon(
+              succeeded
+                  ? Icons.check_circle_outline
+                  : pending
+                  ? Icons.schedule_outlined
+                  : Icons.error_outline,
+            ),
           const SizedBox(width: 8),
           Expanded(child: Text(message)),
           if (waiting)
@@ -1351,17 +1453,21 @@ class _DSHWorkspaceSyncSheetState extends State<_DSHWorkspaceSyncSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final candidates = _eligibleTerminals;
-    TerminalSummary? selected;
-    for (final terminal in candidates) {
-      if (terminal.id == _terminalId) {
-        selected = terminal;
-        break;
-      }
-    }
     return AnimatedBuilder(
-      animation: widget.sessions,
+      animation: Listenable.merge([widget.sessions, widget.terminals]),
       builder: (context, _) {
+        final candidates = _eligibleTerminals;
+        TerminalSummary? selected;
+        for (final terminal in candidates) {
+          if (terminal.id == _terminalId) {
+            selected = terminal;
+            break;
+          }
+        }
+        if (selected == null && candidates.length == 1) {
+          selected = candidates.single;
+        }
+        final terminalsRefreshing = widget.terminals.isRefreshing;
         final waiting = widget.sessions.workspaceSyncWaiting;
         final state = widget.sessions.workspaceSyncState;
         final completed = state?.isTerminal == true && !waiting;
@@ -1386,14 +1492,15 @@ class _DSHWorkspaceSyncSheetState extends State<_DSHWorkspaceSyncSheet> {
                 const SizedBox(height: 6),
                 const Text('只会同步终端已授权的工作区名称和状态。'),
                 const SizedBox(height: 16),
-                if (candidates.isEmpty)
-                  const Text(
-                    '没有可用终端。终端需要在线并声明 DSH 工作区同步能力。',
-                    key: Key('dsh-workspace-sync-no-terminal'),
+                if (candidates.isEmpty && terminalsRefreshing)
+                  const _DSHWorkspaceSyncTerminalLoading()
+                else if (candidates.isEmpty)
+                  _DSHWorkspaceSyncNoTerminal(
+                    error: widget.terminals.errorMessage,
                   )
                 else ...[
                   RadioGroup<String>(
-                    groupValue: _terminalId,
+                    groupValue: selected?.id,
                     onChanged: (value) {
                       if (!waiting) setState(() => _terminalId = value);
                     },
@@ -1421,10 +1528,18 @@ class _DSHWorkspaceSyncSheetState extends State<_DSHWorkspaceSyncSheet> {
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text('将从 ${selected.hostname} 同步。'),
                     ),
+                  if (terminalsRefreshing)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text('正在更新本机终端状态…'),
+                    ),
                 ],
                 if (waiting) ...[
                   const SizedBox(height: 8),
                   const Text('同步请求已提交，正在等待终端响应。'),
+                ] else if (state?.isPending == true) ...[
+                  const SizedBox(height: 8),
+                  const Text('请求仍在等待终端响应，可关闭此窗口后下拉刷新查看结果。'),
                 ] else if (completed) ...[
                   const SizedBox(height: 8),
                   Text(state!.isSucceeded ? '同步完成。' : '同步未完成，请检查终端状态。'),
@@ -1444,10 +1559,10 @@ class _DSHWorkspaceSyncSheetState extends State<_DSHWorkspaceSyncSheet> {
                     FilledButton(
                       key: const Key('dsh-workspace-sync-confirm'),
                       onPressed:
-                          candidates.isEmpty || _terminalId == null || waiting
+                          selected == null || waiting || terminalsRefreshing
                           ? null
                           : () => widget.sessions.syncDSHWorkspaces(
-                              terminalId: _terminalId!,
+                              terminalId: selected!.id,
                             ),
                       child: const Text('确认同步'),
                     ),
@@ -1460,6 +1575,56 @@ class _DSHWorkspaceSyncSheetState extends State<_DSHWorkspaceSyncSheet> {
       },
     );
   }
+}
+
+class _DSHWorkspaceSyncTerminalLoading extends StatelessWidget {
+  const _DSHWorkspaceSyncTerminalLoading();
+
+  @override
+  Widget build(BuildContext context) => const Row(
+    key: Key('dsh-workspace-sync-terminal-loading'),
+    children: [
+      SizedBox(
+        width: 20,
+        height: 20,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+      SizedBox(width: 12),
+      Expanded(child: Text('正在读取本机终端状态…')),
+    ],
+  );
+}
+
+class _DSHWorkspaceSyncNoTerminal extends StatelessWidget {
+  const _DSHWorkspaceSyncNoTerminal({this.error});
+
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    key: const Key('dsh-workspace-sync-no-terminal'),
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text('没有可同步的本机终端。'),
+      const SizedBox(height: 6),
+      Text(
+        error ??
+            '需要一台在线且声明 DSH 工作区同步能力的 Agent Sessions Daemon。重启本机 Daemon 后再试。',
+      ),
+      const SizedBox(height: 12),
+      OutlinedButton.icon(
+        key: const Key('dsh-workspace-sync-open-terminals'),
+        onPressed: () {
+          Navigator.of(context).pop();
+          if (GoRouter.maybeOf(context) != null) {
+            context.push('/terminals');
+          }
+        },
+        icon: const Icon(Icons.computer_outlined),
+        label: const Text('查看终端状态'),
+      ),
+    ],
+  );
 }
 
 class NewSessionScreen extends ConsumerStatefulWidget {
@@ -1626,11 +1791,6 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                           DropdownMenuItem(
                             value: 'opencode',
                             child: Text('OpenCode'),
-                          ),
-                          // v0.5.next：第五类 Provider（DeepSeek Harness，ACP 桥 per-session 接入）。
-                          DropdownMenuItem(
-                            value: 'dsh',
-                            child: Text('DeepSeek Harness'),
                           ),
                         ],
                         onChanged: app.canManageDevices && !sessions.isBusy
@@ -2096,11 +2256,6 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
                     : () => unawaited(_selectCurrentSession(force: true)),
               ),
             ],
-          ),
-          utilities: _SessionControlPanel(
-            sessions: sessions,
-            canWrite: app.canManageDevices,
-            deviceId: app.currentDevice?.id,
           ),
         ),
         activeView: viewMode == SessionViewMode.chat
@@ -3119,9 +3274,10 @@ ButtonStyle _delegationActionStyle(BuildContext context) {
   );
 }
 
-/// P3 控制面保持为紧凑、可扫描的 Happy 风格状态条；所有可执行图标都受 capability + role + lease 同一门控。
-class _SessionControlPanel extends StatefulWidget {
-  const _SessionControlPanel({
+/// 会话级 Plan/Goal/Skill 控制区。它只在模型设置详情中渲染，避免把任务状态
+/// 挤在对话页 Header 和输入区之间；控制器变化时弹窗内仍会实时刷新。
+class _SessionTaskControls extends StatelessWidget {
+  const _SessionTaskControls({
     required this.sessions,
     required this.canWrite,
     required this.deviceId,
@@ -3132,214 +3288,144 @@ class _SessionControlPanel extends StatefulWidget {
   final String? deviceId;
 
   @override
-  State<_SessionControlPanel> createState() => _SessionControlPanelState();
-}
-
-class _SessionControlPanelState extends State<_SessionControlPanel> {
-  bool _collapsed = true;
-
-  @override
-  Widget build(BuildContext context) {
-    final sessions = widget.sessions;
-    final canWrite = widget.canWrite;
-    final deviceId = widget.deviceId;
-    final provider = sessions.selectedProviderCapabilities;
-    final controls = sessions.controls;
-    final plan = controls.plan;
-    final goal = controls.goal;
-    final skill = controls.skills.where((item) => item.risk == SkillRisk.high);
-    final planBlocked = sessions.controlBlockedReason(
-      'plan',
-      canWrite: canWrite,
-    );
-    final goalBlocked = sessions.controlBlockedReason(
-      'goal',
-      canWrite: canWrite,
-    );
-    final skillBlocked = sessions.controlBlockedReason(
-      'invoke_skill',
-      canWrite: canWrite,
-    );
-    final summaryRow = Row(
-      children: [
-        const Icon(Icons.tune_outlined, size: 17),
-        const SizedBox(width: 7),
-        Expanded(
-          child: Text(
-            provider.kind,
-            key: const Key('session-capability-provider'),
-            style: Theme.of(context).textTheme.labelLarge,
-          ),
-        ),
-        Flexible(
-          child: Text(
-            controls.model ?? '等待模型事件',
-            key: const Key('session-control-model'),
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelMedium,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          controls.effort ?? '--',
-          key: const Key('session-control-effort'),
-          style: Theme.of(context).textTheme.labelMedium,
-        ),
-        const SizedBox(width: 2),
-        IconButton(
-          key: const Key('session-capability-toggle'),
-          tooltip: _collapsed ? '展开能力面板' : '折叠能力面板',
-          visualDensity: VisualDensity.compact,
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-          onPressed: () => setState(() => _collapsed = !_collapsed),
-          icon: Icon(
-            _collapsed ? Icons.expand_more : Icons.expand_less,
-            size: 18,
-          ),
-        ),
-      ],
-    );
-    final details = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 8),
-        Wrap(
-          key: const Key('session-capability-states'),
-          spacing: 10,
-          runSpacing: 5,
-          children: [
-            for (final name in const [
-              'model_select',
-              'effort_select',
-              'plan',
-              'goal',
-              'invoke_skill',
-              'attachments',
-            ])
-              _CapabilityStateLabel(entry: provider.capability(name)),
-          ],
-        ),
-        const Divider(height: 17),
-        _ControlSummaryRow(
-          key: const Key('session-plan-summary'),
-          icon: Icons.account_tree_outlined,
-          title: plan?.title ?? 'Plan',
-          subtitle: plan == null
-              ? '等待已解密 Plan 事件'
-              : '${plan.phase.label} · ${plan.summary}',
-          action: IconButton(
-            key: const Key('session-plan-approve-button'),
-            tooltip: '确认 Plan',
-            onPressed:
-                plan?.phase == PlanPhase.awaitingApproval &&
-                    planBlocked == null &&
-                    !sessions.isBusy
-                ? () => sessions.approvePlan(
-                    deviceId: deviceId,
-                    canWrite: canWrite,
-                  )
-                : null,
-            icon: const Icon(Icons.check_circle_outline),
-          ),
-        ),
-        const SizedBox(height: 3),
-        _ControlSummaryRow(
-          key: const Key('session-goal-summary'),
-          icon: Icons.flag_outlined,
-          title: goal?.title ?? 'Goal',
-          subtitle: goal == null
-              ? '等待已解密 Goal 事件'
-              : '${goal.phase.label} · ${goal.progressLabel}',
-          action: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                key: const Key('session-goal-edit-button'),
-                tooltip: '编辑目标',
-                onPressed:
-                    goal != null && goalBlocked == null && !sessions.isBusy
-                    ? () => _showGoalEditDialog(
-                        context,
-                        sessions,
-                        goal.title,
-                        deviceId: deviceId,
-                        canWrite: canWrite,
-                      )
-                    : null,
-                icon: const Icon(Icons.edit_outlined, size: 20),
-              ),
-              IconButton(
-                key: const Key('session-goal-toggle-button'),
-                tooltip: goal?.phase == GoalPhase.active
-                    ? '暂停 Goal'
-                    : '恢复 Goal',
-                onPressed:
-                    goal != null &&
-                        goal.phase != GoalPhase.completed &&
-                        goalBlocked == null &&
-                        !sessions.isBusy
-                    ? () => sessions.toggleGoal(
-                        deviceId: deviceId,
-                        canWrite: canWrite,
-                      )
-                    : null,
-                icon: Icon(
-                  goal?.phase == GoalPhase.active
-                      ? Icons.pause_circle_outline
-                      : Icons.play_circle_outline,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (skill.isNotEmpty) ...[
-          const SizedBox(height: 3),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: sessions,
+    builder: (context, _) {
+      final controls = sessions.controls;
+      final plan = controls.plan;
+      final goal = controls.goal;
+      final skill = controls.skills.where(
+        (item) => item.risk == SkillRisk.high,
+      );
+      final planBlocked = sessions.controlBlockedReason(
+        'plan',
+        canWrite: canWrite,
+      );
+      final goalBlocked = sessions.controlBlockedReason(
+        'goal',
+        canWrite: canWrite,
+      );
+      final skillBlocked = sessions.controlBlockedReason(
+        'invoke_skill',
+        canWrite: canWrite,
+      );
+      return Column(
+        key: const Key('session-task-controls'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           _ControlSummaryRow(
-            key: const Key('session-skill-summary'),
-            icon: Icons.security_outlined,
-            title: skill.first.title,
-            subtitle:
-                '${skill.first.risk.label} Skill · ${skill.first.summary}',
+            key: const Key('session-plan-summary'),
+            icon: Icons.account_tree_outlined,
+            title: plan?.title ?? 'Plan',
+            subtitle: plan == null
+                ? '等待已解密 Plan 事件'
+                : '${plan.phase.label} · ${plan.summary}',
             action: IconButton(
-              key: const Key('session-skill-open-button'),
-              tooltip: '确认高风险 Skill',
-              onPressed: skillBlocked == null && !sessions.isBusy
-                  ? () => sessions.requestSkillConfirmation(
-                      skill.first,
+              key: const Key('session-plan-approve-button'),
+              tooltip: '确认 Plan',
+              onPressed:
+                  plan?.phase == PlanPhase.awaitingApproval &&
+                      planBlocked == null &&
+                      !sessions.isBusy
+                  ? () => sessions.approvePlan(
+                      deviceId: deviceId,
                       canWrite: canWrite,
                     )
                   : null,
-              icon: const Icon(Icons.warning_amber_outlined),
+              icon: const Icon(Icons.check_circle_outline),
             ),
           ),
-        ],
-      ],
-    );
-    final panelContent = _collapsed
-        ? ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 40),
-            child: SingleChildScrollView(
-              primary: false,
-              child: Column(children: [summaryRow, details]),
+          const SizedBox(height: 3),
+          _ControlSummaryRow(
+            key: const Key('session-goal-summary'),
+            icon: Icons.flag_outlined,
+            title: goal?.title ?? 'Goal',
+            subtitle: goal == null
+                ? '等待已解密 Goal 事件'
+                : '${goal.phase.label} · ${goal.progressLabel}',
+            action: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  key: const Key('session-goal-edit-button'),
+                  tooltip: '编辑目标',
+                  onPressed:
+                      goal != null && goalBlocked == null && !sessions.isBusy
+                      ? () => _showGoalEditDialog(
+                          context,
+                          sessions,
+                          goal.title,
+                          deviceId: deviceId,
+                          canWrite: canWrite,
+                        )
+                      : null,
+                  icon: const Icon(Icons.edit_outlined, size: 20),
+                ),
+                IconButton(
+                  key: const Key('session-goal-toggle-button'),
+                  tooltip: goal?.phase == GoalPhase.active
+                      ? '暂停 Goal'
+                      : '恢复 Goal',
+                  onPressed:
+                      goal != null &&
+                          goal.phase != GoalPhase.completed &&
+                          goalBlocked == null &&
+                          !sessions.isBusy
+                      ? () => sessions.toggleGoal(
+                          deviceId: deviceId,
+                          canWrite: canWrite,
+                        )
+                      : null,
+                  icon: Icon(
+                    goal?.phase == GoalPhase.active
+                        ? Icons.pause_circle_outline
+                        : Icons.play_circle_outline,
+                  ),
+                ),
+                IconButton(
+                  key: const Key('session-goal-clear-button'),
+                  tooltip: '清除 Goal',
+                  onPressed:
+                      goal != null && goalBlocked == null && !sessions.isBusy
+                      ? () => sessions.clearGoal(
+                          deviceId: deviceId,
+                          canWrite: canWrite,
+                        )
+                      : null,
+                  icon: const Icon(Icons.clear_outlined, size: 20),
+                ),
+              ],
             ),
-          )
-        : Column(children: [summaryRow, details]);
-    return Container(
-      key: const Key('session-capability-panel'),
-      width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.fromLTRB(12, 6, 8, 4),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHigh,
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.8),
-        ),
-        borderRadius: BorderRadius.circular(AppRadius.card),
-      ),
-      child: panelContent,
-    );
-  }
+          ),
+          if (skill.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            _ControlSummaryRow(
+              key: const Key('session-skill-summary'),
+              icon: Icons.security_outlined,
+              title: skill.first.title,
+              subtitle:
+                  '${skill.first.risk.label} Skill · ${skill.first.summary}',
+              action: IconButton(
+                key: const Key('session-skill-open-button'),
+                tooltip: '确认高风险 Skill',
+                onPressed: skillBlocked == null && !sessions.isBusy
+                    ? () {
+                        sessions.requestSkillConfirmation(
+                          skill.first,
+                          canWrite: canWrite,
+                        );
+                        // 确认卡位于 composer seat；关闭详情弹窗后才可操作拒绝/确认。
+                        Navigator.of(context).pop();
+                      }
+                    : null,
+                icon: const Icon(Icons.warning_amber_outlined),
+              ),
+            ),
+          ],
+        ],
+      );
+    },
+  );
 }
 
 /// v0.3/P0：goal 编辑对话框入口。只提交目标文本，不读取、不展示密文正文。
@@ -3418,47 +3504,6 @@ class _GoalEditDialogState extends State<_GoalEditDialog> {
       ),
     ],
   );
-}
-
-class _CapabilityStateLabel extends StatelessWidget {
-  const _CapabilityStateLabel({required this.entry});
-
-  final CapabilityEntry entry;
-
-  @override
-  Widget build(BuildContext context) {
-    final presentation = switch (entry.availability) {
-      CapabilityAvailability.native => (
-        Icons.check_circle_outline,
-        context.appColors.success,
-      ),
-      CapabilityAvailability.emulated => (
-        Icons.auto_awesome_outlined,
-        context.appColors.warning,
-      ),
-      CapabilityAvailability.unsupported => (
-        Icons.block_outlined,
-        context.appColors.neutral,
-      ),
-    };
-    return Semantics(
-      label:
-          '${entry.name} ${entry.availability.label}${entry.reason == null ? '' : '，${entry.reason}'}',
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(presentation.$1, size: 13, color: presentation.$2),
-          const SizedBox(width: 4),
-          Text(
-            '${entry.name} ${entry.availability.label}',
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(color: presentation.$2),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _ControlSummaryRow extends StatelessWidget {
@@ -4197,7 +4242,7 @@ class _SessionComposerState extends State<_SessionComposer> {
           orElse: () => null,
         );
     // v0.5/P4/P5：Question/Approval 接管整个 composer seat；
-    // input.dock（Todo/Goal/Queue）必须让位，避免长 takeover 面板被 dock 挤出可触达区域。
+    // input.dock（Todo/Queue）必须让位，避免长 takeover 面板被 dock 挤出可触达区域。
     final hasComposerTakeover =
         pendingQuestion != null || pendingPermission != null;
     return SafeArea(
@@ -4230,37 +4275,6 @@ class _SessionComposerState extends State<_SessionComposer> {
               ),
             if (!hasComposerTakeover)
               SessionTodoDock(todos: widget.sessions.controls.todos),
-            if (!hasComposerTakeover)
-              SessionGoalDock(
-                goal: widget.sessions.controls.goal,
-                blockedReason: widget.sessions.controlBlockedReason(
-                  'goal',
-                  canWrite: widget.canWrite,
-                ),
-                busy: widget.sessions.isBusy,
-                onSave: (objective) async {
-                  await widget.sessions.editGoal(
-                    objective: objective,
-                    deviceId: widget.deviceId,
-                    canWrite: widget.canWrite,
-                  );
-                  return widget.sessions.errorMessage;
-                },
-                onToggle: () async {
-                  await widget.sessions.toggleGoal(
-                    deviceId: widget.deviceId,
-                    canWrite: widget.canWrite,
-                  );
-                  return widget.sessions.errorMessage;
-                },
-                onClear: () async {
-                  await widget.sessions.clearGoal(
-                    deviceId: widget.deviceId,
-                    canWrite: widget.canWrite,
-                  );
-                  return widget.sessions.errorMessage;
-                },
-              ),
             if (input.queue.isNotEmpty)
               SessionQueueDock(
                 messages: input.queue,
@@ -4485,7 +4499,7 @@ class _SessionComposerState extends State<_SessionComposer> {
   /// P5-E3：`/goal ...` 是 command-input 创建链路，不能走普通消息发送。
   ///
   /// 成功后 fixture 会先追加 `goal.command_input`，投影为 Chat command node；
-  /// 再追加 `goal.created` 并更新 input.dock。失败时保留原草稿与 claim。
+  /// 再追加 `goal.created` 并更新模型设置中的 Goal 投影。失败时保留原草稿与 claim。
   Future<void> _submitGoalCommand(
     String message,
     String? sessionId,
@@ -5716,6 +5730,17 @@ class _HappyComposerMetaRow extends StatelessWidget {
       provider: sessions.selectedSession?.provider,
       providerVersion: capabilities.version,
       providerAvailable: capabilities.available,
+      capabilities: [
+        for (final name in const [
+          'model_select',
+          'effort_select',
+          'plan',
+          'goal',
+          'invoke_skill',
+          'attachments',
+        ])
+          capabilities.capability(name),
+      ],
       catalog: SessionModelCatalog(
         model: selectedModel,
         effort: controls.effort,
@@ -5735,6 +5760,11 @@ class _HappyComposerMetaRow extends StatelessWidget {
       busy: sessions.isBusy,
       modelDetail: modelDetail,
       usage: controls.usage,
+      taskControls: _SessionTaskControls(
+        sessions: sessions,
+        canWrite: canWrite,
+        deviceId: deviceId,
+      ),
       onRefresh: () async {
         final error = await sessions.refreshSelectedControls();
         final refreshed = sessions.controls;
@@ -5796,28 +5826,22 @@ Color _sessionStatusColor(BuildContext context, _SessionStatusTone tone) =>
       _SessionStatusTone.success => context.appColors.success,
     };
 
-/// 会话卡片状态行文本：休眠会话在标签后展示最后活跃相对时间；活动时间未知
-/// （旧数据）显示「较早」，避免一排没有时间信息的休眠行无法排序感知。
+/// 会话卡片状态行：状态仅来自 Relay/Terminal，会附上可选的最后活动相对时间。
 String _sessionStatusLineText(MobileSession session) {
-  if (session.status == MobileSessionStatus.idle && session.isDormant()) {
-    final time = _relativeTime(session.lastActivityAt ?? session.updatedAt);
-    return time.isEmpty ? '休眠 · 较早' : '休眠 · $time';
-  }
-  return _sessionStatusPresentation(session).label;
+  final presentation = _sessionStatusPresentation(session);
+  final time = _relativeTime(session.lastActivityAt ?? session.updatedAt);
+  return time.isEmpty ? presentation.label : '${presentation.label} · $time';
 }
 
-/// idle 会话按 [MobileSession.isDormant] 衰减为「休眠」（判定规则见模型层）；
-/// 其余状态保持原有语义，stopped/errored 不随时间改写。
+/// 会话状态完全来自 Relay/Terminal，上次活动时间不参与状态推断。
 _SessionStatusPresentation _sessionStatusPresentation(MobileSession? session) {
   final status = session?.status;
-  if (status == MobileSessionStatus.idle && (session?.isDormant() ?? false)) {
-    return const _SessionStatusPresentation(
-      label: '休眠',
-      tone: _SessionStatusTone.neutral,
-      icon: Icons.bedtime_outlined,
-    );
-  }
   return switch (status) {
+    MobileSessionStatus.idle => const _SessionStatusPresentation(
+      label: '空闲',
+      tone: _SessionStatusTone.neutral,
+      icon: Icons.pause_circle_outline,
+    ),
     MobileSessionStatus.streaming => const _SessionStatusPresentation(
       label: '生成中',
       tone: _SessionStatusTone.info,

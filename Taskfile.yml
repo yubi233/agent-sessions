@@ -169,6 +169,35 @@ tasks:
       - node --test e2e-verify/real/dsh-live-result.test.mjs
       - git diff --check
 
+  test:v081:local:
+    desc: v0.8.1 DSH 工作区主模式本地 full gate（fixture + headed Chrome；不扫描真实根、不调用模型）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - go test ./internal/store ./internal/domain ./internal/daemon ./internal/relay ./internal/httpapi -run 'Test(V081|V08DSH|DSHWorkspace|WorkspaceProjection|Migrate|OpenEnsuresArchived)' -count=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/mobile_workspace_projection_test.dart test/http_relay_repository_test.dart test/session_controller_test.dart test/dsh_mode_test.dart test/local_visual_fixture_test.dart --concurrency=1
+      - pnpm --filter @agent-sessions/web test
+      - pnpm --filter @agent-sessions/web build
+      - node e2e-verify/run.mjs --suite v081-dsh-workspace-first
+      - git diff --check
+
+  test:v081:flutter:
+    desc: v0.8.1 DSH 工作区主模式的 macOS 可见窗口 targeted gate（需先关闭用户正在使用的 Agent Sessions 窗口）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs --test test/dsh_mode_test.dart --test test/local_visual_fixture_test.dart --case V081-10 --visual-scenario VISUAL-MOBILE-33
+
+  record:v081:
+    desc: v0.8.1 DSH 工作区 macOS fixture 录屏（需 V081-10 可见 Flutter gate 报告）
+    cmds:
+      - |
+        if [[ -z "${V081_FLUTTER_GATE_REPORT:-}" || ! -f "$V081_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v081 blocked: set V081_FLUTTER_GATE_REPORT to a passed V081 macOS gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v081 --gate-report "$V081_FLUTTER_GATE_REPORT"
+
   test:v08:real:
     desc: v0.8 真实 DSH 恢复门（Zen 测试池：nemotron-3-ultra-free、nemotron-3.5-lightning-free、ling-3.0-flash-fin-free、mimo-v2.5-free；429 按约定通过）
     cmds:
@@ -192,7 +221,7 @@ tasks:
           exit 2
         fi
       - node --test e2e-verify/record-v07.test.mjs e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
-      - node e2e-verify/mobile/record-macos.mjs --gate-report "$V07_FLUTTER_GATE_REPORT"
+      - node e2e-verify/mobile/record-macos.mjs --scope v07 --gate-report "$V07_FLUTTER_GATE_REPORT"
       - node e2e-verify/record-v07.mjs --gate-report "$V07_WEB_GATE_REPORT" --fixture
 
   test:e2e:web:

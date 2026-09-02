@@ -65,7 +65,7 @@ describe("P4 会话列表页", () => {
         ok: true,
         json: async () => ({
           sessions: [
-            { id: "s-dsh", workspace_id: "w-dsh", status: "streaming", provider: "dsh", last_seq: 12 },
+            { id: "s-dsh", workspace_id: "w-dsh", status: "streaming", provider: "dsh", display_name: "deploy review", last_seq: 12 },
             { id: "s-normal", workspace_id: "w-normal", status: "idle", provider: "codex", last_seq: 3 },
           ],
         }),
@@ -81,7 +81,11 @@ describe("P4 会话列表页", () => {
     );
     await wrapper.get('[data-testid="dsh-workspace-expand-w-dsh"]').trigger("click");
     expect(wrapper.get('[data-testid="session-link-s-dsh"]').text()).toContain("streaming");
+    expect(wrapper.get('[data-testid="session-link-s-dsh"]').text()).toContain("deploy review");
+    expect(wrapper.get('[data-testid="session-link-s-dsh"]').text()).not.toContain("s-dsh");
     await wrapper.get('[data-testid="dsh-workspace-search"]').setValue("agent");
+    expect(wrapper.find('[data-testid="dsh-workspace-select-w-dsh"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="dsh-workspace-search"]').setValue("deploy");
     expect(wrapper.find('[data-testid="dsh-workspace-select-w-dsh"]').exists()).toBe(true);
     await wrapper.get('[data-testid="dsh-workspace-search"]').setValue("not-found");
     expect(wrapper.find('[data-testid="dsh-workspaces-search-empty"]').exists()).toBe(true);
@@ -144,6 +148,48 @@ describe("P4 会话列表页", () => {
     // 本地安全搜索可输入，但不提供会改变 Relay 状态的写入口。
     expect(wrapper.find('[data-testid="dsh-workspace-search"]').exists()).toBe(true);
     expect(wrapper.find("textarea").exists()).toBe(false);
+  });
+
+  it("V081-09：Web 对异常工作区名和 DSH 会话名使用安全固定标签", async () => {
+    sessionState.token = "tok";
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("/v1/workspaces")) {
+        return {
+          ok: true,
+          json: async () => ({
+            workspaces: [{
+              id: "w-unsafe",
+              project_id: "opaque-project",
+              origin: "dsh",
+              display_name: "../private-root",
+            }],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          sessions: [{
+            id: "opaque-dsh-session-id",
+            workspace_id: "w-unsafe",
+            status: "idle",
+            provider: "dsh",
+            display_name: "C:\\private\\history",
+            last_seq: 1,
+          }],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const wrapper = mount(SessionsView, { global: { plugins: [router] } });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("未命名 DSH 工作区");
+    expect(wrapper.text()).not.toContain("private-root");
+    await wrapper.get('[data-testid="dsh-workspace-select-w-unsafe"]').trigger("click");
+    expect(wrapper.get('[data-testid="dsh-workspace-expand-w-unsafe"]').attributes("aria-expanded")).toBe("true");
+    expect(wrapper.get('[data-testid="session-link-opaque-dsh-session-id"]').text()).toContain("DSH 历史会话");
+    expect(wrapper.text()).not.toContain("opaque-dsh-session-id");
   });
 
   it("V081-03：没有已同步工作区时显示 DSH 空态", async () => {

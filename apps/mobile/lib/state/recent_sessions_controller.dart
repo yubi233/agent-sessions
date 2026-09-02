@@ -81,8 +81,7 @@ class RecentSessionsController extends ChangeNotifier {
     }
   }
 
-  /// 取消归档：从归档视图移除；会话回到默认列表（Relay 侧刷新活动时间，避免
-  /// 立即被休眠自动归档再次收走）。
+  /// 取消归档：从归档视图移除；会话回到默认列表，保留真实最后活动时间。
   Future<bool> unarchiveSession(String sessionId) async {
     if (sessionId.trim().isEmpty) return false;
     try {

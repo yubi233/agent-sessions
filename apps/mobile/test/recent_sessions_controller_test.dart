@@ -231,7 +231,7 @@ void main() {
     });
   });
 
-  group('MOBILE-V06-ACTIVITY 最后活动时间排序与休眠衰减', () {
+  group('MOBILE-V06-ACTIVITY 最后活动时间排序与状态投影', () {
     final base = DateTime.utc(2026, 8, 28, 10);
 
     MobileSession sessionWithActivity(
@@ -276,38 +276,20 @@ void main() {
       ]);
     });
 
-    test('idle 超过 10 分钟或活动未知即休眠；非 idle 不衰减', () {
-      expect(
-        sessionWithActivity(
-          's',
-          lastActivityAt: base.subtract(const Duration(minutes: 5)),
-        ).isDormant(now: base),
-        isFalse,
+    test('活动时间不会把 idle 推断为休眠，状态只由 Relay status 决定', () {
+      final staleIdle = sessionWithActivity(
+        'stale-idle',
+        lastActivityAt: base.subtract(const Duration(days: 30)),
       );
-      expect(
-        sessionWithActivity(
-          's',
-          lastActivityAt: base.subtract(const Duration(minutes: 11)),
-        ).isDormant(now: base),
-        isTrue,
+      final unknownIdle = sessionWithActivity('unknown-idle');
+      final streaming = sessionWithActivity(
+        'streaming',
+        lastActivityAt: base.subtract(const Duration(days: 30)),
+        status: 'streaming',
       );
-      expect(sessionWithActivity('s').isDormant(now: base), isTrue);
-      expect(
-        sessionWithActivity(
-          's',
-          lastActivityAt: base.subtract(const Duration(hours: 9)),
-          status: 'streaming',
-        ).isDormant(now: base),
-        isFalse,
-      );
-      expect(
-        sessionWithActivity(
-          's',
-          lastActivityAt: base.subtract(const Duration(hours: 9)),
-          status: 'stopped',
-        ).isDormant(now: base),
-        isFalse,
-      );
+      expect(staleIdle.status, MobileSessionStatus.idle);
+      expect(unknownIdle.status, MobileSessionStatus.idle);
+      expect(streaming.status, MobileSessionStatus.streaming);
     });
   });
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:agent_sessions_mobile/app/providers.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
@@ -7,6 +9,8 @@ import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:agent_sessions_mobile/state/terminal_status_controller.dart';
 import 'package:agent_sessions_mobile/storage/encrypted_cache.dart';
 import 'package:agent_sessions_mobile/storage/secure_token_store.dart';
+import 'package:agent_sessions_mobile/storage/theme_preference_store.dart';
+import 'package:agent_sessions_mobile/ui/app_theme.dart';
 import 'package:agent_sessions_mobile/ui/session_screens.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -88,7 +92,12 @@ void main() {
     await tester.tap(find.byKey(const Key('dsh-workspace-expand-ws-one')));
     await tester.pumpAndSettle();
     expect(find.text('尚无 DSH 会话'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('dsh-workspace-select-ws-one')));
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('dsh-workspace-select-ws-one')),
+        matching: find.byIcon(Icons.folder_outlined),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
     await tester.enterText(
@@ -122,7 +131,6 @@ void main() {
         lastSeen: DateTime.now(),
       ),
     ]);
-    await owner.terminals.refresh();
     final controller = SessionController(relay: relay);
     await controller.initialize();
     await tester.pumpWidget(_home(relay, controller, owner));
@@ -132,7 +140,87 @@ void main() {
     expect(find.byKey(const Key('dsh-workspace-sync-sheet')), findsOneWidget);
     expect(find.text('MacBook Pro'), findsOneWidget);
     expect(find.text('Linux'), findsNothing);
-    expect(find.byKey(const Key('dsh-workspace-sync-confirm')), findsOneWidget);
+    final confirm = tester.widget<FilledButton>(
+      find.byKey(const Key('dsh-workspace-sync-confirm')),
+    );
+    expect(confirm.onPressed, isNotNull);
+  });
+
+  testWidgets('V081-P1：同步入口刷新终端并明确提示能力缺失', (tester) async {
+    final relay = FixtureRelayRepository(clock: () => DateTime.now());
+    final owner = await _ownerContext(relay);
+    relay.replaceTerminals([
+      TerminalSummary(
+        id: 'term-without-dsh-sync',
+        hostname: 'Local Daemon',
+        platform: 'macos',
+        status: TerminalConnectionStatus.online,
+        protocolVersion: 1,
+        lastSeen: DateTime.now(),
+        capabilities: const ['start'],
+      ),
+    ]);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+    await tester.pumpWidget(_home(relay, controller, owner));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('dsh-workspace-sync-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('dsh-workspace-sync-no-terminal')),
+      findsOneWidget,
+    );
+    expect(find.text('没有可同步的本机终端。'), findsOneWidget);
+    expect(find.textContaining('重启本机 Daemon 后再试'), findsOneWidget);
+    expect(
+      find.byKey(const Key('dsh-workspace-sync-open-terminals')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('V081-P1：终端刷新挂起时同步弹窗立即反馈并在结果返回后可确认', (tester) async {
+    final relay = _DeferredTerminalRelay(clock: () => DateTime.now());
+    final owner = await _ownerContext(relay);
+    relay.replaceTerminals([
+      TerminalSummary(
+        id: 'term-delayed-dsh',
+        hostname: 'Delayed DSH Mac',
+        platform: 'macos',
+        status: TerminalConnectionStatus.online,
+        protocolVersion: 1,
+        lastSeen: DateTime.now(),
+        capabilities: const ['dsh_workspace_sync'],
+      ),
+    ]);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+    relay.deferTerminalRead();
+    await tester.pumpWidget(_home(relay, controller, owner));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('dsh-workspace-sync-button')));
+    await tester.pump();
+
+    expect(find.byKey(const Key('dsh-workspace-sync-sheet')), findsOneWidget);
+    expect(
+      find.byKey(const Key('dsh-workspace-sync-terminal-loading')),
+      findsOneWidget,
+    );
+    final pendingConfirm = tester.widget<FilledButton>(
+      find.byKey(const Key('dsh-workspace-sync-confirm')),
+    );
+    expect(pendingConfirm.onPressed, isNull);
+
+    await relay.completeTerminalRead();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Delayed DSH Mac'), findsOneWidget);
+    final confirm = tester.widget<FilledButton>(
+      find.byKey(const Key('dsh-workspace-sync-confirm')),
+    );
+    expect(confirm.onPressed, isNotNull);
   });
 
   testWidgets('V081-P2：窄屏工作区标题进入详情，创建入口锁定 DSH workspace', (tester) async {
@@ -202,6 +290,24 @@ void main() {
     final created = controller.sessions.single;
     expect(created.workspaceId, 'ws-dsh');
     expect(created.provider, 'dsh');
+  });
+
+  testWidgets('V081-05：通用新建会话页不暴露 DSH Provider', (tester) async {
+    final relay = FixtureRelayRepository(clock: () => DateTime.now());
+    final owner = await _ownerContext(relay);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+
+    await tester.pumpWidget(_newSession(relay, controller, owner));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('new-session-provider-select')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Codex').last, findsOneWidget);
+    expect(find.text('Claude').last, findsOneWidget);
+    expect(find.text('OpenCode').last, findsOneWidget);
+    expect(find.text('DeepSeek Harness'), findsNothing);
   });
 
   testWidgets('V081-P2：详情页导入确认明确仅导入元数据，且离线时禁用写入口', (tester) async {
@@ -289,8 +395,55 @@ void main() {
       find.byKey(const Key('dsh-workspace-master-detail-scroll')),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('dsh-workspace-toolbar-wide')), findsOneWidget);
+    expect(
+      find.byKey(const Key('dsh-workspace-toolbar-compact')),
+      findsNothing,
+    );
     expect(find.byKey(const Key('dsh-workspace-detail-pane')), findsOneWidget);
     expect(find.byKey(const Key('session-new-button')), findsNothing);
+  });
+
+  testWidgets('V081-10：窄屏搜索独占一行且不产生横向溢出', (tester) async {
+    tester.view.physicalSize = const Size(375, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final relay = FixtureRelayRepository(clock: () => DateTime.now());
+    final owner = await _ownerContext(relay);
+    relay.replaceTerminals([
+      TerminalSummary(
+        id: 'term-dsh',
+        hostname: 'DSH Mac',
+        platform: 'macos',
+        status: TerminalConnectionStatus.online,
+        protocolVersion: 1,
+        lastSeen: DateTime.now(),
+        capabilities: const ['start'],
+      ),
+    ]);
+    await owner.terminals.refresh();
+    relay.replaceWorkspaces(const [
+      MobileWorkspace(
+        id: 'ws-dsh',
+        projectId: 'dsh-project',
+        terminalId: 'term-dsh',
+        origin: MobileWorkspaceOrigin.dsh,
+        displayName: 'agent-sessions',
+      ),
+    ]);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+
+    await tester.pumpWidget(_home(relay, controller, owner));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('dsh-workspace-toolbar-compact')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('dsh-workspace-toolbar-wide')), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }
 
@@ -331,7 +484,10 @@ Widget _home(
     terminalStatusControllerProvider.overrideWith((_) => owner.terminals),
     sessionControllerProvider.overrideWith((_) => sessions),
   ],
-  child: const MaterialApp(home: SessionHomeScreen()),
+  child: MaterialApp(
+    theme: AppTheme.dark(AppAccent.ocean),
+    home: const SessionHomeScreen(),
+  ),
 );
 
 Widget _detail(
@@ -350,6 +506,20 @@ Widget _detail(
   ),
 );
 
+Widget _newSession(
+  FixtureRelayRepository relay,
+  SessionController sessions,
+  _OwnerContext owner,
+) => ProviderScope(
+  overrides: [
+    relayRepositoryProvider.overrideWithValue(relay),
+    appControllerProvider.overrideWith((_) => owner.app),
+    terminalStatusControllerProvider.overrideWith((_) => owner.terminals),
+    sessionControllerProvider.overrideWith((_) => sessions),
+  ],
+  child: const MaterialApp(home: NewSessionScreen()),
+);
+
 Widget _routedHome(
   FixtureRelayRepository relay,
   SessionController sessions,
@@ -364,3 +534,26 @@ Widget _routedHome(
   ],
   child: MaterialApp.router(routerConfig: router),
 );
+
+class _DeferredTerminalRelay extends FixtureRelayRepository {
+  _DeferredTerminalRelay({super.clock});
+
+  Completer<List<TerminalSummary>>? _terminalRead;
+
+  void deferTerminalRead() {
+    _terminalRead = Completer<List<TerminalSummary>>();
+  }
+
+  Future<void> completeTerminalRead() async {
+    final pending = _terminalRead;
+    if (pending == null) return;
+    _terminalRead = null;
+    pending.complete(await super.listTerminals());
+  }
+
+  @override
+  Future<List<TerminalSummary>> listTerminals() {
+    final pending = _terminalRead;
+    return pending?.future ?? super.listTerminals();
+  }
+}

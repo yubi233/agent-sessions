@@ -211,7 +211,7 @@ void main() {
     expect(find.text('v0.0.1'), findsOneWidget);
     expect(find.text('可用'), findsOneWidget);
     expect(find.textContaining('模型 2 项，推理等级 3 项'), findsOneWidget);
-    expect(find.textContaining('Host 未提供推理等级控制。'), findsOneWidget);
+    expect(find.text('effort_select 不可用'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('session-model-details-close')));
     await tester.pumpAndSettle();
@@ -264,7 +264,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('自动（模型内置）'), findsOneWidget);
-    expect(find.text('自动推理（当前模型未提供可选档位）'), findsOneWidget);
+    expect(find.text('effort_select 不可用'), findsOneWidget);
     expect(find.text('用量统计'), findsOneWidget);
     expect(find.textContaining('输入 11.9k'), findsOneWidget);
     expect(find.textContaining('输出 111'), findsOneWidget);

@@ -496,7 +496,7 @@ func newIdentityKeyView(row store.TerminalIdentityKeyRow) identityKeyView {
 
 func (a *API) handleListSessions(c *gin.Context) {
 	subj := subject(c)
-	// ?archived=true 读取归档列表；归档读取不触发对账/自动归档 sweep。
+	// ?archived=true 读取显式归档列表；归档读取不触发状态对账。
 	var sessions []store.SessionRow
 	var err error
 	if c.Query("archived") == "true" {
@@ -1654,7 +1654,7 @@ type sessionView struct {
 	ForkedFromMessageID string `json:"forked_from_message_id,omitempty"`
 	ArchivedAtUnixMS    int64  `json:"archived_at_unix_ms,omitempty"`
 	// LastActivityAtUnixMS 是最后一次状态/事件写入的可审计活动时间；0 表示旧数据未知。
-	// 客户端用它做「最后消息时间」展示、列表排序与 idle 休眠衰减，禁止改作他用。
+	// 客户端用它做「最后消息时间」展示和列表排序，禁止改作状态推断。
 	LastActivityAtUnixMS int64 `json:"last_activity_at_unix_ms,omitempty"`
 }
 

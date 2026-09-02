@@ -5,6 +5,9 @@ import '../../../domain/control_models.dart';
 
 /// v0.5/P5-E：GoalDock 是 `conversation.input.dock` 的只读/轻编辑 strip。
 ///
+/// 当前会话页已将 Goal 操作收纳到模型设置弹窗；此组件保留给兼容调用方，
+/// 不再由会话 composer 挂载。
+///
 /// 这里不读取 timeline，也不直接提交 Relay 命令；保存与暂停/恢复都通过上层
 /// `SessionController` 注入的回调执行，确保 Goal 仍走统一 lease、capability 与幂等链路。
 class SessionGoalDock extends StatefulWidget {

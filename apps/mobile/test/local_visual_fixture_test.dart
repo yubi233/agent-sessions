@@ -41,11 +41,11 @@ void main() {
         ),
         isTrue,
       );
-      // 列表按最后活动时间排序：刚刚活跃的流式主会话在最前，两个休眠会话按
-      // 陈旧度（2 小时前、3 天前）依次沉底。
+      // 列表按最后活动时间排序：刚刚活跃的流式主会话在最前，两个 idle 会话按
+      // 陈旧度（2 小时前、3 天前）依次沉底；陈旧不会改变 Relay 上报的状态。
       expect(sessions.first.status, MobileSessionStatus.streaming);
-      expect(sessions[1].isDormant(), isTrue);
-      expect(sessions[2].isDormant(), isTrue);
+      expect(sessions[1].status, MobileSessionStatus.idle);
+      expect(sessions[2].status, MobileSessionStatus.idle);
       expect(
         sessions[1].lastActivityAt!.isAfter(sessions[2].lastActivityAt!),
         isTrue,

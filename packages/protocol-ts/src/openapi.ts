@@ -448,7 +448,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description 默认返回未归档会话（按 last_activity 倒序），读取前会执行确定性对账与休眠自动归档 sweep；?archived=true 时返回归档列表且不触发 sweep。 */
+        /** @description 默认返回未归档会话（按 last_activity 倒序），读取前仅执行确定性历史状态对账；?archived=true 时返回归档列表。 */
         get: operations["listSessions"];
         put?: never;
         /** @description 仅 android_owner/android 写控制端可创建逻辑会话。 */
@@ -1050,7 +1050,7 @@ export interface components {
             provider?: string;
             /**
              * Format: int64
-             * @description 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端用于最后消息时间展示、列表排序与 idle 休眠衰减。
+             * @description 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端仅用于最后消息时间展示与列表排序，不参与会话状态推断。
              */
             last_activity_at_unix_ms?: number;
         };

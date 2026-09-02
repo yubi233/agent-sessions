@@ -8,6 +8,7 @@ import { p4WebReadTransport } from "../suites/p4-web-read-transport.mjs";
 import { p4WebReadonly } from "../suites/p4-web-readonly.mjs";
 import { p5OpencodeCapabilities } from "../suites/p5-opencode-capabilities.mjs";
 import { v08DshReadonly } from "../suites/v08-dsh-readonly.mjs";
+import { v081DshWorkspaceFirst } from "../suites/v081-dsh-workspace-first.mjs";
 
 // registry 是本仓库 headed 浏览器回归的唯一事实源。
 export const registry = [
@@ -19,4 +20,5 @@ export const registry = [
   p4WebReadTransport,
   p5OpencodeCapabilities,
   v08DshReadonly,
+  v081DshWorkspaceFirst,
 ];

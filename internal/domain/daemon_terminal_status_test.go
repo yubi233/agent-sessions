@@ -71,13 +71,17 @@ func newDaemonEventStatusFixture(t *testing.T) (*DaemonService, store.Repository
 	return NewDaemonService(repo), repo, session.ID, commandID
 }
 
-func daemonStatusEventInput(sessionID, commandID, terminalStatus, eventID string) DaemonEventInput {
+func daemonStatusEventInputForEvent(sessionID, commandID, eventType, terminalStatus, eventID string) DaemonEventInput {
 	return DaemonEventInput{
 		AccountID: "acct-daemon-status", DeviceID: "dev-daemon-status", Role: RoleTerminal,
 		ProtocolVersion: 1, EventID: eventID, CommandID: commandID, SessionID: sessionID,
-		EventType: "turn.completed", TerminalStatus: terminalStatus,
+		EventType: eventType, TerminalStatus: terminalStatus,
 		EnvelopeJSON: `{"alg":"fixture-aead","key_id":"fixture-key","nonce":"fixture-nonce","ciphertext":"opaque","aad_hash":"fixture-aad","payload_version":1}`,
 	}
+}
+
+func daemonStatusEventInput(sessionID, commandID, terminalStatus, eventID string) DaemonEventInput {
+	return daemonStatusEventInputForEvent(sessionID, commandID, "turn.completed", terminalStatus, eventID)
 }
 
 func TestDaemonUploadEventMapsIdleAndStoppedTerminalStatus(t *testing.T) {
@@ -121,5 +125,26 @@ func TestDaemonUploadEventRejectsInvalidTerminalStatusProjection(t *testing.T) {
 				t.Fatalf("validateDaemonTerminalStatus(%q, %q) unexpectedly succeeded", tc.eventType, tc.status)
 			}
 		})
+	}
+}
+
+func TestDaemonUploadEventDoesNotReopenTerminalTurnForCommandUpdate(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, sessionID, commandID := newDaemonEventStatusFixture(t)
+	for _, event := range []DaemonEventInput{
+		daemonStatusEventInputForEvent(sessionID, commandID, "user.message", "", "evt-user"),
+		daemonStatusEventInput(sessionID, commandID, SessionStopped, "evt-stopped"),
+		daemonStatusEventInputForEvent(sessionID, commandID, "command.updated", "", "evt-command-update"),
+	} {
+		if _, err := svc.UploadEvent(ctx, event); err != nil {
+			t.Fatalf("upload %s: %v", event.EventType, err)
+		}
+	}
+	session, err := repo.SessionByID(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if session.Status != SessionStopped {
+		t.Fatalf("session status=%q, want %q after command.updated", session.Status, SessionStopped)
 	}
 }

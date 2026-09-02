@@ -307,7 +307,9 @@ abstract final class AppTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll(Size.fromHeight(52)),
+          // Size.fromHeight creates an infinite width. That is valid only in
+          // a bounded vertical layout and crashes buttons placed in a Row.
+          minimumSize: const WidgetStatePropertyAll(Size(0, 52)),
           backgroundColor: WidgetStatePropertyAll(primary),
           foregroundColor: WidgetStatePropertyAll(onPrimary),
           shape: const WidgetStatePropertyAll(shape),
@@ -322,7 +324,7 @@ abstract final class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll(Size.fromHeight(48)),
+          minimumSize: const WidgetStatePropertyAll(Size(0, 48)),
           foregroundColor: WidgetStatePropertyAll(primaryText),
           side: WidgetStatePropertyAll(BorderSide(color: border)),
           shape: const WidgetStatePropertyAll(shape),

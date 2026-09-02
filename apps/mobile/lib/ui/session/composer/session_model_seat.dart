@@ -36,7 +36,7 @@ class SessionModelCatalogRefresh {
 /// v0.5/P5-E5：会话级模型与推理等级入口。
 ///
 /// Composer 只保留一个固定高度的单行摘要。点击摘要在同一底部弹层中选择模型和
-/// 推理等级；详情按钮只展示 display-safe 投影，不读取 Provider 正文或密文。
+/// 推理等级；详情按钮打开 display-safe 设置与任务控制，不读取 Provider 正文或密文。
 class SessionModelSeat extends StatefulWidget {
   const SessionModelSeat({
     required this.catalog,
@@ -57,6 +57,8 @@ class SessionModelSeat extends StatefulWidget {
       availability: CapabilityAvailability.unsupported,
     ),
     this.modelDetail,
+    this.capabilities = const <CapabilityEntry>[],
+    this.taskControls,
     this.busy = false,
     this.usage,
     super.key,
@@ -69,6 +71,12 @@ class SessionModelSeat extends StatefulWidget {
   final CapabilityEntry modelCapability;
   final CapabilityEntry effortCapability;
   final CapabilityModelDetail? modelDetail;
+
+  /// 当前 Provider 的安全能力投影；完整状态只在模型设置弹窗展示。
+  final List<CapabilityEntry> capabilities;
+
+  /// 会话级 Plan/Goal/Skill 控制区；只在模型设置详情中展开。
+  final Widget? taskControls;
   final String? modelBlockedReason;
   final String? effortBlockedReason;
   final bool busy;
@@ -107,6 +115,13 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
   bool get _hasSelectableEfforts =>
       widget.catalog.efforts.isNotEmpty ||
       widget.modelDetail?.efforts.isNotEmpty == true;
+
+  List<CapabilityEntry> get _effectiveCapabilities {
+    if (widget.capabilities.isNotEmpty) return widget.capabilities;
+    // Keep the standalone widget contract useful for callers that predate the
+    // full capability snapshot; the session screen passes the complete list.
+    return [widget.modelCapability, widget.effortCapability];
+  }
 
   String get _displayEffort {
     final effort = widget.catalog.effort?.trim();
@@ -221,24 +236,39 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                       '模型 ${widget.catalog.models.length} 项，推理等级 ${widget.catalog.efforts.length} 项',
                 ),
                 const Divider(height: 20),
-                _ModelDetailRow(
-                  key: const Key('session-model-details-model-capability'),
-                  label: '模型切换',
-                  value: _capabilityDescription(
-                    widget.modelCapability,
-                    widget.modelBlockedReason,
-                  ),
+                Text(
+                  'Provider 能力',
+                  style: Theme.of(dialogContext).textTheme.titleSmall,
                 ),
-                _ModelDetailRow(
-                  key: const Key('session-model-details-effort-capability'),
-                  label: _usesAutomaticReasoning ? '推理' : '推理等级',
-                  value: _usesAutomaticReasoning
-                      ? '自动推理（当前模型未提供可选档位）'
-                      : _capabilityDescription(
-                          widget.effortCapability,
-                          widget.effortBlockedReason,
+                const SizedBox(height: 8),
+                if (_effectiveCapabilities.isEmpty)
+                  const Text('暂无能力状态。')
+                else
+                  Wrap(
+                    key: const Key('session-model-details-capabilities'),
+                    spacing: 10,
+                    runSpacing: 7,
+                    children: [
+                      for (final entry in _effectiveCapabilities)
+                        _ModelCapabilityLabel(
+                          entry: entry,
+                          overrideReason: entry.name == 'model_select'
+                              ? widget.modelBlockedReason
+                              : entry.name == 'effort_select'
+                              ? widget.effortBlockedReason
+                              : null,
                         ),
-                ),
+                    ],
+                  ),
+                if (widget.taskControls != null) ...[
+                  const Divider(height: 20),
+                  Text(
+                    '任务控制',
+                    style: Theme.of(dialogContext).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  widget.taskControls!,
+                ],
                 if (usage != null) ...[
                   const Divider(height: 20),
                   Text(
@@ -364,10 +394,10 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
             ),
           ),
           Tooltip(
-            message: '查看模型设置详情',
+            message: '模型设置与任务控制',
             child: IconButton(
               key: const Key('session-model-seat-details'),
-              tooltip: '查看模型设置详情',
+              tooltip: '模型设置与任务控制',
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),
@@ -718,19 +748,49 @@ class _ModelDetailRow extends StatelessWidget {
   );
 }
 
-String _capabilityDescription(
-  CapabilityEntry capability,
-  String? blockedReason,
-) {
-  final reason = blockedReason?.trim();
-  if (reason != null && reason.isNotEmpty) {
-    return '${capability.availability.label} · $reason';
+class _ModelCapabilityLabel extends StatelessWidget {
+  const _ModelCapabilityLabel({required this.entry, this.overrideReason});
+
+  final CapabilityEntry entry;
+  final String? overrideReason;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (entry.availability) {
+      CapabilityAvailability.native => context.appColors.success,
+      CapabilityAvailability.emulated => context.appColors.warning,
+      CapabilityAvailability.unsupported => context.appColors.neutral,
+    };
+    final override = overrideReason?.trim();
+    final declared = entry.reason?.trim();
+    final reason = override?.isNotEmpty == true ? override : declared;
+    return Tooltip(
+      message: reason == null || reason.isEmpty
+          ? entry.availability.label
+          : reason,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            entry.availability == CapabilityAvailability.native
+                ? Icons.check_circle_outline
+                : entry.availability == CapabilityAvailability.emulated
+                ? Icons.auto_awesome_outlined
+                : Icons.block_outlined,
+            size: 14,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '${entry.name} ${entry.availability.label}',
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: color),
+          ),
+        ],
+      ),
+    );
   }
-  final declaredReason = capability.reason?.trim();
-  if (declaredReason != null && declaredReason.isNotEmpty) {
-    return '${capability.availability.label} · $declaredReason';
-  }
-  return capability.availability.label;
 }
 
 IconData _providerIcon(String? provider) {

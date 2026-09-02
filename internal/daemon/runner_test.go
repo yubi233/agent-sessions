@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -764,9 +765,18 @@ func TestSessionRunnerUnsupportedKindFailsClosed(t *testing.T) {
 	}
 }
 
-// f) 无实例的 session.send 返回错误（local_state_missing 语义），fail-closed。
+// f) 无实例的 session.send 返回错误（local_state_missing 语义），fail-closed；
+// 同时必须补发 user_message/session_error/turn_completed，客户端才有失败痕迹、
+// 不会无限停留在生成中。
 func TestSessionRunnerSendWithoutInstanceFailsClosed(t *testing.T) {
-	_, runner, fake := newRunnerFixture(t, "opencode")
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	var sinkMu sync.Mutex
+	var emitted []adapter.EventType
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		sinkMu.Lock()
+		defer sinkMu.Unlock()
+		emitted = append(emitted, event.Type)
+	})
 	err := runner.ConsumeCommand(context.Background(), Command{
 		Kind:        "session.send",
 		PayloadJSON: `{"session_id":"ghost","ciphertext":{"fixture_payload":{"message":"hi"}}}`,
@@ -778,6 +788,17 @@ func TestSessionRunnerSendWithoutInstanceFailsClosed(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.handles) != 0 {
 		t.Fatalf("无实例时不得创建 handle")
+	}
+	sinkMu.Lock()
+	defer sinkMu.Unlock()
+	want := []adapter.EventType{
+		adapter.EventUserMessage, adapter.EventSessionError, adapter.EventTurnCompleted,
+	}
+	if !reflect.DeepEqual(emitted, want) {
+		t.Fatalf("emitted = %v, want %v", emitted, want)
+	}
+	if _, err := s.Get(eventKey("ghost")); err != nil {
+		t.Fatalf("失败终态必须回写 last_event 摘要: %v", err)
 	}
 }
 

@@ -1476,7 +1476,7 @@ type RegisterRequest struct {
 type Session struct {
 	Id string `json:"id"`
 
-	// LastActivityAtUnixMs 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端用于最后消息时间展示、列表排序与 idle 休眠衰减。
+	// LastActivityAtUnixMs 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端仅用于最后消息时间展示与列表排序，不参与会话状态推断。
 	LastActivityAtUnixMs *int64  `json:"last_activity_at_unix_ms,omitempty"`
 	LastSeq              *int64  `json:"last_seq,omitempty"`
 	Provider             *string `json:"provider,omitempty"`

@@ -261,6 +261,9 @@ class SessionController extends ChangeNotifier {
       if (state.isSucceeded && _workspaceSyncWaiting) {
         await refreshWorkspaces();
         await refreshSessions();
+      } else if (state.isPending && _workspaceSyncWaiting) {
+        _workspaceErrorMessage =
+            '同步请求仍在等待终端响应。请确认本机 Daemon 在线且支持 DSH 工作区同步，再下拉刷新查看结果。';
       }
       return state;
     } on RelayFailure catch (failure) {
@@ -981,11 +984,6 @@ class SessionController extends ChangeNotifier {
 
   /// resume 入口的阻断原因；离线状态也允许发起（与发送不同），只要求 capability 与 lease。
   String? resumeBlockedReason({required bool canWrite}) {
-    // V08-12 的真实 DSH load/resume/send gate 尚未通过。历史元数据可浏览，
-    // 但任何 DSH 会话都不能把未证实的恢复能力展示成可用。
-    if (selectedSession?.provider == 'dsh') {
-      return 'DSH 历史会话恢复暂不可用。';
-    }
     final declared = selectedProviderCapabilities.capability('resume');
     if (!declared.isSupported) {
       return declared.reason ?? '恢复会话当前不可用。';
@@ -1833,27 +1831,35 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  /// 轮询命令终态。succeeded 返回 true；failed/rejected/cancelled/expired 返回
-  /// false；状态查询失败或超时返回 true，避免确认链路故障阻塞既有受理语义。
-  Future<bool> _awaitCommandTerminal(String commandId) async {
+  /// 轮询命令终态回执。succeeded/accepted 等非失败终态返回回执；failed/rejected/
+  /// cancelled/expired 返回回执；状态查询失败或超时返回 null，调用方自行决定
+  /// 是否回退到"受理即确认"的旧语义。
+  Future<SessionCommandReceipt?> _awaitCommandReceipt(String commandId) async {
     for (var attempt = 0; attempt < 24; attempt += 1) {
       try {
         final receipt = await _relay.getSessionCommand(commandId);
         switch (receipt.status) {
-          case 'succeeded':
-            return true;
           case 'failed':
           case 'rejected':
           case 'cancelled':
           case 'expired':
-            return false;
+            return receipt;
+          case 'succeeded':
+            return receipt;
         }
       } on RelayFailure {
-        return true;
+        return null;
       }
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-    return true;
+    return null;
+  }
+
+  /// 轮询命令终态。succeeded 返回 true；failed/rejected/cancelled/expired 返回
+  /// false；状态查询失败或超时返回 true，避免确认链路故障阻塞既有受理语义。
+  Future<bool> _awaitCommandTerminal(String commandId) async {
+    final receipt = await _awaitCommandReceipt(commandId);
+    return receipt == null || receipt.status == 'succeeded';
   }
 
   Future<bool> _submitCommand({
@@ -1894,6 +1900,22 @@ class SessionController extends ChangeNotifier {
         }
         onAccepted();
       }
+      if (kind == SessionCommandKind.send && onAccepted == null) {
+        // send 同样不能把受理当成功：Daemon 执行失败（如本机实例缺失
+        // local_state_missing）必须立刻浮出并清掉乐观气泡，而不是让客户端在
+        // 快照轮询耗尽后无限停留在生成中。终态查询不可用（null）时保持旧的
+        // 快照轮询语义，不放大确认链路抖动。
+        final terminal = await _awaitCommandReceipt(receipt.id);
+        if (terminal != null && terminal.status != 'succeeded') {
+          // 执行端可能已经把会话收口为 idle，但失败回执本身不包含 session
+          // 投影；先补拉一次快照，避免旧的 streaming 状态继续留在 UI。
+          await _bestEffortRefreshAfterCommandFailure(sessionId);
+          throw RelayFailure(
+            RelayFailureKind.protocol,
+            '消息发送失败（命令 ${terminal.status}），请查看时间线中的失败提示。',
+          );
+        }
+      }
       // 提交后模型需要数秒才产出事件；首次拉取时 message.completed 多半尚未落库。
       // 每一批都合并，直到明确的 completed_turn 或非 streaming 状态到达，
       // 否则只合并第一批会把回复显示出来却遗留“生成中”状态。
@@ -1901,14 +1923,18 @@ class SessionController extends ChangeNotifier {
       if (_selectedSessionId == sessionId) _mergeSnapshot(latest);
       var completed = _snapshotCompletesTurn(latest);
       if (kind == SessionCommandKind.send && !completed) {
-        const attempts = 30;
+        // 免费模型一轮常见 30-60s；轮询窗口必须覆盖典型回合并，
+        // 否则回复落地后客户端仍停留在“生成中”，只能重进会话恢复。
+        const attempts = 120;
         for (var i = 0; i < attempts; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 500));
           latest = await _relay.getSessionSnapshot(
             sessionId,
             afterSequence: latest.session.lastSequence,
           );
-          if (_selectedSessionId == sessionId && latest.events.isNotEmpty) {
+          // 即使本批没有新事件，也要合并 session.status。事件可能已在前一批
+          // 被消费，而执行端随后才把 streaming 收口为 idle。
+          if (_selectedSessionId == sessionId) {
             _mergeSnapshot(latest, appendTimeline: true);
           }
           completed = _snapshotCompletesTurn(latest);
@@ -1930,6 +1956,23 @@ class SessionController extends ChangeNotifier {
       return true;
     });
     return accepted == true;
+  }
+
+  /// 发送命令已在执行端失败时，补拉一次只读快照收口 session.status 和事件。
+  /// 刷新失败不能覆盖原始发送错误，也不能把失败变成成功。
+  Future<void> _bestEffortRefreshAfterCommandFailure(String sessionId) async {
+    if (_selectedSessionId != sessionId) return;
+    try {
+      final snapshot = await _relay.getSessionSnapshot(
+        sessionId,
+        afterSequence: _cursorFor(sessionId),
+      );
+      if (_selectedSessionId == sessionId) {
+        _mergeSnapshot(snapshot, appendTimeline: true);
+      }
+    } catch (_) {
+      // Keep the command failure as the user-visible error when recovery is unavailable.
+    }
   }
 
   bool _snapshotCompletesTurn(SessionSnapshot snapshot) {

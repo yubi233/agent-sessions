@@ -676,9 +676,9 @@ input {
 
 .workspace-select {
   align-items: flex-start;
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
-  gap: 3px;
+  gap: 10px;
   min-width: 0;
   text-align: left;
 }
@@ -700,6 +700,33 @@ input {
 .workspace-empty-session {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.workspace-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.workspace-folder-icon {
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  flex: 0 0 20px;
+  height: 15px;
+  margin-top: 2px;
+  position: relative;
+}
+
+.workspace-folder-icon::before {
+  border: 1.5px solid currentColor;
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+  content: "";
+  height: 4px;
+  left: 1px;
+  position: absolute;
+  top: -5px;
+  width: 8px;
 }
 
 .workspace-label {

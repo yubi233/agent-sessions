@@ -349,6 +349,32 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 	}
 	rs, err := r.lookupSession(sessionID)
 	if err != nil {
+		// 查无实例（如 Daemon 重启后本地映射丢失、客户端未先 session.start）同样
+		// 不会产生任何 Provider 事件。与下方 handle.Send 同步失败保持同一条用户
+		// 可见语义：先落 user_message，再补发脱敏错误与失败终态；否则时间线里的
+		// 消息之后没有任何失败痕迹，客户端会无限停留在生成中。传输细节只保留在
+		// 命令回执错误码（local_state_missing），不进入公共协议。
+		r.emitEvent(sessionID, adapter.Event{
+			Type: adapter.EventUserMessage,
+			Payload: map[string]any{
+				"instance_id": sessionID,
+				"text":        text,
+			},
+		})
+		r.emitEvent(sessionID, adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": sessionID,
+				"message":     "本机会话尚未启动，消息未送达 Provider；请先启动会话。",
+			},
+		})
+		r.emitEvent(sessionID, adapter.Event{
+			Type: adapter.EventTurnCompleted,
+			Payload: map[string]any{
+				"instance_id": sessionID,
+				"stop_reason": "send_failed",
+			},
+		})
 		return err
 	}
 	// prompt 是用户时间线消息的规范来源；在调用 Provider 前先写入，避免模型回合

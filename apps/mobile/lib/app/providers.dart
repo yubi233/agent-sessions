@@ -79,6 +79,8 @@ final relayRepositoryProvider = Provider<RelayRepository>((ref) {
       BaseOptions(
         baseUrl: relayBaseUrl,
         connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 12),
+        sendTimeout: const Duration(seconds: 12),
       ),
     ),
     readTokens: () => ref.read(secureTokenStoreProvider).read(),

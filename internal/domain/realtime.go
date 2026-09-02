@@ -296,20 +296,11 @@ func (s *SessionService) GetSession(ctx context.Context, id string) (store.Sessi
 
 const staleSessionRecoveryTTL = 2 * time.Minute
 
-// idleAutoArchiveTTL 是休眠会话自动归档阈值：idle 且最后活动超过该时长（或活动
-// 时间未知的旧数据）从默认列表转入归档。归档是可逆的本地元数据操作（unarchive
-// 即恢复），不删除任何数据或事件；仅处理 idle，streaming/stopped/errored 不参与。
-const idleAutoArchiveTTL = 24 * time.Hour
-
-// ListSessions 列出账号下未归档会话，并在返回前收口确定性历史悬挂状态、把长期
-// 休眠的 idle 会话自动归档。
+// ListSessions 列出账号下未归档会话，并在返回前收口确定性历史悬挂状态。
 // 该恢复只处理：无活跃命令、无当前实例且最后事件已经是 message.completed 的旧 running
 // 会话；不会根据“未归档”或单纯的年龄隐藏数据，也不会把仍有活动的会话误判为完成。
 func (s *SessionService) ListSessions(ctx context.Context, accountID string) ([]store.SessionRow, error) {
 	if err := s.ReconcileStaleRunningSessions(ctx, accountID, staleSessionRecoveryTTL); err != nil {
-		return nil, err
-	}
-	if _, err := s.AutoArchiveStaleIdleSessions(ctx, accountID, idleAutoArchiveTTL); err != nil {
 		return nil, err
 	}
 	return s.repo.ListSessions(ctx, accountID)
@@ -384,52 +375,6 @@ func (s *SessionService) ReconcileStaleRunningSessions(ctx context.Context, acco
 	})
 }
 
-// AutoArchiveStaleIdleSessions 把长期休眠的 idle 会话自动归档：最后活动超过 ttl
-// （或活动时间未知的旧数据）即从默认列表转入归档。这是列表整理策略，不是状态
-// 收口——archive 与 complete/idle 状态正交且可逆（unarchive 即恢复），数据与
-// 事件全部保留并写审计。仅处理 idle；running/streaming/stopped/errored 不参与，
-// 因此活跃与异常会话永远不会被本策略隐藏。幂等：已归档会话不在默认列表中。
-func (s *SessionService) AutoArchiveStaleIdleSessions(ctx context.Context, accountID string, ttl time.Duration) (int, error) {
-	if ttl <= 0 {
-		ttl = idleAutoArchiveTTL
-	}
-	cutoff := s.now().Add(-ttl).UnixMilli()
-	archived := 0
-	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
-		sessions, err := tx.ListSessions(ctx, accountID)
-		if err != nil {
-			return err
-		}
-		for _, sess := range sessions {
-			if sess.Status != SessionIdle {
-				continue
-			}
-			if sess.LastActivityAtUnixMS != 0 && sess.LastActivityAtUnixMS > cutoff {
-				continue
-			}
-			if err := tx.ArchiveSession(ctx, sess.ID, s.now().UnixMilli()); err != nil {
-				return err
-			}
-			archived++
-			metadata, err := json.Marshal(map[string]any{
-				"session_id": sess.ID, "reason": "idle_dormant_auto_archive",
-				"last_activity_at_unix_ms": sess.LastActivityAtUnixMS,
-			})
-			if err != nil {
-				return err
-			}
-			if err := tx.AppendAudit(ctx, sess.AccountID, "session.auto_archived", string(metadata)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return archived, nil
-}
-
 // SessionRecoverySummary 汇总一次 Terminal 启动清扫的收口计数；只用于诊断日志与响应。
 type SessionRecoverySummary struct {
 	RecoveredIdle    int `json:"recovered_idle"`
@@ -498,7 +443,7 @@ func recoverStaleSessionsForTerminal(ctx context.Context, repo store.Repository,
 				}
 			}
 			// 收口保留原活动时间：last_activity 继续指向真实的最后一次事件/命令，
-			// 客户端的「最后消息时间」排序与休眠展示不会被清扫时间污染。
+			// 客户端的「最后消息时间」排序不会被清扫时间污染。
 			if err := tx.SetSessionStatusKeepActivity(ctx, sess.ID, status); err != nil {
 				return err
 			}
@@ -596,16 +541,10 @@ func (s *SessionService) UnarchiveSession(ctx context.Context, accountID, role, 
 		if err := tx.UnarchiveSession(ctx, sessionID); err != nil {
 			return err
 		}
-		// 取消归档视为一次用户主动操作：刷新活动时间，否则下一次 ListSessions 的
-		// 休眠自动归档会把仍然陈旧的 idle 会话立刻再次归档，形成恢复即消失的循环。
-		if err := tx.SetSessionStatusAt(ctx, sessionID, sess.Status, s.now().UnixMilli()); err != nil {
-			return err
-		}
 		if err := tx.AppendAudit(ctx, accountID, "session.unarchived", `{"session_id":"`+sessionID+`"}`); err != nil {
 			return err
 		}
 		sess.ArchivedAtUnixMS = 0
-		sess.LastActivityAtUnixMS = s.now().UnixMilli()
 		out = sess
 		return nil
 	})
