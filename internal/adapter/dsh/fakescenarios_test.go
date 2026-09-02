@@ -188,8 +188,8 @@ func pushAvailableCommands(t *testing.T, fb *fakeBridge, sessionID string, comma
 
 // (V083-01 基线) 当前 handle 未映射 current_mode_update：丢弃并按变体计数，不产生事件。
 // P1 实现 mode 投影后，本测试由 mode 目录/set_mode 场景测试替代或翻转。
-func TestBaselineCurrentModeUpdateDropped(t *testing.T) {
-	const sessionID = "sess-mode-baseline"
+func TestCurrentModeUpdateUpdatesModeSnapshot(t *testing.T) {
+	const sessionID = "sess-mode-update"
 	fb, _ := newScenarioBridge(t, scenarioConfig{})
 	fb.script = func(fb *fakeBridge, msg map[string]any) {
 		if methodOf(msg) == "initialize" {
@@ -206,16 +206,22 @@ func TestBaselineCurrentModeUpdateDropped(t *testing.T) {
 		respondByMethod(t, sessionID)(fb, msg)
 	}
 	h := startWithFake(t, fb)
-	pushModeUpdate(t, fb, sessionID, "workspace-write")
-	// 事件通道必须保持安静（无伪造 mode 事件）。
+	// v0.8.3 P3：current_mode_update 不再按变体丢弃，而是更新句柄内的
+	// mode 目录快照（SessionModeHandle.Modes() 的真相源）；mode 不是 canonical
+	// 事件，事件通道必须保持安静。
+	pushModeUpdate(t, fb, sessionID, "danger-full-access")
 	select {
 	case ev := <-h.Events():
-		t.Fatalf("未映射的 current_mode_update 不应产生事件: %+v", ev)
+		t.Fatalf("current_mode_update 不应产生 canonical 事件: %+v", ev)
 	case <-time.After(300 * time.Millisecond):
 	}
 	hh := h.(*handle)
-	if got := hh.droppedCounts()["update:current_mode_update"]; got != 1 {
-		t.Fatalf("current_mode_update 应按变体计数丢弃，dropped=%v", hh.droppedCounts())
+	info := hh.Modes()
+	if info.CurrentModeID != "danger-full-access" {
+		t.Fatalf("current_mode_update 应更新快照，得到 %q", info.CurrentModeID)
+	}
+	if got := hh.droppedCounts()["update:current_mode_update"]; got != 0 {
+		t.Fatalf("current_mode_update 不应计入丢弃: %v", hh.droppedCounts())
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
 // 本文件是 v0.8.3 P0 冻结的 DSH ACP 扩展 wire 契约（ADR-014 §7/§8 的代码化事实源）。
@@ -36,14 +38,16 @@ const DshExtensionMetaKey = "com.deepseek.dsh/extensions"
 const DshExtensionProtocolVersion = 1
 
 // dsh/* 方法与通知名（P0 冻结清单；新增必须先修订 ADR-014）。
+// 客户端→桥的方法名以 adapter 包公共常量为唯一事实源（daemon runner 经
+// ExtensionDispatchHandle 分发同一批名字），这里只保留语义别名。
 const (
 	// question/plan/goal/skill 的扩展方法。
-	MethodDshQuestionAnswer  = "dsh/question/answer" // 客户端 → 桥：一次性回答
-	MethodDshPlanSetMode     = "dsh/plan/set_mode"   // 客户端 → 桥：切换 session-scoped plan mode
-	MethodDshGoalGet         = "dsh/goal/get"        // 客户端 → 桥：读取 goal projection
-	MethodDshGoalMutate      = "dsh/goal/mutate"     // 客户端 → 桥：CAS 变更 goal
-	MethodDshSkillCatalogGet = "dsh/skill/catalog"   // 客户端 → 桥：读取安全目录（含 catalogRevision）
-	MethodDshSkillInvoke     = "dsh/skill/invoke"    // 客户端 → 桥：显式调用 user-invocable skill
+	MethodDshQuestionAnswer  = adapter.ExtensionMethodQuestionAnswer // 客户端 → 桥：一次性回答
+	MethodDshPlanSetMode     = adapter.ExtensionMethodPlanSetMode    // 客户端 → 桥：切换 session-scoped plan mode
+	MethodDshGoalGet         = adapter.ExtensionMethodGoalGet        // 客户端 → 桥：读取 goal projection
+	MethodDshGoalMutate      = adapter.ExtensionMethodGoalMutate     // 客户端 → 桥：CAS 变更 goal
+	MethodDshSkillCatalogGet = adapter.ExtensionMethodSkillCatalog   // 客户端 → 桥：读取安全目录（含 catalogRevision）
+	MethodDshSkillInvoke     = adapter.ExtensionMethodSkillInvoke    // 客户端 → 桥：显式调用 user-invocable skill
 	// 状态变更通知（桥 → 客户端，只读投影）。
 	NotifyDshPlanChanged       = "dsh/plan/changed" // committed {active,pending} projection
 	NotifyDshGoalChanged       = "dsh/goal/changed" // goal projection / round 状态

@@ -209,3 +209,112 @@ type ForceKillHandle interface {
 	Handle
 	ForceKill(ctx context.Context) error
 }
+
+// dsh/* 扩展方法名（v0.8.3 冻结调用面；ADR-014 §7/§8）。daemon 的 runner 经
+// ExtensionDispatchHandle 分发这些方法；adapter/dsh 包负责 envelope 注入与
+// P0 wire 契约校验。通知（dsh/*/changed）是桥→客户端只读投影，不在此列。
+const (
+	ExtensionMethodQuestionAnswer = "dsh/question/answer"
+	ExtensionMethodPlanSetMode    = "dsh/plan/set_mode"
+	ExtensionMethodGoalGet        = "dsh/goal/get"
+	ExtensionMethodGoalMutate     = "dsh/goal/mutate"
+	ExtensionMethodSkillCatalog   = "dsh/skill/catalog"
+	ExtensionMethodSkillInvoke    = "dsh/skill/invoke"
+)
+
+// SessionMode 是权限 mode 目录中的一项（ADR-014 §3；来自 DSH permission preset 表）。
+type SessionMode struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// SessionModeInfo 是会话当前广告的权限 mode 目录与当前选中项。
+// 目录为空表示桥/部署未广告 mode（能力保持 unsupported 的真相源）。
+type SessionModeInfo struct {
+	CurrentModeID  string
+	AvailableModes []SessionMode
+}
+
+// SessionModeHandle 由支持运行期权限 mode 切换的 Handle 实现（v0.8.3 B-1）。
+// SetMode 必须走桥的 session/set_mode（preset 原子 bundle 切换）；
+// 未知/custom mode 由桥拒绝，错误原样返回（fail-closed）。
+// Modes 返回最近一次 new/load/resume/current_mode_update 同步的目录快照。
+type SessionModeHandle interface {
+	Handle
+	Modes() SessionModeInfo
+	SetMode(ctx context.Context, modeID string) error
+}
+
+// QuestionAnswerItem 是一次结构化回答批次中的单题回答（ADR-014 §8）。
+// Selected 与 CustomText 互斥表达；Skipped 表示本题跳过。
+type QuestionAnswerItem struct {
+	ID         string   `json:"id"`
+	Selected   []string `json:"selected,omitempty"`
+	CustomText string   `json:"custom_text,omitempty"`
+	Skipped    bool     `json:"skipped,omitempty"`
+}
+
+// QuestionAnswerHandle 由能把桥 dsh/question/request 交互请求挂起等待一次性
+// 回答的 Handle 实现（v0.8.3 B-5）。ResolveQuestion 按 requestKey 一次性回写
+// 桥的原始 JSON-RPC 请求；未知/重复/已收口请求返回错误（fail-closed），
+// 与 PermissionDecisionHandle 的 one-shot 语义一致。
+type QuestionAnswerHandle interface {
+	Handle
+	ResolveQuestion(requestKey string, answers []QuestionAnswerItem) error
+}
+
+// ExtensionDispatchHandle 是 dsh/* 扩展方法的统一分发通道（v0.8.3 B-7/8/10）。
+// method 必须位于 dsh/ 命名空间（如 dsh/goal/mutate、dsh/plan/set_mode、
+// dsh/skill/invoke）；params 由 handle 注入 protocolVersion/sessionId envelope
+// 并做 P0 wire 契约校验。结果原样返回给 runner 写命令回执。
+type ExtensionDispatchHandle interface {
+	Handle
+	CallExtension(ctx context.Context, method string, params map[string]any) (map[string]any, error)
+}
+
+// ContentBlock 是混合内容块（v0.8.3 B-2 图像链路）。Type 为 text 或 image；
+// ImageData 是 Daemon 授权解密后的图像字节（只经内存传给桥，绝不写日志/事件）。
+type ContentBlock struct {
+	Type      string
+	Text      string
+	ImageData []byte
+	ImageMIME string
+}
+
+// ContentHandle 由支持混合内容发送的 Handle 实现（B-2）。实现必须复用与 Send
+// 相同的 prompt 槽位、model/effort 前置下发和失败收口路径。
+type ContentHandle interface {
+	Handle
+	SendContent(ctx context.Context, blocks []ContentBlock) error
+}
+
+// SessionLifecycleHandle 由桥提供生命周期方法的 Handle 实现（v0.8.3 B-3）。
+// CloseSession 是可恢复的 graceful close；DeleteSession 只接受已 close 的冷
+// 会话（桥侧墓碑+审计后回收）；ForkSession 复制 committed 前缀并返回新会话 ID。
+type SessionLifecycleHandle interface {
+	Handle
+	CloseSession(ctx context.Context) error
+	DeleteSession(ctx context.Context) error
+	ForkSession(ctx context.Context, cwd string) (string, error)
+}
+
+// SessionSummary 是 session/list 的脱敏行（无物理路径/正文/凭据）。
+type SessionSummary struct {
+	SessionID string
+	CWD       string
+	UpdatedAt string
+}
+
+// SessionListResult 是一次脱敏分页列表。
+type SessionListResult struct {
+	Sessions   []SessionSummary
+	NextCursor string
+}
+
+// SessionListProvider 由支持 session/list 的 Adapter 实现（v0.8.3 B-3）。
+// list 不绑定单一运行会话，因此挂在 Adapter 层：实现自行为探测桥建立
+// 短生命周期连接并在完成后回收。
+type SessionListProvider interface {
+	ListSessions(ctx context.Context, cwd string, cursor string) (SessionListResult, error)
+}

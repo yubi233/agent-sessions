@@ -768,14 +768,15 @@ func TestSessionRunnerResumeWritesAdapterResult(t *testing.T) {
 	}
 }
 
-// e) 未实现 kind（question.answer 等 C 类）返回 ErrUnsupportedCommand，且不产生成功状态。
-// v0.8.2 起 permission.approve/reject 是受支持 kind（经 runner 注入 handle registry），
-// 因此这里改用真正未接入的 question.answer 验证 fail-closed。
+// e) 未实现 kind（C 类）返回 ErrUnsupportedCommand，且不产生成功状态。
+// v0.8.2 起 permission.approve/reject、v0.8.3 起 question.answer/plan.action/
+// goal.action/skill.invoke/session.stop|delete|fork 均为受支持 kind，因此这里
+// 改用仍未接入的 delegation.create 验证 fail-closed。
 func TestSessionRunnerUnsupportedKindFailsClosed(t *testing.T) {
 	s, runner, _ := newRunnerFixture(t, "opencode")
 	err := runner.ConsumeCommand(context.Background(), Command{
-		Kind:        "question.answer",
-		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"request_id":"q-1"}}}`,
+		Kind:        "delegation.create",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"request_id":"d-1"}}}`,
 	})
 	if !errors.Is(err, ErrUnsupportedCommand) {
 		t.Fatalf("err = %v, want ErrUnsupportedCommand", err)

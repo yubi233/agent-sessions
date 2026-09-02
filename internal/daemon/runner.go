@@ -195,6 +195,24 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 		// 与移动端 permission.approve/reject kind 同义）。runner 把一次性决策
 		// 注入 handle 的 pending permission registry，回写桥原始 JSON-RPC 请求。
 		return r.respondPermission(ctx, cmd)
+	case "mode.set":
+		// v0.8.3 P3：权限 mode 运行期切换（bridge session/set_mode 原子 bundle）。
+		return r.setMode(ctx, cmd)
+	case "question.answer":
+		// v0.8.3 P3：桥 dsh/question/request 的一次性回答回流。
+		return r.answerQuestion(ctx, cmd)
+	case "plan.action", "goal.action", "skill.invoke":
+		// v0.8.3 P3：plan/goal/skill 的受控扩展动作（统一 dsh/* 分发通道）。
+		return r.extensionAction(ctx, cmd)
+	case "session.stop":
+		// v0.8.3 P3：graceful close（可恢复；与 kill/abort 状态机分离）。
+		return r.stopSession(ctx, cmd)
+	case "session.delete":
+		// v0.8.3 P3：冷会话墓碑删除（桥侧审计先行）。
+		return r.deleteSession(ctx, cmd)
+	case "session.fork":
+		// v0.8.3 P3：committed 前缀 fork（新会话身份）。
+		return r.forkSession(ctx, cmd)
 	default:
 		// 未实现 kind 保持 fail-closed：不写任何成功状态（项目文档「统一能力模型」）。
 		return fmt.Errorf("%w: kind=%s", ErrUnsupportedCommand, kind)
@@ -1206,7 +1224,26 @@ type fixturePayload struct {
 	Limit         int    `json:"limit"`
 	// RequestID 是 permission 审批命令携带的权限请求关联键（=桥 toolCallId），
 	// 移动端 permission.approve/reject 的 ciphertext 只带 request_id。
+	// v0.8.3 P3 起也被 question.answer 用作 question 请求关联键。
 	RequestID string `json:"request_id"`
+	// ModeID 是 mode.set 命令的目标权限 mode（桥广告目录内的一项）。
+	ModeID string `json:"mode_id"`
+	// Answers 是 question.answer 的回答批次原文（wire 契约白名单形状）。
+	Answers json.RawMessage `json:"answers"`
+	// Operation 是 goal.action 的显式操作（create/edit/pause/resume/complete/clear/get）。
+	Operation string `json:"operation"`
+	// Text 是 goal.action create/edit 携带的目标文本。
+	Text string `json:"text"`
+	// ExpectedRevision 是 goal.action 的 CAS 期望版本（缺省不校验）。
+	ExpectedRevision *int64 `json:"expected_revision"`
+	// Active 是 plan.action set_mode 的目标状态。
+	Active *bool `json:"active"`
+	// Name 是 skill.invoke 的 skill 名称（须在已广播目录且 userInvocable）。
+	Name string `json:"name"`
+	// CatalogRevision 是 skill.invoke 引用的目录摘要版本。
+	CatalogRevision string `json:"catalog_revision"`
+	// CWD 是 session.fork 的新工作区根。
+	ForkCWD string `json:"fork_cwd"`
 }
 
 // parseEnvelope 解析 payload_json；JSON 不合法或 payload 为空时返回错误。
@@ -1306,6 +1343,248 @@ func (r *SessionRunner) selectEffort(ctx context.Context, cmd Command) error {
 	}
 	if err := r.store.Set("effort:"+sessionID, effort); err != nil {
 		return fmt.Errorf("持久化推理档位: %w", err)
+	}
+	return nil
+}
+
+// setMode 兑现 mode.set（v0.8.3 P3 B-1）：把运行期权限 mode 切换注入会话
+// handle 的 SessionModeHandle（桥 session/set_mode 原子 bundle 切换）。
+// 目录外 mode 由桥拒绝；无运行 handle 或 handle 不支持时 fail-closed。
+func (r *SessionRunner) setMode(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("mode.set 缺少 session_id")
+	}
+	modeID := ""
+	if env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil {
+		modeID = strings.TrimSpace(env.Ciphertext.FixturePayload.ModeID)
+	}
+	if modeID == "" {
+		return errors.New("mode.set 缺少 mode_id")
+	}
+	rs, err := r.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	modeHandle, ok := rs.handle.(adapter.SessionModeHandle)
+	if !ok {
+		return fmt.Errorf("%w: 会话 %s 的 handle 不支持权限 mode 切换", ErrUnsupportedCommand, sessionID)
+	}
+	if err := modeHandle.SetMode(ctx, modeID); err != nil {
+		return fmt.Errorf("权限 mode 切换失败: %w", err)
+	}
+	// mode 状态的客户端可见性走 set_mode 命令回执与能力矩阵目录；mode 不是
+	// 错误也不是 canonical 事件，不伪造事件流流量。
+	return nil
+}
+
+// answerQuestion 兑现 question.answer（v0.8.3 P3 B-5）：把一次性回答注入
+// handle 的 QuestionAnswerHandle，由其回写桥的原始 dsh/question/request。
+// 未知/重复 requestKey 由 handle 侧 fail-closed（与 permission one-shot 同口径）。
+func (r *SessionRunner) answerQuestion(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("question.answer 缺少 session_id")
+	}
+	requestID := ""
+	var answers []adapter.QuestionAnswerItem
+	if env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil {
+		requestID = strings.TrimSpace(env.Ciphertext.FixturePayload.RequestID)
+		if len(env.Ciphertext.FixturePayload.Answers) > 0 {
+			if err := json.Unmarshal(env.Ciphertext.FixturePayload.Answers, &answers); err != nil {
+				return fmt.Errorf("question.answer 回答批次解析失败: %w", err)
+			}
+		}
+	}
+	if requestID == "" {
+		return errors.New("question.answer 缺少 request_id")
+	}
+	if len(answers) == 0 {
+		return errors.New("question.answer 回答批次为空")
+	}
+	rs, err := r.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	qh, ok := rs.handle.(adapter.QuestionAnswerHandle)
+	if !ok {
+		return fmt.Errorf("%w: 会话 %s 的 handle 不支持 question 回答回流", ErrUnsupportedCommand, sessionID)
+	}
+	return qh.ResolveQuestion(requestID, answers)
+}
+
+// extensionAction 兑现 plan.action / goal.action / skill.invoke（v0.8.3 P3）：
+// 统一经 handle 的 ExtensionDispatchHandle 分发到冻结的 dsh/* 扩展方法；
+// method/参数形状由 adapter 侧 P0 wire 契约校验，runner 只做 kind → method 映射。
+func (r *SessionRunner) extensionAction(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return fmt.Errorf("%s 缺少 session_id", cmd.Kind)
+	}
+	fp := env.Ciphertext.FixturePayload
+	if env.Ciphertext == nil || fp == nil {
+		return fmt.Errorf("%s 缺少 ciphertext/fixture 载荷", cmd.Kind)
+	}
+	var method string
+	params := map[string]any{}
+	switch cmd.Kind {
+	case "plan.action":
+		if fp.Active == nil {
+			return errors.New("plan.action 缺少 active")
+		}
+		method = adapter.ExtensionMethodPlanSetMode
+		params["active"] = *fp.Active
+	case "goal.action":
+		operation := strings.TrimSpace(fp.Operation)
+		if operation == "" {
+			return errors.New("goal.action 缺少 operation")
+		}
+		if operation == "get" {
+			method = adapter.ExtensionMethodGoalGet
+		} else {
+			method = adapter.ExtensionMethodGoalMutate
+			params["operation"] = operation
+			if strings.TrimSpace(fp.Text) != "" {
+				params["text"] = fp.Text
+			}
+			if fp.ExpectedRevision != nil {
+				params["expectedRevision"] = *fp.ExpectedRevision
+			}
+		}
+	case "skill.invoke":
+		name := strings.TrimSpace(fp.Name)
+		if name == "" {
+			return errors.New("skill.invoke 缺少 name")
+		}
+		method = adapter.ExtensionMethodSkillInvoke
+		params["requestId"] = cmd.RequestID
+		params["name"] = name
+		params["catalogRevision"] = strings.TrimSpace(fp.CatalogRevision)
+	default:
+		return fmt.Errorf("%w: kind=%s", ErrUnsupportedCommand, cmd.Kind)
+	}
+	rs, err := r.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	ext, ok := rs.handle.(adapter.ExtensionDispatchHandle)
+	if !ok {
+		return fmt.Errorf("%w: 会话 %s 的 handle 不支持 dsh/* 扩展分发", ErrUnsupportedCommand, sessionID)
+	}
+	if _, err := ext.CallExtension(ctx, method, params); err != nil {
+		// 桥的稳定错误码（stale_revision/invalid_payload 等）保留在错误链里，
+		// 让命令回执能区分业务拒绝与基础设施失败。
+		return fmt.Errorf("dsh 扩展动作 %s 失败: %w", method, err)
+	}
+	return nil
+}
+
+// stopSession 兑现 session.stop（v0.8.3 P3 B-3）：graceful close——取消当前
+// turn、桥侧 close（可恢复），随后回收本机桥进程与 handle 登记。
+// 与 session.kill 的强杀状态机分离：这里不清 instance 映射（会话可恢复），
+// 只移除运行句柄；后续 resume 走既有 Resume 流程重建。
+func (r *SessionRunner) stopSession(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("session.stop 缺少 session_id")
+	}
+	rs, err := r.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	lifecycle, ok := rs.handle.(adapter.SessionLifecycleHandle)
+	if !ok {
+		return fmt.Errorf("%w: 会话 %s 的 handle 不支持 graceful close", ErrUnsupportedCommand, sessionID)
+	}
+	if err := lifecycle.CloseSession(ctx); err != nil {
+		return fmt.Errorf("graceful close 失败: %w", err)
+	}
+	rs.cancel()
+	if err := rs.handle.Dispose(ctx); err != nil {
+		return fmt.Errorf("dispose closed session handle: %w", err)
+	}
+	r.removeHandle(sessionID)
+	return nil
+}
+
+// deleteSession 兑现 session.delete（v0.8.3 P3 B-3）：冷会话墓碑删除。
+// 冷状态判定在桥（运行中/未知会话拒绝），daemon 只透传并保持幂等回执。
+func (r *SessionRunner) deleteSession(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("session.delete 缺少 session_id")
+	}
+	rs, err := r.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	lifecycle, ok := rs.handle.(adapter.SessionLifecycleHandle)
+	if !ok {
+		return fmt.Errorf("%w: 会话 %s 的 handle 不支持会话删除", ErrUnsupportedCommand, sessionID)
+	}
+	if err := lifecycle.DeleteSession(ctx); err != nil {
+		return fmt.Errorf("session 删除失败: %w", err)
+	}
+	// 删除成功后回收运行句柄（若仍在）：被删会话不再接受任何命令。
+	rs.cancel()
+	_ = rs.handle.Dispose(ctx)
+	r.removeHandle(sessionID)
+	return nil
+}
+
+// forkSession 兑现 session.fork（v0.8.3 P3 B-3）：committed 前缀复制到新会话。
+// 新 DSH sessionId 记入 daemon 本机 store（fork:<session_id>），供后续
+// 导入/恢复链路消费；Relay 侧会话导入走既有 import 通道，不经此命令回执。
+func (r *SessionRunner) forkSession(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("session.fork 缺少 session_id")
+	}
+	forkCWD := ""
+	if env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil {
+		forkCWD = strings.TrimSpace(env.Ciphertext.FixturePayload.ForkCWD)
+	}
+	if forkCWD == "" {
+		return errors.New("session.fork 缺少 fork_cwd")
+	}
+	rs, err := r.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	lifecycle, ok := rs.handle.(adapter.SessionLifecycleHandle)
+	if !ok {
+		return fmt.Errorf("%w: 会话 %s 的 handle 不支持会话 fork", ErrUnsupportedCommand, sessionID)
+	}
+	newSessionID, err := lifecycle.ForkSession(ctx, forkCWD)
+	if err != nil {
+		return fmt.Errorf("session fork 失败: %w", err)
+	}
+	if err := r.store.Set("fork:"+sessionID, newSessionID); err != nil {
+		return fmt.Errorf("记录 fork 结果: %w", err)
 	}
 	return nil
 }

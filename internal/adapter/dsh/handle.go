@@ -59,6 +59,17 @@ type handle struct {
 	// ResolvePermission 注入决策；断线/Dispose 时统一 fail-closed 收口为 cancelled。
 	permissionMu       sync.Mutex
 	pendingPermissions map[string]*pendingPermission
+
+	// modesMu 保护 modes（v0.8.3 P3）：来自 new/load/resume 响应的 mode 目录
+	// 快照与 current_mode_update 通知的最新选中项。目录为空 = 桥未广告 mode。
+	modesMu sync.Mutex
+	modes   adapter.SessionModeInfo
+
+	// questionMu 保护 pendingQuestions（一次性 question 回答 registry，v0.8.3 P3）。
+	// 桥的 dsh/question/request 请求先登记再广播 EventUserQuestion，等待 daemon
+	// 经 ResolveQuestion 注入回答；断线/Dispose 统一 fail-closed 收口为错误应答。
+	questionMu       sync.Mutex
+	pendingQuestions map[string]*pendingQuestion
 }
 
 // pendingPermission 是一条等待一次性决策的桥权限请求。
@@ -93,6 +104,7 @@ func newHandle(tr BridgeTransport) *handle {
 		pending:            map[int64]*pendingReq{},
 		dropped:            map[string]int64{},
 		pendingPermissions: map[string]*pendingPermission{},
+		pendingQuestions:   map[string]*pendingQuestion{},
 		readDone:           make(chan struct{}),
 		replayDone:         make(chan struct{}),
 		eventStop:          make(chan struct{}),
@@ -256,9 +268,16 @@ func (h *handle) Send(ctx context.Context, text string) error {
 		})
 		return err
 	}
+	return h.sendPromptBlocks(ctx, []map[string]any{{"type": "text", "text": text}})
+}
+
+// sendPromptBlocks 是 Send 的 prompt 发送核心（v0.8.3 P3 提取，供 SendContent
+// 复用）：发起 session/prompt 并在失败/响应异常/正常结束三条路径上补齐
+// session_error / turn_completed 终态事件，客户端绝不悬挂在“生成中”。
+func (h *handle) sendPromptBlocks(ctx context.Context, prompt []map[string]any) error {
 	params := map[string]any{
 		"sessionId": h.sessionID,
-		"prompt":    []map[string]any{{"type": "text", "text": text}},
+		"prompt":    prompt,
 	}
 	result, err := h.request(ctx, "session/prompt", params)
 	if err != nil {
@@ -381,6 +400,8 @@ func (h *handle) Dispose(ctx context.Context) error {
 	h.mu.Unlock()
 	// 关闭前先把所有未决权限请求 fail-closed 收口为 cancelled（断线不泄漏）。
 	h.cancelPendingPermissions()
+	// v0.8.3 P3：未决 question 请求同样收口（错误应答让桥侧 ask() 快速失败）。
+	h.cancelPendingQuestions()
 	err := h.transport.Close()
 	<-h.readDone
 	return err
@@ -470,7 +491,8 @@ func (h *handle) newSession(ctx context.Context, cwd string) (string, error) {
 		return "", err
 	}
 	var res struct {
-		SessionID string `json:"sessionId"`
+		SessionID string          `json:"sessionId"`
+		Modes     json.RawMessage `json:"modes"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return "", fmt.Errorf("解析 session/new 响应: %w", err)
@@ -478,19 +500,26 @@ func (h *handle) newSession(ctx context.Context, cwd string) (string, error) {
 	if res.SessionID == "" {
 		return "", errors.New("session/new 响应缺少 sessionId")
 	}
+	h.storeModes(res.Modes)
 	return res.SessionID, nil
 }
 
 // loadSession 请求 ACP 恢复已有会话并回放持久化的用户/助手消息。桥保证回放通知
 // 先于响应，因此响应到达即可作为本轮回放完成边界。
 func (h *handle) loadSession(ctx context.Context, cwd string) error {
-	_, err := h.request(ctx, "session/load", map[string]any{
+	raw, err := h.request(ctx, "session/load", map[string]any{
 		"sessionId":             h.sessionID,
 		"cwd":                   cwd,
 		"mcpServers":            []any{},
 		"additionalDirectories": []string{},
 	})
 	if err == nil {
+		var res struct {
+			Modes json.RawMessage `json:"modes"`
+		}
+		if json.Unmarshal(raw, &res) == nil {
+			h.storeModes(res.Modes)
+		}
 		h.markReplayComplete()
 	}
 	return err
@@ -498,12 +527,20 @@ func (h *handle) loadSession(ctx context.Context, cwd string) error {
 
 // resumeSession 恢复已有会话但不回放历史。
 func (h *handle) resumeSession(ctx context.Context, cwd string) error {
-	_, err := h.request(ctx, "session/resume", map[string]any{
+	raw, err := h.request(ctx, "session/resume", map[string]any{
 		"sessionId":             h.sessionID,
 		"cwd":                   cwd,
 		"mcpServers":            []any{},
 		"additionalDirectories": []string{},
 	})
+	if err == nil {
+		var res struct {
+			Modes json.RawMessage `json:"modes"`
+		}
+		if json.Unmarshal(raw, &res) == nil {
+			h.storeModes(res.Modes)
+		}
+	}
 	return err
 }
 
@@ -554,6 +591,8 @@ func (h *handle) readLoop() {
 		h.mu.Unlock()
 		// 桥退出（EOF/崩溃）时未决权限请求无法再获得决策：fail-closed 收口 cancelled。
 		h.cancelPendingPermissions()
+		// 未决 question 请求同样无法再获得回答：错误应答快速失败（不悬挂面板）。
+		h.cancelPendingQuestions()
 		h.eventMu.Lock()
 		if !h.eventClosed {
 			h.eventClosed = true
@@ -610,6 +649,20 @@ func (h *handle) handleNotification(msg rpcMessage) {
 		h.countDrop("bad_update")
 		return
 	}
+	// v0.8.3 P3：current_mode_update 不进 canonical 事件流（mode 状态经
+	// SessionModeHandle.Modes() 读取），只更新句柄内的目录快照。
+	var probe struct {
+		SessionUpdate string `json:"sessionUpdate"`
+		CurrentModeID string `json:"currentModeId"`
+	}
+	if json.Unmarshal(params.Update, &probe) == nil && probe.SessionUpdate == "current_mode_update" {
+		if probe.CurrentModeID != "" {
+			h.modesMu.Lock()
+			h.modes.CurrentModeID = probe.CurrentModeID
+			h.modesMu.Unlock()
+		}
+		return
+	}
 	ev, ok, variant := mapSessionUpdate(params.SessionID, params.Update)
 	if !ok {
 		// 白名单外或未知 update 变体：丢弃并计数，不报错。
@@ -624,6 +677,8 @@ func (h *handle) handleBridgeRequest(id int64, msg rpcMessage) {
 	switch msg.Method {
 	case "session/request_permission":
 		h.handlePermissionRequest(id, msg.Params)
+	case "dsh/question/request":
+		h.handleQuestionRequest(id, msg.Params)
 	default:
 		// fs/*（writeTextFile/readTextFile 等）与任何未声明方法一律 -32601 fail-closed，
 		// 与桥未实现方法（session/load 等）的错误形态保持一致。
