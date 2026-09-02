@@ -53,6 +53,24 @@ type handle struct {
 	// 档位必须属于桥对当前模型公布的目录，否则桥以 invalidParams 拒绝（fail-closed）。
 	effort        string
 	appliedEffort string
+
+	// permissionMu 保护 pendingPermissions（一次性权限决策 registry，v0.8.2 P1）。
+	// 桥的 session/request_permission 请求先登记再广播，等待 daemon 经
+	// ResolvePermission 注入决策；断线/Dispose 时统一 fail-closed 收口为 cancelled。
+	permissionMu       sync.Mutex
+	pendingPermissions map[string]*pendingPermission
+}
+
+// pendingPermission 是一条等待一次性决策的桥权限请求。
+// requestKey 是本实现与移动端共用的关联键（=桥 toolCallId）；
+// bridgeID 是桥发来请求的原始 JSON-RPC id，决策后必须原样回显应答。
+type pendingPermission struct {
+	requestKey string
+	bridgeID   int64
+	sessionID  string
+	toolCallID string
+	title      string
+	resolved   bool
 }
 
 // pendingReq 是等待中的请求记录。
@@ -70,13 +88,14 @@ type rpcResult struct {
 // newHandle 构造会话句柄（事件通道有界缓冲，读循环随后启动）。
 func newHandle(tr BridgeTransport) *handle {
 	return &handle{
-		transport:  tr,
-		events:     make(chan adapter.Event, 256),
-		pending:    map[int64]*pendingReq{},
-		dropped:    map[string]int64{},
-		readDone:   make(chan struct{}),
-		replayDone: make(chan struct{}),
-		eventStop:  make(chan struct{}),
+		transport:          tr,
+		events:             make(chan adapter.Event, 256),
+		pending:            map[int64]*pendingReq{},
+		dropped:            map[string]int64{},
+		pendingPermissions: map[string]*pendingPermission{},
+		readDone:           make(chan struct{}),
+		replayDone:         make(chan struct{}),
+		eventStop:          make(chan struct{}),
 	}
 }
 
@@ -360,6 +379,8 @@ func (h *handle) Dispose(ctx context.Context) error {
 	}
 	h.closed = true
 	h.mu.Unlock()
+	// 关闭前先把所有未决权限请求 fail-closed 收口为 cancelled（断线不泄漏）。
+	h.cancelPendingPermissions()
 	err := h.transport.Close()
 	<-h.readDone
 	return err
@@ -531,6 +552,8 @@ func (h *handle) readLoop() {
 		h.mu.Lock()
 		h.closed = true
 		h.mu.Unlock()
+		// 桥退出（EOF/崩溃）时未决权限请求无法再获得决策：fail-closed 收口 cancelled。
+		h.cancelPendingPermissions()
 		h.eventMu.Lock()
 		if !h.eventClosed {
 			h.eventClosed = true
@@ -608,11 +631,13 @@ func (h *handle) handleBridgeRequest(id int64, msg rpcMessage) {
 	}
 }
 
-// handlePermissionRequest 处理桥的 session/request_permission 请求：
-//  1. 先向事件流广播 EventPermissionRequest（供客户端策略层消费）；
-//  2. 再按 fail-closed 返回 cancelled 决策——决策通道已接通，但当前策略是取消
-//     而非静默批准（绝不替用户批准任何工具调用）；
-//  3. 补充广播 EventPermissionDecision 记录已做出的取消决策。
+// handlePermissionRequest 处理桥的 session/request_permission 请求（v0.8.2 P1）：
+//  1. 请求先登记到 pendingPermissions（requestKey=桥 toolCallId，绑定原始 JSON-RPC id），
+//     随后向事件流广播 EventPermissionRequest（供移动端审批面板消费）；
+//  2. 应答不立即 cancelled——真实链路是异步的：移动端批准/拒绝经 daemon 的
+//     ResolvePermission 注入，由 registry 一次性回写桥的原始请求；
+//  3. 只有 ResolvePermission 消费（allowed/rejected）或断线收口（cancelled）两种终态，
+//     绝不静默批准；缺 toolCallId 的畸形请求无法关联，直接 fail-closed 取消。
 func (h *handle) handlePermissionRequest(id int64, params json.RawMessage) {
 	var req struct {
 		SessionID string `json:"sessionId"`
@@ -621,25 +646,110 @@ func (h *handle) handlePermissionRequest(id int64, params json.RawMessage) {
 			Title      string `json:"title"`
 		} `json:"toolCall"`
 	}
-	// 解析失败只影响事件载荷完整性，不影响取消决策本身。
+	// 解析失败只影响事件载荷完整性，不影响关联键判定。
 	_ = json.Unmarshal(params, &req)
-	payload := map[string]any{"instance_id": req.SessionID}
-	if req.ToolCall.ToolCallID != "" {
-		payload["tool_call_id"] = req.ToolCall.ToolCallID
+	requestKey := req.ToolCall.ToolCallID
+	if requestKey == "" {
+		// 无 toolCallId 的权限请求无法与后续决策一一关联：fail-closed 立即取消。
+		h.respondResult(id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
+		instanceID := req.SessionID
+		if instanceID == "" {
+			instanceID = h.sessionID
+		}
+		h.pushEvent(adapter.Event{Type: adapter.EventPermissionDecision, Payload: map[string]any{"instance_id": instanceID, "outcome": "cancelled"}})
+		return
+	}
+	h.permissionMu.Lock()
+	// 重复请求同一 toolCallId：后到者无法获得独立决策，按重复处理（fail-closed 取消）。
+	if _, dup := h.pendingPermissions[requestKey]; dup {
+		h.permissionMu.Unlock()
+		h.respondResult(id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
+		h.countDrop("permission_dup_request")
+		return
+	}
+	h.pendingPermissions[requestKey] = &pendingPermission{
+		requestKey: requestKey,
+		bridgeID:   id,
+		sessionID:  req.SessionID,
+		toolCallID: requestKey,
+		title:      req.ToolCall.Title,
+	}
+	h.permissionMu.Unlock()
+	// 广播权限请求事件（载荷携带 request_id/session_id/tool_call_id，移动端以
+	// request_id 关联 approve/reject 命令；标题仅为展示，正文/凭据不进协议）。
+	payload := map[string]any{
+		"instance_id":  req.SessionID,
+		"request_id":   requestKey,
+		"tool_call_id": requestKey,
 	}
 	if req.ToolCall.Title != "" {
 		payload["title"] = req.ToolCall.Title
 	}
 	h.pushEvent(adapter.Event{Type: adapter.EventPermissionRequest, Payload: payload})
-	// fail-closed：应答 SDK 的决策形状 {outcome:{outcome:"cancelled"}}（近端 protocol 冻结）。
-	h.respondResult(id, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
-	h.pushEvent(adapter.Event{
-		Type: adapter.EventPermissionDecision,
-		Payload: map[string]any{
-			"instance_id": req.SessionID,
-			"outcome":     "cancelled",
-		},
-	})
+}
+
+// ResolvePermission 把一次性决策写回桥的原始 JSON-RPC 请求（PermissionDecisionHandle）。
+// 每个请求只允许一次决策：未知 requestKey 或重复决策返回错误（fail-closed）。
+func (h *handle) ResolvePermission(requestKey string, allow bool) error {
+	requestKey = strings.TrimSpace(requestKey)
+	if requestKey == "" {
+		return errors.New("permission 决策缺少 requestKey")
+	}
+	h.permissionMu.Lock()
+	pp := h.pendingPermissions[requestKey]
+	if pp == nil {
+		h.permissionMu.Unlock()
+		return fmt.Errorf("未知或已处理的权限请求: %s", requestKey)
+	}
+	if pp.resolved {
+		h.permissionMu.Unlock()
+		return fmt.Errorf("权限请求已消费，禁止重复决策: %s", requestKey)
+	}
+	pp.resolved = true
+	delete(h.pendingPermissions, requestKey)
+	h.permissionMu.Unlock()
+	outcome := "allowed-once"
+	if !allow {
+		outcome = "rejected"
+	}
+	// 应答 SDK 的决策形状 {outcome:{outcome:...}}（近端 protocol 冻结三态）。
+	h.respondResult(pp.bridgeID, map[string]any{"outcome": map[string]any{"outcome": outcome}})
+	// 广播决策事件（客户端据此刻画审批状态；决策只消费一次）。
+	decisionPayload := map[string]any{
+		"instance_id":  pp.sessionID,
+		"request_id":   pp.requestKey,
+		"tool_call_id": pp.toolCallID,
+		"outcome":      "allowed",
+	}
+	if !allow {
+		decisionPayload["outcome"] = "rejected"
+	}
+	h.pushEvent(adapter.Event{Type: adapter.EventPermissionDecision, Payload: decisionPayload})
+	return nil
+}
+
+// cancelPendingPermissions 在句柄关闭/断线时把所有未决权限请求 fail-closed 收口为
+// cancelled（v0.8.2 P1：挂起请求不随会话泄漏，客户端不永久显示处理中）。
+func (h *handle) cancelPendingPermissions() {
+	h.permissionMu.Lock()
+	pending := h.pendingPermissions
+	h.pendingPermissions = map[string]*pendingPermission{}
+	h.permissionMu.Unlock()
+	for _, pp := range pending {
+		if pp.resolved {
+			continue
+		}
+		h.respondResult(pp.bridgeID, map[string]any{"outcome": map[string]any{"outcome": "cancelled"}})
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventPermissionDecision,
+			Payload: map[string]any{
+				"instance_id":  pp.sessionID,
+				"request_id":   pp.requestKey,
+				"tool_call_id": pp.toolCallID,
+				"outcome":      "cancelled",
+			},
+		})
+	}
 }
 
 // respondResult 向桥写"客户端"侧请求的成功应答。

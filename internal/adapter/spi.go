@@ -180,6 +180,28 @@ type EffortOverrideHandle interface {
 	SetEffort(effort string)
 }
 
+// PermissionOutcome 是一次权限决策的结果（与桥 request_permission 的 optionId 对齐）。
+type PermissionOutcome string
+
+const (
+	// PermissionAllowed 允许一次（allow-once）。
+	PermissionAllowed PermissionOutcome = "allowed"
+	// PermissionRejected 拒绝（reject-once）。
+	PermissionRejected PermissionOutcome = "rejected"
+)
+
+// PermissionDecisionHandle 由能把 ACP session/request_permission 请求挂起等待
+// 一次性决策的 Handle 实现（v0.8.2 P1 pending permission registry）。
+// daemon 收到 permission.respond 命令后按 requestKey 调用 ResolvePermission；
+// 未知/重复/已取消请求返回错误（fail-closed），每个请求只允许一次决策。
+type PermissionDecisionHandle interface {
+	Handle
+	// ResolvePermission 把一次性决策写回桥的原始 JSON-RPC 请求。
+	// requestKey 是 permission_request 事件载荷中的 request_id（本实现=tool_call_id）。
+	// allow=true 应答 allowed-once，false 应答 rejected；成功后广播 permission_decision。
+	ResolvePermission(requestKey string, allow bool) error
+}
+
 // ForceKillHandle 只由明确拥有本机 Provider 进程树的 Handle 实现。它和 Abort 的语义不同：
 // Abort 只取消当前 turn；ForceKill 必须在返回前启动受控进程树的终止流程。共享 HTTP 服务、
 // 远端 Provider 或无法证明所有权的 Adapter 不得实现此接口。

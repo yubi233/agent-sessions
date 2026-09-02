@@ -619,15 +619,19 @@ func TestAbortIdempotent(t *testing.T) {
 	}
 }
 
-// (d) request_permission：先产出 EventPermissionRequest，fail-closed 应答 cancelled
-// （{outcome:{outcome:"cancelled"}}），再产出 EventPermissionDecision(cancelled)，
-// 绝不静默批准。
-func TestPermissionRequestFailClosed(t *testing.T) {
+// (d1) v0.8.2 P1：request_permission 经 pending registry 挂起等待一次性决策。
+// ResolvePermission(allow=true) → 桥收到 {outcome:{outcome:"allowed-once"}}，
+// 事件流出现 permission_request(带 request_id) → permission_decision(allowed)。
+func TestPermissionRequestOneShotAllow(t *testing.T) {
 	const sessionID = "sess-0001"
 	fb := newFakeBridge()
 	fb.script = respondByMethod(t, sessionID)
 	h := startWithFake(t, fb)
 	drainOut(fb)
+	decider, ok := h.(adapter.PermissionDecisionHandle)
+	if !ok {
+		t.Fatal("DSH handle 必须实现 PermissionDecisionHandle")
+	}
 
 	// 注入桥的权限请求（带 id 100）。
 	fb.push(t, map[string]any{
@@ -642,7 +646,7 @@ func TestPermissionRequestFailClosed(t *testing.T) {
 		},
 	})
 
-	// 事件流先出现 permission_request。
+	// 事件流先出现 permission_request（request_id = tool_call_id 关联键）。
 	select {
 	case ev := <-h.Events():
 		if ev.Type != adapter.EventPermissionRequest {
@@ -651,14 +655,26 @@ func TestPermissionRequestFailClosed(t *testing.T) {
 		if ev.Payload["instance_id"] != sessionID {
 			t.Fatalf("permission_request instance_id = %v", ev.Payload["instance_id"])
 		}
-		if ev.Payload["tool_call_id"] != "tool-7" {
-			t.Fatalf("permission_request tool_call_id = %v", ev.Payload["tool_call_id"])
+		if ev.Payload["request_id"] != "tool-7" || ev.Payload["tool_call_id"] != "tool-7" {
+			t.Fatalf("permission_request 关联键 = %#v, want tool-7", ev.Payload)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 permission_request 事件超时")
 	}
 
-	// 应答帧：id 回显 + outcome.cancelled（SDK 决策形状 {outcome:{outcome:"cancelled"}}）。
+	// 决策前不应有任何应答（请求挂起等待）。
+	select {
+	case out := <-fb.outCh:
+		if frameID(out) == 100 {
+			t.Fatalf("决策前不得应答原始请求: %#v", out)
+		}
+	default:
+	}
+	// 注入一次性 allow 决策。
+	if err := decider.ResolvePermission("tool-7", true); err != nil {
+		t.Fatalf("ResolvePermission(allow): %v", err)
+	}
+	// 桥收到 id 回显 + allowed-once。
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
@@ -668,30 +684,178 @@ func TestPermissionRequestFailClosed(t *testing.T) {
 			}
 			res, _ := out["result"].(map[string]any)
 			outcome, _ := res["outcome"].(map[string]any)
-			if outcome["outcome"] != "cancelled" {
-				t.Fatalf("fail-closed 决策必须是 cancelled: %#v", res)
+			if outcome["outcome"] != "allowed-once" {
+				t.Fatalf("allow 决策应答必须是 allowed-once: %#v", res)
 			}
-		case <-time.After(10 * time.Millisecond):
-			// 等读循环写入应答。
-			continue
 		case <-deadline:
-			t.Fatal("未收到权限请求的 cancelled 应答")
+			t.Fatal("未收到 allowed-once 应答")
 		}
-		// 应答帧已确认，跳出。
 		break
 	}
-
-	// 决策事件：permission_decision(cancelled)。
+	// 决策事件：permission_decision(allowed)。
 	select {
 	case ev := <-h.Events():
 		if ev.Type != adapter.EventPermissionDecision {
 			t.Fatalf("后续事件 = %q, want permission_decision", ev.Type)
 		}
-		if ev.Payload["outcome"] != "cancelled" {
-			t.Fatalf("permission_decision outcome = %v", ev.Payload["outcome"])
+		if ev.Payload["outcome"] != "allowed" || ev.Payload["request_id"] != "tool-7" {
+			t.Fatalf("permission_decision 载荷 = %#v", ev.Payload)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 permission_decision 事件超时")
+	}
+	// 重复决策必须失败（one-shot）。
+	if err := decider.ResolvePermission("tool-7", false); err == nil {
+		t.Fatal("重复决策必须失败")
+	}
+}
+
+// (d2) reject 决策 → 桥收到 rejected，事件流出现 permission_decision(rejected)。
+func TestPermissionRequestOneShotReject(t *testing.T) {
+	const sessionID = "sess-0002"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	h := startWithFake(t, fb)
+	drainOut(fb)
+	decider := h.(adapter.PermissionDecisionHandle)
+
+	fb.push(t, map[string]any{
+		"jsonrpc": "2.0", "id": 101,
+		"method": "session/request_permission",
+		"params": map[string]any{
+			"sessionId": sessionID,
+			"toolCall":  map[string]any{"toolCallId": "tool-8", "title": "write"},
+		},
+	})
+	// 等待 request 事件登记完成（避免在登记前注入决策）。
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-h.Events():
+			if ev.Type == adapter.EventPermissionRequest && ev.Payload["request_id"] == "tool-8" {
+				goto registered
+			}
+		case <-deadline:
+			t.Fatal("等待 permission_request 超时")
+		}
+	}
+registered:
+	if err := decider.ResolvePermission("tool-8", false); err != nil {
+		t.Fatalf("ResolvePermission(reject): %v", err)
+	}
+	deadline = time.After(5 * time.Second)
+	for {
+		select {
+		case out := <-fb.outCh:
+			if frameID(out) != 101 {
+				continue
+			}
+			res, _ := out["result"].(map[string]any)
+			outcome, _ := res["outcome"].(map[string]any)
+			if outcome["outcome"] != "rejected" {
+				t.Fatalf("reject 决策应答必须是 rejected: %#v", res)
+			}
+		case <-deadline:
+			t.Fatal("未收到 rejected 应答")
+		}
+		break
+	}
+	select {
+	case ev := <-h.Events():
+		if ev.Type != adapter.EventPermissionDecision || ev.Payload["outcome"] != "rejected" {
+			t.Fatalf("decision 事件 = %#v, want rejected", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待 permission_decision(rejected) 超时")
+	}
+}
+
+// (d3) 未知 requestKey 决策失败；畸形请求（缺 toolCallId）立即 cancelled 且不登记。
+func TestPermissionRequestUnknownAndMalformed(t *testing.T) {
+	const sessionID = "sess-0003"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	h := startWithFake(t, fb)
+	drainOut(fb)
+	decider := h.(adapter.PermissionDecisionHandle)
+	if err := decider.ResolvePermission("no-such-key", true); err == nil {
+		t.Fatal("未知 requestKey 决策必须失败")
+	}
+	// 畸形请求：缺 toolCallId → 立即回 cancelled + decision(cancelled)。
+	fb.push(t, map[string]any{
+		"jsonrpc": "2.0", "id": 102,
+		"method": "session/request_permission",
+		"params": map[string]any{
+			"sessionId": sessionID,
+			"toolCall":  map[string]any{"title": "no id"},
+		},
+	})
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case out := <-fb.outCh:
+			if frameID(out) != 102 {
+				continue
+			}
+			res, _ := out["result"].(map[string]any)
+			outcome, _ := res["outcome"].(map[string]any)
+			if outcome["outcome"] != "cancelled" {
+				t.Fatalf("畸形请求应答必须是 cancelled: %#v", res)
+			}
+		case <-deadline:
+			t.Fatal("未收到畸形请求 cancelled 应答")
+		}
+		break
+	}
+}
+
+// (d4) 断线收口：未决权限请求在桥退出/Dispose 时全部 fail-closed 为 cancelled。
+func TestPermissionRequestCancelledOnDispose(t *testing.T) {
+	const sessionID = "sess-0004"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	h := startWithFake(t, fb)
+	// 注入未决权限请求（无决策）。
+	fb.push(t, map[string]any{
+		"jsonrpc": "2.0", "id": 103,
+		"method": "session/request_permission",
+		"params": map[string]any{
+			"sessionId": sessionID,
+			"toolCall":  map[string]any{"toolCallId": "tool-9", "title": "bash"},
+		},
+	})
+	// 等 request 事件。
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-h.Events():
+			if ev.Type == adapter.EventPermissionRequest && ev.Payload["request_id"] == "tool-9" {
+				goto reqSeen
+			}
+		case <-deadline:
+			t.Fatal("等待 permission_request 超时")
+		}
+	}
+reqSeen:
+	// Dispose 前不注入决策；Dispose 应收口 cancelled 应答。
+	if err := h.Dispose(context.Background()); err != nil {
+		t.Fatalf("Dispose: %v", err)
+	}
+	// 桥（假桥）收到 id=103 的 cancelled 应答；决策事件在通道关闭前可见或丢弃均可，
+	// 关键是应答必须已写入（写发生在通道关闭前，串行安全）。
+	seen := false
+	for _, frame := range fb.written() {
+		if frameID(frame) != 103 {
+			continue
+		}
+		res, _ := frame["result"].(map[string]any)
+		outcome, _ := res["outcome"].(map[string]any)
+		if outcome["outcome"] == "cancelled" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatal("Dispose 未把未决权限请求收口为 cancelled")
 	}
 }
 
