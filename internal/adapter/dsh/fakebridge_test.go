@@ -725,12 +725,13 @@ func TestEOFAndBadFrameTolerance(t *testing.T) {
 		t.Fatal("坏帧后读循环未继续处理有效帧")
 	}
 
-	// 白名单外变体（tool_call）：丢弃并计数，不报错。
+	// v0.8.2 起 tool_call 是白名单内变体（映射为 EventToolCall，见 mapper 契约测试）。
+	// 白名单外变体（plan）仍丢弃并计数，不报错。
 	fb.push(t, map[string]any{
 		"jsonrpc": "2.0", "method": "session/update",
 		"params": map[string]any{
 			"sessionId": sessionID,
-			"update":    map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t-1"},
+			"update":    map[string]any{"sessionUpdate": "plan", "title": "p-1"},
 		},
 	})
 
@@ -750,7 +751,7 @@ func TestEOFAndBadFrameTolerance(t *testing.T) {
 		}
 	}
 	waitForCount("bad_frame")
-	waitForCount("update:tool_call")
+	waitForCount("update:plan")
 
 	// EOF（模拟桥退出）：读循环结束，事件通道关闭。
 	if err := fb.Close(); err != nil {

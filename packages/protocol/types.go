@@ -39,8 +39,10 @@ const (
 )
 
 // CapabilityNames 是客户端必须消费的能力清单。
+// v0.8.2 校对：补齐与 internal/adapter/spi.go 全量 20 项一致的 kill / permission_mode，
+// 避免 SPI 与公共协议能力清单漂移（一致性守护测试固化的唯一真值清单）。
 var CapabilityNames = []string{
-	"start", "resume", "abort", "permission", "question", "plan", "goal",
+	"start", "resume", "abort", "kill", "permission", "permission_mode", "question", "plan", "goal",
 	"skill_catalog", "invoke_skill", "model_select", "effort_select",
 	"attachments", "file_read", "git_read", "usage",
 	"fork", "delegate_session", "delegate_cross_provider",
