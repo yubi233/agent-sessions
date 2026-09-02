@@ -800,6 +800,45 @@
    "status": "passed",
    "allow_real_upstream": false,
    "uniqueness_rule": "daemon 会话命令/事件/生命周期单元矩阵与 App 消息交互契约；DCM/AMI 前缀独占。"
+  },
+  {
+   "plan_id": "V082",
+   "suite_path": "docs/test/20-DSH能力补全.json",
+   "owner": "Agent Sessions v0.8.2",
+   "id_prefix": [
+    "V082-"
+   ],
+   "owned_ids": [
+    "V082-01",
+    "V082-02",
+    "V082-03",
+    "V082-04",
+    "V082-05",
+    "V082-06",
+    "V082-07",
+    "V082-08",
+    "V082-09",
+    "V082-10",
+    "V082-11",
+    "V082-12",
+    "V082-13",
+    "V082-14",
+    "V082-15",
+    "V082-16",
+    "V082-17",
+    "V082-18",
+    "V082-19"
+   ],
+   "consumed_ids": [
+    "V08-12"
+   ],
+   "dependencies": [
+    "V081",
+    "V08"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "v0.8.2 拥有 DSH 工具事件/effort/权限回流/能力矩阵/生命周期门控的新增回归；V08-12 仅消费且必须保持 failed 不被改写。桥未实现能力的用例以 blocked_on_bridge 如实登记，不伪造 native。"
   }
  ]
 }
