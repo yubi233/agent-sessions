@@ -26,6 +26,28 @@ void main() {
     expect(sessions.single.workspaceId, 'ws-dsh-visual-alpha');
   });
 
+  test('V082-P3：DSH 工具时间线视觉场景预置可渲染时间线（含工具活动）', () async {
+    final fixture = await LocalVisualFixture.create('dsh-session-tool-timeline');
+
+    expect(fixture, isNotNull);
+    expect(fixture!.scenario, LocalVisualScenario.dshSessionToolTimeline);
+    expect(fixture.sessionId, isNotNull);
+    final sessions = await fixture.relay.listSessions();
+    final dsh = sessions.single;
+    expect(dsh.provider, 'dsh');
+    expect(dsh.workspaceId, 'ws-dsh-visual-alpha');
+    // 会话快照时间线必须含工具活动条目（fixture relay 发送生成的本地时间线词汇）。
+    final snapshot = await fixture.relay.getSessionSnapshot(dsh.id);
+    final timeline = snapshot.events
+        .map(SessionTimelineEvent.fromRelayEvent)
+        .toList(growable: false);
+    expect(
+      timeline.any((event) => event.kind == SessionTimelineKind.toolActivity),
+      isTrue,
+      reason: 'DSH 工具时间线场景必须在快照内预置 tool_activity 条目',
+    );
+  });
+
   group('MOBILE-02 本地可见 fixture', () {
     test('会话列表场景预置分组会话、当前选择所需的流式事件和无敏感展示数据', () async {
       final fixture = await LocalVisualFixture.create('session-list');

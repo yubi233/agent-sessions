@@ -18,6 +18,8 @@ enum LocalVisualScenario {
   ownerReady,
   // v0.8.1：DSH 工作区主模式，只注入安全 display name 与会话元数据。
   dshWorkspaceHome,
+  // v0.8.2：DSH 会话工具时间线可见场景（会话详情打开即含工具活动条目）。
+  dshSessionToolTimeline,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -60,6 +62,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
 ) => switch (value) {
   'owner-ready' => LocalVisualScenario.ownerReady,
   'dsh-workspace-home' => LocalVisualScenario.dshWorkspaceHome,
+  'dsh-session-tool-timeline' => LocalVisualScenario.dshSessionToolTimeline,
   'pairing-pending' => LocalVisualScenario.pairingPending,
   'session-list' => LocalVisualScenario.sessionList,
   'session-detail' => LocalVisualScenario.sessionDetail,
@@ -264,7 +267,12 @@ class LocalVisualFixture {
       pairingRequestId = pairing.id;
     }
 
-    if (scenario == LocalVisualScenario.dshWorkspaceHome) {
+    // v0.8.1/v0.8.2：DSH 可见场景共用的安全预置（工作区只含 display name 与
+    // opaque 元数据，不注入任何路径/JSONL 位置/正文）。
+    final isDshScenario = scenario == LocalVisualScenario.dshWorkspaceHome ||
+        scenario == LocalVisualScenario.dshSessionToolTimeline;
+    String? dshSessionId;
+    if (isDshScenario) {
       relay.replaceTerminals([
         TerminalSummary(
           id: 'term-dsh-visual',
@@ -299,16 +307,35 @@ class LocalVisualFixture {
           status: 'active',
         ),
       ]);
-      await relay.createSession(
+      final dshSession = await relay.createSession(
         CreateMobileSessionInput(
           workspaceId: 'ws-dsh-visual-alpha',
           provider: 'dsh',
           deviceId: ownerDeviceId,
         ),
       );
+      dshSessionId = dshSession.id;
+      if (scenario == LocalVisualScenario.dshSessionToolTimeline) {
+        // 时间线场景：fixture 发送一条消息，触发 fixture relay 生成完整的
+        // 本地开发时间线（user_message → tool_activity → assistant_message），
+        // 与 LocalDevEventEncoder 投影词汇一致（不注入真实命令/正文）。
+        final lease = await relay.acquireSessionLease(dshSession.id);
+        await relay.submitSessionCommand(
+          dshSession.id,
+          SessionCommandInput(
+            kind: SessionCommandKind.send,
+            idempotencyKey: 'visual-dsh-tool-timeline-send',
+            leaseEpoch: lease.epoch,
+            deviceId: ownerDeviceId,
+            ciphertext: const {
+              'fixture_payload': {'message': '请展示 DSH fixture 的工具活动时间线。'},
+            },
+          ),
+        );
+      }
     }
 
-    final sessionId = await _seedSessionScenario(
+    final sessionId = dshSessionId ?? await _seedSessionScenario(
       relay: relay,
       ownerDeviceId: ownerDeviceId,
       scenario: scenario,

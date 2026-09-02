@@ -452,7 +452,9 @@ class _LocalVisualScenarioCoordinatorState
         // 快捷菜单场景持有 lease，让 Resume 入口以可用状态呈现。
         LocalVisualScenario.sessionQuickMenu ||
         LocalVisualScenario.sessionComposerControls ||
-        LocalVisualScenario.sessionGoalEdit => true,
+        LocalVisualScenario.sessionGoalEdit ||
+        // v0.8.2：DSH 工具时间线场景持有 lease，composer 控制面以可写状态呈现。
+        LocalVisualScenario.dshSessionToolTimeline => true,
         LocalVisualScenario.sessionGitMain ||
         LocalVisualScenario.sessionGitRestricted ||
         LocalVisualScenario.sessionFilesBrowse => false,
