@@ -68,6 +68,11 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-33"]),
     requiredTestIds: Object.freeze(["V081-10"]),
   }),
+  v082: Object.freeze({
+    // v0.8.2 录屏范围：DSH 工具时间线可见场景（VISUAL-MOBILE-34，对应 V082-P3）。
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-34"]),
+    requiredTestIds: Object.freeze(["V082-P3"]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {
