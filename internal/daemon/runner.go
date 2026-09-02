@@ -13,6 +13,7 @@ package daemon
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -431,6 +432,46 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 		if setter, ok := rs.handle.(adapter.EffortOverrideHandle); ok {
 			setter.SetEffort(strings.TrimSpace(stored))
 		}
+	}
+	// v0.8.3 P3 混合内容：send 密文携带 images 时走 ContentHandle.SendContent
+	//（文本 + 图像块同批进入 ACP prompt；图像字节只经内存，明文不写日志/事件）。
+	// 无图像保持既有纯文本 Send 路径不变。图像解码失败与桥 admission 拒绝
+	// （text-only overlay / 缺 attachment 服务 / 模型不支持）都走同一条
+	// session_error + turn_completed 失败收口，客户端不悬挂在生成中。
+	if env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil && len(env.Ciphertext.FixturePayload.Images) > 0 {
+		blocks := make([]adapter.ContentBlock, 0, len(env.Ciphertext.FixturePayload.Images)+1)
+		if text != "" {
+			blocks = append(blocks, adapter.ContentBlock{Type: "text", Text: text})
+		}
+		for i, img := range env.Ciphertext.FixturePayload.Images {
+			data, decodeErr := base64.StdEncoding.DecodeString(img.DataB64)
+			if decodeErr != nil {
+				return fmt.Errorf("session.send 图像块 %d base64 解码失败: %w", i, decodeErr)
+			}
+			blocks = append(blocks, adapter.ContentBlock{Type: "image", ImageData: data, ImageMIME: img.MIME})
+		}
+		contentHandle, ok := rs.handle.(adapter.ContentHandle)
+		if !ok {
+			return fmt.Errorf("%w: 会话 %s 的 handle 不支持混合内容发送", ErrUnsupportedCommand, sessionID)
+		}
+		if err := contentHandle.SendContent(ctx, blocks); err != nil {
+			r.emitEvent(sessionID, adapter.Event{
+				Type: adapter.EventSessionError,
+				Payload: map[string]any{
+					"instance_id": sessionID,
+					"message":     "图像消息发送失败，详情仅限本机诊断。",
+				},
+			})
+			r.emitEvent(sessionID, adapter.Event{
+				Type: adapter.EventTurnCompleted,
+				Payload: map[string]any{
+					"instance_id": sessionID,
+					"stop_reason": "send_failed",
+				},
+			})
+			return err
+		}
+		return nil
 	}
 	if err := rs.handle.Send(ctx, text); err != nil {
 		// 传输层同步失败不会产生 Provider SSE 事件；若只回写命令回执，时间线里的
@@ -1212,6 +1253,14 @@ type fixtureCiphertext struct {
 }
 
 // fixturePayload 是 fixture 场景的明文负载；真实密文不携带此结构。
+// fixtureImage 是 session.send 混合内容中的一张图像（v0.8.3 P3）。
+// DataB64 是标准 base64 编码的图像字节；MIME 必须在桥 admission 白名单内
+// （image/png|jpeg|webp|gif），由 adapter SendContent 与桥共同校验。
+type fixtureImage struct {
+	DataB64 string `json:"data_b64"`
+	MIME    string `json:"mime"`
+}
+
 type fixturePayload struct {
 	Message       string `json:"message"`
 	Provider      string `json:"provider"`
@@ -1244,6 +1293,12 @@ type fixturePayload struct {
 	CatalogRevision string `json:"catalog_revision"`
 	// CWD 是 session.fork 的新工作区根。
 	ForkCWD string `json:"fork_cwd"`
+	// ChildSessionID 是 Relay fork API（POST /v1/sessions/:id/forks）生成的
+	// 子 Relay 会话 ID；daemon fork 成功后把新 provider sessionId 绑定为子会话实例。
+	ChildSessionID string `json:"child_session_id"`
+	// Images 是 session.send 携带的图像块（fixture 形状：base64 数据 + MIME）。
+	// Daemon 在本机把图像字节转成 ACP image 块；明文只经内存，不写日志/事件。
+	Images []fixtureImage `json:"images"`
 }
 
 // parseEnvelope 解析 payload_json；JSON 不合法或 payload 为空时返回错误。
@@ -1553,8 +1608,14 @@ func (r *SessionRunner) deleteSession(ctx context.Context, cmd Command) error {
 }
 
 // forkSession 兑现 session.fork（v0.8.3 P3 B-3）：committed 前缀复制到新会话。
-// 新 DSH sessionId 记入 daemon 本机 store（fork:<session_id>），供后续
-// 导入/恢复链路消费；Relay 侧会话导入走既有 import 通道，不经此命令回执。
+// 两种入口形状：
+//  1. Relay fork API（POST /v1/sessions/:id/forks）：ciphertext 携带
+//     child_session_id（Relay 已创建的子 Relay 会话）。fork 成功后把新 provider
+//     sessionId 绑定为子会话实例映射（instance:<childSessionID>），子会话随即
+//     可按既有 resume 链路恢复——不产生孤儿 Relay 会话。
+//  2. 直连/fixture：fork_cwd 显式提供工作区根。
+//
+// fork 结果同时写入本机 store（fork:<parentSessionID>）供诊断；回执只含状态。
 func (r *SessionRunner) forkSession(ctx context.Context, cmd Command) error {
 	env, err := parseEnvelope(cmd.PayloadJSON)
 	if err != nil {
@@ -1564,12 +1625,27 @@ func (r *SessionRunner) forkSession(ctx context.Context, cmd Command) error {
 	if sessionID == "" {
 		return errors.New("session.fork 缺少 session_id")
 	}
+	childSessionID := ""
 	forkCWD := ""
 	if env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil {
+		childSessionID = strings.TrimSpace(env.Ciphertext.FixturePayload.ChildSessionID)
 		forkCWD = strings.TrimSpace(env.Ciphertext.FixturePayload.ForkCWD)
 	}
+	// 父会话实例映射：fork 的工作区根与 provider 必须与父会话一致（同一 workspace
+	// 语义），不能由命令载荷自由指定第二套授权真相。
+	raw, err := r.store.Get(instanceKey(sessionID))
+	if err != nil {
+		return fmt.Errorf("%w: session=%s", ErrSessionInstanceMissing, sessionID)
+	}
+	var th providerThread
+	if err := json.Unmarshal([]byte(raw), &th); err != nil {
+		return fmt.Errorf("instance 映射损坏: %w", err)
+	}
 	if forkCWD == "" {
-		return errors.New("session.fork 缺少 fork_cwd")
+		forkCWD = th.WorkspaceRoot
+	}
+	if forkCWD == "" {
+		return errors.New("session.fork 缺少 fork_cwd 且父会话无工作区根")
 	}
 	rs, err := r.lookupSession(sessionID)
 	if err != nil {
@@ -1585,6 +1661,20 @@ func (r *SessionRunner) forkSession(ctx context.Context, cmd Command) error {
 	}
 	if err := r.store.Set("fork:"+sessionID, newSessionID); err != nil {
 		return fmt.Errorf("记录 fork 结果: %w", err)
+	}
+	// Relay 子会话绑定：新 provider sessionId 成为子 Relay 会话的实例，
+	// 子会话从 committed 前缀继续（resume 走既有链路）。无 child_session_id
+	// 的直连/fixture 调用跳过绑定，不留悬空映射。
+	if childSessionID != "" {
+		binding, err := json.Marshal(providerThread{
+			Provider: th.Provider, InstanceID: newSessionID, WorkspaceRoot: forkCWD,
+		})
+		if err != nil {
+			return fmt.Errorf("序列化子会话实例绑定: %w", err)
+		}
+		if err := r.store.Set(instanceKey(childSessionID), string(binding)); err != nil {
+			return fmt.Errorf("绑定子会话实例: %w", err)
+		}
 	}
 	return nil
 }

@@ -9,6 +9,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,6 +174,32 @@ type fakeHandle struct {
 	permissionDecisions []permissionCall
 	// permissionErr 注入决策失败（未知/重复请求的 fail-closed 语义）。
 	permissionErr error
+	// v0.8.3 P3 扩展面观测记录。
+	contentSends [][]adapter.ContentBlock
+	forkCalls    []string
+	closed       bool
+	deleted      bool
+	modeCalls    []string
+	modesInfo    adapter.SessionModeInfo
+	questionAns  []questionAnswerCall
+	extCalls     []extCall
+	contentErr   error
+	lifecycleErr error
+	questionErr  error
+	extResult    map[string]any
+	extErr       error
+	forkedID     string
+}
+
+// contentCall 之外的 P3 调用记录形状。
+type questionAnswerCall struct {
+	requestKey string
+	answers    []adapter.QuestionAnswerItem
+}
+
+type extCall struct {
+	method string
+	params map[string]any
 }
 
 // permissionCall 是一次权限决策调用的记录。
@@ -224,6 +251,97 @@ func (h *fakeHandle) ResolvePermission(requestKey string, allow bool) error {
 	h.permissionDecisions = append(h.permissionDecisions, permissionCall{requestKey: requestKey, allow: allow})
 	h.mu.Unlock()
 	return nil
+}
+
+// SendContent 记录混合内容发送（v0.8.3 P3 ContentHandle）。
+func (h *fakeHandle) SendContent(ctx context.Context, blocks []adapter.ContentBlock) error {
+	h.mu.Lock()
+	h.contentSends = append(h.contentSends, blocks)
+	err := h.contentErr
+	h.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	h.emit(adapter.Event{Type: adapter.EventMessageDelta, Seq: 3,
+		Payload: map[string]any{"text": "content fixture"}})
+	return nil
+}
+
+// CloseSession 记录 graceful close（SessionLifecycleHandle）。
+func (h *fakeHandle) CloseSession(ctx context.Context) error {
+	if h.lifecycleErr != nil {
+		return h.lifecycleErr
+	}
+	h.mu.Lock()
+	h.closed = true
+	h.mu.Unlock()
+	return nil
+}
+
+// DeleteSession 记录冷会话删除。
+func (h *fakeHandle) DeleteSession(ctx context.Context) error {
+	if h.lifecycleErr != nil {
+		return h.lifecycleErr
+	}
+	h.mu.Lock()
+	h.deleted = true
+	h.mu.Unlock()
+	return nil
+}
+
+// ForkSession 返回预置的新会话 ID 并记录调用 cwd。
+func (h *fakeHandle) ForkSession(ctx context.Context, cwd string) (string, error) {
+	if h.lifecycleErr != nil {
+		return "", h.lifecycleErr
+	}
+	h.mu.Lock()
+	h.forkCalls = append(h.forkCalls, cwd)
+	h.mu.Unlock()
+	if h.forkedID == "" {
+		return "", errors.New("fakeHandle.forkedID 未预置")
+	}
+	return h.forkedID, nil
+}
+
+// Modes 返回预置的 mode 目录快照（SessionModeHandle）。
+func (h *fakeHandle) Modes() adapter.SessionModeInfo {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.modesInfo
+}
+
+// SetMode 记录 mode 切换调用。
+func (h *fakeHandle) SetMode(ctx context.Context, modeID string) error {
+	h.mu.Lock()
+	h.modeCalls = append(h.modeCalls, modeID)
+	h.mu.Unlock()
+	return nil
+}
+
+// ResolveQuestion 记录一次性回答（QuestionAnswerHandle）。
+func (h *fakeHandle) ResolveQuestion(requestKey string, answers []adapter.QuestionAnswerItem) error {
+	if h.questionErr != nil {
+		return h.questionErr
+	}
+	h.mu.Lock()
+	h.questionAns = append(h.questionAns, questionAnswerCall{requestKey: requestKey, answers: answers})
+	h.mu.Unlock()
+	return nil
+}
+
+// CallExtension 记录 dsh/* 扩展分发（ExtensionDispatchHandle）。
+func (h *fakeHandle) CallExtension(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
+	if h.extErr != nil {
+		return nil, h.extErr
+	}
+	h.mu.Lock()
+	h.extCalls = append(h.extCalls, extCall{method: method, params: params})
+	result := h.extResult
+	h.mu.Unlock()
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, nil
 }
 
 func (h *fakeHandle) emit(ev adapter.Event) {
@@ -765,6 +883,119 @@ func TestSessionRunnerResumeWritesAdapterResult(t *testing.T) {
 	}
 	if !validWakeResult(res.Result) {
 		t.Fatalf("resume 结果 %q 不在六态之内", res.Result)
+	}
+}
+
+// (V083-05) session.fork（Relay 形状）：daemon 用父会话工作区 fork DSH 前缀，
+// 并把新 provider sessionId 绑定为 Relay 子会话的实例映射（子会话可恢复，
+// 不产生孤儿）；无 child_session_id 的直连形状只记 fork 结果。
+func TestSessionRunnerForkBindsChildInstance(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "dsh")
+	start := Command{
+		Kind: "session.start",
+		PayloadJSON: `{"session_id":"p1","workspace_root":"/tmp/ws","provider":"dsh",` +
+			`"ciphertext":{"fixture_payload":{"prompt":"开始"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), start); err != nil {
+		t.Fatalf("consume session.start: %v", err)
+	}
+	fake.handles[0].mu.Lock()
+	fake.handles[0].forkedID = "dsh-forked-1"
+	fake.handles[0].mu.Unlock()
+
+	fork := Command{
+		Kind: "session.fork",
+		PayloadJSON: `{"session_id":"p1","ciphertext":{"fixture_payload":` +
+			`{"child_session_id":"c1"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), fork); err != nil {
+		t.Fatalf("consume session.fork: %v", err)
+	}
+	// fork 调用携带父会话的工作区根（不要求命令提供第二套 cwd）。
+	if calls := fake.handles[0].forkCalls; len(calls) != 1 || calls[0] != "/tmp/ws" {
+		t.Fatalf("ForkSession 调用 = %v, want [/tmp/ws]", calls)
+	}
+	// 子会话实例绑定：provider/instance/workspace 与父一致（instance 为新 DSH id）。
+	raw, err := s.Get(instanceKey("c1"))
+	if err != nil {
+		t.Fatalf("子会话实例映射缺失: %v", err)
+	}
+	var th providerThread
+	if err := json.Unmarshal([]byte(raw), &th); err != nil {
+		t.Fatalf("子会话实例映射损坏: %v", err)
+	}
+	if th.Provider != "dsh" || th.InstanceID != "dsh-forked-1" || th.WorkspaceRoot != "/tmp/ws" {
+		t.Fatalf("子会话绑定不正确: %+v", th)
+	}
+	if stored, _ := s.Get("fork:p1"); stored != "dsh-forked-1" {
+		t.Fatalf("fork 诊断记录 = %q", stored)
+	}
+}
+
+// (V083-03) session.send 混合内容：携带 images 时路由到 ContentHandle.SendContent
+// （文本 + 图像同批，图像按标准 base64 解码），不再走纯文本 Send。
+func TestSessionRunnerSendRoutesMixedContent(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "dsh")
+	start := Command{
+		Kind: "session.start",
+		PayloadJSON: `{"session_id":"m1","workspace_root":"/tmp/ws","provider":"dsh",` +
+			`"ciphertext":{"fixture_payload":{"prompt":"开始"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), start); err != nil {
+		t.Fatalf("consume session.start: %v", err)
+	}
+	png := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4E, 0x47})
+	send := Command{
+		Kind: "session.send",
+		PayloadJSON: `{"session_id":"m1","ciphertext":{"fixture_payload":` +
+			`{"message":"看这张图","images":[{"data_b64":"` + png + `","mime":"image/png"}]}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), send); err != nil {
+		t.Fatalf("consume session.send(images): %v", err)
+	}
+	h := fake.handles[0]
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.contentSends) != 1 {
+		t.Fatalf("应路由到 SendContent，得到 %d 次", len(h.contentSends))
+	}
+	if len(h.sends) != 0 {
+		t.Fatalf("携带图像时不得再走纯文本 Send: %v", h.sends)
+	}
+	blocks := h.contentSends[0]
+	if len(blocks) != 2 || blocks[0].Type != "text" || blocks[0].Text != "看这张图" {
+		t.Fatalf("内容块形状不正确: %+v", blocks)
+	}
+	if blocks[1].Type != "image" || blocks[1].ImageMIME != "image/png" ||
+		string(blocks[1].ImageData) != "\x89PNG"[:4] {
+		t.Fatalf("图像块解码不正确: %+v", blocks[1])
+	}
+}
+
+// (V083-03) 非法图像载荷 fail-closed：base64 坏数据直接拒绝命令，不产生半发送。
+func TestSessionRunnerSendRejectsBadImagePayload(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "dsh")
+	start := Command{
+		Kind: "session.start",
+		PayloadJSON: `{"session_id":"m2","workspace_root":"/tmp/ws","provider":"dsh",` +
+			`"ciphertext":{"fixture_payload":{"prompt":"开始"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), start); err != nil {
+		t.Fatalf("consume session.start: %v", err)
+	}
+	send := Command{
+		Kind: "session.send",
+		PayloadJSON: `{"session_id":"m2","ciphertext":{"fixture_payload":` +
+			`{"message":"坏图","images":[{"data_b64":"@@not-base64@@","mime":"image/png"}]}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), send); err == nil {
+		t.Fatalf("非法 base64 图像应拒绝命令")
+	}
+	h := fake.handles[0]
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.contentSends) != 0 || len(h.sends) != 0 {
+		t.Fatalf("畸形载荷不得触发任何发送: content=%d send=%d", len(h.contentSends), len(h.sends))
 	}
 }
 
