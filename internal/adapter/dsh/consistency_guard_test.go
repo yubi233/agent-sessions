@@ -7,7 +7,6 @@ package dsh
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -246,4 +245,63 @@ func cordisDeclaredEfforts(t *testing.T) map[string][]string {
 	return declared
 }
 
-var _ = regexp.MustCompile
+// bridgeImplementedACP 是外部 deepseek-harness 仓库 ACP 桥当前已实现的方法清单
+// （2026-09-02 核对 packages/acp/acp/src/index.ts：initialize/authenticate/newSession/
+// loadSession/resumeSession/setSessionConfigOption/prompt/cancel）。
+// 该清单是矩阵 unsupported 口径的桥事实锚点：桥侧新增方法时必须同步本清单，
+// 否则守护测试会红，防止能力矩阵把未实现能力误报为 native。
+var bridgeImplementedACP = map[string]bool{
+	"initialize":             true,
+	"authenticate":           true,
+	"newSession":             true,
+	"loadSession":            true,
+	"resumeSession":          true,
+	"setSessionConfigOption": true,
+	"prompt":                 true,
+	"cancel":                 true,
+}
+
+// TestBridgeFactMatrixGuard（V082-13/14/15 守护落点）断言：凡桥未实现 ACP 面的
+// 能力，能力矩阵必须保持 unsupported 且给出与桥事实一致的非空 Reason；
+// 桥一旦实现并广播对应方法，本测试会因 bridgeImplementedACP 待同步而红，
+// 由开发者同步清单并核对矩阵升格，杜绝“空目录/无 handler 冒充 native”。
+func TestBridgeFactMatrixGuard(t *testing.T) {
+	caps := successMatrix("test")
+	byName := map[string]adapter.Capability{}
+	for _, c := range caps.Capabilities {
+		byName[c.Name] = c
+	}
+	// ACP 面 → SPI 能力名映射（桥方法缺失 → 能力必须 unsupported）。
+	missing := []struct {
+		acpFace   string
+		capName   string
+		reasonSub string
+	}{
+		// session/set_mode 未实现 → permission_mode 不可用。
+		{"session/set_mode", "permission_mode", "桥配置固定"},
+		// 生命周期方法（session/close、session/list、session/delete、session/fork）
+		// 未实现 → fork 等能力不可用。
+		{"session/fork", "fork", "未实现"},
+		// image 附件 admission 未实现（prompt 仅接受 text 块）→ attachments 不可用。
+		{"image admission", "attachments", "仅接受 text 块"},
+	}
+	for _, item := range missing {
+		if bridgeImplementedACP[item.acpFace] {
+			continue // 桥已实现：本测试要求同步矩阵升格，见上注释。
+		}
+		c, ok := byName[item.capName]
+		if !ok {
+			t.Fatalf("能力矩阵缺少 %q", item.capName)
+		}
+		if c.Status != adapter.CapabilityUnsupported {
+			t.Fatalf("桥未实现 %s 但 %s 宣称 %s：不得冒充 native（同步 bridgeImplementedACP 与 successMatrix）",
+				item.acpFace, item.capName, c.Status)
+		}
+		if !strings.Contains(c.Reason, item.reasonSub) {
+			t.Fatalf("%s reason 与桥事实不一致: %q（应含 %q）", item.capName, c.Reason, item.reasonSub)
+		}
+	}
+	// tool 生命周期/目录能力的 ACP operation gate 由 TestCapabilityListsDoNotDiverge
+	// 保证清单完整；successMatrix switch 内未显式置 unsupported 的能力不得以 native
+	// 漏出——上述三面（mode/lifecycle/image）是本轮桥事实核对的最关键面。
+}

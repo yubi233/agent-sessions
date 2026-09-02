@@ -310,7 +310,8 @@
    ],
    "evidence": [
     "internal/adapter/dsh/adapter.go",
-    "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"
+    "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md",
+    "internal/adapter/dsh/consistency_guard_test.go（TestBridgeFactMatrixGuard）"
    ]
   },
   {
@@ -332,7 +333,8 @@
    ],
    "evidence": [
     "internal/adapter/dsh/adapter.go",
-    "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md"
+    "docs/zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md",
+    "internal/adapter/dsh/consistency_guard_test.go（TestBridgeFactMatrixGuard）"
    ]
   },
   {
@@ -353,7 +355,8 @@
     "无。"
    ],
    "evidence": [
-    "internal/adapter/dsh/adapter.go"
+    "internal/adapter/dsh/adapter.go",
+    "internal/adapter/dsh/consistency_guard_test.go（TestBridgeFactMatrixGuard）"
    ]
   },
   {
