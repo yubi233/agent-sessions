@@ -80,6 +80,53 @@ func TestLocalDevEventEncoderMapsWhitelistedEvents(t *testing.T) {
 	}
 }
 
+// (V083-10) user_question → question_request 词汇映射：request_id 关联 + questions
+// 数组透传（intent/detail 完整保留）；缺 request_id 不产生事件。
+func TestLocalDevEventEncoderMapsUserQuestion(t *testing.T) {
+	question := localDevEvent(t, adapter.EventUserQuestion, map[string]any{
+		"instance_id": "ses-x",
+		"request_id":  "q-1",
+		"questions": []any{map[string]any{
+			"id": "p1", "title": "审核计划", "type": "single-select",
+			"options": []any{"Approve", "Keep planning"},
+			"intent":  map[string]any{"kind": "plan-review", "approve": "Approve"},
+			"detailMarkdown": "# 计划",
+		}},
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(question), &payload); err != nil {
+		t.Fatalf("envelope not json: %v", err)
+	}
+	fixture, ok := payload["fixture_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("envelope missing fixture_payload: %v", payload)
+	}
+	if fixture["kind"] != "question_request" || fixture["request_id"] != "q-1" {
+		t.Fatalf("question fixture = %v", fixture)
+	}
+	questions, ok := fixture["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("questions 数组应透传: %v", fixture)
+	}
+	first, _ := questions[0].(map[string]any)
+	intent, _ := first["intent"].(map[string]any)
+	if first["id"] != "p1" || intent["kind"] != "plan-review" || intent["approve"] != "Approve" {
+		t.Fatalf("question intent/detail 应完整保留: %v", first)
+	}
+	if _, hasDetail := first["detailMarkdown"]; !hasDetail {
+		t.Fatalf("detail 不得静默丢失: %v", first)
+	}
+	// 缺 request_id：不产生事件（返回空 envelope）。
+	encoder := NewLocalDevEventEncoder()
+	empty, err := encoder.Encode("ses-x", adapter.Event{
+		Type:    adapter.EventUserQuestion,
+		Payload: map[string]any{"instance_id": "ses-x"},
+	})
+	if err != nil || empty != "" {
+		t.Fatalf("缺 request_id 应返回空 envelope: %q, %v", empty, err)
+	}
+}
+
 func TestLocalDevEventEncoderSkipsNoiseEvents(t *testing.T) {
 	for _, eventType := range []adapter.EventType{
 		adapter.EventTurnStarted, adapter.EventUsage,

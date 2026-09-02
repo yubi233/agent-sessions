@@ -228,6 +228,17 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
       - node e2e-verify/mobile/record-macos.mjs --scope v082 --gate-report "$V082_FLUTTER_GATE_REPORT"
 
+  record:v083:
+    desc: v0.8.3 DSH 能力门控 macOS fixture 录屏（需 VISUAL-MOBILE-35 可见 Flutter gate 报告；录屏内容先定：VISUAL-MOBILE-35 场景 5fps 连续帧，只读态会话详情 + unsupported 能力写入口不出现 + 能力 reason 可读采样，不作为功能回归替代）
+    cmds:
+      - |
+        if [[ -z "${V083_FLUTTER_GATE_REPORT:-}" || ! -f "$V083_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v083 blocked: set V083_FLUTTER_GATE_REPORT to a passed V083 macOS gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v083 --gate-report "$V083_FLUTTER_GATE_REPORT"
+
   test:v08:real:
     desc: v0.8 真实 DSH 恢复门（Zen 测试池：nemotron-3-ultra-free、nemotron-3.5-lightning-free、ling-3.0-flash-fin-free、mimo-v2.5-free；429 按约定通过）
     cmds:

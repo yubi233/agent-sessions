@@ -20,6 +20,8 @@ enum LocalVisualScenario {
   dshWorkspaceHome,
   // v0.8.2：DSH 会话工具时间线可见场景（会话详情打开即含工具活动条目）。
   dshSessionToolTimeline,
+  // v0.8.3：DSH 能力门控可见场景（无 lease 只读态；unsupported 能力不渲染写入口）。
+  dshCapabilityGates,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -63,6 +65,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'owner-ready' => LocalVisualScenario.ownerReady,
   'dsh-workspace-home' => LocalVisualScenario.dshWorkspaceHome,
   'dsh-session-tool-timeline' => LocalVisualScenario.dshSessionToolTimeline,
+  'dsh-capability-gates' => LocalVisualScenario.dshCapabilityGates,
   'pairing-pending' => LocalVisualScenario.pairingPending,
   'session-list' => LocalVisualScenario.sessionList,
   'session-detail' => LocalVisualScenario.sessionDetail,
@@ -270,7 +273,8 @@ class LocalVisualFixture {
     // v0.8.1/v0.8.2：DSH 可见场景共用的安全预置（工作区只含 display name 与
     // opaque 元数据，不注入任何路径/JSONL 位置/正文）。
     final isDshScenario = scenario == LocalVisualScenario.dshWorkspaceHome ||
-        scenario == LocalVisualScenario.dshSessionToolTimeline;
+        scenario == LocalVisualScenario.dshSessionToolTimeline ||
+        scenario == LocalVisualScenario.dshCapabilityGates;
     String? dshSessionId;
     if (isDshScenario) {
       relay.replaceTerminals([

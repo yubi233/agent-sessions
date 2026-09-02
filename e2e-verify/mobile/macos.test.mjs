@@ -177,6 +177,8 @@ test("P2/P3/P4/P5/V081 截图场景在 runner 中固定登记，避免录制前�
       "VISUAL-MOBILE-01",
       "VISUAL-MOBILE-02",
       "VISUAL-MOBILE-33",
+      "VISUAL-MOBILE-34",
+      "VISUAL-MOBILE-35",
       "VISUAL-PAIR-01",
       "VISUAL-MOBILE-03",
       "VISUAL-MOBILE-04",

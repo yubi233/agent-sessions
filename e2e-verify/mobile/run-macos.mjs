@@ -84,6 +84,11 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     localVisualScenario: "dsh-session-tool-timeline",
   }),
   Object.freeze({
+    id: "VISUAL-MOBILE-35",
+    directory: "visual-mobile-35-dsh-capability-gates",
+    localVisualScenario: "dsh-capability-gates",
+  }),
+  Object.freeze({
     id: "VISUAL-PAIR-01",
     directory: "visual-pair-01-pending",
     localVisualScenario: "pairing-pending",

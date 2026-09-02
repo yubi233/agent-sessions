@@ -1024,6 +1024,24 @@ class FixtureRelayRepository implements RelayRepository {
             'usage',
             'model_select',
           },
+          emulated: const {'permission'},
+          // v0.8.3：unsupported reason 与 internal/adapter/dsh successMatrix 同口径
+          //（桥已实现面如实标注「链路待接入」，防止客户端残留失效文案）。
+          unsupportedReasons: const {
+            'permission': '决策通道已接通但当前策略为取消而非静默批准',
+            'permission_mode': '桥已实现 session/set_mode；Go adapter/Relay/移动端链路接入后升格',
+            'question': '桥未实现提问通道（无 question 相关 wire 方法）',
+            'plan': '桥不广播 plan 变体，未接入计划能力',
+            'goal': '桥不广播 goal 事件',
+            'skill_catalog': '桥未实现技能目录通道',
+            'invoke_skill': '桥未实现技能调用方法',
+            'attachments': '桥已实现图像 admission 且按 deployment 条件开启；Go opaque ref 链路接入后升格',
+            'fork': '桥已实现 session/fork；Go adapter/Relay 链路接入后升格',
+            'file_read': '桥 fs/* 请求按 -32601 拒绝，未接入文件读取',
+            'git_read': '桥未实现 git 读取能力',
+            'delegate_session': '桥未实现会话委托',
+            'delegate_cross_provider': '桥未实现跨 Provider 委托',
+          },
         ),
         _fixtureProvider(
           'claude',
@@ -1770,6 +1788,7 @@ ProviderCapabilityProfile _fixtureProvider(
   String kind, {
   Set<String> native = const {},
   Set<String> emulated = const {},
+  Map<String, String> unsupportedReasons = const {},
 }) {
   const names = [
     'start',
@@ -1808,7 +1827,7 @@ ProviderCapabilityProfile _fixtureProvider(
                 : CapabilityAvailability.unsupported,
             reason: native.contains(name) || emulated.contains(name)
                 ? null
-                : 'fixture Provider 未声明此能力。',
+                : unsupportedReasons[name] ?? 'fixture Provider 未声明此能力。',
           ),
         )
         .toList(growable: false),

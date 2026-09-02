@@ -1,0 +1,154 @@
+# v0.8.3 deterministic DSH bridge overlay（V083-25 / P4 必过门）：
+# 在生产 acp-demo 组合上追加 permission-presets（mode 目录真值源）与
+# attachment-local（图像 admission 服务面）。模型目录保持生产 Zen 免费池
+# text-only —— 图像 admission 的正向路径由 cordis-v083-image.yml（image-capable
+# overlay）承载；本 overlay 固定验证：
+#   mode 目录广告 / set_mode 原子切换 / current_mode_update、
+#   session close/list/fork/delete 生命周期（含墓碑）、
+#   additionalDirectories admission 与拒绝、
+#   extension 协商（dsh/* _meta）与 goal 扩展只读面。
+# 全程不发送 prompt（real_model=false）；凭据仍只经 DSH 根 .env 引用。
+# 注意：permission-presets 依赖 sessions，必须排在 acp-agent 之后（桥侧已改为
+# 惰性解析，加载顺序不限制 mode 面的可用性）。
+
+- id: llm
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          - id: deepseek-v4-flash
+            input:
+              - text
+      opencode-zen:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/v1
+        retryPolicy:
+          mode: normal
+          maxRetries: 5
+        models:
+          - id: nemotron-3-ultra-free
+            input:
+              - text
+          - id: nemotron-3.5-lightning-free
+            input:
+              - text
+          - id: ling-3.0-flash-fin-free
+            input:
+              - text
+          - id: mimo-v2.5-free
+            input:
+              - text
+      openai:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        baseURL: https://api.paktf.sbs/v1
+        models:
+          - id: gpt-5.5
+            name: GPT-5.5
+            contextWindow: 272000
+            maxTokens: 128000
+            input:
+              - text
+            reasoningEfforts:
+              xhigh: xhigh
+          - id: gpt-5.6-terra
+            name: GPT-5.6 Terra
+            contextWindow: 272000
+            maxTokens: 128000
+            input:
+              - text
+            reasoningEfforts:
+              max: max
+
+- id: sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js'
+
+- id: sandbox-policy
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js "process.env.DSH_SESSION_CWD ?? process.cwd()"
+
+- id: subprocess
+  name: '/Users/yubi/code/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+
+- id: bash
+  name: '/Users/yubi/code/deepseek-harness/packages/shell/bash-sandbox/lib/index.js'
+  config:
+    timeoutMs: 60000
+
+- id: approval
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-approval/lib/index.js'
+  config:
+    policy: never
+
+# attachment 服务（attachments）：图像 admission 的服务面；存储根由环境隔离。
+- id: attachments
+  name: '/Users/yubi/code/deepseek-harness/packages/attachment/attachment-local/lib/index.js'
+  config:
+    dshHome: !!js "process.env.AGENT_SESSIONS_DSH_ATTACHMENT_HOME ?? ((process.env.TMPDIR ?? '/tmp') + '/agent-sessions-dsh-attachments-v083-overlay')"
+
+- id: user-questions
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-questions/lib/index.js'
+- id: fs-sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/fs/fs-sandbox/lib/index.js'
+- id: token-meter
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/token-meter/lib/index.js'
+- id: commands
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/commands/lib/index.js'
+- id: compaction
+  name: '/Users/yubi/code/deepseek-harness/packages/compaction/compaction/lib/index.js'
+
+- id: agent-presets
+  name: '/Users/yubi/code/deepseek-harness/packages/preset/agent-presets/lib/index.js'
+  config:
+    default: standard
+    includeUserRoot: false
+    roots:
+      - path: '/Users/yubi/code/deepseek-harness/apps/cli/config/agent-presets'
+        trust: system
+
+- id: acp-agent
+  name: '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/index.js'
+  config:
+    provider: opencode-zen
+    model: nemotron-3-ultra-free
+    modelProviders:
+      nemotron-3-ultra-free: opencode-zen
+      nemotron-3.5-lightning-free: opencode-zen
+      ling-3.0-flash-fin-free: opencode-zen
+      mimo-v2.5-free: opencode-zen
+      deepseek-v4-flash: opencode-go
+      gpt-5.5: openai
+      gpt-5.6-terra: openai
+    toolUpdates: true
+    ignoreMcpServers: true
+    modelEffortVariants: true
+    persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
+    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? 'none'"
+    workspaceContext:
+      maxBytes: 65536
+    persona: |
+      You are a coding assistant powered by the {{model}} model. Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access denied …]` result is policy, not a command bug.
+
+      Verify your work by running the code or tests. Keep answers brief and factual.
+
+# permission-presets：mode 目录真值源（3 preset 表与 DSH base bundle 一致）。
+# 依赖 sessions/shell/approval，排在 acp-agent 之后挂载；桥按惰性解析读取。
+- id: permission
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/permission-presets/lib/index.js'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never

@@ -193,6 +193,28 @@ func (e *LocalDevEventEncoder) localDevFixturePayload(sessionID string, event ad
 			payload["inspect_target"] = toolCallID
 		}
 		return payload, true
+	case adapter.EventUserQuestion:
+		// v0.8.3（B-5）：DSH question 请求进入本地开发时间线，客户端以既有
+		// question_request 词汇渲染（多题/多选/自由文本/plan-review intent 均为
+		// Flutter 侧已支持形状）。载荷只复制白名单字段：request_id 关联 question.answer
+		// 命令；questions 数组由桥按 wire 契约生成（id/title/options/multiSelect/
+		// allowCustomText/intent/detail），这里整体透传不拆包，避免丢 intent/detail。
+		requestID, _ := event.Payload["request_id"].(string)
+		if strings.TrimSpace(requestID) == "" {
+			return nil, false
+		}
+		payload := map[string]any{
+			"kind":       "question_request",
+			"request_id": requestID,
+			"prompt":     "Provider 需要你的回答。",
+		}
+		if questions, ok := event.Payload["questions"]; ok {
+			payload["questions"] = questions
+		}
+		if title, _ := event.Payload["title"].(string); title != "" {
+			payload["prompt"] = title
+		}
+		return payload, true
 	case adapter.EventSessionError:
 		message, _ := event.Payload["message"].(string)
 		if strings.TrimSpace(message) == "" {

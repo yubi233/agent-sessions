@@ -73,6 +73,16 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-34"]),
     requiredTestIds: Object.freeze(["V082-P3"]),
   }),
+  v083: Object.freeze({
+    // v0.8.3 录屏范围（V083-P4）：
+    // 内容先定——录制 VISUAL-MOBILE-35（dsh-capability-gates）：
+    //   1) DSH 工作区分组首页进入会话详情（只读态，无 lease）；
+    //   2) 时间线为空态/只读态，composer 写入口不出现（unsupported 能力门控）；
+    //   3) 能力 reasons（桥已实现 + 链路待接入）在设置/能力面可读。
+    // 5fps 连续帧，不作为功能回归替代；前置 gate 报告必须已 passed。
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-35"]),
+    requiredTestIds: Object.freeze(["V083-P4"]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {
