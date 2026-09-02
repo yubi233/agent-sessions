@@ -169,6 +169,16 @@ type fakeHandle struct {
 	disposed bool
 	events   chan adapter.Event
 	done     chan struct{}
+	// permissionDecisions 记录 ResolvePermission 的调用（requestKey → allow）。
+	permissionDecisions []permissionCall
+	// permissionErr 注入决策失败（未知/重复请求的 fail-closed 语义）。
+	permissionErr error
+}
+
+// permissionCall 是一次权限决策调用的记录。
+type permissionCall struct {
+	requestKey string
+	allow      bool
 }
 
 func newFakeHandle(id string) *fakeHandle {
@@ -203,6 +213,17 @@ func (h *fakeHandle) SetEffort(effort string) {
 	h.mu.Lock()
 	h.efforts = append(h.efforts, effort)
 	h.mu.Unlock()
+}
+
+// ResolvePermission 实现 adapter.PermissionDecisionHandle（v0.8.2 P1），记录决策。
+func (h *fakeHandle) ResolvePermission(requestKey string, allow bool) error {
+	if h.permissionErr != nil {
+		return h.permissionErr
+	}
+	h.mu.Lock()
+	h.permissionDecisions = append(h.permissionDecisions, permissionCall{requestKey: requestKey, allow: allow})
+	h.mu.Unlock()
+	return nil
 }
 
 func (h *fakeHandle) emit(ev adapter.Event) {
@@ -747,12 +768,14 @@ func TestSessionRunnerResumeWritesAdapterResult(t *testing.T) {
 	}
 }
 
-// e) 未实现 kind（permission.approve）返回 ErrUnsupportedCommand，且不产生成功状态。
+// e) 未实现 kind（question.answer 等 C 类）返回 ErrUnsupportedCommand，且不产生成功状态。
+// v0.8.2 起 permission.approve/reject 是受支持 kind（经 runner 注入 handle registry），
+// 因此这里改用真正未接入的 question.answer 验证 fail-closed。
 func TestSessionRunnerUnsupportedKindFailsClosed(t *testing.T) {
 	s, runner, _ := newRunnerFixture(t, "opencode")
 	err := runner.ConsumeCommand(context.Background(), Command{
-		Kind:        "permission.approve",
-		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"request_id":"permission-1"}}}`,
+		Kind:        "question.answer",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"request_id":"q-1"}}}`,
 	})
 	if !errors.Is(err, ErrUnsupportedCommand) {
 		t.Fatalf("err = %v, want ErrUnsupportedCommand", err)
@@ -1853,5 +1876,69 @@ func TestSessionRunnerForwardEventsRearmsTerminalAfterNewTurn(t *testing.T) {
 	}
 	if summary.Count != 4 || summary.Type != adapter.EventTurnCompleted || summary.Seq != fourth.Seq {
 		t.Fatalf("durable summary=%+v, want count=4 turn_completed seq=%d", summary, fourth.Seq)
+	}
+}
+
+// v0.8.2 P1：permission.approve/reject 命令经 runner 注入 handle 的 pending registry。
+// 成功路径把 allow/reject 决策传给 PermissionDecisionHandle；无运行 handle 或
+// 缺 request_id 时 fail-closed。
+func TestSessionRunnerRespondPermission(t *testing.T) {
+	s, runner, adapter_ := newRunnerFixture(t, "dsh")
+	_ = s
+	// 先 start 一个会话拿到运行 handle。
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.start",
+		PayloadJSON: `{"session_id":"s-perm","provider":"dsh","workspace_root":"/tmp/ws","model":"nemotron-3-ultra-free"}`,
+	}); err != nil {
+		t.Fatalf("session.start: %v", err)
+	}
+	adapter_.mu.Lock()
+	var hd *fakeHandle
+	if len(adapter_.handles) > 0 {
+		hd = adapter_.handles[len(adapter_.handles)-1]
+	}
+	adapter_.mu.Unlock()
+	if hd == nil {
+		t.Fatal("start 后没有运行 handle")
+	}
+	// approve：决策被注入 handle。
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "permission.approve",
+		PayloadJSON: `{"session_id":"s-perm","ciphertext":{"fixture_payload":{"request_id":"tool-1"}}}`,
+	}); err != nil {
+		t.Fatalf("permission.approve: %v", err)
+	}
+	hd.mu.Lock()
+	decisions := append([]permissionCall(nil), hd.permissionDecisions...)
+	hd.mu.Unlock()
+	if len(decisions) != 1 || decisions[0].requestKey != "tool-1" || !decisions[0].allow {
+		t.Fatalf("approve 决策 = %+v, want [{tool-1 true}]", decisions)
+	}
+	// reject：allow=false。
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "permission.reject",
+		PayloadJSON: `{"session_id":"s-perm","ciphertext":{"fixture_payload":{"request_id":"tool-2"}}}`,
+	}); err != nil {
+		t.Fatalf("permission.reject: %v", err)
+	}
+	hd.mu.Lock()
+	decisions = append([]permissionCall(nil), hd.permissionDecisions...)
+	hd.mu.Unlock()
+	if len(decisions) != 2 || decisions[1].requestKey != "tool-2" || decisions[1].allow {
+		t.Fatalf("reject 决策 = %+v, want 第二项 allow=false", decisions)
+	}
+	// 缺 request_id：fail-closed。
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "permission.approve",
+		PayloadJSON: `{"session_id":"s-perm","ciphertext":{"fixture_payload":{}}}`,
+	}); err == nil {
+		t.Fatal("缺 request_id 必须失败")
+	}
+	// 无运行 handle 的会话：fail-closed。
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "permission.approve",
+		PayloadJSON: `{"session_id":"s-ghost","ciphertext":{"fixture_payload":{"request_id":"tool-3"}}}`,
+	}); err == nil {
+		t.Fatal("无运行 handle 的权限决策必须失败")
 	}
 }

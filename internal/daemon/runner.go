@@ -190,6 +190,11 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 		return r.selectModel(ctx, cmd)
 	case "session.effort_select":
 		return r.selectEffort(ctx, cmd)
+	case "permission.respond", "permission.approve", "permission.reject":
+		// v0.8.2 P1：移动端审批命令经 Relay 透传到 daemon（协议枚举 permission.respond
+		// 与移动端 permission.approve/reject kind 同义）。runner 把一次性决策
+		// 注入 handle 的 pending permission registry，回写桥原始 JSON-RPC 请求。
+		return r.respondPermission(ctx, cmd)
 	default:
 		// 未实现 kind 保持 fail-closed：不写任何成功状态（项目文档「统一能力模型」）。
 		return fmt.Errorf("%w: kind=%s", ErrUnsupportedCommand, kind)
@@ -1199,6 +1204,9 @@ type fixturePayload struct {
 	SnapshotToken string `json:"snapshot_token"`
 	Offset        int    `json:"offset"`
 	Limit         int    `json:"limit"`
+	// RequestID 是 permission 审批命令携带的权限请求关联键（=桥 toolCallId），
+	// 移动端 permission.approve/reject 的 ciphertext 只带 request_id。
+	RequestID string `json:"request_id"`
 }
 
 // parseEnvelope 解析 payload_json；JSON 不合法或 payload 为空时返回错误。
@@ -1300,4 +1308,42 @@ func (r *SessionRunner) selectEffort(ctx context.Context, cmd Command) error {
 		return fmt.Errorf("持久化推理档位: %w", err)
 	}
 	return nil
+}
+
+// respondPermission 兑现 permission.respond / permission.approve / permission.reject：
+// 把移动端的一次性审批决策注入会话 handle 的 pending permission registry，
+// 由 handle 回写桥的原始 JSON-RPC 请求（allowed-once/rejected）。
+// 命令 kind 为 reject（permission.reject）时决策为拒绝，其余一律视为批准；
+// 会话无运行 handle、未知 request_id 或重复决策均失败（fail-closed）。
+func (r *SessionRunner) respondPermission(ctx context.Context, cmd Command) error {
+	env, err := parseEnvelope(cmd.PayloadJSON)
+	if err != nil {
+		return err
+	}
+	sessionID := env.sessionID()
+	if sessionID == "" {
+		return errors.New("permission 命令缺少 session_id")
+	}
+	requestID := ""
+	if env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil {
+		requestID = strings.TrimSpace(env.Ciphertext.FixturePayload.RequestID)
+	}
+	if requestID == "" {
+		return errors.New("permission 命令缺少 request_id")
+	}
+	// 以分发 case 的 cmd.Kind 为准（PayloadJSON 可能不含 kind）；
+	// permission.reject → 拒绝，其余（approve/respond）→ 批准。
+	allow := cmd.Kind != "permission.reject"
+	r.mu.Lock()
+	rs := r.handles[sessionID]
+	r.mu.Unlock()
+	if rs == nil {
+		return fmt.Errorf("会话 %s 没有运行中 handle，无法回写权限决策", sessionID)
+	}
+	decider, ok := rs.handle.(adapter.PermissionDecisionHandle)
+	if !ok {
+		return fmt.Errorf("%w: 会话 %s 的 handle 不支持权限决策回流", ErrUnsupportedCommand, sessionID)
+	}
+	// 决策注入：handle 侧 one-shot 校验未知/重复并回写桥原始请求。
+	return decider.ResolvePermission(requestID, allow)
 }
