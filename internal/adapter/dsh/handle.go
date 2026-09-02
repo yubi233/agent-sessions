@@ -48,6 +48,11 @@ type handle struct {
 	// 两者共同保证每次变更只下发一次，绝不带着旧模型静默发送。
 	model        string
 	appliedModel string
+	// effort 是用户通过 session.effort_select / send 随行 effort 表达的期望推理档位；
+	// appliedEffort 是桥上已通过 set_config_option(configId=thought_level) 生效的档位。
+	// 档位必须属于桥对当前模型公布的目录，否则桥以 invalidParams 拒绝（fail-closed）。
+	effort        string
+	appliedEffort string
 }
 
 // pendingReq 是等待中的请求记录。
@@ -149,19 +154,78 @@ func (h *handle) applyModel(ctx context.Context) error {
 	return nil
 }
 
+// SetEffort 应用运行期推理档位覆盖（session.effort_select / session.send 的随行档位）。
+// 空值忽略：与 model 口径一致，避免清空后桥回退到未受控的配置默认。
+// 实际下发发生在下一次 Send 前（applyEffort），桥对不支持的档位以 invalidParams 拒绝，
+// 失败在 Send 路径 fail-closed 并如实上报（客户端保留原档位，不产生假成功）。
+func (h *handle) SetEffort(effort string) {
+	effort = strings.TrimSpace(effort)
+	if effort == "" {
+		return
+	}
+	h.mu.Lock()
+	h.effort = effort
+	h.mu.Unlock()
+}
+
+// applyEffort 在 prompt 前把期望档位同步到桥（session/set_config_option，
+// configId=thought_level——桥按当前模型已公布的档位校验并记忆该档位）。
+// 与上一次生效值相同则跳过；失败返回错误并交给 Send 的失败路径广播
+// session_error/turn_completed，绝不带着旧档位继续发送。
+func (h *handle) applyEffort(ctx context.Context) error {
+	h.mu.Lock()
+	effort := h.effort
+	applied := h.appliedEffort
+	h.mu.Unlock()
+	if effort == "" || effort == applied {
+		return nil
+	}
+	applyCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	defer cancel()
+	if _, err := h.request(applyCtx, "session/set_config_option", map[string]any{
+		"sessionId": h.sessionID,
+		"configId":  "thought_level",
+		"value":     effort,
+	}); err != nil {
+		return fmt.Errorf("dsh set_config_option(thought_level=%s): %w", effort, err)
+	}
+	h.mu.Lock()
+	h.appliedEffort = effort
+	h.mu.Unlock()
+	return nil
+}
+
 // Send 把文本作为 session/prompt 单文本块发送，阻塞到该 turn 结束（桥返回 stopReason）。
 // 取消当前 turn 请调用 Abort（cancel 通知会让桥以 stopReason=cancelled 结算本请求）。
 func (h *handle) Send(ctx context.Context, text string) error {
 	h.sendMu.Lock()
 	defer h.sendMu.Unlock()
-	// 模型切换必须先于 prompt 落地：sendMu 保证 set_config_option 不会与
-	// in-flight prompt 并发；桥拒绝（未知模型/校验失败）时整轮 fail-closed。
+	// 下发顺序固定为 model → effort → prompt（与桥 configOptions 语义一致）：
+	// sendMu 保证 set_config_option 不会与 in-flight prompt 并发；桥拒绝
+	// （未知模型/不支持的档位/校验失败）时整轮 fail-closed，绝不带旧值静默发送。
 	if err := h.applyModel(ctx); err != nil {
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventSessionError,
 			Payload: map[string]any{
 				"instance_id": h.sessionID,
 				"message":     fmt.Sprintf("模型切换失败：%v", err),
+			},
+		})
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventTurnCompleted,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"stop_reason": "error",
+			},
+		})
+		return err
+	}
+	if err := h.applyEffort(ctx); err != nil {
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"message":     fmt.Sprintf("推理档位切换失败：%v", err),
 			},
 		})
 		h.pushEvent(adapter.Event{
@@ -203,6 +267,23 @@ func (h *handle) Send(ctx context.Context, text string) error {
 		StopReason string `json:"stopReason"`
 	}
 	if decodeErr := json.Unmarshal(result, &response); decodeErr != nil {
+		// 响应 decode 失败同样必须收敛回合状态（v0.8.2 P1）：桥已返回结果但形状异常时，
+		// 若直接返回错误，客户端会永远停留在“生成中”。先补发脱敏错误与失败终态，
+		// 让 UI 回到可操作状态，原始错误只留在本机回执中。
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventSessionError,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"message":     "模型回合响应异常，详情仅限本机诊断。",
+			},
+		})
+		h.pushEvent(adapter.Event{
+			Type: adapter.EventTurnCompleted,
+			Payload: map[string]any{
+				"instance_id": h.sessionID,
+				"stop_reason": "error",
+			},
+		})
 		return fmt.Errorf("解析 session/prompt 响应: %w", decodeErr)
 	}
 	// 实测桥可能先返回 stopReason 响应、再补发最后一条 message_completed 通知

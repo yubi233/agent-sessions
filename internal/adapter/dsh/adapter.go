@@ -412,8 +412,12 @@ func successMatrix(version string) adapter.Capabilities {
 			// modelProviders 同步维护），Default 为 Zen 免费池默认模型。
 			status = adapter.CapabilityNative
 		case "effort_select":
+			// v0.8.2 P1：桥的 setSessionConfigOption 已支持 configId=thought_level
+			// （handle 的 SetEffort/applyEffort 已接通该通道）。但当前 Zen 免费池默认
+			// 模型不公布 reasoningEfforts 档位（目录为空），按计划风险条款保持
+			// unsupported：能切则切，切不了的档位绝不出现在目录中。
 			status = adapter.CapabilityUnsupported
-			reason = "桥不支持运行期 effort 选择"
+			reason = "桥支持 thought_level 通道，但当前模型池（Zen 免费池）无已公布档位；空目录不得冒充 native"
 		case "attachments":
 			status = adapter.CapabilityUnsupported
 			reason = "桥 prompt 仅接受 text 块，不支持附件"

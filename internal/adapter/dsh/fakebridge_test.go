@@ -977,3 +977,140 @@ func TestSetModelFailureFailsClosed(t *testing.T) {
 		t.Fatalf("恢复后 prompt 应发送一次，实际 %d", len(prompts))
 	}
 }
+
+// v0.8.2 P1：SetEffort 经 session/set_config_option(configId=thought_level) 下发，
+// 顺序为 model → effort → prompt；同一档位去重、变更再下发、空值忽略。
+func TestSendAppliesEffortViaThoughtLevelBeforePrompt(t *testing.T) {
+	const sessionID = "sess-effort"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	h := startWithFake(t, fb)
+	setter, ok := h.(adapter.EffortOverrideHandle)
+	if !ok {
+		t.Fatal("DSH handle 必须实现 EffortOverrideHandle")
+	}
+	setter.SetEffort("max")
+	if err := h.Send(context.Background(), "第一轮"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	written := fb.written()
+	switches := framesByMethod(written, "session/set_config_option")
+	if len(switches) != 1 {
+		t.Fatalf("预期恰好 1 帧 set_config_option，实际 %d", len(switches))
+	}
+	p, _ := switches[0]["params"].(map[string]any)
+	if p["sessionId"] != sessionID || p["configId"] != "thought_level" || p["value"] != "max" {
+		t.Fatalf("set_config_option 形状不符: %#v", p)
+	}
+	// 时序：thought_level 必须先于 prompt。
+	switchIndex, promptIndex := -1, -1
+	for i, frame := range written {
+		switch methodOf(frame) {
+		case "session/set_config_option":
+			if switchIndex < 0 {
+				switchIndex = i
+			}
+		case "session/prompt":
+			if promptIndex < 0 {
+				promptIndex = i
+			}
+		}
+	}
+	if switchIndex == -1 || promptIndex == -1 || switchIndex > promptIndex {
+		t.Fatalf("set_config_option(idx=%d) 必须先于 prompt(idx=%d)", switchIndex, promptIndex)
+	}
+	// 同一档位再次 Send：不重复下发。
+	if err := h.Send(context.Background(), "第二轮"); err != nil {
+		t.Fatalf("第二次 Send: %v", err)
+	}
+	if got := len(framesByMethod(fb.written(), "session/set_config_option")); got != 1 {
+		t.Fatalf("同一档位不得重复下发，实际 %d 帧", got)
+	}
+	// 变更档位：恰好再下发一次新值。
+	setter.SetEffort("medium")
+	if err := h.Send(context.Background(), "第三轮"); err != nil {
+		t.Fatalf("第三次 Send: %v", err)
+	}
+	switches = framesByMethod(fb.written(), "session/set_config_option")
+	if len(switches) != 2 {
+		t.Fatalf("变更后预期共 2 帧 set_config_option，实际 %d", len(switches))
+	}
+	if p, _ := switches[1]["params"].(map[string]any); p["value"] != "medium" {
+		t.Fatalf("第二次下发 value = %v, want medium", p["value"])
+	}
+}
+
+// SetEffort 空值/纯空白忽略：不产生 set_config_option，prompt 直接发送。
+func TestSetEffortEmptyIgnored(t *testing.T) {
+	const sessionID = "sess-empty-effort"
+	fb := newFakeBridge()
+	fb.script = respondByMethod(t, sessionID)
+	h := startWithFake(t, fb)
+	setter := h.(adapter.EffortOverrideHandle)
+	setter.SetEffort("   ")
+	if err := h.Send(context.Background(), "首轮"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got := len(framesByMethod(fb.written(), "session/set_config_option")); got != 0 {
+		t.Fatalf("空 effort 不得下发 set_config_option，实际 %d 帧", got)
+	}
+	if got := len(framesByMethod(fb.written(), "session/prompt")); got != 1 {
+		t.Fatalf("空 effort 时 prompt 应照常发送，实际 %d 帧", got)
+	}
+}
+
+// 桥拒绝不支持的档位（invalidParams）时整轮 fail-closed：不发 prompt，
+// 先广播 session_error 再补 turn_completed(error)；客户端保留原档位可重试。
+func TestSetEffortFailureFailsClosed(t *testing.T) {
+	const sessionID = "sess-bad-effort"
+	fb := newFakeBridge()
+	fb.script = func(fb *fakeBridge, msg map[string]any) {
+		id := frameID(msg)
+		switch methodOf(msg) {
+		case "initialize":
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": id,
+				"result": map[string]any{
+					"protocolVersion": 1,
+					"agentInfo":       map[string]any{"name": "deepseek-harness-acp", "version": "0.0.1"},
+				},
+			})
+		case "session/new":
+			fb.push(t, map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"sessionId": sessionID}})
+		case "session/set_config_option":
+			// 桥拒绝不支持的档位：invalidParams（-32602）。
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": id,
+				"error": map[string]any{"code": -32602, "message": "unsupported reasoning effort"},
+			})
+		}
+	}
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	h, err := a.Start(context.Background(), adapter.StartRequest{WorkspaceRoot: "/tmp/dsh-ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Dispose(context.Background()) })
+	setter := h.(adapter.EffortOverrideHandle)
+	setter.SetEffort("ultra")
+	if err := h.Send(context.Background(), "首轮"); err == nil {
+		t.Fatal("桥拒绝档位时 Send 必须失败（fail-closed）")
+	}
+	if got := len(framesByMethod(fb.written(), "session/prompt")); got != 0 {
+		t.Fatalf("档位被拒后不得发送 prompt，实际 %d 帧", got)
+	}
+	// 事件流补终态：session_error → turn_completed(error)，客户端不悬挂。
+	var types []adapter.EventType
+	deadline := time.After(5 * time.Second)
+	for len(types) < 2 {
+		select {
+		case ev := <-h.Events():
+			types = append(types, ev.Type)
+		case <-deadline:
+			t.Fatalf("等待终态事件超时，got=%v", types)
+		}
+	}
+	if types[0] != adapter.EventSessionError || types[1] != adapter.EventTurnCompleted {
+		t.Fatalf("终态事件顺序 = %v, want [session_error turn_completed]", types)
+	}
+}
