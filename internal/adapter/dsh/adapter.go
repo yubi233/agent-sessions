@@ -389,8 +389,11 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityEmulated
 			reason = "决策通道已接通但当前策略为取消而非静默批准"
 		case "permission_mode":
+			// v0.8.3 P1：桥已实现 session/set_mode + modes 目录 + current_mode_update
+			// （经 DSH permission preset 原子 bundle 切换）。Go handle/runner/Relay/
+			// 移动端链路接入完成并过 deterministic gate 后升格 native（V083-P3/P4/P5）。
 			status = adapter.CapabilityUnsupported
-			reason = "权限策略由桥配置固定，不支持运行期切换"
+			reason = "桥已实现 session/set_mode；Go adapter/Relay/移动端链路接入后升格"
 		case "question":
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现提问通道（无 question 相关 wire 方法）"
@@ -419,8 +422,11 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityUnsupported
 			reason = "桥支持 thought_level 通道，但当前模型池（Zen 免费池）无已公布档位；空目录不得冒充 native"
 		case "attachments":
+			// v0.8.3 P1：桥 content.ts 已实现图像双向 admission（attachment 服务 +
+			// 模型 inputModalities 同时支持时开启，deployment 条件决定）。Go 侧
+			// opaque ref 链路接入后按 deployment 条件升格（V083-P3）。
 			status = adapter.CapabilityUnsupported
-			reason = "桥 prompt 仅接受 text 块，不支持附件"
+			reason = "桥已实现图像 admission 且按 deployment 条件开启；Go opaque ref 链路接入后升格"
 		case "file_read":
 			status = adapter.CapabilityUnsupported
 			reason = "桥 fs/* 请求按 -32601 拒绝，未接入文件读取"
@@ -430,8 +436,10 @@ func successMatrix(version string) adapter.Capabilities {
 		case "usage":
 			status = adapter.CapabilityNative
 		case "fork":
+			// v0.8.3 P1：桥已实现 session/fork（committed-prefix 复制）。Go adapter/
+			// Relay 的 fork 命令链路接入后升格（V083-P3/P4）。
 			status = adapter.CapabilityUnsupported
-			reason = "桥未实现 session/fork"
+			reason = "桥已实现 session/fork；Go adapter/Relay 链路接入后升格"
 		case "delegate_session":
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现会话委托"

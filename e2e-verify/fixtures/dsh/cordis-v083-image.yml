@@ -1,0 +1,112 @@
+# v0.8.3 image-capable 受控 overlay（V083-03/P1）：在 acp-demo 组合上挂载
+# @deepseek-ai/dsh-attachment-local，并路由声明 image 输入的模型，使桥的
+# promptCapabilities.image 如实升为 true、inline image admission 全链路可用。
+# 对照 overlay 是生产 cordis.yml（不挂载 attachment 服务、模型目录 text-only）：
+# 图像发送在该组合下以 invalidParams 拒绝，用于 V083-03 的拒绝矩阵。
+# 凭据只经 DSH 根 .env / 环境变量引用，不写入本文件。
+
+- id: llm
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          - id: deepseek-v4-flash
+            input:
+              - text
+      openai:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        baseURL: https://api.paktf.sbs/v1
+        models:
+          # 图像 capable 路由：overlay 的 model 目录必须声明 image 输入，
+          # 否则 supportsAcpImagePrompts 如实返回 false（不伪造能力）。
+          - id: gpt-5.5
+            name: GPT-5.5
+            contextWindow: 272000
+            maxTokens: 128000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              xhigh: xhigh
+          - id: gpt-5.6-terra
+            name: GPT-5.6 Terra
+            contextWindow: 272000
+            maxTokens: 128000
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              max: max
+
+- id: sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js'
+
+- id: sandbox-policy
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js "process.env.DSH_SESSION_CWD ?? process.cwd()"
+
+- id: subprocess
+  name: '/Users/yubi/code/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+
+- id: bash
+  name: '/Users/yubi/code/deepseek-harness/packages/shell/bash-sandbox/lib/index.js'
+  config:
+    timeoutMs: 60000
+
+- id: approval
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-approval/lib/index.js'
+  config:
+    policy: never
+
+# attachment 服务：服务 id 固定为 attachments（桥 supportsAcpImagePrompts 读取）。
+# 存储根由测试显式注入，不落在用户 ~/.dsh。
+- id: attachments
+  name: '/Users/yubi/code/deepseek-harness/packages/attachment/attachment-local/lib/index.js'
+  config:
+    dshHome: !!js "process.env.AGENT_SESSIONS_DSH_ATTACHMENT_HOME ?? ((process.env.TMPDIR ?? '/tmp') + '/agent-sessions-dsh-attachments-v083')"
+
+- id: user-questions
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-questions/lib/index.js'
+- id: fs-sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/fs/fs-sandbox/lib/index.js'
+- id: token-meter
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/token-meter/lib/index.js'
+- id: commands
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/commands/lib/index.js'
+- id: compaction
+  name: '/Users/yubi/code/deepseek-harness/packages/compaction/compaction/lib/index.js'
+
+- id: agent-presets
+  name: '/Users/yubi/code/deepseek-harness/packages/preset/agent-presets/lib/index.js'
+  config:
+    default: standard
+    includeUserRoot: false
+    roots:
+      - path: '/Users/yubi/code/deepseek-harness/apps/cli/config/agent-presets'
+        trust: system
+
+- id: acp-agent
+  name: '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/index.js'
+  config:
+    provider: openai
+    model: gpt-5.5
+    modelProviders:
+      gpt-5.5: openai
+      gpt-5.6-terra: openai
+    toolUpdates: true
+    ignoreMcpServers: true
+    modelEffortVariants: true
+    persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
+    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? 'none'"
+    workspaceContext:
+      maxBytes: 65536
+    persona: |
+      You are a coding assistant powered by the {{model}} model. Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access denied …]` result is policy, not a command bug.
+
+      Verify your work by running the code or tests. Keep answers brief and factual.

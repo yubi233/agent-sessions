@@ -1,0 +1,176 @@
+# v0.8.3 permission ask 受控 overlay（V083-08/P1）：与生产 cordis.yml 相同组合，
+# 但 approval.policy=ask，使真实桥的 session/request_permission 决策链路可被
+# deterministic fixture 驱动（allow/reject/cancel/timeout/disconnect/duplicate）。
+# 凭据仍只经 DSH 根 .env 引用。
+# Happy 接入配置（dsh-happy-init 生成）：路径全部锚定启动 cwd，
+# 本文件可原样复制到任何项目。默认 LLM 走 OpenCode Zen 免费模型，Go 路由作为兼容回退。
+# 桥进程由 daemon 以最小环境派生（internal/adapter/dsh/bridge.go minimalEnv），
+# shell 导出的变量不会进来；apiKeyEnv 引用由桥启动目录（DSH 检出根）的
+# .env 供给——app-boot loadEnv 在挂载配置前读取它，llm-pi-ai 无凭据服务时
+# 以该进程环境作为完整凭据平面。本机凭据正本仍在 ~/.dsh/.credentials.yaml。
+- id: llm
+  # @deepseek-ai/dsh-llm-pi-ai
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          - id: deepseek-v4-flash
+            input:
+              - text
+            reasoningEfforts:
+              max: max
+      opencode-zen:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/v1
+        retryPolicy:
+          mode: normal
+          maxRetries: 5
+        models:
+          # 当前可用的 Zen 免费池（与 internal/adapter/dsh dshKnownModels 同步维护）。
+          # deepseek-v4-flash-free / big-pickle 已下线，不再保留。
+          - id: nemotron-3-ultra-free
+            input:
+              - text
+          - id: nemotron-3.5-lightning-free
+            input:
+              - text
+          - id: ling-3.0-flash-fin-free
+            input:
+              - text
+          - id: mimo-v2.5-free
+            input:
+              - text
+      openai:
+        apiKeyEnv: OPENAI_API_KEY
+        baseURL: https://api.paktf.sbs/v1
+        models:
+          - id: gpt-5.5
+            name: GPT-5.5
+            contextWindow: 272000
+            maxTokens: 128000
+            input:
+              - text
+            reasoningEfforts:
+              xhigh: xhigh
+          - id: gpt-5.6-terra
+            name: GPT-5.6 Terra
+            contextWindow: 272000
+            maxTokens: 128000
+            input:
+              - text
+            reasoningEfforts:
+              max: max
+
+# bash 与文件工具限制在当前项目内；越界重试会先请求批准（手机推送）。
+- id: sandbox
+  # @deepseek-ai/dsh-sandbox-local
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js'
+
+- id: sandbox-policy
+  # @deepseek-ai/dsh-sandbox-policy
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js "process.env.DSH_SESSION_CWD ?? process.cwd()"
+
+- id: subprocess
+  # @deepseek-ai/dsh-subprocess-local
+  name: '/Users/yubi/code/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+
+- id: bash
+  # @deepseek-ai/dsh-bash-sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/shell/bash-sandbox/lib/index.js'
+  config:
+    timeoutMs: 60000
+
+- id: approval
+  # @deepseek-ai/dsh-user-approval
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-approval/lib/index.js'
+  config:
+    policy: ask
+
+# ACP 自动化应用：agent spine + JSONL 持久化 + 协议桥。
+# stdout 只承载 JSON-RPC；toolUpdates 让手机端看到工具活动。
+# 已发布的 standard/minimal 预设所使用的宿主服务。
+- id: user-questions
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-questions/lib/index.js'
+- id: fs-sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/fs/fs-sandbox/lib/index.js'
+- id: token-meter
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/token-meter/lib/index.js'
+- id: commands
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/commands/lib/index.js'
+- id: compaction
+  name: '/Users/yubi/code/deepseek-harness/packages/compaction/compaction/lib/index.js'
+- id: subagent
+  name: '/Users/yubi/code/deepseek-harness/packages/subagent/subagent/lib/index.js'
+- id: subagent-spawn-in-process
+  name: '/Users/yubi/code/deepseek-harness/packages/subagent/subagent-spawn-in-process/lib/index.js'
+  config:
+    providerName: spawn
+- id: subagent-fork-in-process
+  name: '/Users/yubi/code/deepseek-harness/packages/subagent/subagent-fork-in-process/lib/index.js'
+  config:
+    providerName: fork
+- id: workflow
+  name: '/Users/yubi/code/deepseek-harness/packages/workflow/workflow/lib/index.js'
+- id: web
+  name: '/Users/yubi/code/deepseek-harness/packages/web/web/lib/index.js'
+  config:
+    searchProvider: deepseek-official
+- id: web-search-deepseek
+  name: '/Users/yubi/code/deepseek-harness/packages/web/web-search-deepseek/lib/index.js'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+
+# DSH 预设清单：Flash 使用 minimal，其余模型选择使用 standard。
+- id: agent-presets
+  name: '/Users/yubi/code/deepseek-harness/packages/preset/agent-presets/lib/index.js'
+  config:
+    default: standard
+    includeUserRoot: false
+    roots:
+      - path: '/Users/yubi/code/deepseek-harness/apps/cli/config/agent-presets'
+        trust: system
+
+- id: acp-agent
+  # @deepseek-ai/dsh-acp-demo
+  name: '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/index.js'
+  config:
+    provider: opencode-zen
+    # 默认使用 Zen 免费池模型；额度耗尽时按测试约定记录为额度命中，不切回失效模型。
+    model: nemotron-3-ultra-free
+    # 模型 → 路由映射：桥按此解析 set_config_option 并合并各 provider 目录；
+    # 必须与 internal/adapter/dsh 的 dshKnownModels roster 同步维护。
+    modelProviders:
+      nemotron-3-ultra-free: opencode-zen
+      nemotron-3.5-lightning-free: opencode-zen
+      ling-3.0-flash-fin-free: opencode-zen
+      mimo-v2.5-free: opencode-zen
+      deepseek-v4-flash: opencode-go
+      gpt-5.5: openai
+      gpt-5.6-terra: openai
+    # 不设 minimalModel：所有模型归属同一（默认 standard）组合，避免
+    # “preset 在首个 turn 后固定”围栏拒绝会话中途的模型切换。
+    # 不设 reasoningEffort：当前 Zen 池模型不声明推理档位，初始请求沿用
+    # provider 默认（与 e2e-verify/fixtures/dsh/cordis-oxalpha.yml 已验证形状一致）。
+    toolUpdates: true
+    # Happy 总是声明它自己的 MCP 工具桥；放行并忽略（不挂载），否则 session/new 被拒。
+    ignoreMcpServers: true
+    # Happy 的会话界面只渲染模型选择器；把推理档位折成 model@effort 变体条目。
+    modelEffortVariants: true
+    # 生产会话使用客户端工作区。快照或 fixture 工具可以注入隔离根，
+    # 但不会改变工作区语义。
+    persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
+    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? 'none'"
+    workspaceContext:
+      maxBytes: 65536
+    persona: |
+      You are a coding assistant powered by the {{model}} model. Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access denied …]` result is policy, not a command bug.
+
+      Verify your work by running the code or tests. Keep answers brief and factual.
