@@ -74,7 +74,8 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
         question.resolved == true ||
         widget.sessions.isRequestResolved('question', question.requestId);
     final pending = widget.sessions.isRequestPending(question.requestId);
-    final enabled = widget.canWrite && widget.hasLease && !resolved && !pending;
+    // v0.9：lease 在提交时自动获取，不再作为按钮前置门控。
+    final enabled = widget.canWrite && !resolved && !pending;
     final answered = _answered(currentStep);
     if (_locallyCancelled && !resolved) {
       return Container(
@@ -599,7 +600,8 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
     final resolved =
         question.resolved == true ||
         widget.sessions.isRequestResolved('question', question.requestId);
-    final enabled = widget.canWrite && widget.hasLease && !resolved && !_busy;
+    // v0.9：lease 在提交时自动获取，不再作为按钮前置门控。
+    final enabled = widget.canWrite && !resolved && !_busy;
     final plan = _review.detail;
     final approve = _approve;
     if (_locallyDismissed && !resolved) {

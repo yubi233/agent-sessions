@@ -536,18 +536,15 @@ void main() {
       expect(created, isNotNull);
       expect(controller.selectedSession?.id, created!.id);
       expect(controller.timeline.single.kind, SessionTimelineKind.systemNotice);
-      expect(controller.composerBlockedReason(canWrite: true), '会话暂不可操作，请稍后重试');
+      // v0.9：lease 不再是 composer 前置阻断；写命令提交时自动静默获取。
+      expect(controller.composerBlockedReason(canWrite: true), isNull);
 
-      await controller.acquireSelectedLease(
-        deviceId: _ownerDeviceId,
-        canWrite: true,
-      );
-      expect(controller.selectedLease?.epoch, 1);
-
+      // 未显式 acquire 时 start 也会自动获取 lease 并成功执行。
       await controller.startSelectedSession(
         deviceId: _ownerDeviceId,
         canWrite: true,
       );
+      expect(controller.selectedLease?.epoch, 1);
       expect(
         controller.timeline.any((event) => event.label == '会话已启动'),
         isTrue,

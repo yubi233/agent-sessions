@@ -126,8 +126,9 @@ void main() {
         (command) => command.action == PaletteControlAction.stop,
       );
       expect(resume.blockedReason, contains('未声明'));
-      // 未获取 lease 时 stop 先被租约门控阻断。
-      expect(stop.blockedReason, '当前会话暂不可操作。');
+      // v0.9：lease 不再是 stop 的索引层门控（执行时自动获取）；
+      // claude 未声明 abort，直接按 capability fail-closed。
+      expect(stop.blockedReason, contains('未声明'));
       // 浏览/查看 Git 是只读索引，选中会话后不被 capability 阻断。
       final files = palette.results.firstWhere(
         (command) => command.action == PaletteControlAction.openFiles,
@@ -138,7 +139,7 @@ void main() {
       expect(files.blockedReason, isNull);
       expect(git.blockedReason, isNull);
 
-      // 获取 lease 后 stop 仍然因 capability 缺失而阻断（fail-closed）。
+      // 获取 lease 后 stop 仍因 capability 缺失而阻断（fail-closed 与 lease 无关）。
       await sessions.acquireSelectedLease(
         deviceId: ownerDeviceId,
         canWrite: true,

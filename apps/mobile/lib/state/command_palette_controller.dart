@@ -198,7 +198,8 @@ class CommandPaletteController extends ChangeNotifier {
 
   String? _stopBlockedReason() {
     if (_sessionController.selectedSessionId == null) return '当前没有选中会话。';
-    if (_sessionController.hasSelectedLease == false) return '当前会话暂不可操作。';
+    // v0.9：lease 在执行命令时自动获取（SessionController._submitCommand），
+    // 索引层不再把“尚未持有控制权”当作阻断原因。
     final declared = _sessionController.selectedProviderCapabilities.capability(
       'abort',
     );

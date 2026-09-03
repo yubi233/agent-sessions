@@ -92,6 +92,21 @@ class SessionController extends ChangeNotifier {
   int _selectionGeneration = 0;
   int _runtimeLeaseGeneration = 0;
   bool _initializing = false;
+  // 最近一次成功获取 lease 所用的写授权参数；前台/网络恢复后用于无参重新获取，
+  // 使“从后台回来直接可写”无需用户再次点按。
+  String? _lastLeaseDeviceId;
+  bool _lastLeaseCanWrite = false;
+  bool _lastLeaseSet = false;
+  // 自动获取 lease 的闸门：前台+在线时允许写命令静默补获取；
+  // 后台或离线时由生命周期控制器关闭，避免把用户尚未看到的输入悄悄发出去。
+  bool _autoLeaseEnabled = true;
+
+  /// 生命周期控制器在前后台/网络切换时开关自动获取闸门。
+  void setAutoLeaseEnabled(bool enabled) {
+    if (_autoLeaseEnabled == enabled) return;
+    _autoLeaseEnabled = enabled;
+    notifyListeners();
+  }
 
   SessionListPhase get phase => _phase;
   List<MobileSession> get sessions =>
@@ -749,8 +764,58 @@ class SessionController extends ChangeNotifier {
           return;
         }
         _selectedLease = lease;
+        _lastLeaseDeviceId = deviceId;
+        _lastLeaseCanWrite = canWrite;
+        _lastLeaseSet = true;
       },
     );
+  }
+
+  /// 前台/网络恢复后的无参自动重取：沿用最近一次成功写授权的参数，
+  /// 让恢复完成的会话立即可写，无需用户手动点按“重试”。
+  /// 从未写过（_lastLeaseSet == false）或当前未选中会话时静默跳过。
+  Future<bool> reacquireLeaseAfterRuntimePause() async {
+    if (!_lastLeaseSet) return false;
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return false;
+    if (!hasSelectedLease) {
+      _selectedLease = null;
+      await acquireSelectedLease(
+        deviceId: _lastLeaseDeviceId,
+        canWrite: _lastLeaseCanWrite,
+        reportFailure: false,
+      );
+    }
+    return hasSelectedLease;
+  }
+
+  /// 写操作统一前置：已持有当前会话有效 lease 时直接通过；否则自动静默获取一次。
+  /// 返回是否可写。失败（Relay 不可达、被其它设备抢占等）返回 false 且不弹错误，
+  /// 由调用方决定是否提示；真正的写提交仍带 lease_epoch，Relay fencing 兜底。
+  /// 后台/离线时闸门关闭，不自动获取（返回 false），由调用方呈现原阻断原因。
+  Future<bool> ensureSelectedLeaseAuto({
+    required String? deviceId,
+    required bool canWrite,
+    bool silent = true,
+  }) async {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return false;
+    final lease = _selectedLease;
+    if (lease != null &&
+        lease.sessionId == sessionId &&
+        lease.epoch > 0) {
+      return true;
+    }
+    if (!_autoLeaseEnabled) return false;
+    if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
+      return false;
+    }
+    await acquireSelectedLease(
+      deviceId: deviceId,
+      canWrite: canWrite,
+      reportFailure: !silent,
+    );
+    return hasSelectedLease;
   }
 
   Future<bool> startSelectedSession({
@@ -863,7 +928,11 @@ class SessionController extends ChangeNotifier {
     final sessionId = _selectedSessionId;
     if (sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
-        !_ensureSelectedLease(sessionId)) {
+        !await _ensureSelectedLeaseAuto(
+              sessionId,
+              deviceId: deviceId,
+              canWrite: canWrite,
+            )) {
       return;
     }
     // 同一条待发送内容重试复用幂等键；成功后的新输入会生成新的 action key。
@@ -902,7 +971,11 @@ class SessionController extends ChangeNotifier {
     final sessionId = _selectedSessionId;
     if (sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
-        !_ensureSelectedLease(sessionId)) {
+        !await _ensureSelectedLeaseAuto(
+              sessionId,
+              deviceId: deviceId,
+              canWrite: canWrite,
+            )) {
       return;
     }
     await _submitCommand(
@@ -926,7 +999,11 @@ class SessionController extends ChangeNotifier {
     }
     if (sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
-        !_ensureSelectedLease(sessionId)) {
+        !await _ensureSelectedLeaseAuto(
+              sessionId,
+              deviceId: deviceId,
+              canWrite: canWrite,
+            )) {
       return null;
     }
     final operation = 'fork:$sessionId:$trimmed';
@@ -1003,7 +1080,11 @@ class SessionController extends ChangeNotifier {
         isRequestPending(requestId) ||
         sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
-        !_ensureSelectedLease(sessionId)) {
+        !await _ensureSelectedLeaseAuto(
+              sessionId,
+              deviceId: deviceId,
+              canWrite: canWrite,
+            )) {
       return false;
     }
     // v0.5/P4-D：同一 approval request 的 reject / approve 必须 one-shot。
@@ -1063,7 +1144,11 @@ class SessionController extends ChangeNotifier {
     if (_resolvedRequestKeys.contains(requestKey) ||
         sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
-        !_ensureSelectedLease(sessionId)) {
+        !await _ensureSelectedLeaseAuto(
+              sessionId,
+              deviceId: deviceId,
+              canWrite: canWrite,
+            )) {
       return false;
     }
     // v0.5/P4-E：DeepSeek question 使用一次 respond 提交完整 answer batch；
@@ -1093,7 +1178,11 @@ class SessionController extends ChangeNotifier {
     if (_resolvedRequestKeys.contains(requestKey) ||
         sessionId == null ||
         !_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
-        !_ensureSelectedLease(sessionId)) {
+        !await _ensureSelectedLeaseAuto(
+              sessionId,
+              deviceId: deviceId,
+              canWrite: canWrite,
+            )) {
       return false;
     }
     // v0.5/P4-C：当前 Relay 命令集没有 question.cancel；skip 按 DeepSeek
@@ -1129,7 +1218,9 @@ class SessionController extends ChangeNotifier {
     }
     if (!canWrite) return '当前设备是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
-    if (requiresLease && !hasSelectedLease) return '会话暂不可操作，请稍后重试';
+    // lease（单写者控制权）不再是 UI 前置阻断：写命令提交时由
+    // _submitCommand 静默自动获取。requiresLease 参数保留以兼容调用方，
+    // 但不再产生面向用户的“暂不可操作”文案。
     return null;
   }
 
@@ -1670,7 +1761,8 @@ class SessionController extends ChangeNotifier {
   String? composerBlockedReason({required bool canWrite}) {
     if (!canWrite) return '当前设备是只读状态';
     if (_selectedSessionId == null) return '请选择一个会话';
-    if (!hasSelectedLease) return '会话暂不可操作，请稍后重试';
+    // lease 不再阻断输入：发送时会自动获取（见 _submitCommand），
+    // 输入框与发送按钮始终可用，避免用户面对“暂不可操作”状态条。
     return null;
   }
 
@@ -1867,10 +1959,19 @@ class SessionController extends ChangeNotifier {
     required String operation,
     required SessionCommandKind kind,
     required String deviceId,
+    bool canWrite = true,
     Map<String, dynamic>? ciphertext,
     VoidCallback? onAccepted,
   }) async {
-    if (!_ensureSelectedLease(sessionId)) return false;
+    // 写命令统一在这里自动确保 lease：调用方可能刚从前台/断网恢复，
+    // 本地 lease 已作废，此刻静默补获取一次，避免把“暂不可操作”抛给用户。
+    if (!await _ensureSelectedLeaseAuto(
+      sessionId,
+      deviceId: deviceId,
+      canWrite: canWrite,
+    )) {
+      return false;
+    }
     final accepted = await _runAction<bool>(operation, () async {
       final lease = _selectedLease;
       if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
@@ -2148,13 +2249,29 @@ class SessionController extends ChangeNotifier {
     return true;
   }
 
-  bool _ensureSelectedLease(String sessionId) {
-    final lease = _selectedLease;
-    if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
-      _setError('会话暂不可操作，请稍后重试。');
-      return false;
+  /// 写操作前自动确保持有当前会话 lease：前台+在线时缺失会静默补获取一次。
+  /// 后台/离线（闸门关闭）时不自动获取，返回 false 并保留原“暂不可操作”提示，
+  /// 避免把用户尚未看到的输入在后台悄悄发出。
+  Future<bool> _ensureSelectedLeaseAuto(
+    String sessionId, {
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    if (!_autoLeaseEnabled) {
+      final lease = _selectedLease;
+      if (lease == null ||
+          lease.sessionId != sessionId ||
+          lease.epoch <= 0) {
+        _setError('会话暂不可操作，请稍后重试。');
+        return false;
+      }
+      return true;
     }
-    return true;
+    return ensureSelectedLeaseAuto(
+      deviceId: deviceId,
+      canWrite: canWrite,
+      silent: true,
+    );
   }
 
   String _idempotencyKeyFor(

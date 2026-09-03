@@ -56,9 +56,8 @@ class SessionInfoController extends ChangeNotifier {
   List<TerminalSummary> get visibleTerminals =>
       terminalStatusController.terminals;
 
-  /// 终止（abort）能力的只读三态；无 lease/不可写时同样明确不可执行。
+  /// 终止（abort）能力的只读三态；不可写时明确不可执行。
   String? get stopBlockedReason {
-    if (sessionController.hasSelectedLease == false) return '当前会话暂不可操作。';
     final declared = sessionController.selectedProviderCapabilities.capability(
       'abort',
     );

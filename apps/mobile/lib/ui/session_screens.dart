@@ -5298,11 +5298,9 @@ class _SessionStatusStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = _sessionStatusPresentation(session);
     final statusColor = _sessionStatusColor(context, status.tone);
-    final leaseText = !canWrite
-        ? '只读'
-        : hasLease
-        ? '可操作'
-        : '暂不可操作';
+    // v0.9：lease 在写操作时自动获取（见 SessionController._submitCommand），
+    // 不再是需要用户手动点按的前置状态；这里只区分只读与可写。
+    final leaseText = !canWrite ? '只读' : '可操作';
     // v0.3/P1：Provider 连接态与版本只来自 capability 白名单；探测失败时展示 fail-closed 原因。
     final providerConnected = provider.available;
     final providerVersion = provider.version.trim();
@@ -5402,16 +5400,26 @@ class _SessionStatusStrip extends StatelessWidget {
                 ),
               ),
             ),
+            // v0.9：写权（lease）在提交命令时自动获取；此处保留可点入口仅作
+            // 兜底（行为与打开会话时自动获取一致），不再显示“暂不可操作”提示。
             IconButton(
               key: const Key('session-acquire-lease-button'),
-              tooltip: hasLease ? '会话可操作' : '暂不可操作，点按重试',
+              tooltip: hasLease ? '会话可操作' : '获取会话操作权',
               visualDensity: VisualDensity.compact,
               onPressed: canWrite && !hasLease ? onAcquireLease : null,
               icon: Icon(
-                hasLease ? Icons.check_circle_outline : Icons.refresh,
+                hasLease
+                    ? Icons.check_circle_outline
+                    : canWrite
+                    ? Icons.autorenew
+                    : Icons.lock_outline,
                 size: 18,
+                color: hasLease
+                    ? context.appColors.success
+                    : Theme.of(context).colorScheme.outline,
               ),
             ),
+
           ],
         ),
       ),

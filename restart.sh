@@ -1140,6 +1140,7 @@ cleanup_start_failure() {
   echo "restart.sh: startup failed; cleaning processes started by this invocation" >&2
   [[ "$STARTED_FLUTTER" == true ]] && stop_process flutter || true
   [[ "$STARTED_DAEMON" == true ]] && stop_process daemon || true
+  stop_orphan_daemons || true
   [[ "$STARTED_OPENCODE" == true ]] && stop_process opencode || true
   [[ "$STARTED_ADMIN" == true ]] && stop_process admin || true
   [[ "$STARTED_WEB" == true ]] && stop_process web || true
@@ -1246,6 +1247,41 @@ restart_flutter_action() {
   start_flutter
 }
 
+# Kill daemon processes that serve this project's state dir but are not
+# recorded in the daemon pid file. Historical restarts tracked only the `go
+# run` parent pid; when that parent died, the compiled daemon child was
+# orphaned, kept holding daemon.db, and never matched by stop_process.
+# Matching requires the exact --state-dir so unrelated projects are untouched.
+stop_orphan_daemons() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local state_abs known_pid p orphans=0
+  state_abs="$(absolute_path "$DAEMON_STATE_DIR")"
+  known_pid="$(read_pid "$(pid_file daemon)" 2>/dev/null || true)"
+  # macOS pgrep treats the -f pattern as an extended regex: a leading "--"
+  # would be parsed as an illegal option, so match loosely and filter below.
+  while read -r p; do
+    [[ -n "$p" ]] || continue
+    [[ "$p" != "$known_pid" ]] || continue
+    if [[ "$(process_command "$p")" == *"daemon run"*"--state-dir $state_abs"* ]]; then
+      echo "daemon: stopping orphan daemon pid $p (state dir $state_abs)"
+      kill_tree "$p"
+      if ! wait_dead "$p"; then
+        echo "daemon: orphan pid $p did not stop gracefully; sending SIGKILL" >&2
+        kill -KILL "$p" 2>/dev/null || true
+        if ! wait_dead "$p"; then
+          echo "daemon: failed to stop orphan pid $p" >&2
+          return 1
+        fi
+      fi
+      orphans=1
+    fi
+  done < <(pgrep -f "daemon run .*state-dir" 2>/dev/null || true)
+  if [[ "$orphans" == 1 ]]; then
+    echo "daemon: orphan cleanup complete"
+  fi
+  return 0
+}
+
 stop_action() {
   # Stop every component owned by this state directory. Selection flags only
   # affect startup, so `stop --no-web` cannot accidentally leave a managed Web
@@ -1253,6 +1289,9 @@ stop_action() {
   local result=0
   if ! stop_process flutter; then result=1; fi
   if ! stop_process daemon; then result=1; fi
+  # Belt-and-suspenders: clear any daemon left outside the pid file (e.g.
+  # orphaned compiled child of a dead `go run` parent) before proceeding.
+  if ! stop_orphan_daemons; then result=1; fi
   if ! stop_process opencode; then result=1; fi
   if ! stop_process admin; then result=1; fi
   if ! stop_process web; then result=1; fi

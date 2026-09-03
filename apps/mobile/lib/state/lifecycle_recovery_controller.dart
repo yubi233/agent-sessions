@@ -74,6 +74,8 @@ class SessionRecoveryController extends ChangeNotifier {
     if (value == MobileAppVisibility.background) {
       _recoveryPending = true;
       _sessions.invalidateSelectedLeaseForRuntimePause();
+      // 后台期间禁止写命令自动补获取 lease，防止静默发出用户未看到的输入。
+      _sessions.setAutoLeaseEnabled(false);
       _phase = SessionRecoveryPhase.paused;
       _message = '应用已进入后台，返回后将重新确认可操作状态。';
       if (changed) notifyListeners();
@@ -100,6 +102,8 @@ class SessionRecoveryController extends ChangeNotifier {
     if (value == MobileNetworkAvailability.offline) {
       _recoveryPending = true;
       _sessions.invalidateSelectedLeaseForRuntimePause();
+      // 离线时同样禁止自动补获取（请求必然失败，也不该在弱网下发起写）。
+      _sessions.setAutoLeaseEnabled(false);
       _phase = _visibility == MobileAppVisibility.background
           ? SessionRecoveryPhase.paused
           : SessionRecoveryPhase.waitingForNetwork;
@@ -174,6 +178,11 @@ class SessionRecoveryController extends ChangeNotifier {
       }
       _phase = SessionRecoveryPhase.recovered;
       _recoveryPending = false;
+      // 回到前台/在线：重新打开自动获取闸门。
+      _sessions.setAutoLeaseEnabled(true);
+      // 恢复只读事件后自动重取会话写权（沿用最近一次成功授权参数），
+      // 用户从后台/断网回到前台即可直接发送，无需手动点按“暂不可操作”重试。
+      await _sessions.reacquireLeaseAfterRuntimePause();
       _message = recovery.addedEventCount == 0
           ? '会话已同步，没有遗漏事件。'
           : '已同步 ${recovery.addedEventCount} 条新事件。';

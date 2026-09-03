@@ -28,7 +28,8 @@ class SessionApprovalPanel extends StatelessWidget {
         permission.resolved == true ||
         sessions.isRequestResolved('permission', permission.requestId);
     final pending = sessions.isRequestPending(permission.requestId);
-    final enabled = canWrite && hasLease && !resolved && !pending;
+    // v0.9：lease 在提交时自动获取，不再作为按钮前置门控。
+    final enabled = canWrite && !resolved && !pending;
     return Container(
       key: Key('permission-card-${permission.requestId}'),
       padding: const EdgeInsets.all(12),

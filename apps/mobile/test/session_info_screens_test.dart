@@ -149,7 +149,7 @@ void main() {
       expect(find.textContaining('日志'), findsNothing);
     });
 
-    testWidgets('无 lease 时终止/恢复显示阻断原因，不显示假可用入口', (tester) async {
+    testWidgets('无 lease 时终止能力仍按 Provider 声明呈现；恢复/结束按只读门控', (tester) async {
       _usePhoneSurface(tester);
       final relay = await _fixtureWithSession(
         provider: 'codex',
@@ -158,11 +158,12 @@ void main() {
       await _pumpInfoScreen(tester, relay, now);
 
       expect(find.text('终止会话'), findsOneWidget);
-      expect(find.text('当前会话暂不可操作。'), findsOneWidget);
+      // v0.9：lease 不再是 info 页阻断原因；codex 声明 abort，终止行显示“可用”。
+      expect(find.text('当前会话暂不可操作。'), findsNothing);
+      expect(find.text('可用'), findsOneWidget);
       expect(find.text('结束本机进程'), findsOneWidget);
       expect(find.text('恢复会话'), findsOneWidget);
       expect(find.text('当前设备是只读状态'), findsNWidgets(2));
-      expect(find.text('可用'), findsNothing);
     });
 
     testWidgets('Provider 未声明 abort/resume 时即使有 lease 也 fail-closed', (
