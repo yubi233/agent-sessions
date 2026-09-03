@@ -124,7 +124,8 @@ func parseDshThoughtMeta(raw json.RawMessage) *dshThoughtMeta {
 //
 // 仍丢弃并计数（ok=false）的变体：无 meta 的 agent_thought_chunk/plan/plan_update
 // 等未知变体，以及畸形工具帧（缺 tool_call_id、孤儿 update、非法 JSON、缺结果文本）。
-// usage_update 是桥为 usage 投影提供的受控扩展，不携带正文。
+// usage_update 自 SDK 0.25.1 起为标准变体（used/size 折算上下文窗口），
+// 桥同时兼容携带旧 usage/contextWindow 字段（superset），mapper 只读旧字段。
 // 返回的第三个值是变体名（含解析失败时的占位），供调用方按变体计数。
 // meta 是 session/update 通知参数级 _meta（键：DshChunkMetaKey/DshThoughtMetaKey）。
 func mapSessionUpdate(sessionID string, update json.RawMessage, meta map[string]json.RawMessage) (adapter.Event, bool, string) {
@@ -232,7 +233,8 @@ func mapThoughtChunk(sessionID string, body updateBody, rawMeta json.RawMessage)
 	return adapter.Event{Type: adapter.EventThoughtDelta, Payload: payload}, true, variant
 }
 
-// mapUsageUpdate 映射 usage_update 受控扩展（纯函数分离便于单测与后续扩展）。
+// mapUsageUpdate 映射 usage_update（纯函数分离便于单测与后续扩展）。
+// 只解析旧 usage/contextWindow 字段；标准 used/size 与 _meta 不进本映射。
 func mapUsageUpdate(sessionID string, body updateBody) (adapter.Event, bool, string) {
 	variant := "usage_update"
 	var usage usageUpdate

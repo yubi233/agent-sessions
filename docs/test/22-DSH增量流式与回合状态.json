@@ -184,7 +184,7 @@
     {
       "id": "V084-08",
       "title": "背压/取消：慢消费者、队列上限、close/dispose、取消 race、断线收口",
-      "status": "planned",
+      "status": "partial",
       "phase": "P2",
       "category": "reliability",
       "priority": "P0",
@@ -195,7 +195,7 @@
         "在流式中途 Dispose 与 Abort，断言 thought/text 通道与 phase 均以明确终态收口",
         "模拟断线后 resume，断言无重复播放、无永久 pending"
       ],
-      "expected": "所有路径有明确终态；timeout/EOF/close/dispose/cancel 不留无限 pending。",
+      "expected": "所有路径有明确终态；timeout/EOF/close/dispose/cancel 不留无限 pending。【v0.8.4 收口备注：取消 race/断线/dispose 收口由 overlay（cancelled/failed 终态）与桥 dispose 路径覆盖；慢消费者背压未单独成项——有界队列与丢弃计数已实现（adapter 事件通道 256 上限 + countDrop），残余风险低。】",
       "cleanup": [
         "销毁 fixture 进程与存储"
       ],
@@ -257,7 +257,7 @@
     {
       "id": "V084-11",
       "title": "Flutter 性能：高频 chunk 节流、布局稳定、滚动/后台恢复、窄屏无溢出",
-      "status": "planned",
+      "status": "partial",
       "phase": "P3/P4",
       "category": "flutter_performance",
       "priority": "P1",
@@ -268,7 +268,7 @@
         "断言合并后 rebuild 次数有界、文本完整无损",
         "可见窗口验证滚动锁定、后台恢复、窄屏无溢出"
       ],
-      "expected": "无无限 layout/rebuild；输出零丢失；恢复后内容连续。",
+      "expected": "无无限 layout/rebuild；输出零丢失；恢复后内容连续。【v0.8.4 收口备注：200 帧 phase 折叠性能例与 widget 回归通过；真实窗口渲染帧率未做逐帧测量。视觉 gate 100 帧连续采集未见卡顿证据。】",
       "cleanup": [
         "关闭 Flutter 应用进程"
       ],
@@ -349,7 +349,7 @@
     {
       "id": "V084-15",
       "title": "真实模型 gate（需用户显式授权）",
-      "status": "planned",
+      "status": "blocked",
       "phase": "P5",
       "category": "real_model",
       "priority": "P1",
@@ -360,7 +360,7 @@
         "观察 thinking/tool 状态与 phase 流",
         "load/resume → send 复验恢复路径"
       ],
-      "expected": "报告记录 provider/model、请求次数、usage、request id 与失败分类；不记录 prompt/回复正文/凭据。缺凭据或额度时如实记 blocked/partial。",
+      "expected": "报告记录 provider/model、请求次数、usage、request id 与失败分类；不记录 prompt/回复正文/凭据。缺凭据或额度时如实记 blocked/partial。【v0.8.4 收口备注：真实模型 gate 需用户显式授权（AGENT_SESSIONS_DSH_REAL=1）；本期未获授权，按计划如实记 blocked，不阻塞文档收口，也不得写成 native。】",
       "cleanup": [
         "关闭真实会话与进程"
       ],
@@ -372,7 +372,7 @@
     {
       "id": "V084-16",
       "title": "审计：凭据与私有 session id 不进入公共产物；thought 独立通道核验",
-      "status": "planned",
+      "status": "passed",
       "phase": "P5",
       "category": "audit",
       "priority": "P0",
@@ -389,7 +389,8 @@
       ],
       "evidence": [
         "问题排查/",
-        "e2e-verify/reports/"
+        "e2e-verify/reports/",
+        "v084 overlay 报告/transcript 扫描：仅 usage 计数与脱敏路径，无凭据/正文/私有 session id"
       ]
     },
     {
