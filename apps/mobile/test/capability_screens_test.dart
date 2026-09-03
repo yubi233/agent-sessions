@@ -15,8 +15,10 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(480, 960));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _openWritableFixtureSession(tester, 'p3-panel@fixture.test');
+    await _openWritableFixtureSession(tester, harness);
 
     expect(find.byKey(const Key('session-capability-panel')), findsNothing);
     expect(find.byKey(const Key('session-task-controls')), findsNothing);
@@ -56,14 +58,17 @@ void main() {
       tester,
       find.byKey(const Key('session-model-details-close')),
     );
-    expect(find.byKey(const Key('session-task-controls')), findsNothing);
+    // 等关闭动画完成后再断言弹窗内容消失。
+    await _waitForAbsent(tester, find.byKey(const Key('session-task-controls')));
     expect(tester.takeException(), isNull);
   });
 
   testWidgets('MODE-03：拒绝高风险 Skill 不提交命令，确认后只提交一次', (tester) async {
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _openWritableFixtureSession(tester, 'p3-skill@fixture.test');
+    await _openWritableFixtureSession(tester, harness);
 
     expect(harness.relay.submittedCommandCount, 0);
     await _tapVisible(
@@ -129,8 +134,10 @@ void main() {
     tester,
   ) async {
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _openWritableFixtureSession(tester, 'p3-attachment-ui@fixture.test');
+    await _openWritableFixtureSession(tester, harness);
     final container = ProviderScope.containerOf(
       tester.element(find.byKey(const Key('session-detail-screen'))),
     );
@@ -200,26 +207,21 @@ AttachmentDraft _attachmentDraft({
   ],
 );
 
-Future<void> _openWritableFixtureSession(WidgetTester tester, String _) async {
-  await _waitForVisible(tester, find.byKey(const Key('device-connect-submit')));
-  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
-  await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
-  await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+/// v0.8.1+：harness 已预置 owner + seed 会话并 pump 完成；打开详情并等待可写。
+Future<void> _openWritableFixtureSession(
+  WidgetTester tester,
+  MobileAppHarness harness,
+) async {
+  await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
+  final sessionId = (await harness.relay.listSessions()).single.id;
+  // 经「最近会话」入口打开详情（首页已改为 DSH 工作区视图）。
+  await _tapVisible(tester, find.byKey(const Key('session-recent-button')));
   await _waitForVisible(
     tester,
-    find.byKey(const Key('new-session-workspace-input')),
+    find.byKey(Key('recent-session-$sessionId')),
   );
-  await _enterVisible(
-    tester,
-    find.byKey(const Key('new-session-workspace-input')),
-    'fixture-workspace',
-  );
-  await _tapVisible(tester, find.byKey(const Key('new-session-create-button')));
+  await _tapVisible(tester, find.byKey(Key('recent-session-$sessionId')));
   await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-  await _tapVisible(
-    tester,
-    find.byKey(const Key('session-acquire-lease-button')),
-  );
   await _waitForVisible(tester, find.text('可操作'));
 }
 
@@ -254,13 +256,4 @@ Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
   await tester.tap(finder);
 }
 
-Future<void> _enterVisible(
-  WidgetTester tester,
-  Finder finder,
-  String value,
-) async {
-  await _waitForVisible(tester, finder);
-  await tester.ensureVisible(finder);
-  await tester.pump();
-  await tester.enterText(finder, value);
-}
+

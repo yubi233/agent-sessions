@@ -1,5 +1,6 @@
 import 'package:agent_sessions_mobile/app/providers.dart';
 import 'package:agent_sessions_mobile/attachments/attachment_picker.dart';
+import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/main.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
@@ -48,6 +49,7 @@ class MobileAppHarness {
   );
 
   Widget build() => ProviderScope(
+    key: const ValueKey('mobile-harness-scope'),
     overrides: [
       relayRepositoryProvider.overrideWithValue(relay),
       secureTokenStoreProvider.overrideWithValue(tokens),
@@ -70,4 +72,26 @@ class MobileAppHarness {
       child: AgentSessionsApp(useMacBookPhoneCanvas: false),
     ),
   );
+
+  /// v0.8.1+ 会话 UI 测试的统一入口：预置本机 owner（token/identity 写入
+  /// harness 的 store），App 冷启动后由 router 直接进入已认证首页，
+  /// 无需再走“连接设备→等待 owner-ready”的旧引导。
+  Future<void> launchAsOwner() async {
+    await bootstrapLocalOwner();
+  }
+
+  /// 预置一个会话并返回其 id。workspaceId/provider 可覆盖。
+  Future<String> seedSession({
+    String workspaceId = 'fixture-workspace',
+    String provider = 'codex',
+  }) async {
+    final created = await relay.createSession(
+      CreateMobileSessionInput(
+        workspaceId: workspaceId,
+        provider: provider,
+        deviceId: 'android-owner-fixture',
+      ),
+    );
+    return created.id;
+  }
 }

@@ -1,5 +1,7 @@
+import 'package:agent_sessions_mobile/app/router.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/app_harness.dart';
@@ -20,8 +22,9 @@ void main() {
     await tester.tap(find.byKey(const Key('device-connect-submit')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
-    expect(find.byKey(const Key('pairing-page-link')), findsOneWidget);
+    // v0.8.1+：控制端 owner 初始化完成后进入 DSH 工作区首页。
+    expect(find.byKey(const Key('session-home-screen')), findsOneWidget);
+    expect(find.byKey(const Key('mobile-header-title')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('signout-button')));
     await tester.pumpAndSettle();
@@ -31,12 +34,16 @@ void main() {
 
   testWidgets('MOBILE-01：owner 恢复码只在当前页展示，确认后立即清除', (tester) async {
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await tester.pumpAndSettle();
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _registerOwner(tester, 'recovery-code-owner@fixture.test');
 
-    await tester.tap(find.byKey(const Key('recovery-code-page-link')));
-    await tester.pumpAndSettle();
+    await _goToRoute(
+      tester,
+      '/recovery-code',
+      routeKey: const Key('recovery-code-back-button'),
+    );
     expect(
       find.byKey(const Key('recovery-code-generate-button')),
       findsOneWidget,
@@ -54,8 +61,12 @@ void main() {
     await tester.tap(find.byKey(const Key('recovery-code-dismiss-button')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('recovery-code-value')), findsNothing);
-    await tester.tap(find.byKey(const Key('recovery-code-page-link')));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-home-screen')), findsOneWidget);
+    await _goToRoute(
+      tester,
+      '/recovery-code',
+      routeKey: const Key('recovery-code-back-button'),
+    );
     expect(
       find.byKey(const Key('recovery-code-generate-button')),
       findsOneWidget,
@@ -65,8 +76,9 @@ void main() {
 
   testWidgets('PAIR-01..03：owner 读取 QR payload、批准并撤销终端设备', (tester) async {
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await tester.pumpAndSettle();
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
 
     await _registerOwner(tester, 'pairing@fixture.test');
 
@@ -81,8 +93,11 @@ void main() {
         ),
       ),
     );
-    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
-    await tester.pumpAndSettle();
+    await _goToRoute(
+      tester,
+      '/pairing',
+      routeKey: const Key('pairing-request-id'),
+    );
     await tester.enterText(
       find.byKey(const Key('pairing-request-id')),
       PairingPayload.encode(request.id),
@@ -90,18 +105,24 @@ void main() {
     await tester.tap(find.byKey(const Key('pairing-load-button')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(Key('pairing-qr-image-${request.id}')), findsOneWidget);
-    expect(find.byKey(Key('pairing-short-code-${request.id}')), findsOneWidget);
-    await tester.tap(find.byKey(Key('pairing-approve-${request.id}')));
+    expect(find.byKey(Key('pairing-qr-image-' + request.id)), findsOneWidget);
+    expect(find.byKey(Key('pairing-short-code-' + request.id)), findsOneWidget);
+    await tester.tap(find.byKey(Key('pairing-approve-' + request.id)));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('back-home-button')));
     await tester.pumpAndSettle();
-    await _tapVisible(tester, find.byKey(const Key('devices-page-link')));
-    await tester.pumpAndSettle();
-    final deviceId = 'device-${request.id}';
-    expect(find.byKey(Key('device-$deviceId')), findsOneWidget);
-    await tester.tap(find.byKey(Key('device-revoke-$deviceId')));
+    expect(find.byKey(const Key('session-home-screen')), findsOneWidget);
+    await _goToRoute(
+      tester,
+      '/devices',
+      // owner 设备恒存在，且该 key 只在设备管理页出现（pairing 页同用 back-home-button）。
+      routeKey: const Key('device-android-owner-fixture'),
+    );
+    // fixture 设备 id 已带 device- 前缀，列表 tile 再加一层前缀（见 _DeviceTile）。
+    final deviceId = 'device-' + request.id;
+    expect(find.byKey(Key('device-' + deviceId)), findsOneWidget);
+    await tester.tap(find.byKey(Key('device-revoke-' + deviceId)));
     await tester.pumpAndSettle();
     expect(find.textContaining('revoked'), findsOneWidget);
   });
@@ -110,8 +131,9 @@ void main() {
     final harness = MobileAppHarness(
       scannerBuilder: buildPairingScannerFixture,
     );
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await tester.pumpAndSettle();
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _registerOwner(tester, 'scanner@fixture.test');
 
     final request = await harness.relay.createPairing(
@@ -125,8 +147,11 @@ void main() {
         ),
       ),
     );
-    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
-    await tester.pumpAndSettle();
+    await _goToRoute(
+      tester,
+      '/pairing',
+      routeKey: const Key('pairing-request-id'),
+    );
     await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('fixture-scanner-payload')), findsOneWidget);
@@ -142,18 +167,22 @@ void main() {
       find.byKey(const Key('pairing-request-id')),
     );
     expect(requestInput.controller!.text, PairingPayload.encode(request.id));
-    expect(find.byKey(Key('pairing-request-${request.id}')), findsOneWidget);
+    expect(find.byKey(Key('pairing-request-' + request.id)), findsOneWidget);
   });
 
   testWidgets('PAIR-01：无效扫码内容不会离开扫码页或请求 Relay', (tester) async {
     final harness = MobileAppHarness(
       scannerBuilder: buildPairingScannerFixture,
     );
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await tester.pumpAndSettle();
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _registerOwner(tester, 'invalid-scan@fixture.test');
-    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
-    await tester.pumpAndSettle();
+    await _goToRoute(
+      tester,
+      '/pairing',
+      routeKey: const Key('pairing-request-id'),
+    );
     await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
     await tester.pumpAndSettle();
 
@@ -175,8 +204,9 @@ void main() {
     final harness = MobileAppHarness(
       scannerBuilder: buildPairingScannerFixture,
     );
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await tester.pumpAndSettle();
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _registerOwner(tester, 'fallback@fixture.test');
 
     final request = await harness.relay.createPairing(
@@ -190,8 +220,11 @@ void main() {
         ),
       ),
     );
-    await _tapVisible(tester, find.byKey(const Key('pairing-page-link')));
-    await tester.pumpAndSettle();
+    await _goToRoute(
+      tester,
+      '/pairing',
+      routeKey: const Key('pairing-request-id'),
+    );
     await tester.tap(find.byKey(const Key('pairing-scan-open-button')));
     await tester.pumpAndSettle();
     await tester.tap(
@@ -213,7 +246,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('pairing-load-button')));
     await tester.pumpAndSettle();
-    expect(find.byKey(Key('pairing-request-${request.id}')), findsOneWidget);
+    expect(find.byKey(Key('pairing-request-' + request.id)), findsOneWidget);
   });
 
   testWidgets('MOBILE-01：恢复码不要求邮箱并恢复已绑定 owner', (tester) async {
@@ -230,18 +263,40 @@ void main() {
     await tester.tap(find.byKey(const Key('recovery-submit')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
+    // v0.8.1+：恢复码接管 owner 成功后进入 DSH 工作区首页。
+    expect(find.byKey(const Key('session-home-screen')), findsOneWidget);
   });
 }
 
-Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
-  await tester.ensureVisible(finder);
-  await tester.pumpAndSettle();
-  await tester.tap(finder);
+/// 经 router 直达路由（v0.8.1+ 控制端入口从首页卡片收敛到 router/设置）。
+/// [routeKey] 为落地页的稳定元素 key，避免在路由过渡帧过早返回。
+Future<void> _goToRoute(
+  WidgetTester tester,
+  String route, {
+  required Key routeKey,
+}) async {
+  final container = ProviderScope.containerOf(
+    tester.element(find.byKey(const Key('session-home-screen'))),
+  );
+  container.read(appRouterProvider).go(route);
+  await _waitForVisible(tester, find.byKey(const Key('mobile-page-shell')));
+  // 等路由目标页自身的稳定元素出现（shell 在过渡帧可能已匹配）。
+  await _waitForVisible(tester, find.byKey(routeKey));
 }
 
-Future<void> _registerOwner(WidgetTester tester, String email) async {
-  await tester.tap(find.byKey(const Key('device-connect-submit')));
-  await tester.pumpAndSettle();
-  expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
+Future<void> _waitForVisible(
+  WidgetTester tester,
+  Finder finder, {
+  int maxFrames = 80,
+}) async {
+  for (var frame = 0; frame < maxFrames; frame += 1) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (finder.evaluate().isNotEmpty) return;
+  }
+  expect(finder, findsOneWidget);
+}
+
+/// v0.8.1+：owner 初始化已由 launchAsOwner 预置；等 DSH 首页出现。
+Future<void> _registerOwner(WidgetTester tester, String _) async {
+  await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
 }

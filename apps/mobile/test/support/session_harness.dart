@@ -1,47 +1,60 @@
 // v0.5 会话 UI 测试公共 harness：全屏 FixtureRelayRepository 驱动的可写会话入口
 // 与稳定的交互 helper。供 session_takeover_test / session_accessibility_focus_test
 // 等专项测试复用；与 session_screens_test.dart 的私有 helper 行为保持一致。
+import 'package:agent_sessions_mobile/app/router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'app_harness.dart';
 
 export 'app_harness.dart' show MobileAppHarness;
 
-/// 打开一个 owner 可写的 fixture 会话详情页。
+/// v0.8.1+：预置 owner 与会话后，经「最近会话」入口打开会话详情。
+/// 返回 harness（调用方可用 relay 断言事件）。
 Future<MobileAppHarness> openWritableSession(
   WidgetTester tester,
   String ownerEmail,
 ) async {
   final harness = MobileAppHarness();
+  await harness.launchAsOwner();
+  final sessionId = await harness.seedSession();
   await tester.pumpWidget(harness.build());
-  await waitForVisible(tester, find.byKey(const Key('device-connect-submit')));
-  await registerOwner(tester, ownerEmail);
-
-  await tapVisible(tester, find.byKey(const Key('session-new-button')));
-  await waitForVisible(
-    tester,
-    find.byKey(const Key('new-session-workspace-input')),
-  );
-  await enterVisible(
-    tester,
-    find.byKey(const Key('new-session-workspace-input')),
-    'fixture-workspace',
-  );
-  await tapVisible(tester, find.byKey(const Key('new-session-create-button')));
-  await waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-  await tapVisible(
-    tester,
-    find.byKey(const Key('session-acquire-lease-button')),
-  );
+  await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
+  await openSessionDetailFromRecent(tester, harness, sessionId);
   await waitForVisible(tester, find.text('可操作'));
   return harness;
 }
 
+/// v0.8.1+ owner 引导已由 bootstrapLocalOwner 预置完成，无需再点击连接。
 Future<void> registerOwner(WidgetTester tester, String _) async {
-  await tapVisible(tester, find.byKey(const Key('device-connect-submit')));
-  await waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
+  await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
+}
+
+/// v0.8.1+：进入「新建会话」页（首页无旧式新建按钮，经 router 直达）。
+Future<void> openNewSessionScreen(WidgetTester tester) async {
+  // 从 home 页元素向上找 ProviderScope（containerOf 不接受 scope 自身 element）。
+  final container = ProviderScope.containerOf(
+    tester.element(find.byKey(const Key('session-home-screen'))),
+  );
+  container.read(appRouterProvider).go('/sessions/new');
+  await waitForVisible(
+    tester,
+    find.byKey(const Key('new-session-workspace-input')),
+  );
+}
+
+/// 从首页「最近会话」入口打开指定会话详情。
+Future<void> openSessionDetailFromRecent(
+  WidgetTester tester,
+  MobileAppHarness harness,
+  String sessionId,
+) async {
+  await tapVisible(tester, find.byKey(const Key('session-recent-button')));
+  await waitForVisible(tester, find.byKey(Key('recent-session-$sessionId')));
+  await tapVisible(tester, find.byKey(Key('recent-session-$sessionId')));
+  await waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
 }
 
 String composerText(WidgetTester tester) {

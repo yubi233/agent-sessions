@@ -29,8 +29,11 @@ void main() {
     tester,
   ) async {
     final harness = MobileAppHarness();
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'delegation-ui-owner@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _createAndAcquireParent(tester);
 
     final parentId = (await harness.relay.listSessions()).single.id;
@@ -88,8 +91,11 @@ void main() {
     tester,
   ) async {
     final harness = MobileAppHarness();
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'delegation-reject-owner@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _createAndAcquireParent(tester);
     final parentId = (await harness.relay.listSessions()).single.id;
 
@@ -149,8 +155,11 @@ void main() {
 
   testWidgets('MOBILE-07：父会话内可见派发入口创建 proposed 子会话节点', (tester) async {
     final harness = MobileAppHarness();
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'delegation-propose-owner@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _createAndAcquireParent(tester);
 
     // 打开“新建子会话”底表并提交：只提交密文 envelope 与目标 Provider。
@@ -193,8 +202,11 @@ void main() {
     tester,
   ) async {
     final harness = MobileAppHarness();
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'delegation-catalog-owner@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _createAndAcquireParent(tester);
     final parentId = (await harness.relay.listSessions()).single.id;
     final proposal = await harness.relay.seedDelegationProposal(
@@ -253,29 +265,22 @@ void main() {
   });
 
   testWidgets('MOBILE-07：无 parent lease 时派发入口给出中文原因且不创建节点', (tester) async {
+    // v0.8.1+：blocking relay 使打开会话时的自动 lease 获取被拒（保持无 lease）。
     final relay = _AcquireLeaseBlockingRelay();
     final harness = MobileAppHarness(relay: relay);
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'delegation-propose-blocked@fixture.test');
-
-    // 创建父会话但不获取 lease。
-    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+    final parentId = (await harness.relay.listSessions()).single.id;
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
+    await _tapVisible(tester, find.byKey(const Key('session-recent-button')));
     await _waitForVisible(
       tester,
-      find.byKey(const Key('new-session-workspace-input')),
+      find.byKey(Key('recent-session-$parentId')),
     );
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('new-session-create-button')),
-    );
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('session-detail-screen')),
-    );
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('session-acquire-lease-button')).first,
-    );
+    await _tapVisible(tester, find.byKey(Key('recent-session-$parentId')));
+    await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
 
     await _tapVisible(
       tester,
@@ -290,7 +295,6 @@ void main() {
       find.byKey(const Key('delegation-propose-blocked')),
     );
     expect(find.textContaining('可操作'), findsWidgets);
-    final parentId = (await harness.relay.listSessions()).single.id;
     expect(
       await harness.relay.listSessionDelegations(parentId),
       isEmpty,
@@ -299,29 +303,26 @@ void main() {
   });
 }
 
+MobileAppHarness? _activeHarness;
+
+/// v0.8.1+：打开预置会话详情并获取写权。
 Future<void> _createAndAcquireParent(WidgetTester tester) async {
-  await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+  final harness = _activeHarness;
+  if (harness == null) return;
+  final sessionId = (await harness.relay.listSessions()).single.id;
+  await _tapVisible(tester, find.byKey(const Key('session-recent-button')));
   await _waitForVisible(
     tester,
-    find.byKey(const Key('new-session-create-button')),
+    find.byKey(Key('recent-session-$sessionId')),
   );
-  await _tapVisible(tester, find.byKey(const Key('new-session-create-button')));
+  await _tapVisible(tester, find.byKey(Key('recent-session-$sessionId')));
   await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-  await _tapVisible(
-    tester,
-    find.byKey(const Key('session-acquire-lease-button')).first,
-  );
   await _waitForVisible(tester, find.text('可操作'));
 }
 
 Future<void> _refreshSession(WidgetTester tester) async {
   await _tapVisible(tester, find.byKey(const Key('session-quick-menu-button')));
   await _tapVisible(tester, find.byKey(const Key('session-refresh-button')));
-}
-
-Future<void> _registerOwner(WidgetTester tester, String _) async {
-  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
-  await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
 }
 
 Future<void> _waitForVisible(

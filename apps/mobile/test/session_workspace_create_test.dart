@@ -10,14 +10,11 @@ import 'support/session_harness.dart';
 void main() {
   testWidgets('MOBILE-V07-03：合法名称创建工作区并自动填入 workspace ID', (tester) async {
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await waitForVisible(
-      tester,
-      find.byKey(const Key('device-connect-submit')),
-    );
+    await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await registerOwner(tester, 'v07-workspace-widget-owner@fixture.test');
-
-    await tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await openNewSessionScreen(tester);
     await waitForVisible(
       tester,
       find.byKey(const Key('new-session-workspace-name-input')),
@@ -64,14 +61,11 @@ void main() {
 
   testWidgets('MOBILE-V07-04：非法名称在页面校验并且不会创建工作区', (tester) async {
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await waitForVisible(
-      tester,
-      find.byKey(const Key('device-connect-submit')),
-    );
+    await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await registerOwner(tester, 'v07-workspace-widget-invalid@fixture.test');
-
-    await tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await openNewSessionScreen(tester);
     await waitForVisible(
       tester,
       find.byKey(const Key('new-session-workspace-name-input')),
@@ -92,14 +86,11 @@ void main() {
   testWidgets('MOBILE-V07-03：创建 pending 时按钮单飞并在结果收口后填入 ID', (tester) async {
     final relay = _PendingWorkspaceRelay();
     final harness = MobileAppHarness(relay: relay);
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
-    await waitForVisible(
-      tester,
-      find.byKey(const Key('device-connect-submit')),
-    );
+    await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await registerOwner(tester, 'v07-workspace-widget-pending@fixture.test');
-
-    await tapVisible(tester, find.byKey(const Key('session-new-button')));
+    await openNewSessionScreen(tester);
     await waitForVisible(
       tester,
       find.byKey(const Key('new-session-workspace-name-input')),

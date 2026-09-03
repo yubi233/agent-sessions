@@ -52,7 +52,7 @@ void main() {
       }
       // 分区副标题来自只读白名单状态
       expect(find.text('已确认 owner 设备'), findsOneWidget);
-      expect(find.text('4/4 个 Provider 可用'), findsOneWidget);
+      expect(find.text('5/5 个 Provider 可用'), findsOneWidget);
       expect(find.text('今日、7 天与 30 天统计'), findsOneWidget);
       expect(find.text('2 台终端'), findsOneWidget);
 

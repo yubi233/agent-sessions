@@ -10,9 +10,7 @@ void main() {
   testWidgets('MOBILE-08：composer 模型/effort 切换走 lease 命令，usage 只展示脱敏计数', (
     tester,
   ) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'composer-controls@fixture.test');
+    final harness = await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     // Composer 只保留一个单行模型/effort 状态入口。
@@ -67,9 +65,7 @@ void main() {
   testWidgets('MOBILE-V05-21：danger-full-access 必须先勾选风险确认，取消不提交', (
     tester,
   ) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'permission-danger@fixture.test');
+    final harness = await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     await _waitForVisible(
@@ -127,10 +123,8 @@ void main() {
   });
 
   testWidgets('MOBILE-08：无 capability 时模型/effort 下拉禁用且不提交命令', (tester) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'composer-blocked@fixture.test');
-    await _createAndAcquireLease(tester, provider: 'opencode');
+    final harness = await _launchSeededOwner(tester, provider: 'opencode');
+    await _createAndAcquireLease(tester);
 
     // opencode fixture 未声明 model_select/effort_select：状态入口保留说明但不可交互。
     await _waitForVisible(
@@ -146,9 +140,7 @@ void main() {
   });
 
   testWidgets('MOBILE-08：@ 补全给文件建议并应用，越权查询不产生建议', (tester) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'completion@fixture.test');
+    await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     await _enterVisible(
@@ -190,9 +182,7 @@ void main() {
   });
 
   testWidgets('MOBILE-08：/ 补全给 Skill 建议并应用', (tester) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'skill-completion@fixture.test');
+    await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     await _enterVisible(
@@ -222,9 +212,7 @@ void main() {
   });
 
   testWidgets('MOBILE-V05-08：URL 与 user@host 中的 trigger 不弹候选', (tester) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'trigger-boundary@fixture.test');
+    await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     // URL 中的 / 不是 trigger：不弹 slash/skill 候选，也不出现空态。
@@ -256,9 +244,7 @@ void main() {
   });
 
   testWidgets('MOBILE-V05-08：@ 引用只替换 trigger span，不重建整段草稿', (tester) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'trigger-span@fixture.test');
+    await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     // 在行中触发 @ 后应用：只替换 @...+查询，保留前后文本。
@@ -302,8 +288,11 @@ void main() {
     final harness = MobileAppHarness(
       attachmentPicker: const FixtureAttachmentPicker(),
     );
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'pick-attach@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _createAndAcquireLease(tester);
 
     await _waitForVisible(
@@ -334,8 +323,11 @@ void main() {
     final harness = MobileAppHarness(
       attachmentPicker: const FixtureAttachmentPicker(),
     )..relay.contentKeysReady = false;
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'pick-blocked@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _createAndAcquireLease(tester);
 
     await _waitForVisible(
@@ -356,9 +348,7 @@ void main() {
   });
 
   testWidgets('MOBILE-10：permission mode 切换走 lease 命令并落事件', (tester) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'permission-mode@fixture.test');
+    final harness = await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     // 控制条第二行出现权限下拉。
@@ -388,11 +378,9 @@ void main() {
   testWidgets('MOBILE-10：无 permission_mode capability 时下拉禁用且不提交命令', (
     tester,
   ) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'permission-mode-blocked@fixture.test');
+    final harness = await _launchSeededOwner(tester, provider: 'opencode');
     // opencode 未声明 permission_mode：选择器不可交互。
-    await _createAndAcquireLease(tester, provider: 'opencode');
+    await _createAndAcquireLease(tester);
 
     await _waitForVisible(
       tester,
@@ -419,8 +407,11 @@ void main() {
     tester,
   ) async {
     final harness = MobileAppHarness(relay: _EmptyPermissionModesRelay());
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'permission-empty@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     // codex 仍声明 permission_mode capability，但 Host 投影未提供可用目录。
     await _createAndAcquireLease(tester);
 
@@ -445,9 +436,7 @@ void main() {
   });
 
   testWidgets('MOBILE-12：usage 在模型设置弹窗内展示 cache 计数与上下文占用', (tester) async {
-    final harness = MobileAppHarness();
-    await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'usage-depth@fixture.test');
+    await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
     // v0.5/P7：用量统计已移入模型设置弹窗；点击 info 按钮打开弹窗。
@@ -475,8 +464,11 @@ void main() {
     final harness = MobileAppHarness(
       attachmentPicker: const FixtureAttachmentPicker(),
     );
+    _activeHarness = harness;
+    await harness.launchAsOwner();
+    await harness.seedSession();
     await tester.pumpWidget(harness.build());
-    await _registerOwner(tester, 'command-image-reject@fixture.test');
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
     await _createAndAcquireLease(tester);
 
     await _waitForVisible(
@@ -540,34 +532,44 @@ class _EmptyPermissionModesRelay extends FixtureRelayRepository {
   }
 }
 
-Future<void> _registerOwner(WidgetTester tester, String _) async {
-  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
-  await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
+/// v0.8.1+：seed 会话已由 _launchSeededOwner 预置；打开其详情并等待可写。
+Future<void> _createAndAcquireLease(WidgetTester tester) async {
+  final harness = _activeHarness;
+  if (harness == null) return;
+  final sessionId = (await harness.relay.listSessions()).single.id;
+  await _openSeededDetail(tester, harness, sessionId);
 }
 
-Future<void> _createAndAcquireLease(
+/// v0.8.1+：预置 owner（+ 可选 provider 的 seed 会话）并 pump 完整 App。
+/// 测试随后调用 _createAndAcquireLease 打开详情。harness 记录在静态槽供 helper 使用。
+Future<MobileAppHarness> _launchSeededOwner(
   WidgetTester tester, {
   String provider = 'codex',
 }) async {
-  await _tapVisible(tester, find.byKey(const Key('session-new-button')));
+  final harness = MobileAppHarness();
+  _activeHarness = harness;
+  await harness.launchAsOwner();
+  await harness.seedSession(provider: provider);
+  await tester.pumpWidget(harness.build());
+  await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
+  return harness;
+}
+
+MobileAppHarness? _activeHarness;
+
+/// 经「最近会话」入口打开会话详情并等待可写。
+Future<void> _openSeededDetail(
+  WidgetTester tester,
+  MobileAppHarness harness,
+  String sessionId,
+) async {
+  await _tapVisible(tester, find.byKey(const Key('session-recent-button')));
   await _waitForVisible(
     tester,
-    find.byKey(const Key('new-session-workspace-input')),
+    find.byKey(Key('recent-session-$sessionId')),
   );
-  if (provider != 'codex') {
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('new-session-provider-select')),
-    );
-    await _waitForVisible(tester, find.text('OpenCode').last);
-    await tester.tap(find.text('OpenCode').last);
-  }
-  await _tapVisible(tester, find.byKey(const Key('new-session-create-button')));
+  await _tapVisible(tester, find.byKey(Key('recent-session-$sessionId')));
   await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-  await _tapVisible(
-    tester,
-    find.byKey(const Key('session-acquire-lease-button')),
-  );
   await _waitForVisible(tester, find.text('可操作'));
 }
 

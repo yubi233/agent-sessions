@@ -1,6 +1,8 @@
+import 'package:agent_sessions_mobile/app/router.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/main.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/app_harness.dart';
@@ -43,7 +45,7 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-01：480x960 竖屏保持 Happy 风格控制端层级与主操作尺寸', (tester) async {
+  testWidgets('MOBILE-01：480x960 竖屏保持连接页主操作尺寸与 DSH 首页轨道', (tester) async {
     await tester.binding.setSurfaceSize(const Size(480, 960));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -51,6 +53,7 @@ void main() {
     await tester.pumpWidget(harness.build());
     await tester.pumpAndSettle();
 
+    // 未认证：竖屏连接页保持主操作尺寸与内容轨道。
     expect(
       tester.getSize(find.byKey(const Key('mobile-page-shell'))),
       const Size(480, 960),
@@ -64,12 +67,15 @@ void main() {
       greaterThanOrEqualTo(52),
     );
 
-    await _registerOwner(tester, 'portrait-layout@fixture.test');
-
-    // owner 成功后的状态和操作仍在手机竖屏内容轨道内，不能因视觉重构丢失关键入口。
-    expect(find.byKey(const Key('mobile-control-status')), findsOneWidget);
-    expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
-    expect(find.byKey(const Key('pairing-page-link')), findsOneWidget);
+    // v0.8.1+：owner 预置后以全新 harness 启动进入 DSH 工作区首页。
+    await harness.launchAsOwner();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(harness.build());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('session-home-screen')), findsOneWidget);
+    expect(find.byKey(const Key('session-recent-button')), findsOneWidget);
+    expect(find.byKey(const Key('mobile-header-title')), findsOneWidget);
   });
 
   testWidgets('PAIR-01：480px 竖屏将 QR 详情和批准操作约束在同一移动端请求块内', (tester) async {
@@ -77,6 +83,7 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
     await tester.pumpWidget(harness.build());
     await tester.pumpAndSettle();
     await _registerOwner(tester, 'portrait-pairing@fixture.test');
@@ -92,8 +99,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.byKey(const Key('pairing-page-link')));
-    await tester.pumpAndSettle();
+    await _goToRoute(tester, '/pairing');
     await tester.enterText(
       find.byKey(const Key('pairing-request-id')),
       PairingPayload.encode(request.id),
@@ -115,8 +121,29 @@ void main() {
   });
 }
 
-Future<void> _registerOwner(WidgetTester tester, String _) async {
-  await tester.tap(find.byKey(const Key('device-connect-submit')));
+/// 经 router 直达路由（v0.8.1+ 控制端入口从首页卡片收敛到 router/设置）。
+Future<void> _goToRoute(WidgetTester tester, String route) async {
+  final container = ProviderScope.containerOf(
+    tester.element(find.byKey(const Key('session-home-screen'))),
+  );
+  container.read(appRouterProvider).go(route);
+  for (var i = 0; i < 40; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (find.byKey(const Key('pairing-request-id')).evaluate().isNotEmpty ||
+        find.byKey(const Key('session-home-screen')).evaluate().isNotEmpty) {
+      break;
+    }
+  }
   await tester.pumpAndSettle();
-  expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
+}
+
+/// v0.8.1+：owner 初始化已由 launchAsOwner 预置；等 DSH 首页出现。
+Future<void> _registerOwner(WidgetTester tester, String _) async {
+  for (var i = 0; i < 60; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (find.byKey(const Key('session-home-screen')).evaluate().isNotEmpty) {
+      return;
+    }
+  }
+  expect(find.byKey(const Key('session-home-screen')), findsOneWidget);
 }

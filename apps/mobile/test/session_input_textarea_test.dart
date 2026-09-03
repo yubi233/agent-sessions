@@ -126,17 +126,14 @@ void main() {
 Future<void> _openComposer(WidgetTester tester) async {
   final harness = MobileAppHarness();
   await harness.bootstrapLocalOwner();
+  final sessionId = await harness.seedSession();
   await tester.pumpWidget(harness.build());
   await _waitFor(tester, find.byKey(const Key('session-home-screen')));
-  await tester.tap(find.byKey(const Key('session-new-button')));
-  await _waitFor(tester, find.byKey(const Key('new-session-workspace-input')));
-  await tester.enterText(
-    find.byKey(const Key('new-session-workspace-input')),
-    'fixture-workspace',
-  );
-  await _tapVisible(tester, find.byKey(const Key('new-session-create-button')));
+  // v0.8.1+：经「最近会话」入口打开预置会话详情（首页已无旧式新建按钮）。
+  await tester.tap(find.byKey(const Key('session-recent-button')));
+  await _waitFor(tester, find.byKey(Key('recent-session-$sessionId')));
+  await tester.tap(find.byKey(Key('recent-session-$sessionId')));
   await _waitFor(tester, find.byKey(const Key('session-detail-screen')));
-  await tester.tap(find.byKey(const Key('session-acquire-lease-button')));
   await _waitFor(tester, find.text('可操作'));
   await tester.ensureVisible(find.byKey(const Key('session-composer-input')));
   await tester.pumpAndSettle();
@@ -166,13 +163,6 @@ String _text(WidgetTester tester) => tester
     .widget<TextField>(find.byKey(const Key('session-composer-input')))
     .controller!
     .text;
-
-Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
-  await tester.ensureVisible(finder);
-  await tester.pumpAndSettle();
-  await tester.tap(finder);
-  await tester.pump();
-}
 
 Future<void> _waitFor(WidgetTester tester, Finder finder) async {
   for (var index = 0; index < 120; index++) {

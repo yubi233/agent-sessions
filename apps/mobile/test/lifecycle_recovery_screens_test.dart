@@ -12,28 +12,20 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     final harness = MobileAppHarness();
+    await harness.launchAsOwner();
+    final sessionId = await harness.seedSession();
     await tester.pumpWidget(harness.build());
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
+    // 经「最近会话」入口打开详情并等待自动获取写权。
+    await _tapVisible(tester, find.byKey(const Key('session-recent-button')));
     await _waitForVisible(
       tester,
-      find.byKey(const Key('device-connect-submit')),
+      find.byKey(Key('recent-session-$sessionId')),
     );
-    await _registerOwner(tester, 'lifecycle-ui-owner@fixture.test');
-    await _tapVisible(tester, find.byKey(const Key('session-new-button')));
-    await _waitForVisible(
-      tester,
-      find.byKey(const Key('new-session-create-button')),
-    );
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('new-session-create-button')),
-    );
+    await _tapVisible(tester, find.byKey(Key('recent-session-$sessionId')));
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-detail-screen')),
-    );
-    await _tapVisible(
-      tester,
-      find.byKey(const Key('session-acquire-lease-button')),
     );
     await _waitForVisible(tester, find.text('可操作'));
 
@@ -42,7 +34,6 @@ void main() {
     );
     final sessions = container.read(sessionControllerProvider);
     final recovery = container.read(sessionRecoveryControllerProvider);
-    final sessionId = sessions.selectedSessionId!;
     await recovery.reportAppVisibility(MobileAppVisibility.background);
     await recovery.reportNetworkAvailability(MobileNetworkAvailability.offline);
     harness.relay.setNetworkAvailable(false);
@@ -52,8 +43,11 @@ void main() {
     await recovery.reportNetworkAvailability(MobileNetworkAvailability.online);
     await recovery.reportAppVisibility(MobileAppVisibility.foreground);
     await tester.pump();
-
-    expect(sessions.hasSelectedLease, isFalse);
+    // v0.9：恢复完成后自动重取会话写权（沿用最近成功授权参数），用户无需手动点按。
+    for (var i = 0; i < 40 && !sessions.hasSelectedLease; i += 1) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(sessions.hasSelectedLease, isTrue);
     expect(find.byKey(const Key('session-recovery-banner')), findsOneWidget);
     expect(find.byKey(const Key('session-recovery-notice')), findsOneWidget);
     expect(find.textContaining('本会话新增 1 条事件'), findsOneWidget);
@@ -63,9 +57,10 @@ void main() {
       tester.getSize(find.byKey(const Key('session-recovery-banner'))).width,
       lessThanOrEqualTo(480),
     );
+    // v0.9：lease 已自动重取，composer 不再显示阻断原因，可直接输入。
     expect(
       find.byKey(const Key('session-composer-blocked-reason')),
-      findsOneWidget,
+      findsNothing,
     );
 
     await _tapVisible(
@@ -76,11 +71,6 @@ void main() {
     expect(find.byKey(const Key('session-recovery-notice')), findsNothing);
     expect(tester.takeException(), isNull);
   });
-}
-
-Future<void> _registerOwner(WidgetTester tester, String _) async {
-  await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
-  await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
 }
 
 Future<void> _waitForVisible(
