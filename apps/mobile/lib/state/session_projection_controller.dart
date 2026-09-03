@@ -16,6 +16,9 @@ class SessionProjectionController {
     final nodes = <ConversationNode>[];
     final waits = <ComposerPendingWait>[];
     final trajectory = <TrajectoryRecord>[];
+    // v0.8.4（ADR-015 §3）：按 revision 单调折叠 phase 投影；乱序/回退帧丢弃。
+    TurnPhase? turnPhase;
+    var phaseRevision = 0;
 
     // v0.5/P6-B：用 user 事件作为 turn 分组锚点；无 user 时统一归到 turn-0。
     // 该 turnId 只是展示层分组标识，不写回 Relay / Chat projection。
@@ -49,6 +52,16 @@ class SessionProjectionController {
           inspectTarget: event.inspectTarget,
         ),
       );
+
+      // v0.8.4：turn_phase 只驱动状态行（快照上的 turnPhase 字段），不渲染
+      // 聊天气泡，也不进入轨迹记录（避免高频 phase 帧刷屏）。
+      if (event.kind == SessionTimelineKind.turnPhase) {
+        if (event.phase != null && event.phaseRevision >= phaseRevision) {
+          turnPhase = event.phase;
+          phaseRevision = event.phaseRevision;
+        }
+        continue;
+      }
 
       // pending interaction 是 composer chain 的唯一交互面，不能再渲染成 Chat 操作卡。
       final wait = _pendingWaitFor(event);
@@ -109,6 +122,7 @@ class SessionProjectionController {
       trajectoryRecords: List.unmodifiable(trajectory),
       stats: SessionStatsLineProjection.fromUsage(controls.usage),
       context: SessionContextMeterProjection.fromUsage(controls.usage),
+      turnPhase: turnPhase,
     );
   }
 
@@ -119,6 +133,11 @@ class SessionProjectionController {
           _looksLikeReasoning(event)
               ? ConversationNodeKind.reasoning
               : ConversationNodeKind.assistant,
+        // v0.8.4（ADR-015 §5）：raw thought 是一等 reasoning 节点，文本直接
+        // 展示（终端所有者本地授权内容），不再依赖 label 启发式。
+        SessionTimelineKind.assistantThought => ConversationNodeKind.reasoning,
+        // turn_phase 事件在主循环中提前跳过（只驱动状态行），此分支仅为穷尽性。
+        SessionTimelineKind.turnPhase => ConversationNodeKind.notice,
         SessionTimelineKind.toolActivity => ConversationNodeKind.tool,
         SessionTimelineKind.permissionRequest => ConversationNodeKind.notice,
         SessionTimelineKind.questionRequest => ConversationNodeKind.notice,
@@ -154,6 +173,10 @@ class SessionProjectionController {
   }
 
   String? _displayTextFor(SessionTimelineEvent event) {
+    // v0.8.4：thought 通道的 raw 文本直接展示（独立通道已保证不混入回答）。
+    if (event.kind == SessionTimelineKind.assistantThought) {
+      return event.text;
+    }
     if (_looksLikeReasoning(event)) {
       // reasoning 只展示安全摘要；没有摘要时交给 UI 显示运行元数据。
       return _safeReasoningSummary(event);

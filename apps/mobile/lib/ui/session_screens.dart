@@ -1939,6 +1939,8 @@ class _SessionChatView extends StatelessWidget {
       // 乐观回显挂出即视为进行中：状态行立刻出现，不等 daemon 事件回传。
       running:
           sessions.isStreaming || (sessions.pendingOutgoingMessage != null),
+      // v0.8.4（ADR-015 §3）：phase-aware 状态行文案。
+      turnPhase: projection.turnPhase,
       leading: _SessionRecoveryStrip(
         controller: recovery,
         sessionId: sessionId,

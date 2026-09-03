@@ -2094,21 +2094,31 @@ class SessionController extends ChangeNotifier {
     return events.any((event) => event.completedTurn);
   }
 
-  /// 流式合并：连续的 assistant 流式增量坍缩为单个生长节点；非流式的
+  /// 流式合并：连续的 assistant 流式增量坍缩为单个生长节点（打字机）；非流式的
   /// message.completed 全文替换其前的流式节点，避免"生长气泡 + 完整气泡"并排。
   /// completed_turn 终态标记不参与替换（投影层本就不渲染空文本标记）。
+  ///
+  /// v0.8.4（ADR-015 §5）：thought 通道按同种类独立折叠——localdev 编码器对
+  /// 每条 thought 增量回发全量已收文本，同一身份的连续流式帧坍缩为一个生长
+  /// 节点；thought 与 assistant 之间天然以 kind 区分，绝不互相并入。
   List<SessionTimelineEvent> _coalesceStreaming(
     List<SessionTimelineEvent> events,
   ) {
     final out = <SessionTimelineEvent>[];
     for (final event in events) {
       final last = out.isEmpty ? null : out.last;
+      // 同类（answer/thought 各自独立）且上一帧仍在流式：增量帧与同一身份的
+      // completed 帧都整体替换上一帧；身份变化（新消息）另起新节点。
       final replacesStreaming =
           last != null &&
-          last.kind == SessionTimelineKind.assistantMessage &&
+          last.kind == event.kind &&
           last.isStreaming &&
-          event.kind == SessionTimelineKind.assistantMessage &&
-          !event.completedTurn;
+          !event.completedTurn &&
+          (event.kind == SessionTimelineKind.assistantMessage ||
+              event.kind == SessionTimelineKind.assistantThought) &&
+          (event.messageId == null ||
+              last.messageId == null ||
+              event.messageId == last.messageId);
       if (replacesStreaming) {
         out[out.length - 1] = event;
         continue;

@@ -1,5 +1,59 @@
 import 'models.dart';
 
+/// TurnPhase 是 v0.8.4（ADR-015 §2）冻结的回合级阶段，与 session 级
+/// [MobileSessionStatus] 正交：后者描述会话生命周期，前者描述当前回合内
+/// 的可观察活动。未知 wire 值 fail-closed 归 [TurnPhase.unknown]，
+/// 绝不映射为近似相位。
+enum TurnPhase {
+  queued('queued'),
+  preparing('preparing'),
+  thinking('thinking'),
+  streaming('streaming'),
+  toolRunning('tool_running'),
+  waitingPermission('waiting_permission'),
+  waitingQuestion('waiting_question'),
+  finishing('finishing'),
+  cancelling('cancelling'),
+  completed('completed'),
+  cancelled('cancelled'),
+  failed('failed'),
+  unknown('unknown');
+
+  const TurnPhase(this.wireValue);
+
+  final String wireValue;
+
+  static TurnPhase fromWire(String value) {
+    for (final phase in TurnPhase.values) {
+      if (phase != TurnPhase.unknown && phase.wireValue == value) return phase;
+    }
+    return TurnPhase.unknown;
+  }
+
+  /// 是否为回合终态（completed/cancelled/failed）。
+  bool get isTerminal =>
+      this == TurnPhase.completed ||
+      this == TurnPhase.cancelled ||
+      this == TurnPhase.failed;
+
+  /// phase-aware 状态行的可见文案（v0.8.4 P3）。
+  String get displayLabel => switch (this) {
+    TurnPhase.queued => '排队中',
+    TurnPhase.preparing => '正在准备',
+    TurnPhase.thinking => '思考中',
+    TurnPhase.streaming => '生成中',
+    TurnPhase.toolRunning => '工具执行中',
+    TurnPhase.waitingPermission => '等待权限确认',
+    TurnPhase.waitingQuestion => '等待回答',
+    TurnPhase.finishing => '收尾中',
+    TurnPhase.cancelling => '正在取消',
+    TurnPhase.completed => '已完成',
+    TurnPhase.cancelled => '已取消',
+    TurnPhase.failed => '回合失败',
+    TurnPhase.unknown => '处理中',
+  };
+}
+
 /// 会话状态来自 Relay 白名单元数据；消息正文、工具参数和附件内容不属于该字段。
 enum MobileSessionStatus {
   idle('idle'),
@@ -639,6 +693,12 @@ class SessionCommandReceipt {
 enum SessionTimelineKind {
   userMessage,
   assistantMessage,
+  // v0.8.4（ADR-015 §5）：raw reasoning 走独立 thought 通道，永远不并入
+  // assistantMessage——解析层即分离，渲染层无需启发式猜疑。
+  assistantThought,
+  // v0.8.4（ADR-015 §3）：回合相位投影（phase/revision/reason 白名单事实），
+  // 只驱动状态行，不渲染为聊天气泡。
+  turnPhase,
   toolActivity,
   permissionRequest,
   questionRequest,
@@ -791,6 +851,11 @@ class SessionTimelineEvent {
     this.inspectTarget,
     this.producedFilePaths = const [],
     this.toolSubcalls = const [],
+    this.phase,
+    this.phaseReason,
+    this.phaseRevision = 0,
+    this.thoughtVisibility,
+    this.thoughtSummary = false,
   });
 
   factory SessionTimelineEvent.fromRelayEvent(RelaySessionEvent event) {
@@ -830,6 +895,13 @@ class SessionTimelineEvent {
       inspectTarget: _nullableString(payload['inspect_target']),
       producedFilePaths: _stringList(payload['produced_files']),
       toolSubcalls: _toolSubcallsFromFixture(payload['subcalls']),
+      phase: payload['phase'] is String
+          ? TurnPhase.fromWire(payload['phase'] as String)
+          : null,
+      phaseReason: _nullableString(payload['reason']),
+      phaseRevision: payload['revision'] is int ? payload['revision'] as int : 0,
+      thoughtVisibility: _nullableString(payload['visibility']),
+      thoughtSummary: payload['summary'] == true,
     );
   }
 
@@ -861,11 +933,25 @@ class SessionTimelineEvent {
   final String? inspectTarget;
   final List<String> producedFilePaths;
   final List<SessionToolSubcall> toolSubcalls;
+
+  /// v0.8.4：turn_phase 事件的相位（ADR-015 §3），非 phase 事件为 null。
+  final TurnPhase? phase;
+  /// phase 变更的白名单原因（如 first_text_delta）。
+  final String? phaseReason;
+  /// 相位机单调 revision，客户端据此丢弃乱序/重复帧。
+  final int phaseRevision;
+  /// thought 事件的可见级别（raw|summary）；assistantMessage 为 null。
+  final String? thoughtVisibility;
+  /// thought 是否为 summary 模式的回合级折叠摘要帧。
+  final bool thoughtSummary;
 }
 
 SessionTimelineKind _timelineKindFromFixture(String? kind) => switch (kind) {
   'user_message' => SessionTimelineKind.userMessage,
   'assistant_message' => SessionTimelineKind.assistantMessage,
+  // v0.8.4：raw thought 与回合相位走独立通道（ADR-015 §3/§5）。
+  'assistant_thought' => SessionTimelineKind.assistantThought,
+  'turn_phase' => SessionTimelineKind.turnPhase,
   'tool_activity' => SessionTimelineKind.toolActivity,
   'permission_request' => SessionTimelineKind.permissionRequest,
   'question_request' => SessionTimelineKind.questionRequest,
@@ -952,6 +1038,8 @@ TimelineQuestionOption? _questionOptionFromFixture(Object? value) {
 String _fallbackTimelineLabel(SessionTimelineKind kind) => switch (kind) {
   SessionTimelineKind.userMessage => '你',
   SessionTimelineKind.assistantMessage => 'Assistant',
+  SessionTimelineKind.assistantThought => '思考中',
+  SessionTimelineKind.turnPhase => '回合状态',
   SessionTimelineKind.toolActivity => '工具活动',
   SessionTimelineKind.permissionRequest => '需要确认',
   SessionTimelineKind.questionRequest => '需要回答',

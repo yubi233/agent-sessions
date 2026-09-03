@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../domain/session_models.dart';
 import '../../../domain/session_projection_models.dart';
 import '../../../state/session_message_feedback_controller.dart';
 import 'session_chat_node_seat.dart';
@@ -17,6 +18,7 @@ class SessionChatView extends StatefulWidget {
   const SessionChatView({
     required this.nodes,
     required this.running,
+    this.turnPhase,
     this.emptyHero,
     this.leading,
     this.footer = const [],
@@ -35,6 +37,8 @@ class SessionChatView extends StatefulWidget {
 
   final List<ConversationNode> nodes;
   final bool running;
+  /// v0.8.4（ADR-015 §3）：最近的回合相位；null 时状态行回退通用生成态文案。
+  final TurnPhase? turnPhase;
   final Widget? emptyHero;
 
   /// 位于消息流上方的会话级控制带（如子会话面板）。它属于 Chat 投影上下文，
@@ -251,7 +255,12 @@ class _SessionChatViewState extends State<SessionChatView> {
         // 这样即使滚动到底部时 footer（如子会话面板）较高，streaming indicator 也始终在树中，
         // 不会因为 ListView 未 build 视口外的行而被测试或用户跳过。
         if (widget.running)
-          Positioned(left: 16, right: 16, bottom: 12, child: _TurnStatusRow()),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 12,
+            child: _TurnStatusRow(phase: widget.turnPhase),
+          ),
         if (!_readerPinnedToBottom)
           Positioned(
             right: 18,
@@ -424,11 +433,32 @@ class _FileOpenErrorDialog extends StatelessWidget {
   }
 }
 
+/// v0.8.4（ADR-015 §3）：phase-aware 状态行。取代固定的"模型仍在处理当前轮次"：
+/// 有 phase 投影时展示对应可见文案（思考中/生成中/工具执行中/等待交互/收尾/取消），
+/// 无投影（旧桥/旧会话）时回退通用文案，行为与 v0.8.3 完全一致。
+/// 终态相位（completed/cancelled/failed）不由该常驻行展示——终态收敛由
+/// running=false 关闭状态行与消息气泡本身表达，避免终态文案残留闪烁。
 class _TurnStatusRow extends StatelessWidget {
-  const _TurnStatusRow();
+  const _TurnStatusRow({this.phase});
+
+  final TurnPhase? phase;
 
   @override
   Widget build(BuildContext context) {
+    final label = switch (phase) {
+      null => '模型仍在处理当前轮次...',
+      TurnPhase.queued => '排队中...',
+      TurnPhase.preparing => '正在准备新一轮...',
+      TurnPhase.thinking => '思考中...',
+      TurnPhase.streaming => '生成中...',
+      TurnPhase.toolRunning => '工具执行中...',
+      TurnPhase.waitingPermission => '等待权限确认...',
+      TurnPhase.waitingQuestion => '等待你的回答...',
+      TurnPhase.finishing => '收尾中...',
+      TurnPhase.cancelling => '正在取消...',
+      // 终态相位不常驻展示：running 会随终态关闭，此行随即消失。
+      _ => '模型仍在处理当前轮次...',
+    };
     return Semantics(
       liveRegion: true,
       child: Container(
@@ -449,7 +479,7 @@ class _TurnStatusRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            const Expanded(child: Text('模型仍在处理当前轮次...')),
+            Expanded(child: Text(label)),
           ],
         ),
       ),

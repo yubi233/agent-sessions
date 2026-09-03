@@ -21,6 +21,8 @@ const workspaces = ref<WorkspaceInfo[]>([]);
 const selectedWorkspace = ref("");
 const sessionId = ref("");
 const sessionStatus = ref("");
+// v0.8.4（ADR-015 §3）：只读回合相位（无写入口，仅状态展示）。
+const sessionPhase = ref<string | null>(null);
 const draft = ref("");
 const sending = ref(false);
 const chatMessages = ref<ChatMessage[]>([]);
@@ -55,6 +57,7 @@ async function refreshMessages(): Promise<void> {
   try {
     const snapshot = await fetchChatSnapshot(sessionId.value);
     sessionStatus.value = snapshot.status;
+    sessionPhase.value = snapshot.turnPhase;
     chatMessages.value = snapshot.messages;
     chatError.value = "";
   } catch (err) {
@@ -160,7 +163,7 @@ onMounted(loadWorkspaces);
           新建 DSH 会话
         </button>
         <p v-if="hasSession" data-testid="chat-session-id" class="status">
-          会话：{{ sessionId }} · 状态：{{ sessionStatus }}
+          会话：{{ sessionId }} · 状态：{{ sessionStatus }}<template v-if="sessionPhase"> · 相位：{{ sessionPhase }}</template>
         </p>
       </template>
     </section>

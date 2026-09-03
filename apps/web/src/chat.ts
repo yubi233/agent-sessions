@@ -162,19 +162,37 @@ export async function fetchChatSnapshot(sessionId: string): Promise<{
   status: string;
   lastSeq: number;
   messages: ChatMessage[];
+  /** v0.8.4（ADR-015 §3）：最近一条 turn_phase 投影的只读相位；无投影为 null。 */
+  turnPhase: string | null;
 }> {
   const data = await requestJSON<SnapshotResponse>(
     `/v1/sessions/${encodeURIComponent(sessionId)}/snapshot?after_seq=0`,
   );
   const messages: ChatMessage[] = [];
+  let turnPhase: string | null = null;
+  let phaseRevision = 0;
   for (const event of data.events) {
     const message = messageFromEvent(event);
     if (message) messages.push(message);
+    // v0.8.4：phase 是只读安全事实（phase/revision 白名单），按 revision 单调折叠。
+    const envelope = parseEnvelope(event.envelope);
+    const fixture = envelope?.fixture_payload;
+    if (fixture != null && typeof fixture === "object") {
+      const fp = fixture as Record<string, unknown>;
+      if (fp.kind === "turn_phase" && typeof fp.phase === "string") {
+        const revision = typeof fp.revision === "number" ? fp.revision : 0;
+        if (revision >= phaseRevision) {
+          turnPhase = fp.phase;
+          phaseRevision = revision;
+        }
+      }
+    }
   }
   return {
     sessionId: data.session.id,
     status: data.session.status,
     lastSeq: data.session.last_seq,
     messages,
+    turnPhase,
   };
 }

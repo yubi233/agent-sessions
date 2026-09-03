@@ -190,6 +190,9 @@ class _MessageCard extends StatelessWidget {
   IconData _kindIcon(SessionTimelineKind kind) => switch (kind) {
     SessionTimelineKind.userMessage => Icons.person_outline,
     SessionTimelineKind.assistantMessage => Icons.smart_toy_outlined,
+    // v0.8.4：thought 与 phase 是独立通道；deep-link 摘要里分别用脑图与脉冲图标。
+    SessionTimelineKind.assistantThought => Icons.psychology_outlined,
+    SessionTimelineKind.turnPhase => Icons.timelapse,
     SessionTimelineKind.toolActivity => Icons.build_outlined,
     SessionTimelineKind.permissionRequest => Icons.shield_outlined,
     SessionTimelineKind.questionRequest => Icons.help_outline,

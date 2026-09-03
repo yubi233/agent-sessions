@@ -1,3 +1,4 @@
+import 'session_models.dart';
 import 'control_models.dart';
 
 /// v0.5 会话 UI 的展示节点类型。
@@ -344,6 +345,7 @@ class SessionProjectionSnapshot {
     required this.trajectoryRecords,
     required this.stats,
     required this.context,
+    this.turnPhase,
   });
 
   final List<ConversationNode> chatNodes;
@@ -351,4 +353,8 @@ class SessionProjectionSnapshot {
   final List<TrajectoryRecord> trajectoryRecords;
   final SessionStatsLineProjection stats;
   final SessionContextMeterProjection context;
+
+  /// v0.8.4（ADR-015 §3）：时间线上最近一条 turn_phase 投影的相位。
+  /// null 表示本时间线窗口没有 phase 投影（旧桥/旧会话），UI 回退通用生成态。
+  final TurnPhase? turnPhase;
 }
