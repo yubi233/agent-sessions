@@ -58,6 +58,10 @@ class SessionController extends ChangeNotifier {
   String? _historyErrorMessage;
   SessionLease? _selectedLease;
   CapabilityMatrix _capabilities = CapabilityMatrix.empty;
+  // 能力快照的最近一次成功拉取时间。启动瞬间 daemon 的 Provider
+  // 探测可能尚未完成，若只在 initialize 拉一次，陈旧的"未连接"会话状态行会
+  // 缓存整个 App 生命周期；打开会话时按节流窗口刷新（见 refreshCapabilities）。
+  DateTime? _capabilitiesFetchedAt;
   SessionControlState _controls = const SessionControlState.empty();
 
   /// 已提交但 canonical user.message 事件尚未回传的出站文本，按会话隔离。
@@ -181,17 +185,34 @@ class SessionController extends ChangeNotifier {
   }
 
   /// capability 失败时采取 fail-closed：已有会话仍可读，但所有 P3 写入口保持禁用。
-  Future<void> refreshCapabilities() async {
+  ///
+  /// 修复（空闲会话状态行误显示"未连接"）：启动瞬间的拉取可能早于 daemon
+  /// 完成 Provider 探测，失败或空结果会被缓存到 App 生命周期结束。因此
+  /// （1）带 15 秒节流窗口，允许在打开会话等时机安全重试；
+  /// （2）拉取失败时保留最近一次成功快照（若存在），避免把好数据清成空矩阵。
+  Future<void> refreshCapabilities({bool force = false}) async {
+    if (!force) {
+      final fetchedAt = _capabilitiesFetchedAt;
+      if (fetchedAt != null &&
+          _clock().difference(fetchedAt) < const Duration(seconds: 15)) {
+        return;
+      }
+    }
     _isCapabilitiesLoading = true;
     notifyListeners();
     try {
       _capabilities = await _relay.getCapabilities();
+      _capabilitiesFetchedAt = _clock();
     } on RelayFailure catch (failure) {
-      _capabilities = CapabilityMatrix.empty;
-      _errorMessage = failure.message;
+      if (_capabilities.providers.isEmpty) {
+        _capabilities = CapabilityMatrix.empty;
+        _errorMessage = failure.message;
+      }
     } catch (_) {
-      _capabilities = CapabilityMatrix.empty;
-      _errorMessage = '能力矩阵暂时不可用，控制入口已安全禁用。';
+      if (_capabilities.providers.isEmpty) {
+        _capabilities = CapabilityMatrix.empty;
+        _errorMessage = '能力矩阵暂时不可用，控制入口已安全禁用。';
+      }
     } finally {
       _isCapabilitiesLoading = false;
       notifyListeners();
@@ -1891,6 +1912,11 @@ class SessionController extends ChangeNotifier {
     try {
       // 会话 DEK 可用性只影响附件选文件入口；异步读取不阻塞快照。
       unawaited(_loadContentKeyAvailability(sessionId, selectionGeneration));
+      // 状态行"已连接/未连接"徽章消费能力快照。启动期缓存可能早于 daemon
+      // 探测完成（或成功拿到"探测未完成"的暂态结果），因此打开会话时强制
+      // 刷新一次（低频操作，单次 GET 可接受）；完成后 notifyListeners 让状态
+      // 行以服务端当前事实重渲染。日常节流仍保护其他潜在调用方。
+      unawaited(refreshCapabilities(force: true));
       final snapshot = await _relay.getSessionSnapshot(sessionId);
       if (_selectedSessionId != sessionId ||
           _selectionGeneration != selectionGeneration) {

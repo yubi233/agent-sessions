@@ -2026,11 +2026,14 @@ void main() {
     expect(find.textContaining('已连接'), findsOneWidget);
 
     // 探测失败路径：全部 Provider unavailable -> 状态条 fail-closed 展示。
+    // force 绕过 15 秒节流（打开会话自动刷新即走 force 通道）。
     harness.relay.providersUnavailable = true;
     final container = ProviderScope.containerOf(
       tester.element(find.byKey(const Key('session-detail-screen'))),
     );
-    await container.read(sessionControllerProvider).refreshCapabilities();
+    await container
+        .read(sessionControllerProvider)
+        .refreshCapabilities(force: true);
     await tester.pump(const Duration(milliseconds: 100));
     await _waitForVisible(
       tester,
