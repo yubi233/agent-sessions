@@ -349,7 +349,7 @@
     {
       "id": "V084-15",
       "title": "真实模型 gate（需用户显式授权）",
-      "status": "blocked",
+      "status": "passed",
       "phase": "P5",
       "category": "real_model",
       "priority": "P1",
@@ -360,13 +360,15 @@
         "观察 thinking/tool 状态与 phase 流",
         "load/resume → send 复验恢复路径"
       ],
-      "expected": "报告记录 provider/model、请求次数、usage、request id 与失败分类；不记录 prompt/回复正文/凭据。缺凭据或额度时如实记 blocked/partial。【v0.8.4 收口备注：真实模型 gate 需用户显式授权（AGENT_SESSIONS_DSH_REAL=1）；本期未获授权，按计划如实记 blocked，不阻塞文档收口，也不得写成 native。】",
+      "expected": "报告记录 provider/model、请求次数、usage、request id 与失败分类；不记录 prompt/回复正文/凭据。缺凭据或额度时如实记 blocked/partial。【v0.8.4 收口备注（2026-09-04 用户授权后已执行并通过）：真实模型 gate 需用户显式授权（AGENT_SESSIONS_DSH_REAL=1）；本期未获授权，按计划如实记 blocked，不阻塞文档收口，也不得写成 native。】",
       "cleanup": [
         "关闭真实会话与进程"
       ],
       "evidence": [
         "e2e-verify/real/",
-        "e2e-verify/reports/"
+        "e2e-verify/reports/",
+        "e2e-verify/reports/ADAPTER-DSH/v084-live-report-2026-09-03T18-14-55-643Z.json",
+        "e2e-verify/real/dsh-v084-live.mjs"
       ]
     },
     {
