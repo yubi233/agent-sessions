@@ -176,7 +176,7 @@ export function recordingUsage() {
   return [
     "用法：node e2e-verify/mobile/record-macos.mjs --gate-report <MOBILE/mobile-01-macos.json>",
     "  --gate-report <path>  本轮已通过的 macOS Flutter full gate 报告",
-    "  --scope v07|v081     录制范围；默认 v07，v081 只录 DSH 工作区场景",
+    "  --scope v07|v081|v082|v083  录制范围；默认 v07，v081+ 为各 DSH 迭代的独立场景",
     "  --fps 5               固定 5fps；其他值会拒绝",
     "  --headless            明确拒绝；录屏必须观察可见 macOS 窗口",
   ].join("\n");
@@ -537,7 +537,7 @@ async function main() {
         `${JSON.stringify(
           {
             command:
-              "node e2e-verify/mobile/record-macos.mjs --scope <v07|v081> --gate-report <passed-mobile-gate-report>",
+              "node e2e-verify/mobile/record-macos.mjs --scope <v07|v081|v082|v083> --gate-report <passed-mobile-gate-report>",
             completed_scenarios: completedScenarios,
             fixture_revision: "local-deterministic-fixture",
             fps: FLUTTER_RECORDING_FPS,
@@ -587,7 +587,7 @@ async function main() {
           headless: false,
           browser: "n/a",
           command:
-            "node e2e-verify/mobile/record-macos.mjs --scope <v07|v081> --gate-report <passed-mobile-gate-report>",
+            "node e2e-verify/mobile/record-macos.mjs --scope <v07|v081|v082|v083> --gate-report <passed-mobile-gate-report>",
           artifacts,
           failure_class: failureClass,
           remaining_risk: remainingRisk,

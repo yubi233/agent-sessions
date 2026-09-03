@@ -389,26 +389,40 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityEmulated
 			reason = "决策通道已接通但当前策略为取消而非静默批准"
 		case "permission_mode":
-			// v0.8.3 P1：桥已实现 session/set_mode + modes 目录 + current_mode_update
-			// （经 DSH permission preset 原子 bundle 切换）。Go handle/runner/Relay/
-			// 移动端链路接入完成并过 deterministic gate 后升格 native（V083-P3/P4/P5）。
-			status = adapter.CapabilityUnsupported
-			reason = "桥已实现 session/set_mode；Go adapter/Relay/移动端链路接入后升格"
+			// v0.8.3 P5 升格：桥 session/set_mode（preset 原子 bundle）+ Go
+			// SessionModeHandle + runner mode.set + Relay 命令通道 + 客户端矩阵门控
+			// 全链路成立，dsh-v083-overlay deterministic gate 15/15 通过（mode 目录/
+			// set_mode/current_mode_update/目录外拒绝）。mode 目录为 session 级，
+			// 静态 Options 留空（空目录语义：不暴露静态目录，客户端按 Status 放行入口）。
+			status = adapter.CapabilityNative
+			reason = "全链路成立且 deterministic overlay 通过；session 级 mode 目录经 session 响应下发"
 		case "question":
-			status = adapter.CapabilityUnsupported
-			reason = "桥未实现提问通道（无 question 相关 wire 方法）"
+			// v0.8.3 P5 升格（dsh/* 上限 emulated）：桥 userQuestions provider +
+			// Go pending registry + 编码映射 + 移动端 question_request composer 已接通；
+			// 触发需真实模型 turn（V083-26 待授权复验）。
+			status = adapter.CapabilityEmulated
+			reason = "dsh/question 链路已接通；真实模型 turn 复验待授权（V083-26）"
 		case "plan":
-			status = adapter.CapabilityUnsupported
-			reason = "桥不广播 plan 变体，未接入计划能力"
+			// v0.8.3 P5 升格（extension 承载）：桥 plan mode/审核 + runner plan.action
+			// 已接通；plan-review 触发需真实模型 turn（V083-26 待授权复验）。
+			status = adapter.CapabilityEmulated
+			reason = "dsh/plan 链路已接通；真实模型 turn 复验待授权（V083-26）"
 		case "goal":
-			status = adapter.CapabilityUnsupported
-			reason = "桥不广播 goal 事件"
+			// v0.8.3 P5 升格（extension 承载）：桥 goal 服务 + dsh/goal/get|mutate +
+			// runner goal.action 已接通；空 projection 经 deterministic overlay 验证。
+			status = adapter.CapabilityEmulated
+			reason = "dsh/goal 链路已接通；空 projection 经 overlay 验证，mutate 复验待授权（V083-26）"
 		case "skill_catalog":
-			status = adapter.CapabilityUnsupported
-			reason = "桥未实现技能目录通道"
+			// v0.8.3 P5 升格（extension 承载）：桥目录快照 + 摘要 revision +
+			// dsh/skill/catalog + runner skill.invoke 已接通；部署需配置 skills，
+			// 真实目录复验待授权（V083-26）。
+			status = adapter.CapabilityEmulated
+			reason = "dsh/skill 链路已接通（descriptor 白名单 + 摘要 revision）；部署目录复验待授权"
 		case "invoke_skill":
-			status = adapter.CapabilityUnsupported
-			reason = "桥未实现技能调用方法"
+			// v0.8.3 P5 升格（extension 承载）：调用 admission（userInvocable +
+			// catalogRevision）进入既有 prompt slot；真实执行复验待授权（V083-26）。
+			status = adapter.CapabilityEmulated
+			reason = "skill invoke admission 已接通（复用 prompt/cancel 生命周期）；真实执行复验待授权"
 		case "model_select":
 			// ACP session/set_config_option(configId=model) 已接入 Go handle：
 			// send 前 fail-closed 下发，目录来自 dshKnownModels（与 cordis.yml
@@ -422,11 +436,11 @@ func successMatrix(version string) adapter.Capabilities {
 			status = adapter.CapabilityUnsupported
 			reason = "桥支持 thought_level 通道，但当前模型池（Zen 免费池）无已公布档位；空目录不得冒充 native"
 		case "attachments":
-			// v0.8.3 P1：桥 content.ts 已实现图像双向 admission（attachment 服务 +
-			// 模型 inputModalities 同时支持时开启，deployment 条件决定）。Go 侧
-			// opaque ref 链路接入后按 deployment 条件升格（V083-P3）。
+			// v0.8.3 P5：桥 admission 已实现且 SendContent 通道就绪；生产链路剩余
+			// Relay opaque attachment ref（附件 id → Daemon 授权解密 → 图像块），
+			// 未接通前保持 unsupported（text-only/缺服务部署本就准确拒绝，不伪造）。
 			status = adapter.CapabilityUnsupported
-			reason = "桥已实现图像 admission 且按 deployment 条件开启；Go opaque ref 链路接入后升格"
+			reason = "桥 admission 与 SendContent 通道就绪；Relay opaque attachment ref 接入后按 deployment 条件升格"
 		case "file_read":
 			status = adapter.CapabilityUnsupported
 			reason = "桥 fs/* 请求按 -32601 拒绝，未接入文件读取"
@@ -436,10 +450,11 @@ func successMatrix(version string) adapter.Capabilities {
 		case "usage":
 			status = adapter.CapabilityNative
 		case "fork":
-			// v0.8.3 P1：桥已实现 session/fork（committed-prefix 复制）。Go adapter/
-			// Relay 的 fork 命令链路接入后升格（V083-P3/P4）。
-			status = adapter.CapabilityUnsupported
-			reason = "桥已实现 session/fork；Go adapter/Relay 链路接入后升格"
+			// v0.8.3 P5 升格：桥 committed-prefix fork（deterministic overlay 验证）
+			// + Relay fork API → daemon 子会话绑定（TestSessionRunnerForkBindsChildInstance）
+			// + 客户端既有 fork 入口按矩阵放行，全链路成立。
+			status = adapter.CapabilityNative
+			reason = "全链路成立且 deterministic overlay 通过（committed-prefix + 子会话绑定）"
 		case "delegate_session":
 			status = adapter.CapabilityUnsupported
 			reason = "桥未实现会话委托"

@@ -18,7 +18,7 @@ import {
   WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
 } from "./macos-screenshot.mjs";
 
-test("P6 Flutter 录屏固定使用 5fps、gate report 和三个预登记场景", () => {
+test("P6 Flutter 录屏固定使用 5fps、gate report 和预登记场景", () => {
   const args = parseRecordingArgs([
     "--gate-report",
     "e2e-verify/reports/example/MOBILE/mobile-01-macos.json",
@@ -35,6 +35,10 @@ test("P6 Flutter 录屏固定使用 5fps、gate report 和三个预登记场景"
   assert.deepEqual(
     recordingScenarioIdsForScope("v081"),
     ["VISUAL-MOBILE-33"],
+  );
+  assert.deepEqual(
+    recordingScenarioIdsForScope("v083"),
+    ["VISUAL-MOBILE-35"],
   );
   assert.throws(() => parseRecordingArgs(["--headless"]), /headless/);
   assert.throws(

@@ -473,24 +473,37 @@ func TestAdapterListSessions(t *testing.T) {
 	}
 }
 
-// (V083-22) 能力矩阵真实性：桥已实现 mode/lifecycle/图像面（P1 后），矩阵保持
-// unsupported 且 reason 必须是"链路待接入"口径；P3 起链路存在，本守护与
-// TestBridgeFactMatrixGuard 的双向断言共同防止冒充 native。
-func TestP3MatrixStillUnsupportedUntilGates(t *testing.T) {
+// (V083-22) 能力矩阵真实性（P5 收口口径）：deterministic overlay（15/15）通过后，
+// permission_mode/fork 升为 native；question/plan/goal/skill 以 dsh/* extension
+// 承载最高 emulated；attachments 的 Relay opaque ref 未接通保持 unsupported。
+// 防止「观察冒充能力」与「未过 gate 冒充 native」两个方向。
+func TestP5MatrixUpgradedAfterDeterministicGate(t *testing.T) {
 	caps := successMatrix("test")
 	byName := map[string]adapter.Capability{}
 	for _, c := range caps.Capabilities {
 		byName[c.Name] = c
 	}
-	for _, name := range []string{"permission_mode", "fork", "attachments"} {
-		c := byName[name]
-		if c.Status != adapter.CapabilityUnsupported {
-			t.Fatalf("%s 在全链路 gate 完成前必须保持 unsupported，得到 %s", name, c.Status)
+	for _, name := range []string{"permission_mode", "fork"} {
+		if c := byName[name]; c.Status != adapter.CapabilityNative {
+			t.Fatalf("P5 gate 通过后 %s 应为 native，得到 %s", name, c.Status)
 		}
 	}
-	// question 在 P3 已有 Go 侧 registry + 桥 provider，但 Relay/移动端 gate 未收口，
-	// 矩阵同样保持 unsupported（Reason 与桥事实一致，由 TestBridgeFactMatrixGuard 覆盖）。
-	if c := byName["question"]; c.Status != adapter.CapabilityUnsupported {
-		t.Fatalf("question 应保持 unsupported，得到 %s", c.Status)
+	for _, name := range []string{"question", "plan", "goal", "skill_catalog", "invoke_skill"} {
+		c := byName[name]
+		if c.Status != adapter.CapabilityEmulated {
+			t.Fatalf("%s 以 dsh/* extension 承载应为 emulated，得到 %s", name, c.Status)
+		}
+		if c.Reason == "" {
+			t.Fatalf("%s 的 emulated 必须带残余风险 reason", name)
+		}
+	}
+	if c := byName["attachments"]; c.Status != adapter.CapabilityUnsupported {
+		t.Fatalf("attachments 在 opaque ref 接入前保持 unsupported，得到 %s", c.Status)
+	}
+	// 观察不提升：delegation 两项在任何 gate 下保持 unsupported。
+	for _, name := range []string{"delegate_session", "delegate_cross_provider"} {
+		if c := byName[name]; c.Status != adapter.CapabilityUnsupported {
+			t.Fatalf("%s 不得因 subagent 投影升格", name)
+		}
 	}
 }

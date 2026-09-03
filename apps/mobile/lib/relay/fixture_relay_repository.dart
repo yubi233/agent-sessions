@@ -1023,20 +1023,23 @@ class FixtureRelayRepository implements RelayRepository {
             'abort',
             'usage',
             'model_select',
+            // v0.8.3 P5 升格：deterministic overlay 通过后全链路成立。
+            'permission_mode',
+            'fork',
           },
-          emulated: const {'permission'},
-          // v0.8.3：unsupported reason 与 internal/adapter/dsh successMatrix 同口径
-          //（桥已实现面如实标注「链路待接入」，防止客户端残留失效文案）。
+          emulated: const {
+            'permission',
+            // v0.8.3 P5 升格（dsh/* extension 承载上限 emulated）。
+            'question',
+            'plan',
+            'goal',
+            'skill_catalog',
+            'invoke_skill',
+          },
+          // 与 internal/adapter/dsh successMatrix P5 口径一致：
+          // 升格项 reason 引用 gate 证据；未接通项如实标注残余链路。
           unsupportedReasons: const {
-            'permission': '决策通道已接通但当前策略为取消而非静默批准',
-            'permission_mode': '桥已实现 session/set_mode；Go adapter/Relay/移动端链路接入后升格',
-            'question': '桥未实现提问通道（无 question 相关 wire 方法）',
-            'plan': '桥不广播 plan 变体，未接入计划能力',
-            'goal': '桥不广播 goal 事件',
-            'skill_catalog': '桥未实现技能目录通道',
-            'invoke_skill': '桥未实现技能调用方法',
-            'attachments': '桥已实现图像 admission 且按 deployment 条件开启；Go opaque ref 链路接入后升格',
-            'fork': '桥已实现 session/fork；Go adapter/Relay 链路接入后升格',
+            'attachments': '桥 admission 与 SendContent 通道就绪；Relay opaque attachment ref 接入后按 deployment 条件升格',
             'file_read': '桥 fs/* 请求按 -32601 拒绝，未接入文件读取',
             'git_read': '桥未实现 git 读取能力',
             'delegate_session': '桥未实现会话委托',

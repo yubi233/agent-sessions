@@ -271,68 +271,68 @@ var bridgeImplementedACP = map[string]bool{
 	"cancel":                 true,
 }
 
-// TestBridgeFactMatrixGuard（V082-13/14/15 守护落点；V083-P1 修订）断言双向真实：
-//  1. 桥未实现 ACP 面的能力必须保持 unsupported 且 Reason 与桥事实一致；
-//  2. 桥已实现的 ACP 面（V083-P1），矩阵在 Go adapter/Relay/移动端链路接入前
-//     仍保持 unsupported，但 Reason 必须如实描述"桥已实现 + 链路待接入"，
-//     不得沿用"桥配置固定/未实现/仅接受 text 块"之类已失效的旧口径。
+// TestBridgeFactMatrixGuard（V082-13/14/15 守护落点；V083-P5 收口修订）断言矩阵
+// 与桥事实、gate 证据双向一致：
+//  1. deterministic overlay（dsh-v083-overlay.mjs 15/15）通过后 permission_mode/fork
+//     升为 native，reason 必须引用 gate 证据，失效旧口径出现即红；
+//  2. attachments 的 Relay opaque ref 链路未接通，保持 unsupported（新口径 reason）；
+//  3. bridgeImplementedACP 清单与矩阵宣称互为锚点，防止未实现冒充 native。
 func TestBridgeFactMatrixGuard(t *testing.T) {
 	caps := successMatrix("test")
 	byName := map[string]adapter.Capability{}
 	for _, c := range caps.Capabilities {
 		byName[c.Name] = c
 	}
-	// ACP 面 → SPI 能力名映射 + reason 真值校验（按桥是否实现分派）。
-	guards := []struct {
+	// P5 升格面：桥已实现 + 全链路回归 + deterministic gate 证据。
+	upgraded := []struct {
 		acpFace   string
 		capName   string
-		reasonSub string // 桥已实现时 reason 必须包含的"链路待接入"字样
-		staleSub  string // 桥已实现后不得再出现的失效口径
-		unimplSub string // 桥未实现时 reason 必须包含的字样
+		status    string
+		reasonSub string
 	}{
 		{
 			acpFace: "session/set_mode", capName: "permission_mode",
-			reasonSub: "桥已实现 session/set_mode", staleSub: "桥配置固定",
-			unimplSub: "桥配置固定",
+			status: adapter.CapabilityNative, reasonSub: "deterministic overlay",
 		},
 		{
 			acpFace: "session/fork", capName: "fork",
-			reasonSub: "桥已实现 session/fork", staleSub: "未实现",
-			unimplSub: "未实现",
-		},
-		{
-			acpFace: "image admission", capName: "attachments",
-			reasonSub: "桥已实现图像 admission", staleSub: "仅接受 text 块",
-			unimplSub: "仅接受 text 块",
+			status: adapter.CapabilityNative, reasonSub: "deterministic overlay",
 		},
 	}
-	for _, item := range guards {
+	for _, item := range upgraded {
 		c, ok := byName[item.capName]
 		if !ok {
 			t.Fatalf("能力矩阵缺少 %q", item.capName)
 		}
-		if bridgeImplementedACP[item.acpFace] {
-			// 桥已实现：链路接入前矩阵保持 unsupported，但 reason 必须是新口径。
-			if c.Status != adapter.CapabilityUnsupported {
-				t.Fatalf("桥已实现 %s 且 adapter/Relay 链路未收口，%s 不得提前升格: %s", item.acpFace, item.capName, c.Status)
-			}
-			if !strings.Contains(c.Reason, item.reasonSub) {
-				t.Fatalf("%s reason 未反映桥新事实: %q（应含 %q）", item.capName, c.Reason, item.reasonSub)
-			}
-			if strings.Contains(c.Reason, item.staleSub) {
-				t.Fatalf("%s reason 仍含失效口径 %q: %q", item.capName, item.staleSub, c.Reason)
-			}
-			continue
+		if !bridgeImplementedACP[item.acpFace] {
+			t.Fatalf("%s 宣称 %s 但桥事实清单未登记 %s（同步 bridgeImplementedACP）", item.capName, item.status, item.acpFace)
 		}
-		if c.Status != adapter.CapabilityUnsupported {
-			t.Fatalf("桥未实现 %s 但 %s 宣称 %s：不得冒充 native（同步 bridgeImplementedACP 与 successMatrix）",
-				item.acpFace, item.capName, c.Status)
+		if c.Status != item.status {
+			t.Fatalf("P5 gate 通过后 %s 应为 %s，得到 %s", item.capName, item.status, c.Status)
 		}
-		if !strings.Contains(c.Reason, item.unimplSub) {
-			t.Fatalf("%s reason 与桥事实不一致: %q（应含 %q）", item.capName, c.Reason, item.unimplSub)
+		if !strings.Contains(c.Reason, item.reasonSub) {
+			t.Fatalf("%s reason 必须引用 gate 证据: %q", item.capName, c.Reason)
+		}
+		for _, stale := range []string{"桥配置固定", "链路接入后升格", "未实现"} {
+			if strings.Contains(c.Reason, stale) {
+				t.Fatalf("%s reason 仍含失效口径 %q: %q", item.capName, stale, c.Reason)
+			}
 		}
 	}
-	// tool 生命周期/目录能力的 ACP operation gate 由 TestCapabilityListsDoNotDiverge
-	// 保证清单完整；successMatrix switch 内未显式置 unsupported 的能力不得以 native
-	// 漏出——上述三面（mode/lifecycle/image）是桥事实核对的最关键面。
+
+	// attachments：桥 admission 已实现，但 Relay opaque attachment ref 链路未接通，
+	// 保持 unsupported 且 reason 如实（不残留「仅接受 text 块」旧口径）。
+	c, ok := byName["attachments"]
+	if !ok {
+		t.Fatalf("能力矩阵缺少 attachments")
+	}
+	if !bridgeImplementedACP["image admission"] {
+		t.Fatalf("桥事实清单应登记 image admission（P1 起已实现）")
+	}
+	if c.Status != adapter.CapabilityUnsupported {
+		t.Fatalf("Relay opaque ref 链路接入前 attachments 保持 unsupported，得到 %s", c.Status)
+	}
+	if !strings.Contains(c.Reason, "opaque attachment ref") || strings.Contains(c.Reason, "仅接受 text 块") {
+		t.Fatalf("attachments reason 与桥事实不一致: %q", c.Reason)
+	}
 }

@@ -88,8 +88,8 @@ func TestLocalDevEventEncoderMapsUserQuestion(t *testing.T) {
 		"request_id":  "q-1",
 		"questions": []any{map[string]any{
 			"id": "p1", "title": "审核计划", "type": "single-select",
-			"options": []any{"Approve", "Keep planning"},
-			"intent":  map[string]any{"kind": "plan-review", "approve": "Approve"},
+			"options":        []any{"Approve", "Keep planning"},
+			"intent":         map[string]any{"kind": "plan-review", "approve": "Approve"},
 			"detailMarkdown": "# 计划",
 		}},
 	})

@@ -20,7 +20,9 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
+
+const ROOT = resolve(new URL("../..", import.meta.url).pathname);
 
 const args = process.argv.slice(2);
 const argOf = (flag) => {
@@ -49,7 +51,7 @@ const report = {
   model: "n/a (no prompt sent)",
   provider: "deepseek-harness-acp",
   credential_source: "none",
-  command: `node e2e-verify/real/dsh-v083-overlay.mjs --config ${configPath}`,
+  command: "node e2e-verify/real/dsh-v083-overlay.mjs --config e2e-verify/fixtures/dsh/cordis-v083-overlay.yml",
   request_ids: [],
   usage: { input_tokens: 0, output_tokens: 0 },
   artifacts: [],
@@ -75,7 +77,29 @@ const pending = new Map();
 const notifications = [];
 
 function record(direction, message) {
-  transcript.write(`${JSON.stringify({ ts: new Date().toISOString(), direction, message })}\n`);
+  transcript.write(`${JSON.stringify({ ts: new Date().toISOString(), direction, message: redactValue(message) })}\n`);
+}
+
+// 长期证据只保留结构化摘要，所有执行机路径和临时工作区身份统一脱敏。
+function redactValue(value) {
+  if (typeof value === "string") {
+    return value
+      .replaceAll(dshRoot, "[DSH ROOT REDACTED]")
+      .replaceAll(workdir, "[WORKDIR REDACTED]")
+      .replaceAll(configPath, "e2e-verify/fixtures/dsh/cordis-v083-overlay.yml")
+      .replace(/\[WORKDIR REDACTED\](?:\/[^\s"']+)*/g, "[WORKDIR REDACTED]")
+      .replace(/\/(?:Users|private|var|tmp)\/[^\s"']+/g, "[PATH REDACTED]");
+  }
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactValue(child)]));
+  }
+  return value;
+}
+
+function evidenceReference(path) {
+  const projectRelative = relative(ROOT, path);
+  return projectRelative.startsWith("..") ? "[PATH REDACTED]" : projectRelative;
 }
 
 const childEnv = {
@@ -133,7 +157,7 @@ function request(method, params, label, waitMs = 30_000) {
 }
 
 function check(name, ok, detail) {
-  report.checks[name] = { ok, ...(detail === undefined ? {} : { detail }) };
+  report.checks[name] = { ok, ...(detail === undefined ? {} : { detail: redactValue(detail) }) };
   console.log(`[v083-overlay] ${ok ? "PASS" : "FAIL"} ${name}${detail === undefined ? "" : ` ${JSON.stringify(detail)}`}`);
   if (!ok) throw new Error(`check failed: ${name} ${JSON.stringify(detail ?? {})}`);
 }
@@ -291,6 +315,10 @@ try {
 } finally {
   await cleanup();
   const reportPath = join(outDir, `v083-overlay-${stamp}.json`);
+  report.artifacts = report.artifacts.map(evidenceReference);
+  report.command = "node e2e-verify/real/dsh-v083-overlay.mjs --config e2e-verify/fixtures/dsh/cordis-v083-overlay.yml";
+  report.remaining_risk = redactValue(report.remaining_risk);
+  report.checks = redactValue(report.checks);
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(`[v083-overlay] status=${report.status} -> ${reportPath}`);
   process.exitCode = report.status === "passed" ? 0 : 1;

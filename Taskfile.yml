@@ -194,6 +194,26 @@ tasks:
       - node e2e-verify/run.mjs --suite v081-dsh-workspace-first
       - git diff --check
 
+  test:v083:local:
+    desc: v0.8.3 DSH ACP 能力本地统一回归入口（契约、Go/Flutter/Web、deterministic bridge overlay、headed Chrome；不调用真实模型）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - go test ./internal/adapter/... ./internal/daemon/... ./internal/relay/... -run 'Test(V083|V082|MapTool|MapSession|SendAppliesEffort|SetEffort|PermissionRequest|SessionRunnerRespondPermission|Cordis|EffortSelect|CapabilityLists|BridgeFact|DetectVersion|CapabilitiesMatch|ModelSelectOptions|RelayEventType|LocalDevEventEncoder|SessionRunnerForkBindsChildInstance)' -count=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/v083_capability_gating_test.dart test/session_projection_test.dart test/capability_controller_test.dart test/dsh_mode_test.dart test/session_controller_test.dart test/local_visual_fixture_test.dart --concurrency=1
+      - pnpm --filter @agent-sessions/web test
+      - pnpm --filter @agent-sessions/web build
+      - node e2e-verify/real/dsh-v083-overlay.mjs
+      - node e2e-verify/run.mjs --suite v082-dsh-capability-web
+      - node e2e-verify/run.mjs --suite v081-dsh-workspace-first
+      - git diff --check
+
+  test:v083:flutter:
+    desc: v0.8.3 DSH 能力门控 macOS 可见窗口 targeted gate（需先关闭用户正在使用的 Agent Sessions 窗口；不运行 Android）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs --test test/v083_capability_gating_test.dart --test test/local_visual_fixture_test.dart --case V083-P4 --visual-scenario VISUAL-MOBILE-35
+
   test:v081:flutter:
     desc: v0.8.1 DSH 工作区主模式的 macOS 可见窗口 targeted gate（需先关闭用户正在使用的 Agent Sessions 窗口）
     cmds:
