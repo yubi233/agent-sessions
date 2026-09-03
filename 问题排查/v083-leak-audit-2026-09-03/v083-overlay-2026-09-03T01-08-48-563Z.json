@@ -1,0 +1,124 @@
+{
+  "suite": "adpt-dsh-v083-overlay",
+  "report_kind": "deterministic_bridge_gate",
+  "status": "passed",
+  "failure_class": null,
+  "real_browser": false,
+  "real_model": false,
+  "real_upstream": true,
+  "fixture_data": false,
+  "local_test": true,
+  "headless": false,
+  "browser": "n/a",
+  "model": "n/a (no prompt sent)",
+  "provider": "deepseek-harness-acp",
+  "credential_source": "none",
+  "command": "node e2e-verify/real/dsh-v083-overlay.mjs --config e2e-verify/fixtures/dsh/cordis-v083-overlay.yml",
+  "request_ids": [],
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "artifacts": [
+    "e2e-verify/reports/ADAPTER-DSH/v083-overlay-transcript-2026-09-03T01-08-48-563Z.jsonl"
+  ],
+  "checks": {
+    "extension_negotiated": {
+      "ok": true,
+      "detail": {
+        "directory_keys": 10
+      }
+    },
+    "image_negative_advertised": {
+      "ok": true,
+      "detail": {
+        "image": false,
+        "note": "overlay 模型池为 text-only；image=true 正向路径由 cordis-v083-image.yml 承载"
+      }
+    },
+    "modes_advertised": {
+      "ok": true,
+      "detail": {
+        "current": "danger-full-access",
+        "modes": [
+          "read-only",
+          "workspace-write",
+          "danger-full-access"
+        ]
+      }
+    },
+    "additional_directory_admitted": {
+      "ok": true,
+      "detail": {
+        "cwd": "[WORKDIR REDACTED]"
+      }
+    },
+    "set_mode_atomic_update": {
+      "ok": true,
+      "detail": {
+        "sessionUpdate": "current_mode_update",
+        "currentModeId": "danger-full-access"
+      }
+    },
+    "unknown_mode_rejected": {
+      "ok": true,
+      "detail": {
+        "code": -32602,
+        "message": "Invalid params: unknown session mode: custom"
+      }
+    },
+    "relative_dir_rejected": {
+      "ok": true,
+      "detail": {
+        "code": -32602,
+        "message": "Invalid params: additionalDirectories entries must be absolute paths: relative/path"
+      }
+    },
+    "close_idempotent": {
+      "ok": true
+    },
+    "close_resumable": {
+      "ok": true,
+      "detail": null
+    },
+    "fork_new_identity": {
+      "ok": true,
+      "detail": {
+        "forked_prefix": "422873ec"
+      }
+    },
+    "list_sanitized": {
+      "ok": true,
+      "detail": {
+        "count": 2
+      }
+    },
+    "goal_empty_projection": {
+      "ok": true,
+      "detail": {
+        "goal": null
+      }
+    },
+    "delete_cold_session": {
+      "ok": true
+    },
+    "delete_removes_from_list": {
+      "ok": true,
+      "detail": {
+        "count": 1
+      }
+    },
+    "fork_survives_delete": {
+      "ok": true,
+      "detail": {
+        "forked_prefix": "422873ec"
+      }
+    }
+  },
+  "model_gated": [
+    "question ask/answer 回流（需 agent turn；桥契约由 deepseek-harness vitest v083-capabilities 覆盖）",
+    "plan-review markdown plan_update/plan_removed（同上）",
+    "skill catalog 快照（依赖部署 skills 配置；契约已由 vitest 覆盖）"
+  ],
+  "remaining_risk": "question/plan-review/skill 交互回流需真实模型 turn，桥契约由 deepseek-harness vitest 覆盖（model-gated）；image 正向路径由 cordis-v083-image.yml overlay 另测。"
+, "audit_redaction": {"note": "2026-09-03 P5-D4 leak audit: absolute paths redacted in archive"}}

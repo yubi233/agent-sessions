@@ -1,6 +1,6 @@
 # ADR-014：DSH ACP 扩展契约与 v0.8.2 遗留能力收口
 
-- 状态：Proposed（v0.8.3 P0 冻结；对应 handler/adapter/Relay/客户端 gate 全链路成立后按证据升格）
+- 状态：Accepted（v0.8.3 P0 冻结契约；P5 收口后对应 handler/adapter/Relay/客户端 gate 全链路成立并按证据升格：permission_mode/fork → native、question/plan/goal/skill_catalog/invoke_skill → emulated（dsh/* extension 承载）、attachments → 条件式 unsupported（Relay opaque ref 未接通）；证据见[实施记录 21](../zh/实施记录/21-v0.8.3-DSH-ACP能力收口与交互扩展.md) P5 节）
 - 关联：[迭代计划 v0.8.3](../zh/迭代计划/迭代计划v0.8.3.md)、[ADR-013](ADR-013-DeepSeek-Harness-Provider接入.md)、[实施记录 20](../zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md)、[实施记录 21](../zh/实施记录/21-v0.8.3-DSH-ACP能力收口与交互扩展.md)
 - 事实锚点：外部 deepseek-harness 仓库 `packages/acp/acp/src/index.ts`（桥）、`internal/adapter/dsh/`（Go 适配器）、`internal/daemon/runner.go`（命令分发）、`packages/protocol/schema/*`（公共协议）
 

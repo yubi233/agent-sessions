@@ -12,7 +12,7 @@
     {
       "id": "V083-01",
       "title": "permission mode 目录与切换",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "permission_mode",
       "priority": "P0",
@@ -35,7 +35,7 @@
     {
       "id": "V083-02",
       "title": "permission mode 原子性与恢复",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "permission_mode",
       "priority": "P0",
@@ -58,7 +58,7 @@
     {
       "id": "V083-03",
       "title": "图像附件 admission",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "attachments",
       "priority": "P0",
@@ -81,7 +81,7 @@
     {
       "id": "V083-04",
       "title": "session close/list",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "session_lifecycle",
       "priority": "P0",
@@ -104,7 +104,7 @@
     {
       "id": "V083-05",
       "title": "session delete/fork",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "session_lifecycle",
       "priority": "P0",
@@ -127,7 +127,7 @@
     {
       "id": "V083-06",
       "title": "additional directories",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "workspace",
       "priority": "P0",
@@ -150,7 +150,7 @@
     {
       "id": "V083-07",
       "title": "resume → send deterministic regression",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "v08_12",
       "priority": "P0",
@@ -173,7 +173,7 @@
     {
       "id": "V083-08",
       "title": "permission ask overlay",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "permission",
       "priority": "P1",
@@ -194,7 +194,7 @@
     {
       "id": "V083-09",
       "title": "extension capability negotiation",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "extension",
       "priority": "P0",
@@ -217,7 +217,7 @@
     {
       "id": "V083-10",
       "title": "question → elicitation 请求",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "question",
       "priority": "P0",
@@ -239,7 +239,7 @@
     {
       "id": "V083-11",
       "title": "question 取消与断线",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "question",
       "priority": "P0",
@@ -260,7 +260,7 @@
     {
       "id": "V083-12",
       "title": "delegated child question",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "question",
       "priority": "P1",
@@ -280,7 +280,7 @@
     {
       "id": "V083-13",
       "title": "plan state 与 review markdown",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "plan",
       "priority": "P0",
@@ -303,7 +303,7 @@
     {
       "id": "V083-14",
       "title": "plan mode 与 plan-review",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "plan",
       "priority": "P0",
@@ -325,7 +325,7 @@
     {
       "id": "V083-15",
       "title": "goal projection 与 CAS mutate",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "goal",
       "priority": "P0",
@@ -347,7 +347,7 @@
     {
       "id": "V083-16",
       "title": "goal round/changed notification",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "goal",
       "priority": "P1",
@@ -367,7 +367,7 @@
     {
       "id": "V083-17",
       "title": "command/skill catalog snapshot",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "skill",
       "priority": "P0",
@@ -390,7 +390,7 @@
     {
       "id": "V083-18",
       "title": "invoke_skill admission",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "skill",
       "priority": "P0",
@@ -412,7 +412,7 @@
     {
       "id": "V083-19",
       "title": "skill tool lifecycle projection",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "skill",
       "priority": "P1",
@@ -432,7 +432,7 @@
     {
       "id": "V083-20",
       "title": "subagent lifecycle 受限投影",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "delegation",
       "priority": "P0",
@@ -456,7 +456,7 @@
     {
       "id": "V083-21",
       "title": "command/event canonical mapping",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "protocol",
       "priority": "P0",
@@ -477,7 +477,7 @@
     {
       "id": "V083-22",
       "title": "capability matrix truthfulness",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "capability_matrix",
       "priority": "P0",
@@ -499,7 +499,7 @@
     {
       "id": "V083-23",
       "title": "Relay/mobile command security",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "relay",
       "priority": "P0",
@@ -521,7 +521,7 @@
     {
       "id": "V083-24",
       "title": "Flutter capability journeys",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "flutter",
       "priority": "P0",
@@ -543,7 +543,7 @@
     {
       "id": "V083-25",
       "title": "headed Chrome + DSH overlay",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "web_e2e",
       "priority": "P0",
@@ -565,7 +565,7 @@
     {
       "id": "V083-26",
       "title": "real DSH model smoke",
-      "status": "planned",
+      "status": "partial",
       "phase": "P5",
       "category": "real_model",
       "priority": "P1",
@@ -583,12 +583,15 @@
       "evidence": [
         "e2e-verify/real/dsh-v08-resume.mjs",
         "e2e-verify/real/dsh-live-prompt.mjs"
-      ]
+      ],
+      "note": {
+        "evidence": "2026-09-03 经授权真实冒烟：new->send passed（p4-dsh-live-prompt-2026-09-03T02-44-44-034Z.json）；load/resume->send passed（p4-dsh-v08-resume-2026-09-03T02-45-10-397Z.json，V08-12 修复真实证据）；image-capable 模型路由冒烟未执行（本机 overlay 为 text-only 生产池，图像正向路径由 cordis-v083-image.yml 独立 overlay 契约覆盖）"
+      }
     },
     {
       "id": "V083-27",
       "title": "V081/V082/V08 regression",
-      "status": "planned",
+      "status": "passed",
       "phase": "P5",
       "category": "regression",
       "priority": "P0",
