@@ -2,6 +2,7 @@ package dsh
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
@@ -37,22 +38,96 @@ type contentBlock struct {
 	Text string `json:"text"`
 }
 
+// dshChunkMeta 是 v0.8.4 流式增量/committed 帧的 namespaced _meta 身份
+// （ADR-015 §4；桥侧 com.deepseek.dsh/chunk）。缺失时该帧按 v0.8.3 旧语义
+// 处理（完整消息 → message_completed），构成回滚开关的 Go 侧落点。
+type dshChunkMeta struct {
+	Kind        string `json:"kind"` // text-delta | committed
+	Turn        int64  `json:"turn"`
+	Step        int64  `json:"step"`
+	Seq         int64  `json:"seq"`
+	MessageID   string `json:"messageId"`
+	Interrupted bool   `json:"interrupted"`
+}
+
+// dshThoughtMeta 是 thought 帧的 namespaced _meta（ADR-015 §5；桥侧
+// com.deepseek.dsh/thought）。kind 为 thought-delta（raw 逐块）或
+// thought-summary（summary 模式的回合级折叠摘要帧）。
+type dshThoughtMeta struct {
+	Kind       string `json:"kind"`
+	Turn       int64  `json:"turn"`
+	Step       int64  `json:"step"`
+	Seq        int64  `json:"seq"`
+	Visibility string `json:"visibility"`
+}
+
+// dshTurnStepIdentity 是桥侧 turn/step 推导的稳定消息身份（ADR-015 §4）：
+// 增量与 committed 帧使用同一身份，客户端据此以 completed 整体替换临时文本。
+func dshTurnStepIdentity(turn, step int64) string {
+	return "t" + strconv.FormatInt(turn, 10) + "s" + strconv.FormatInt(step, 10)
+}
+
+// parseDshChunkMeta 解析并校验 chunk 身份 meta：kind 必须在冻结集合内，
+// turn/step/seq 必须非负；形状非法返回 nil（调用方按旧语义回退）。
+func parseDshChunkMeta(raw json.RawMessage) *dshChunkMeta {
+	if len(raw) == 0 {
+		return nil
+	}
+	var meta dshChunkMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	if meta.Kind != "text-delta" && meta.Kind != "committed" {
+		return nil
+	}
+	if meta.Turn < 0 || meta.Step < 0 || meta.Seq < 0 {
+		return nil
+	}
+	return &meta
+}
+
+// parseDshThoughtMeta 解析并校验 thought 身份 meta；visibility 只接受 raw/summary
+// （hidden 模式桥不发送内容帧）；形状非法返回 nil（调用方丢弃计数）。
+func parseDshThoughtMeta(raw json.RawMessage) *dshThoughtMeta {
+	if len(raw) == 0 {
+		return nil
+	}
+	var meta dshThoughtMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	if meta.Kind != "thought-delta" && meta.Kind != "thought-summary" {
+		return nil
+	}
+	if meta.Visibility != "raw" && meta.Visibility != "summary" {
+		return nil
+	}
+	if meta.Turn < 0 || meta.Step < 0 || meta.Seq < 0 {
+		return nil
+	}
+	return &meta
+}
+
 // mapSessionUpdate 把 session/update 的 update 字段映射为 canonical 事件（纯函数，可单测）。
-// 白名单只放行桥承诺面内的变体；当前桥（acp-demo index.ts）在 session/load
-// 回放时提交 user_message_chunk，在助手历史/实时输出时提交 agent_message_chunk。
-// agent_message_chunk 在桥侧已等待 assistant/message 的完整 content block 落地，
-// 因此映射为 message_completed，而不是原始 token delta；用户回放映射为 user_message。
+// 白名单只放行桥承诺面内的变体。v0.8.4（ADR-015）起 agent_message_chunk 按帧身份分流：
+//   - _meta kind=text-delta  → EventMessageDelta（逐块增量，身份 t<turn>s<step>）；
+//   - _meta kind=committed   → EventMessageCompleted（权威全文，客户端整体替换同身份）；
+//   - 无 _meta（旧桥/回滚路径）→ EventMessageCompleted（v0.8.3 语义不变）。
+//
+// agent_thought_chunk 只在带合法 thought _meta 时映射为 EventThoughtDelta
+// （独立 thought 通道，绝不并入 assistant answer）；否则丢弃计数（旧桥行为）。
 //
 // 工具事件映射（v0.8.2 B 类 #1）：
 //   - tool_call        → EventToolCall：携带 tool_call_id/kind/title/raw_input/status；
 //     rawInput 只在合法 JSON 时透传（桥已保证畸形输入省略，这里兜底校验）。
 //   - tool_call_update → EventToolResult：携带 tool_call_id/status/output_text（两层解包）。
 //
-// 仍丢弃并计数（ok=false）的变体：agent_thought_chunk/plan/plan_update 等未知变体，
-// 以及畸形工具帧（缺 tool_call_id、孤儿 update、非法 JSON、缺结果文本）。
+// 仍丢弃并计数（ok=false）的变体：无 meta 的 agent_thought_chunk/plan/plan_update
+// 等未知变体，以及畸形工具帧（缺 tool_call_id、孤儿 update、非法 JSON、缺结果文本）。
 // usage_update 是桥为 usage 投影提供的受控扩展，不携带正文。
 // 返回的第三个值是变体名（含解析失败时的占位），供调用方按变体计数。
-func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, bool, string) {
+// meta 是 session/update 通知参数级 _meta（键：DshChunkMetaKey/DshThoughtMetaKey）。
+func mapSessionUpdate(sessionID string, update json.RawMessage, meta map[string]json.RawMessage) (adapter.Event, bool, string) {
 	var body updateBody
 	if err := json.Unmarshal(update, &body); err != nil {
 		return adapter.Event{}, false, "<malformed>"
@@ -65,6 +140,8 @@ func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, 
 		return mapToolCall(sessionID, body)
 	case "tool_call_update":
 		return mapToolCallUpdate(sessionID, body)
+	case "agent_thought_chunk":
+		return mapThoughtChunk(sessionID, body, meta[DshThoughtMetaKey])
 	}
 	if variant != "agent_message_chunk" && variant != "user_message_chunk" {
 		// 白名单外/未知变体：丢弃并计数，不产生事件。
@@ -78,6 +155,48 @@ func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, 
 		// 非文本块（image 等）无 canonical 对应，同样丢弃并计数。
 		return adapter.Event{}, false, variant
 	}
+	if variant == "user_message_chunk" {
+		// 用户回放仍是完整消息（ADR-015 §4：replay 不做增量）。
+		payload := map[string]any{
+			"instance_id": sessionID,
+			"text":        block.Text,
+		}
+		if body.MessageID != "" {
+			payload["message_id"] = body.MessageID
+		}
+		return adapter.Event{Type: adapter.EventUserMessage, Payload: payload}, true, variant
+	}
+	// v0.8.4 流式分流：有身份 meta 的帧按 kind 投影，缺失时保持旧 completed 语义。
+	if chunkMeta := parseDshChunkMeta(meta[DshChunkMetaKey]); chunkMeta != nil {
+		identity := dshTurnStepIdentity(chunkMeta.Turn, chunkMeta.Step)
+		if chunkMeta.Kind == "text-delta" {
+			if block.Text == "" {
+				// 空 delta 不进公共协议（丢弃计数，避免客户端累加无意义帧）。
+				return adapter.Event{}, false, variant
+			}
+			return adapter.Event{
+				Type: adapter.EventMessageDelta,
+				Payload: map[string]any{
+					"instance_id": sessionID,
+					"message_id":  identity,
+					"text":        block.Text,
+				},
+			}, true, variant
+		}
+		// committed：权威全文替换同身份；中断时保留前缀并标记 interrupted。
+		payload := map[string]any{
+			"instance_id": sessionID,
+			"message_id":  identity,
+			"text":        block.Text,
+		}
+		if chunkMeta.MessageID != "" {
+			payload["provider_message_id"] = chunkMeta.MessageID
+		}
+		if chunkMeta.Interrupted {
+			payload["interrupted"] = true
+		}
+		return adapter.Event{Type: adapter.EventMessageCompleted, Payload: payload}, true, variant
+	}
 	payload := map[string]any{
 		"instance_id": sessionID,
 		"text":        block.Text,
@@ -85,14 +204,32 @@ func mapSessionUpdate(sessionID string, update json.RawMessage) (adapter.Event, 
 	if body.MessageID != "" {
 		payload["message_id"] = body.MessageID
 	}
-	eventType := adapter.EventMessageCompleted
-	if variant == "user_message_chunk" {
-		eventType = adapter.EventUserMessage
+	return adapter.Event{Type: adapter.EventMessageCompleted, Payload: payload}, true, variant
+}
+
+// mapThoughtChunk 把带合法 _meta 的 agent_thought_chunk 映射为 EventThoughtDelta
+// （ADR-015 §5：raw 逐块 / summary 折叠摘要）。无 meta 或形状非法时丢弃计数——
+// 未协商 thought 通道的旧桥帧不产生事件，thought 与 answer 的分离在映射层兜底。
+func mapThoughtChunk(sessionID string, body updateBody, rawMeta json.RawMessage) (adapter.Event, bool, string) {
+	variant := "agent_thought_chunk"
+	thoughtMeta := parseDshThoughtMeta(rawMeta)
+	if thoughtMeta == nil {
+		return adapter.Event{}, false, variant
 	}
-	return adapter.Event{
-		Type:    eventType,
-		Payload: payload,
-	}, true, variant
+	var block contentBlock
+	if err := json.Unmarshal(body.Content, &block); err != nil || block.Type != "text" || block.Text == "" {
+		return adapter.Event{}, false, variant
+	}
+	payload := map[string]any{
+		"instance_id": sessionID,
+		"message_id":  dshTurnStepIdentity(thoughtMeta.Turn, thoughtMeta.Step),
+		"text":        block.Text,
+		"visibility":  thoughtMeta.Visibility,
+	}
+	if thoughtMeta.Kind == "thought-summary" {
+		payload["summary"] = true
+	}
+	return adapter.Event{Type: adapter.EventThoughtDelta, Payload: payload}, true, variant
 }
 
 // mapUsageUpdate 映射 usage_update 受控扩展（纯函数分离便于单测与后续扩展）。

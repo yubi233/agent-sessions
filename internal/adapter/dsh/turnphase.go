@@ -193,3 +193,76 @@ func (m *TurnPhaseMachine) Apply(next TurnPhase) (TurnPhase, bool) {
 	m.seen = true
 	return m.phase, true
 }
+
+// turnPhaseEntry 是注册表内单个回合的校验状态：转换机 + 桥侧 revision 单调守卫。
+// 桥是 phase 的唯一权威，adapter 只做结构校验：revision 回退/重复帧在此丢弃。
+// joining 表示该回合尚未收到首帧：桥重启后加入进行中回合时，首帧允许是任意
+// 相位（权威投影），后续帧才受冻结转换表约束。
+type turnPhaseEntry struct {
+	machine      *TurnPhaseMachine
+	lastRevision int64
+	joining      bool
+}
+
+// joinedMachineAt 构造一个以任意相位为起点、revision=1 的转换机（加入即投影）。
+func joinedMachineAt(phase TurnPhase) *TurnPhaseMachine {
+	return &TurnPhaseMachine{phase: phase, revision: 1, seen: true}
+}
+
+// turnPhaseRegistry 保存最近若干回合的相位校验状态（同一 session 最多一个
+// active turn；历史条目只为迟到帧的判定保留，超上限时淘汰最旧回合）。
+// 非并发安全：调用方（读循环单 goroutine）负责串行化。
+type turnPhaseRegistry struct {
+	entries map[string]*turnPhaseEntry
+	// limit 是保留的回合数上限；超限淘汰 turnId 最小的条目（回合 id 单调递增）。
+	limit int
+	// lastCreated 是最近创建的回合 id；prompt 终态的兜底合成在没有明确 turnId
+	// 时以它为目标（旧桥整轮无投影时为空串，等价隐式 queued 起点）。
+	lastCreated string
+}
+
+// dshTurnStatusProtocolVersion 是 dsh/turn/status 通知的协议 major 版本（ADR-015 §3）。
+const dshTurnStatusProtocolVersion = 1
+
+// newTurnPhaseRegistry 构造注册表；limit ≤0 时使用默认值 8。
+func newTurnPhaseRegistry(limit int) *turnPhaseRegistry {
+	if limit <= 0 {
+		limit = 8
+	}
+	return &turnPhaseRegistry{entries: map[string]*turnPhaseEntry{}, limit: limit}
+}
+
+// getOrCreate 返回回合条目；新回合从隐式 queued 起点开始。
+func (r *turnPhaseRegistry) getOrCreate(turnID string) *turnPhaseEntry {
+	if entry, ok := r.entries[turnID]; ok {
+		return entry
+	}
+	entry := &turnPhaseEntry{machine: NewTurnPhaseMachine(), joining: true}
+	r.entries[turnID] = entry
+	r.lastCreated = turnID
+	for len(r.entries) > r.limit {
+		oldest := ""
+		for turnID := range r.entries {
+			if oldest == "" || turnID < oldest {
+				oldest = turnID
+			}
+		}
+		delete(r.entries, oldest)
+	}
+	return entry
+}
+
+// latestTurnID 返回最近创建的回合 id；没有任何回合时为空串（隐式回合）。
+func (r *turnPhaseRegistry) latestTurnID() string {
+	return r.lastCreated
+}
+
+// current 返回回合当前相位；未见过该回合时返回隐式 queued。
+func (r *turnPhaseRegistry) current(turnID string) TurnPhase {
+	if entry, ok := r.entries[turnID]; ok {
+		if phase, _ := entry.machine.Current(); phase != "" {
+			return phase
+		}
+	}
+	return TurnPhaseQueued
+}

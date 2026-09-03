@@ -105,17 +105,70 @@ func (e *LocalDevEventEncoder) localDevFixturePayload(sessionID string, event ad
 		if strings.TrimSpace(text) == "" {
 			return nil, false
 		}
-		return map[string]any{
+		payload := map[string]any{
 			"kind":      "assistant_message",
 			"label":     "Assistant",
 			"text":      text,
 			"streaming": false,
 			"copy_text": text,
-		}, true
+		}
+		// v0.8.4（ADR-015 §4）：中断回合的 completed 保留前缀并带 interrupted 标记，
+		// 客户端据此区分"完整回答"与"被中断的前缀"。
+		if event.Payload["interrupted"] == true {
+			payload["interrupted"] = true
+		}
+		return payload, true
+	case adapter.EventThoughtDelta:
+		// v0.8.4（ADR-015 §5）：raw thought 走独立 thought 通道。按身份累积并回发
+		// 全量已收文本（与 message_delta 对称）；thought 永远不并入 assistant_message。
+		chunk, _ := event.Payload["text"].(string)
+		messageID, _ := event.Payload["message_id"].(string)
+		visibility, _ := event.Payload["visibility"].(string)
+		key := "thought\x00" + localDevStreamKey(sessionID, messageID)
+		e.mu.Lock()
+		e.streams[key] = e.streams[key] + chunk
+		text := e.streams[key]
+		e.mu.Unlock()
+		if strings.TrimSpace(text) == "" {
+			return nil, false
+		}
+		payload := map[string]any{
+			"kind":       "assistant_thought",
+			"label":      "思考中",
+			"text":       text,
+			"streaming":  true,
+			"visibility": visibility,
+		}
+		if event.Payload["summary"] == true {
+			payload["streaming"] = false
+			payload["summary"] = true
+		}
+		return payload, true
+	case adapter.EventTurnPhase:
+		// v0.8.4（ADR-015 §3）：phase 进入本地开发时间线的白名单投影，供
+		// phase-aware 状态行消费；payload 只含脱敏相位事实，无正文/路径。
+		phase, _ := event.Payload["phase"].(string)
+		if phase == "" {
+			return nil, false
+		}
+		payload := map[string]any{
+			"kind":     "turn_phase",
+			"phase":    phase,
+			"revision": event.Payload["revision"],
+		}
+		if turnID, _ := event.Payload["turn_id"].(string); turnID != "" {
+			payload["turn_id"] = turnID
+		}
+		if reason, _ := event.Payload["reason"].(string); reason != "" {
+			payload["reason"] = reason
+		}
+		return payload, true
 	case adapter.EventTurnCompleted:
 		e.mu.Lock()
 		for key := range e.streams {
-			if strings.HasPrefix(key, sessionID+"\x00") {
+			// 正文缓冲前缀是 sessionID+\x00；thought 缓冲另有 thought 域前缀，
+			// 形如 thought\x00<sessionID>\x00<messageID>。两类都要在回合终态清账。
+			if strings.HasPrefix(key, sessionID+"\x00") || strings.HasPrefix(key, "thought\x00"+sessionID+"\x00") {
 				delete(e.streams, key)
 			}
 		}

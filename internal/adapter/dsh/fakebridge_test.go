@@ -14,6 +14,25 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
+// nextNonPhaseEvent 读取下一条非旁路投影事件。v0.8.4（ADR-015）起
+// turn.phase/session.activity 是与主事件并行的相位投影，既有主链路断言
+// （session_error → turn_completed 等）通过本 helper 忽略它们。
+func nextNonPhaseEvent(t *testing.T, events <-chan adapter.Event) adapter.Event {
+	t.Helper()
+	for {
+		select {
+		case ev := <-events:
+			if ev.Type == adapter.EventTurnPhase || ev.Type == adapter.EventSessionActivity {
+				continue
+			}
+			return ev
+		case <-time.After(5 * time.Second):
+			t.Fatal("等待事件超时")
+			return adapter.Event{}
+		}
+	}
+}
+
 // fakeBridge 是 BridgeTransport 的内存实现（契约测试注入点）：
 //   - 脚本回调在每次出站帧写入后同步执行，按请求 method/id 注入应答——应答在
 //     请求注册之后才入队，消除"应答先于 pending 注册"的时序竞态；
@@ -555,16 +574,13 @@ func TestStartSendRoundTripAndMessageCompleted(t *testing.T) {
 
 	// session/prompt 应答（stopReason=end_turn）后必须补发回合终止标记，
 	// 否则客户端无法区分“模型仍在生成”与“本轮已结束”。
-	select {
-	case ev := <-h.Events():
-		if ev.Type != adapter.EventTurnCompleted {
-			t.Fatalf("事件类型 = %q, want turn_completed", ev.Type)
-		}
-		if ev.Payload["stop_reason"] != "end_turn" {
-			t.Fatalf("stop_reason = %v", ev.Payload["stop_reason"])
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("等待 turn_completed 事件超时")
+	// v0.8.4：终止标记前还会出现合成的 turn.phase 兜底帧（旁路投影）。
+	ev := nextNonPhaseEvent(t, h.Events())
+	if ev.Type != adapter.EventTurnCompleted {
+		t.Fatalf("事件类型 = %q, want turn_completed", ev.Type)
+	}
+	if ev.Payload["stop_reason"] != "end_turn" {
+		t.Fatalf("stop_reason = %v", ev.Payload["stop_reason"])
 	}
 }
 
@@ -685,11 +701,11 @@ func TestSendPromptFailureEmitsTerminalEvents(t *testing.T) {
 		t.Fatal("prompt 失败必须返回错误")
 	}
 
-	first := <-h.Events()
+	first := nextNonPhaseEvent(t, h.Events())
 	if first.Type != adapter.EventSessionError {
 		t.Fatalf("第一个事件 = %q, want session_error", first.Type)
 	}
-	second := <-h.Events()
+	second := nextNonPhaseEvent(t, h.Events())
 	if second.Type != adapter.EventTurnCompleted {
 		t.Fatalf("第二个事件 = %q, want turn_completed", second.Type)
 	}
@@ -1264,11 +1280,11 @@ func TestSetModelFailureFailsClosed(t *testing.T) {
 	if got := framesByMethod(fb.written(), "session/prompt"); len(got) != 0 {
 		t.Fatal("模型切换失败后绝不能发送 prompt（fail-closed）")
 	}
-	first := <-h.Events()
+	first := nextNonPhaseEvent(t, h.Events())
 	if first.Type != adapter.EventSessionError {
 		t.Fatalf("第一个事件 = %q, want session_error", first.Type)
 	}
-	second := <-h.Events()
+	second := nextNonPhaseEvent(t, h.Events())
 	if second.Type != adapter.EventTurnCompleted {
 		t.Fatalf("第二个事件 = %q, want turn_completed", second.Type)
 	}
@@ -1421,6 +1437,10 @@ func TestSetEffortFailureFailsClosed(t *testing.T) {
 	for len(types) < 2 {
 		select {
 		case ev := <-h.Events():
+			// v0.8.4：phase 投影是旁路事件，不计入主链路顺序断言。
+			if ev.Type == adapter.EventTurnPhase || ev.Type == adapter.EventSessionActivity {
+				continue
+			}
 			types = append(types, ev.Type)
 		case <-deadline:
 			t.Fatalf("等待终态事件超时，got=%v", types)

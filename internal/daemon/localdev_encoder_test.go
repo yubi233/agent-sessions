@@ -306,3 +306,87 @@ func TestLocalDevEventEncoderMapsDSHToolPayloads(t *testing.T) {
 		t.Fatalf("DSH tool_result(failed) fixture = %s", failed)
 	}
 }
+
+// v0.8.4（V084-07，ADR-015）：本地开发明文通道对新增事件的投影——
+// thought 独立累积、phase 白名单投影、interrupted 前缀标记与终态清账。
+func TestLocalDevEventEncoderStreamsThoughtAndPhase(t *testing.T) {
+	encoder := NewLocalDevEventEncoder()
+	encode := func(eventType adapter.EventType, payload map[string]any) (map[string]any, bool) {
+		t.Helper()
+		envelope, err := encoder.Encode("sess-1", adapter.Event{Type: eventType, Seq: 1, Payload: payload})
+		if err != nil {
+			t.Fatalf("encode %s: %v", eventType, err)
+		}
+		if envelope == "" {
+			return nil, false
+		}
+		var payloadOut struct {
+			FixturePayload map[string]any `json:"fixture_payload"`
+		}
+		if err := json.Unmarshal([]byte(envelope), &payloadOut); err != nil {
+			t.Fatalf("envelope not json: %v", err)
+		}
+		return payloadOut.FixturePayload, true
+	}
+
+	// thought 通道独立于正文缓冲累积。
+	thought1, ok := encode(adapter.EventThoughtDelta, map[string]any{
+		"text": "先算", "message_id": "t1s1", "visibility": "raw",
+	})
+	if !ok || thought1["kind"] != "assistant_thought" || thought1["text"] != "先算" || thought1["streaming"] != true {
+		t.Fatalf("thought1 fixture = %v ok=%v", thought1, ok)
+	}
+	thought2, _ := encode(adapter.EventThoughtDelta, map[string]any{
+		"text": "一遍", "message_id": "t1s1", "visibility": "raw",
+	})
+	if thought2["text"] != "先算一遍" {
+		t.Fatalf("thought2 fixture = %v", thought2)
+	}
+	// 正文缓冲与 thought 互不串扰。
+	answer, _ := encode(adapter.EventMessageDelta, map[string]any{"text": "答案", "message_id": "t1s1"})
+	if answer["kind"] != "assistant_message" || answer["text"] != "答案" {
+		t.Fatalf("answer fixture = %v", answer)
+	}
+
+	// summary 折叠帧：非流式的计数级摘要。
+	summary, ok := encode(adapter.EventThoughtDelta, map[string]any{
+		"text": "内部推理已折叠：2 段增量 / 9 字符", "message_id": "t1s1",
+		"visibility": "summary", "summary": true,
+	})
+	if !ok || summary["summary"] != true || summary["streaming"] != false {
+		t.Fatalf("summary fixture = %v ok=%v", summary, ok)
+	}
+
+	// phase 白名单投影（脱敏相位事实）。
+	phase, ok := encode(adapter.EventTurnPhase, map[string]any{
+		"turn_id": "1", "step": 2, "phase": "streaming", "revision": 2, "reason": "first_text_delta",
+	})
+	// JSON 反序列化把数值统一成 float64，断言按同型比较。
+	if !ok || phase["kind"] != "turn_phase" || phase["phase"] != "streaming" || phase["revision"] != float64(2) {
+		t.Fatalf("phase fixture = %v ok=%v", phase, ok)
+	}
+
+	// 中断回合：completed 保留前缀并携带 interrupted 标记。
+	interrupted, _ := encode(adapter.EventMessageCompleted, map[string]any{
+		"text": "答案", "message_id": "t1s1", "interrupted": true,
+	})
+	if interrupted["interrupted"] != true || interrupted["text"] != "答案" {
+		t.Fatalf("interrupted fixture = %v", interrupted)
+	}
+
+	// 回合终态清账：正文与 thought 缓冲全部清理，新回合从零累积。
+	if turnDone, ok := encode(adapter.EventTurnCompleted, map[string]any{"instance_id": "sess-1"}); !ok || turnDone["completed_turn"] != true {
+		t.Fatalf("turn fixture = %v ok=%v", turnDone, ok)
+	}
+	nextThought, _ := encode(adapter.EventThoughtDelta, map[string]any{
+		"text": "新回合", "message_id": "t2s1", "visibility": "raw",
+	})
+	if nextThought["text"] != "新回合" {
+		t.Fatalf("thought buffer not cleared: %v", nextThought)
+	}
+
+	// session.activity 是聚合镜像，不进入本地开发时间线（避免逐相位噪音）。
+	if _, ok := encode(adapter.EventSessionActivity, map[string]any{"phase": "streaming"}); ok {
+		t.Fatal("session.activity 不应进入本地开发时间线")
+	}
+}

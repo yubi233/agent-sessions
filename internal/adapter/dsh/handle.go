@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +71,29 @@ type handle struct {
 	// 经 ResolveQuestion 注入回答；断线/Dispose 统一 fail-closed 收口为错误应答。
 	questionMu       sync.Mutex
 	pendingQuestions map[string]*pendingQuestion
+
+	// turnPhases 是 v0.8.4（ADR-015 §3）的回合相位注册表：对桥的 dsh/turn/status
+	// 投影做结构校验（冻结转换表 + revision 单调 + 终态 fence），合法帧映射为
+	// canonical turn.phase/session.activity 事件。读循环单 goroutine 访问。
+	turnPhases *turnPhaseRegistry
+}
+
+// streamingEnvSwitch 是 v0.8.4 流式协商的回滚开关（ADR-015 §8）：
+// AGENT_SESSIONS_DSH_STREAMING=off 时不声明流式扩展、不解析 _meta 身份帧，
+// DSH 路径回到 v0.8.3 的 completed-only 语义。
+const streamingEnvSwitch = "AGENT_SESSIONS_DSH_STREAMING"
+
+var streamingOnce struct {
+	sync.Once
+	enabled bool
+}
+
+// streamingNegotiationEnabled 报告流式扩展是否协商（默认开启）。
+func streamingNegotiationEnabled() bool {
+	streamingOnce.Do(func() {
+		streamingOnce.enabled = os.Getenv(streamingEnvSwitch) != "off"
+	})
+	return streamingOnce.enabled
 }
 
 // pendingPermission 是一条等待一次性决策的桥权限请求。
@@ -105,6 +129,7 @@ func newHandle(tr BridgeTransport) *handle {
 		dropped:            map[string]int64{},
 		pendingPermissions: map[string]*pendingPermission{},
 		pendingQuestions:   map[string]*pendingQuestion{},
+		turnPhases:         newTurnPhaseRegistry(0),
 		readDone:           make(chan struct{}),
 		replayDone:         make(chan struct{}),
 		eventStop:          make(chan struct{}),
@@ -264,6 +289,7 @@ func (h *handle) Send(ctx context.Context, text string) error {
 			Type:    adapter.EventSessionError,
 			Payload: h.sessionErrorPayload(fmt.Sprintf("模型切换失败：%v", err), err),
 		})
+		h.synthesizeTerminalPhase("error")
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventTurnCompleted,
 			Payload: map[string]any{
@@ -278,6 +304,7 @@ func (h *handle) Send(ctx context.Context, text string) error {
 			Type:    adapter.EventSessionError,
 			Payload: h.sessionErrorPayload(fmt.Sprintf("推理档位切换失败：%v", err), err),
 		})
+		h.synthesizeTerminalPhase("error")
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventTurnCompleted,
 			Payload: map[string]any{
@@ -306,6 +333,7 @@ func (h *handle) sendPromptBlocks(ctx context.Context, prompt []map[string]any) 
 			Type:    adapter.EventSessionError,
 			Payload: h.sessionErrorPayload(fmt.Sprintf("模型回合失败：%v", err), err),
 		})
+		h.synthesizeTerminalPhase("error")
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventTurnCompleted,
 			Payload: map[string]any{
@@ -331,6 +359,7 @@ func (h *handle) sendPromptBlocks(ctx context.Context, prompt []map[string]any) 
 				"message":     "模型回合响应异常，详情仅限本机诊断。",
 			},
 		})
+		h.synthesizeTerminalPhase("error")
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventTurnCompleted,
 			Payload: map[string]any{
@@ -346,6 +375,8 @@ func (h *handle) sendPromptBlocks(ctx context.Context, prompt []map[string]any) 
 	// 回复正文。这里等待事件通道进入静默（或达到上限）再发终止标记，保证通知
 	// 先入队；Send 本就阻塞到回合结束，额外宽限不影响并发语义。
 	h.awaitInFlightNotifications(dshEventQuietWindow, dshEventDrainLimit)
+	// v0.8.4：prompt 终态合成兜底 phase——桥已发终态时 terminal fence 去重。
+	h.synthesizeTerminalPhase(response.StopReason)
 	h.pushEvent(adapter.Event{
 		Type: adapter.EventTurnCompleted,
 		Payload: map[string]any{
@@ -464,14 +495,34 @@ func (h *handle) notify(method string, params any) error {
 	return h.transport.WriteFrame(frame)
 }
 
+// streamingNegotiationMeta 是 v0.8.4 客户端声明（ADR-015 §3/§5）：声明
+// dsh/turn/status（增量 + phase 通知）与 dsh/thought（thought 通道），可见级别
+// 默认 raw——终端所有者对自身终端拥有绝对所有权，raw 无需显式开启。
+var streamingNegotiationMeta = map[string]any{
+	NegotiationEntryTurnStatus: "1.0",
+	NegotiationEntryThought:    "1.0",
+	"dsh/thought/visibility":   "raw",
+}
+
 // initializeParams 是 ACP initialize 请求参数（spec §协议事实 冻结形状）。
+// 流式回滚开关（AGENT_SESSIONS_DSH_STREAMING=off）关闭时不声明任何扩展，
+// 桥自动回到 completed-only 旧路径。
 var initializeParams = map[string]any{
 	"protocolVersion": 1,
 	"clientInfo": map[string]any{
 		"name":    "agent-sessions-dsh",
 		"version": "0.0.1",
 	},
-	"clientCapabilities": map[string]any{},
+	"clientCapabilities": func() map[string]any {
+		if !streamingNegotiationEnabled() {
+			return map[string]any{}
+		}
+		return map[string]any{
+			"_meta": map[string]any{
+				DshExtensionMetaKey: streamingNegotiationMeta,
+			},
+		}
+	}(),
 }
 
 // initializeResult 是 initialize 响应的最小投影。
@@ -761,15 +812,23 @@ func (h *handle) readLoop() {
 	}
 }
 
-// handleNotification 处理桥的通知帧；目前只关注 session/update，其余方法名计数丢弃。
+// handleNotification 处理桥的通知帧：session/update（含 v0.8.4 流式帧）与
+// 协商后的 dsh/turn/status；其余方法名计数丢弃。
 func (h *handle) handleNotification(msg rpcMessage) {
+	if msg.Method == NotifyDshTurnStatus {
+		// v0.8.4（ADR-015 §3）：桥是 phase 的唯一权威；未声明扩展时该通知
+		// 不会到达（fail-closed），畸形/越权帧在这里丢弃计数。
+		h.handleTurnStatus(msg.Params)
+		return
+	}
 	if msg.Method != "session/update" {
 		h.countDrop("notify:" + msg.Method)
 		return
 	}
 	var params struct {
-		SessionID string          `json:"sessionId"`
-		Update    json.RawMessage `json:"update"`
+		SessionID string                     `json:"sessionId"`
+		Update    json.RawMessage            `json:"update"`
+		Meta      map[string]json.RawMessage `json:"_meta"`
 	}
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		h.countDrop("bad_update")
@@ -789,13 +848,144 @@ func (h *handle) handleNotification(msg rpcMessage) {
 		}
 		return
 	}
-	ev, ok, variant := mapSessionUpdate(params.SessionID, params.Update)
+	if !streamingNegotiationEnabled() {
+		params.Meta = nil
+	}
+	ev, ok, variant := mapSessionUpdate(params.SessionID, params.Update, params.Meta)
 	if !ok {
 		// 白名单外或未知 update 变体：丢弃并计数，不报错。
 		h.countDrop("update:" + variant)
 		return
 	}
 	h.pushEvent(ev)
+}
+
+// handleTurnStatus 校验并转发桥的 dsh/turn/status 通知（v0.8.4，ADR-015 §3）。
+// 严格 schema：未知字段、版本不匹配、跨 session、超限字段、白名单外 reason、
+// 非法转换、revision 回退一律丢弃计数；合法帧映射为 canonical turn.phase 与
+// session.activity 两个事件（后者是 session 级聚合镜像）。
+func (h *handle) handleTurnStatus(params json.RawMessage) {
+	if !streamingNegotiationEnabled() {
+		h.countDrop("turn_status_undeclared")
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(params, &raw); err != nil {
+		h.countDrop("turn_status_malformed")
+		return
+	}
+	for key := range raw {
+		if !turnStatusAllowedField(key) {
+			h.countDrop("turn_status_unknown_field")
+			return
+		}
+	}
+	var req struct {
+		ProtocolVersion int             `json:"protocolVersion"`
+		SessionID       string          `json:"sessionId"`
+		TurnID          string          `json:"turnId"`
+		Step            int64           `json:"step"`
+		Phase           string          `json:"phase"`
+		Revision        int64           `json:"revision"`
+		Reason          string          `json:"reason"`
+		SafeSummary     json.RawMessage `json:"safeSummary"`
+	}
+	if err := json.Unmarshal(params, &req); err != nil {
+		h.countDrop("turn_status_malformed")
+		return
+	}
+	if req.ProtocolVersion != dshTurnStatusProtocolVersion || req.SessionID != h.sessionID ||
+		req.TurnID == "" || len(req.TurnID) > dshTurnStatusTurnIDLimit ||
+		req.Step < 0 || req.Revision <= 0 || len(req.SafeSummary) > dshTurnStatusSummaryLimit ||
+		!IsValidTurnPhaseReason(req.Reason) {
+		h.countDrop("turn_status_invalid_payload")
+		return
+	}
+	phase, ok := ParseTurnPhase(req.Phase)
+	if !ok {
+		h.countDrop("turn_status_unknown_phase")
+		return
+	}
+	h.phaseApply(req.TurnID, req.Step, phase, TurnPhaseReason(req.Reason), req.Revision)
+}
+
+// turnStatusAllowedField 是 dsh/turn/status 严格 schema 的字段白名单。
+func turnStatusAllowedField(key string) bool {
+	switch key {
+	case "protocolVersion", "sessionId", "turnId", "step", "phase", "revision", "reason", "safeSummary":
+		return true
+	default:
+		return false
+	}
+}
+
+// phaseApply 对一个回合执行冻结转换表校验并广播 phase 事件。bridgeRevision>0
+// 时执行单调守卫（回退/重复丢弃）；合成兜底帧无桥 revision，由转换机自己的
+// 终态 fence 去重。事件 revision 以转换机内部单调计数为准（下游排序依据）。
+func (h *handle) phaseApply(turnID string, step int64, next TurnPhase, reason TurnPhaseReason, bridgeRevision int64) bool {
+	entry := h.turnPhases.getOrCreate(turnID)
+	if bridgeRevision > 0 {
+		if bridgeRevision <= entry.lastRevision {
+			h.countDrop("turn_phase_stale_revision")
+			return false
+		}
+		entry.lastRevision = bridgeRevision
+	}
+	var phase, revision = next, int64(1)
+	switch {
+	case entry.joining:
+		// 加入进行中的回合：首帧是桥的权威投影，任意相位都被信任并直接投影；
+		// 之后的所有帧才受冻结转换表约束（ADR-015 §3 结构校验边界）。
+		entry.joining = false
+		entry.machine = joinedMachineAt(next)
+	default:
+		if current, _ := entry.machine.Current(); current == next {
+			// 同相位自环：合法的 no-op 去重，不推进 revision、不产生事件。
+			return true
+		}
+		var ok bool
+		if phase, ok = entry.machine.Apply(next); !ok {
+			// 非法转换 / terminal fence：丢弃并计数，绝不产生事件。
+			h.countDrop("turn_phase_illegal_transition")
+			return false
+		}
+		_, revision = entry.machine.Current()
+	}
+	activity := map[string]any{
+		"instance_id": h.sessionID,
+		"turn_id":     turnID,
+		"phase":       string(phase),
+		"revision":    revision,
+	}
+	h.pushEvent(adapter.Event{Type: adapter.EventTurnPhase, Payload: map[string]any{
+		"instance_id": h.sessionID,
+		"turn_id":     turnID,
+		"step":        step,
+		"phase":       string(phase),
+		"revision":    revision,
+		"reason":      string(reason),
+	}})
+	h.pushEvent(adapter.Event{Type: adapter.EventSessionActivity, Payload: activity})
+	return true
+}
+
+// synthesizeTerminalPhase 在 prompt 终态处合成兜底 phase（ADR-015 §3）：桥已经
+// 投影过终态时 terminal fence 静默去重；旧桥没有 phase 投影时保证客户端收到
+// 权威终态，不会永远停留在"生成中"。
+func (h *handle) synthesizeTerminalPhase(stopReason string) {
+	if !streamingNegotiationEnabled() {
+		return
+	}
+	phase := TurnPhaseCompleted
+	reason := TurnReasonTurnEnd
+	if stopReason == "cancelled" {
+		phase = TurnPhaseCancelled
+		reason = TurnReasonTurnCancelled
+	} else if stopReason == "error" {
+		phase = TurnPhaseFailed
+		reason = TurnReasonTurnFailed
+	}
+	h.phaseApply(h.turnPhases.latestTurnID(), 0, phase, reason, 0)
 }
 
 // handleBridgeRequest 处理"桥→客户端"请求（带 id + method）。
