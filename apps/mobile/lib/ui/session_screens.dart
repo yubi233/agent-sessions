@@ -4198,6 +4198,10 @@ class _SessionComposerState extends State<_SessionComposer> {
       canWrite: widget.canWrite,
     );
     final streaming = widget.sessions.isStreaming;
+    // v0.8.4：受理（乐观回显挂出）即视为运行中——主按钮在草稿清空后立刻
+    // 变为"中断"，覆盖 status 尚未翻到 streaming 的受理窗口。
+    final running =
+        streaming || widget.sessions.pendingOutgoingMessage != null;
     final input = _inputMachine.snapshot;
     final submitMode = _inputMachine.submit(
       running: streaming,
@@ -4216,7 +4220,10 @@ class _SessionComposerState extends State<_SessionComposer> {
       SessionSubmitMode.steer => '插话',
       SessionSubmitMode.send || null => '发送消息',
     };
-    final canStop = blocked == null && streaming && !widget.sessions.isBusy;
+    final canStop = blocked == null && running && !widget.sessions.isBusy;
+    // 运行中且草稿已清空：主按钮即中断按钮（用户请求：发送后可一键中断当前
+    // 任务）。草稿非空时保留 queue/steer 语义，中断走独立停止按钮。
+    final primaryIsStop = running && input.draft.trim().isEmpty && canStop;
     final pendingPermission = widget.interactionEvents
         .where((event) => event.kind == SessionTimelineKind.permissionRequest)
         .cast<SessionTimelineEvent?>()
@@ -4437,25 +4444,36 @@ class _SessionComposerState extends State<_SessionComposer> {
                   ),
                   IconButton(
                     key: const Key('session-composer-primary-action'),
-                    tooltip: primaryTooltip,
-                    onPressed: canSubmit
+                    tooltip: primaryIsStop ? '中断当前任务' : primaryTooltip,
+                    onPressed: primaryIsStop
+                        ? () async {
+                            await _stop();
+                            _focusComposer();
+                          }
+                        : canSubmit
                         ? () async {
                             await _submitComposer();
                             _focusComposer();
                           }
                         : null,
                     style: IconButton.styleFrom(
-                      backgroundColor: canSubmit
+                      backgroundColor: primaryIsStop
+                          ? Theme.of(context).colorScheme.errorContainer
+                          : canSubmit
                           ? Theme.of(context).colorScheme.primary
                           : Theme.of(
                               context,
                             ).colorScheme.surfaceContainerHighest,
-                      foregroundColor: canSubmit
+                      foregroundColor: primaryIsStop
+                          ? Theme.of(context).colorScheme.error
+                          : canSubmit
                           ? Theme.of(context).colorScheme.onPrimary
                           : Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                     icon: Icon(
-                      submitMode == SessionSubmitMode.send
+                      primaryIsStop
+                          ? Icons.stop
+                          : submitMode == SessionSubmitMode.send
                           ? Icons.arrow_upward
                           : Icons.schedule_send_outlined,
                     ),
@@ -4612,10 +4630,13 @@ class _SessionComposerState extends State<_SessionComposer> {
           await _submitGoalCommand(message, sessionId, attemptToken);
           return;
         }
+        // 受理即返回（awaitTurnCompletion=false）：命令确认 + 首批快照后
+        // 立刻清空输入框并把主按钮切换为"中断"；回合完成由后台轮询收敛。
         await widget.sessions.sendMessage(
           message: message,
           deviceId: widget.deviceId,
           canWrite: widget.canWrite,
+          awaitTurnCompletion: false,
         );
         if (!mounted) return;
         final error = widget.sessions.errorMessage;

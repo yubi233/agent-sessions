@@ -954,6 +954,9 @@ class SessionController extends ChangeNotifier {
     required String message,
     required String? deviceId,
     required bool canWrite,
+    // UI 传 false：受理（命令确认 + 首批快照）后立即返回，让 composer 把
+    // 主按钮切换为"中断"；回合完成轮询转后台继续，直到终态再收敛状态行。
+    bool awaitTurnCompletion = true,
   }) async {
     final trimmed = message.trim();
     if (trimmed.isEmpty) {
@@ -998,6 +1001,7 @@ class SessionController extends ChangeNotifier {
           if (sessionModel.isNotEmpty) 'model': sessionModel,
         },
       },
+      awaitTurnCompletion: awaitTurnCompletion,
     );
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
       _pendingOutgoingBySession.remove(sessionId);
@@ -2010,6 +2014,7 @@ class SessionController extends ChangeNotifier {
     bool canWrite = true,
     Map<String, dynamic>? ciphertext,
     VoidCallback? onAccepted,
+    bool awaitTurnCompletion = true,
   }) async {
     // 写命令统一在这里自动确保 lease：调用方可能刚从前台/断网恢复，
     // 本地 lease 已作废，此刻静默补获取一次，避免把“暂不可操作”抛给用户。
@@ -2071,7 +2076,7 @@ class SessionController extends ChangeNotifier {
       var latest = await _relay.getSessionSnapshot(sessionId);
       if (_selectedSessionId == sessionId) _mergeSnapshot(latest);
       var completed = _snapshotCompletesTurn(latest);
-      if (kind == SessionCommandKind.send && !completed) {
+      if (kind == SessionCommandKind.send && !completed && awaitTurnCompletion) {
         // 免费模型一轮常见 30-60s；轮询窗口必须覆盖典型回合并，
         // 否则回复落地后客户端仍停留在“生成中”，只能重进会话恢复。
         const attempts = 120;
@@ -2091,20 +2096,56 @@ class SessionController extends ChangeNotifier {
         }
       }
       if (kind == SessionCommandKind.send && completed) {
-        try {
-          final controls = await _relay.getSessionControls(sessionId);
-          if (_selectedSessionId == sessionId) {
-            _controls = controls;
-            notifyListeners();
-          }
-        } catch (_) {
-          // A usage projection can lag the event upload. The next snapshot/recovery
-          // will retry controls without turning a successful send into an error.
-        }
+        await _refreshControlsAfterTurn(sessionId);
+      }
+      if (kind == SessionCommandKind.send &&
+          !completed &&
+          !awaitTurnCompletion) {
+        // UI 受理即返回：剩余轮询转后台，composer 立刻把主按钮切换为"中断"。
+        unawaited(_pollTurnCompletionInBackground(sessionId, latest));
       }
       return true;
     });
     return accepted == true;
+  }
+
+  /// 回合完成后台轮询：继续按 500ms 合并快照直到终态，并在终态后刷新
+  /// controls。带会话守卫，切换会话后自动停止合并。
+  Future<void> _pollTurnCompletionInBackground(
+    String sessionId,
+    SessionSnapshot latest,
+  ) async {
+    const attempts = 120;
+    var completed = _snapshotCompletesTurn(latest);
+    for (var i = 0; i < attempts && !completed; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      try {
+        latest = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: latest.session.lastSequence,
+        );
+      } catch (_) {
+        // 单次快照失败不终止轮询；下一拍继续。
+        continue;
+      }
+      if (_selectedSessionId != sessionId) return;
+      _mergeSnapshot(latest, appendTimeline: true);
+      completed = _snapshotCompletesTurn(latest);
+    }
+    if (completed) await _refreshControlsAfterTurn(sessionId);
+  }
+
+  Future<void> _refreshControlsAfterTurn(String sessionId) async {
+    try {
+      final controls = await _relay.getSessionControls(sessionId);
+      if (_selectedSessionId == sessionId) {
+        _controls = controls;
+        notifyListeners();
+      }
+    } catch (_) {
+      // A usage projection can lag the event upload. The next snapshot/recovery
+      // will retry controls without turning a successful send into an error.
+    }
   }
 
   /// 发送命令已在执行端失败时，补拉一次只读快照收口 session.status 和事件。

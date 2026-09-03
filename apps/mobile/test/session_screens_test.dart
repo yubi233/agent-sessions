@@ -430,6 +430,38 @@ void main() {
     expect(harness.relay.submittedCommandCount, 4);
   });
 
+  testWidgets('中断：发送受理后输入框清空，主按钮变为停止并可中断回合', (tester) async {
+    final (harness, sessionId) = await _openSeededWritableSession(tester);
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发一轮生成',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+
+    // 受理即清稿：输入框立刻为空，主按钮切换为中断（stop 图标）。
+    await _waitForVisible(tester, find.byIcon(Icons.stop));
+    final primaryIcon =
+        tester.widget<IconButton>(
+          find.byKey(const Key('session-composer-primary-action')),
+        ).icon as Icon;
+    expect(primaryIcon.icon, Icons.stop);
+    expect(_composerText(tester), isEmpty);
+
+    // 点击中断：提交 session.abort，会话收口为"已停止"。
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    await _waitForVisible(tester, find.text('已停止'));
+    final snapshot = await harness.relay.getSessionSnapshot(sessionId);
+    expect(snapshot.session.status, MobileSessionStatus.stopped);
+  });
+
   testWidgets('MOBILE-V05-04/P3-B：提交失败显示 notice 且保留草稿', (tester) async {
     final (harness, _) = await _openSeededWritableSession(tester);
 
