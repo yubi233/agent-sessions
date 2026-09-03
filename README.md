@@ -35,10 +35,12 @@
 
 ## 本地启动
 
-仓库根目录的 `restart.sh` 是完整本地开发入口，默认启动 Relay、Daemon 和 Flutter macOS 客户端：
+**本地环境默认用仓库根目录的 `restart.sh` 脚本启动**：直接运行 `./restart.sh`（无参数，等价于 `restart` 动作）即可拉起完整本地栈——Relay（8787）、Daemon（真实 `go run`，心跳就绪确认）与 Flutter macOS 客户端，全部就绪后输出 "selected services are running"。这是本地开发/验收的标准启动方式。
 
 ```bash
-./restart.sh start
+./restart.sh                # 默认完整启动（等价 restart：清理端口 + 拉起全部服务）
+
+./restart.sh start          # 启动（不清理外部监听进程）
 ./restart.sh status
 ./restart.sh stop
 ./restart.sh restart
