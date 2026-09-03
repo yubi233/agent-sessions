@@ -104,6 +104,14 @@ const (
 	EventFileChange         EventType = "file_change"
 	EventDelegationChanged  EventType = "delegation_changed"
 	EventSessionError       EventType = "session_error" // Provider 会话级错误（脱敏文案）
+	// v0.8.4（ADR-015）：细粒度回合状态与独立 thought 通道。
+	// EventTurnPhase 投影回合阶段机（payload 白名单见 ADR-015 §6）；
+	// EventSessionActivity 是 session 级聚合镜像（最新 active turn 的 phase）；
+	// EventThoughtDelta 只承载 raw 模式的 reasoning 增量，与 assistant answer
+	// 分开建模，绝不并入回答正文。
+	EventTurnPhase       EventType = "turn_phase"
+	EventSessionActivity EventType = "session_activity"
+	EventThoughtDelta    EventType = "message_thought_delta"
 )
 
 // Event 是一条规范化事件。私有 Provider 字段不进入公共协议。

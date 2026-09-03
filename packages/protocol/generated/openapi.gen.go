@@ -139,14 +139,17 @@ const (
 	CipherEventEventTypeGoalChanged         CipherEventEventType = "goal.changed"
 	CipherEventEventTypeMessageCompleted    CipherEventEventType = "message.completed"
 	CipherEventEventTypeMessageDelta        CipherEventEventType = "message.delta"
+	CipherEventEventTypeMessageThoughtDelta CipherEventEventType = "message.thought_delta"
 	CipherEventEventTypePermissionDecision  CipherEventEventType = "permission.decision"
 	CipherEventEventTypePermissionRequest   CipherEventEventType = "permission.request"
 	CipherEventEventTypePlanChanged         CipherEventEventType = "plan.changed"
+	CipherEventEventTypeSessionActivity     CipherEventEventType = "session.activity"
 	CipherEventEventTypeSessionLifecycle    CipherEventEventType = "session.lifecycle"
 	CipherEventEventTypeSkillCatalogChanged CipherEventEventType = "skill.catalog_changed"
 	CipherEventEventTypeToolCall            CipherEventEventType = "tool.call"
 	CipherEventEventTypeToolResult          CipherEventEventType = "tool.result"
 	CipherEventEventTypeTurnCompleted       CipherEventEventType = "turn.completed"
+	CipherEventEventTypeTurnPhase           CipherEventEventType = "turn.phase"
 	CipherEventEventTypeTurnStarted         CipherEventEventType = "turn.started"
 	CipherEventEventTypeUsageUpdated        CipherEventEventType = "usage.updated"
 	CipherEventEventTypeUserMessage         CipherEventEventType = "user.message"
@@ -170,11 +173,15 @@ func (e CipherEventEventType) Valid() bool {
 		return true
 	case CipherEventEventTypeMessageDelta:
 		return true
+	case CipherEventEventTypeMessageThoughtDelta:
+		return true
 	case CipherEventEventTypePermissionDecision:
 		return true
 	case CipherEventEventTypePermissionRequest:
 		return true
 	case CipherEventEventTypePlanChanged:
+		return true
+	case CipherEventEventTypeSessionActivity:
 		return true
 	case CipherEventEventTypeSessionLifecycle:
 		return true
@@ -185,6 +192,8 @@ func (e CipherEventEventType) Valid() bool {
 	case CipherEventEventTypeToolResult:
 		return true
 	case CipherEventEventTypeTurnCompleted:
+		return true
+	case CipherEventEventTypeTurnPhase:
 		return true
 	case CipherEventEventTypeTurnStarted:
 		return true
@@ -219,19 +228,22 @@ func (e CipherEventTerminalStatus) Valid() bool {
 
 // Defines values for DaemonCipherEventObservationEventType.
 const (
-	DaemonCipherEventObservationEventTypeCommandUpdated   DaemonCipherEventObservationEventType = "command.updated"
-	DaemonCipherEventObservationEventTypeFileChanged      DaemonCipherEventObservationEventType = "file.changed"
-	DaemonCipherEventObservationEventTypeGitSnapshot      DaemonCipherEventObservationEventType = "git.snapshot"
-	DaemonCipherEventObservationEventTypeMessageCompleted DaemonCipherEventObservationEventType = "message.completed"
-	DaemonCipherEventObservationEventTypeMessageDelta     DaemonCipherEventObservationEventType = "message.delta"
-	DaemonCipherEventObservationEventTypeSessionLifecycle DaemonCipherEventObservationEventType = "session.lifecycle"
-	DaemonCipherEventObservationEventTypeToolCall         DaemonCipherEventObservationEventType = "tool.call"
-	DaemonCipherEventObservationEventTypeToolResult       DaemonCipherEventObservationEventType = "tool.result"
-	DaemonCipherEventObservationEventTypeTurnCompleted    DaemonCipherEventObservationEventType = "turn.completed"
-	DaemonCipherEventObservationEventTypeTurnStarted      DaemonCipherEventObservationEventType = "turn.started"
-	DaemonCipherEventObservationEventTypeUnknown          DaemonCipherEventObservationEventType = "unknown"
-	DaemonCipherEventObservationEventTypeUsageUpdated     DaemonCipherEventObservationEventType = "usage.updated"
-	DaemonCipherEventObservationEventTypeUserMessage      DaemonCipherEventObservationEventType = "user.message"
+	DaemonCipherEventObservationEventTypeCommandUpdated      DaemonCipherEventObservationEventType = "command.updated"
+	DaemonCipherEventObservationEventTypeFileChanged         DaemonCipherEventObservationEventType = "file.changed"
+	DaemonCipherEventObservationEventTypeGitSnapshot         DaemonCipherEventObservationEventType = "git.snapshot"
+	DaemonCipherEventObservationEventTypeMessageCompleted    DaemonCipherEventObservationEventType = "message.completed"
+	DaemonCipherEventObservationEventTypeMessageDelta        DaemonCipherEventObservationEventType = "message.delta"
+	DaemonCipherEventObservationEventTypeMessageThoughtDelta DaemonCipherEventObservationEventType = "message.thought_delta"
+	DaemonCipherEventObservationEventTypeSessionActivity     DaemonCipherEventObservationEventType = "session.activity"
+	DaemonCipherEventObservationEventTypeSessionLifecycle    DaemonCipherEventObservationEventType = "session.lifecycle"
+	DaemonCipherEventObservationEventTypeToolCall            DaemonCipherEventObservationEventType = "tool.call"
+	DaemonCipherEventObservationEventTypeToolResult          DaemonCipherEventObservationEventType = "tool.result"
+	DaemonCipherEventObservationEventTypeTurnCompleted       DaemonCipherEventObservationEventType = "turn.completed"
+	DaemonCipherEventObservationEventTypeTurnPhase           DaemonCipherEventObservationEventType = "turn.phase"
+	DaemonCipherEventObservationEventTypeTurnStarted         DaemonCipherEventObservationEventType = "turn.started"
+	DaemonCipherEventObservationEventTypeUnknown             DaemonCipherEventObservationEventType = "unknown"
+	DaemonCipherEventObservationEventTypeUsageUpdated        DaemonCipherEventObservationEventType = "usage.updated"
+	DaemonCipherEventObservationEventTypeUserMessage         DaemonCipherEventObservationEventType = "user.message"
 )
 
 // Valid indicates whether the value is a known member of the DaemonCipherEventObservationEventType enum.
@@ -247,6 +259,10 @@ func (e DaemonCipherEventObservationEventType) Valid() bool {
 		return true
 	case DaemonCipherEventObservationEventTypeMessageDelta:
 		return true
+	case DaemonCipherEventObservationEventTypeMessageThoughtDelta:
+		return true
+	case DaemonCipherEventObservationEventTypeSessionActivity:
+		return true
 	case DaemonCipherEventObservationEventTypeSessionLifecycle:
 		return true
 	case DaemonCipherEventObservationEventTypeToolCall:
@@ -254,6 +270,8 @@ func (e DaemonCipherEventObservationEventType) Valid() bool {
 	case DaemonCipherEventObservationEventTypeToolResult:
 		return true
 	case DaemonCipherEventObservationEventTypeTurnCompleted:
+		return true
+	case DaemonCipherEventObservationEventTypeTurnPhase:
 		return true
 	case DaemonCipherEventObservationEventTypeTurnStarted:
 		return true
@@ -390,18 +408,21 @@ func (e DaemonCommandResultRequestStatus) Valid() bool {
 
 // Defines values for DaemonEventUploadRequestEventType.
 const (
-	DaemonEventUploadRequestEventTypeCommandUpdated   DaemonEventUploadRequestEventType = "command.updated"
-	DaemonEventUploadRequestEventTypeFileChanged      DaemonEventUploadRequestEventType = "file.changed"
-	DaemonEventUploadRequestEventTypeGitSnapshot      DaemonEventUploadRequestEventType = "git.snapshot"
-	DaemonEventUploadRequestEventTypeMessageCompleted DaemonEventUploadRequestEventType = "message.completed"
-	DaemonEventUploadRequestEventTypeMessageDelta     DaemonEventUploadRequestEventType = "message.delta"
-	DaemonEventUploadRequestEventTypeSessionLifecycle DaemonEventUploadRequestEventType = "session.lifecycle"
-	DaemonEventUploadRequestEventTypeToolCall         DaemonEventUploadRequestEventType = "tool.call"
-	DaemonEventUploadRequestEventTypeToolResult       DaemonEventUploadRequestEventType = "tool.result"
-	DaemonEventUploadRequestEventTypeTurnCompleted    DaemonEventUploadRequestEventType = "turn.completed"
-	DaemonEventUploadRequestEventTypeTurnStarted      DaemonEventUploadRequestEventType = "turn.started"
-	DaemonEventUploadRequestEventTypeUsageUpdated     DaemonEventUploadRequestEventType = "usage.updated"
-	DaemonEventUploadRequestEventTypeUserMessage      DaemonEventUploadRequestEventType = "user.message"
+	DaemonEventUploadRequestEventTypeCommandUpdated      DaemonEventUploadRequestEventType = "command.updated"
+	DaemonEventUploadRequestEventTypeFileChanged         DaemonEventUploadRequestEventType = "file.changed"
+	DaemonEventUploadRequestEventTypeGitSnapshot         DaemonEventUploadRequestEventType = "git.snapshot"
+	DaemonEventUploadRequestEventTypeMessageCompleted    DaemonEventUploadRequestEventType = "message.completed"
+	DaemonEventUploadRequestEventTypeMessageDelta        DaemonEventUploadRequestEventType = "message.delta"
+	DaemonEventUploadRequestEventTypeMessageThoughtDelta DaemonEventUploadRequestEventType = "message.thought_delta"
+	DaemonEventUploadRequestEventTypeSessionActivity     DaemonEventUploadRequestEventType = "session.activity"
+	DaemonEventUploadRequestEventTypeSessionLifecycle    DaemonEventUploadRequestEventType = "session.lifecycle"
+	DaemonEventUploadRequestEventTypeToolCall            DaemonEventUploadRequestEventType = "tool.call"
+	DaemonEventUploadRequestEventTypeToolResult          DaemonEventUploadRequestEventType = "tool.result"
+	DaemonEventUploadRequestEventTypeTurnCompleted       DaemonEventUploadRequestEventType = "turn.completed"
+	DaemonEventUploadRequestEventTypeTurnPhase           DaemonEventUploadRequestEventType = "turn.phase"
+	DaemonEventUploadRequestEventTypeTurnStarted         DaemonEventUploadRequestEventType = "turn.started"
+	DaemonEventUploadRequestEventTypeUsageUpdated        DaemonEventUploadRequestEventType = "usage.updated"
+	DaemonEventUploadRequestEventTypeUserMessage         DaemonEventUploadRequestEventType = "user.message"
 )
 
 // Valid indicates whether the value is a known member of the DaemonEventUploadRequestEventType enum.
@@ -417,6 +438,10 @@ func (e DaemonEventUploadRequestEventType) Valid() bool {
 		return true
 	case DaemonEventUploadRequestEventTypeMessageDelta:
 		return true
+	case DaemonEventUploadRequestEventTypeMessageThoughtDelta:
+		return true
+	case DaemonEventUploadRequestEventTypeSessionActivity:
+		return true
 	case DaemonEventUploadRequestEventTypeSessionLifecycle:
 		return true
 	case DaemonEventUploadRequestEventTypeToolCall:
@@ -424,6 +449,8 @@ func (e DaemonEventUploadRequestEventType) Valid() bool {
 	case DaemonEventUploadRequestEventTypeToolResult:
 		return true
 	case DaemonEventUploadRequestEventTypeTurnCompleted:
+		return true
+	case DaemonEventUploadRequestEventTypeTurnPhase:
 		return true
 	case DaemonEventUploadRequestEventTypeTurnStarted:
 		return true

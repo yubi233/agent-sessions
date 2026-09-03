@@ -53,6 +53,19 @@ const (
 	NotifyDshGoalChanged       = "dsh/goal/changed" // goal projection / round 状态
 	NotifyDshSkillCatalogChg   = "dsh/skill/catalog_changed"
 	NotifyDshDelegationChanged = "dsh/delegation/changed" // subagent 生命周期 observe-only 投影
+	// NotifyDshTurnStatus 是 v0.8.4 的回合阶段通知（ADR-015 §3 冻结）：
+	// 桥是实时 phase 的唯一权威；未协商 "dsh/turn/status" 的客户端不得收到。
+	NotifyDshTurnStatus = "dsh/turn/status"
+	// DshChunkMetaKey 是流式增量/committed 帧的 namespaced _meta 键（ADR-015 §4）：
+	// { kind: "text-delta"|"committed", turn, step, seq, messageId? }。
+	DshChunkMetaKey = "com.deepseek.dsh/chunk"
+	// DshThoughtMetaKey 是 thought 帧的 namespaced _meta 键（ADR-015 §5）：
+	// { kind: "thought-delta", turn, step, seq, visibility: "raw" }。
+	DshThoughtMetaKey = "com.deepseek.dsh/thought"
+	// NegotiationEntryTurnStatus / NegotiationEntryThought 是 initialize 协商
+	// 目录中的扩展条目名（复用 com.deepseek.dsh/extensions 的 major.minor 规则）。
+	NegotiationEntryTurnStatus = "dsh/turn/status"
+	NegotiationEntryThought    = "dsh/thought"
 )
 
 // 扩展错误码（ADR-014 §7.1 冻结）。字符串码进扩展 payload/日志，

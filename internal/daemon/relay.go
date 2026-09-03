@@ -1402,6 +1402,17 @@ func relayEventType(value adapter.EventType) string {
 		return "user.message"
 	case adapter.EventMessageDelta:
 		return "message.delta"
+	case adapter.EventThoughtDelta:
+		// v0.8.4（ADR-015 §5）：raw reasoning 增量走独立 thought 通道，
+		// 与 assistant answer 分开建模，绝不并入 message.delta。
+		return "message.thought_delta"
+	case adapter.EventTurnPhase:
+		// v0.8.4（ADR-015 §3）：回合阶段投影；旧客户端忽略未知事件类型，
+		// 仍按 message.completed/turn.completed 正确关闭 streaming 状态。
+		return "turn.phase"
+	case adapter.EventSessionActivity:
+		// session 级聚合镜像（最新 active turn 的 phase），供粗粒度消费方。
+		return "session.activity"
 	case adapter.EventMessageCompleted:
 		return "message.completed"
 	case adapter.EventTurnCompleted:

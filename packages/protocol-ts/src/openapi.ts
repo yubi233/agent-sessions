@@ -1096,7 +1096,7 @@ export interface components {
             /** Format: int64 */
             event_seq: number;
             /** @enum {string} */
-            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.completed" | "turn.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "unknown";
+            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.thought_delta" | "message.completed" | "turn.completed" | "turn.phase" | "session.activity" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "unknown";
             /**
              * @description 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
              * @enum {string}
@@ -1149,7 +1149,7 @@ export interface components {
             /** Format: int64 */
             event_seq: number;
             /** @enum {string} */
-            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.completed" | "turn.completed" | "tool.call" | "tool.result" | "permission.request" | "permission.decision" | "user.question" | "plan.changed" | "goal.changed" | "skill.catalog_changed" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "delegation.changed";
+            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.thought_delta" | "message.completed" | "turn.completed" | "turn.phase" | "session.activity" | "tool.call" | "tool.result" | "permission.request" | "permission.decision" | "user.question" | "plan.changed" | "goal.changed" | "skill.catalog_changed" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated" | "delegation.changed";
             /**
              * @description 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
              * @enum {string}
@@ -1357,7 +1357,7 @@ export interface components {
             command_id: string;
             session_id: string;
             /** @enum {string} */
-            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.completed" | "turn.completed" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated";
+            event_type: "session.lifecycle" | "turn.started" | "user.message" | "message.delta" | "message.thought_delta" | "message.completed" | "turn.completed" | "turn.phase" | "session.activity" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated";
             /**
              * @description 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
              * @enum {string}

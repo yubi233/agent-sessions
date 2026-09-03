@@ -1,892 +1,931 @@
 {
-  "registry_version": 7,
-  "status": "in_progress",
-  "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
-  "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
-  "evidence_rule": "报告放在 e2e-verify/reports/<timestamp>/<plan_id>/，必须包含测试 ID、suite/fixture revision、命令、local_test、fixture_data、real_browser、headless、real_upstream、real_model、failure_class 和 remaining_risk；不得包含 token、正文、diff 或解密附件。",
-  "plan_id_rule": "TEST-RELEASE 维护本注册表与 gate 口径，不拥有业务测试 ID。RELIABILITY-RELEASE 拥有 P0-DEPLOY/DEPLOY/PERF/E2E-RELAY 与 SYNC-04。FOUNDATION-ACCEPTANCE 只消费领域 ID。",
-  "suites": [
-    {
-      "plan_id": "PROTO-CRYPTO",
-      "suite_path": "docs/test/00-工程协议密码学.json",
-      "owner": "Protocol/Security",
-      "id_prefix": [
-        "P0-TOOL-",
-        "P0-SCHEMA-",
-        "P0-CRYPTO-"
-      ],
-      "owned_ids": [
-        "P0-TOOL-01",
-        "P0-SCHEMA-01",
-        "P0-SCHEMA-02",
-        "P0-CRYPTO-01",
-        "SEC-02",
-        "SEC-03",
-        "SEC-04"
-      ],
-      "consumed_ids": [],
-      "dependencies": [],
-      "status": "in_progress",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "拥有 P0-TOOL/SCHEMA/CRYPTO 以及密码学、篡改、AAD、密钥撤销和轮换安全回归；P0-DEPLOY-01 例外归 RELIABILITY-RELEASE。"
-    },
-    {
-      "plan_id": "RELAY-IDENTITY",
-      "suite_path": "docs/test/01-Relay身份持久化.json",
-      "owner": "Relay Server",
-      "id_prefix": [
-        "AUTH-",
-        "PAIR-",
-        "RELAY-DB-",
-        "RELAY-REDIS-",
-        "MIG-"
-      ],
-      "owned_ids": [
-        "AUTH-01",
-        "AUTH-05",
-        "PAIR-01",
-        "PAIR-02",
-        "PAIR-03",
-        "PAIR-04",
-        "RELAY-DB-01",
-        "RELAY-DB-02",
-        "RELAY-DB-03",
-        "MIG-01",
-        "MIG-02",
-        "RELAY-REDIS-01"
-      ],
-      "consumed_ids": [
-        "SEC-02",
-        "SEC-03"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "认证、配对、设备撤销、持久化迁移和进程内 presence 重建根因测试只能由此 suite 定义；历史 ID RELAY-REDIS-01 保留但不表示 Redis 运行时依赖；密码学安全 ID 仅消费。"
-    },
-    {
-      "plan_id": "RELAY-REALTIME",
-      "suite_path": "docs/test/02-Relay实时同步.json",
-      "owner": "Relay Server",
-      "id_prefix": [
-        "HTTP-",
-        "SSE-",
-        "WS-",
-        "TERM-",
-        "SESS-",
-        "CTRL-",
-        "RELAY-LEASE-"
-      ],
-      "owned_ids": [
-        "HTTP-01",
-        "HTTP-02",
-        "HTTP-03",
-        "SSE-01",
-        "SSE-02",
-        "WS-01",
-        "WS-02",
-        "TERM-01",
-        "TERM-02",
-        "SESS-01",
-        "SESS-02",
-        "SESS-03",
-        "SESS-04",
-        "CTRL-01",
-        "CTRL-02",
-        "CTRL-03",
-        "CTRL-04",
-        "SYNC-01",
-        "SYNC-02",
-        "SYNC-05",
-        "RELAY-LEASE-01",
-        "RELAY-LEASE-02",
-        "RELAY-LEASE-03",
-        "SESS-05",
-        "SESS-06",
-        "SESS-07",
-        "SESS-08",
-        "SESS-09",
-        "SESS-10",
-        "SEC-01"
-      ],
-      "consumed_ids": [],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-IDENTITY"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "HTTP、账号 SSE、Terminal、Session、控制租约和 Relay 侧 outbox/cursor 的根因测试归此 suite；WS-01/02 是明确排除的历史 ID；SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。"
-    },
-    {
-      "plan_id": "DAEMON-CORE",
-      "suite_path": "docs/test/03-Daemon核心安全.json",
-      "owner": "PC Daemon",
-      "id_prefix": [
-        "DAEMON-",
-        "WORKSPACE-"
-      ],
-      "owned_ids": [
-        "DAEMON-BOOT-01",
-        "DAEMON-BOOT-02",
-        "DAEMON-PROC-01",
-        "DAEMON-PROC-02",
-        "DAEMON-RPC-01",
-        "SYNC-03",
-        "WORKSPACE-01"
-      ],
-      "consumed_ids": [
-        "TERM-02"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-REALTIME"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "Daemon 生命周期、本地 SQLite、Keychain、重连 outbox、项目登记和 Workspace 路径安全由此 suite 定义；Terminal 协议仅消费。"
-    },
-    {
-      "plan_id": "DAEMON-GIT",
-      "suite_path": "docs/test/04-Daemon-Git只读.json",
-      "owner": "PC Daemon",
-      "id_prefix": [
-        "GIT-"
-      ],
-      "owned_ids": [
-        "GIT-01",
-        "GIT-02",
-        "GIT-03",
-        "GIT-04",
-        "GIT-05",
-        "GIT-06",
-        "GIT-07"
-      ],
-      "consumed_ids": [
-        "WORKSPACE-01"
-      ],
-      "dependencies": [
-        "DAEMON-CORE"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "Git parser、只读 RPC、snapshot drift、特殊文件和大 diff 的根因测试只由此 suite 定义。"
-    },
-    {
-      "plan_id": "ADAPTER-PLATFORM",
-      "suite_path": "docs/test/05-Adapter平台.json",
-      "owner": "Provider Adapter Platform",
-      "id_prefix": [
-        "MODE-"
-      ],
-      "owned_ids": [
-        "ADPT-01",
-        "MODE-01",
-        "MODE-02",
-        "MODE-03",
-        "MODE-04"
-      ],
-      "consumed_ids": [],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "DAEMON-CORE",
-        "RELAY-REALTIME"
-      ],
-      "status": "planned",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "统一 SPI、能力矩阵及 Plan/Goal/Skill 状态机的根因 contract 只由此 suite 定义；各 Provider 的 ADPT-<provider>-* 由专属 suite 定义。"
-    },
-    {
-      "plan_id": "ADAPTER-CLAUDE",
-      "suite_path": "docs/test/06-Adapter-Claude.json",
-      "owner": "Claude Adapter",
-      "id_prefix": [
-        "ADPT-CLAUDE-"
-      ],
-      "owned_ids": [
-        "ADPT-CLAUDE-01",
-        "ADPT-CLAUDE-02",
-        "ADPT-CLAUDE-03",
-        "ADPT-CLAUDE-04"
-      ],
-      "consumed_ids": [
-        "ADPT-01",
-        "MODE-01",
-        "MODE-02",
-        "MODE-03",
-        "MODE-04"
-      ],
-      "dependencies": [
-        "ADAPTER-PLATFORM",
-        "DAEMON-CORE"
-      ],
-      "status": "planned",
-      "allow_real_upstream": true,
-      "uniqueness_rule": "只定义 Claude fixture、版本矩阵和授权 live smoke；无授权时真实上游 gate 必须保持 blocked。"
-    },
-    {
-      "plan_id": "ADAPTER-CODEX",
-      "suite_path": "docs/test/07-Adapter-Codex.json",
-      "owner": "Codex Adapter",
-      "id_prefix": [
-        "ADPT-CODEX-"
-      ],
-      "owned_ids": [
-        "ADPT-CODEX-01",
-        "ADPT-CODEX-02",
-        "ADPT-CODEX-03",
-        "ADPT-CODEX-04"
-      ],
-      "consumed_ids": [
-        "ADPT-01",
-        "MODE-01",
-        "MODE-02",
-        "MODE-03",
-        "MODE-04"
-      ],
-      "dependencies": [
-        "ADAPTER-PLATFORM",
-        "DAEMON-CORE"
-      ],
-      "status": "planned",
-      "allow_real_upstream": true,
-      "uniqueness_rule": "只定义 Codex fixture、版本矩阵和授权 live smoke；未被证据证明的能力必须标为 unsupported。"
-    },
-    {
-      "plan_id": "ADAPTER-OPENCODE",
-      "suite_path": "docs/test/08-Adapter-OpenCode.json",
-      "owner": "OpenCode Adapter",
-      "id_prefix": [
-        "ADPT-OPENCODE-",
-        "HAPPY-OPENCODE-"
-      ],
-      "owned_ids": [
-        "ADPT-OPENCODE-01",
-        "ADPT-OPENCODE-02",
-        "ADPT-OPENCODE-03",
-        "ADPT-OPENCODE-04",
-        "ADPT-OPENCODE-05",
-        "ADPT-OPENCODE-06",
-        "HAPPY-OPENCODE-01",
-        "E2E-OPENCODE-01",
-        "ADPT-OPENCODE-07",
-        "ADPT-OPENCODE-08",
-        "ADPT-OPENCODE-09"
-      ],
-      "consumed_ids": [
-        "ADPT-01",
-        "MODE-01",
-        "MODE-02",
-        "MODE-03",
-        "MODE-04"
-      ],
-      "dependencies": [
-        "ADAPTER-PLATFORM",
-        "DAEMON-CORE"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": true,
-      "uniqueness_rule": "只定义 OpenCode 本地 API/SSE/session fixture、fail-closed capability contract、授权 CLI live smoke、Adapter transport live 与 Happy 对比一致性检查；真实 CLI 通过不能替代 Adapter transport，恢复不足时必须保留明确降级结果。"
-    },
-    {
-      "plan_id": "ADAPTER-OPENCLAW",
-      "suite_path": "docs/test/09-Adapter-OpenClaw.json",
-      "owner": "OpenClaw Adapter",
-      "id_prefix": [
-        "ADPT-OPENCLAW-"
-      ],
-      "owned_ids": [
-        "ADPT-OPENCLAW-01",
-        "ADPT-OPENCLAW-02",
-        "ADPT-OPENCLAW-03",
-        "ADPT-OPENCLAW-04"
-      ],
-      "consumed_ids": [
-        "ADPT-01",
-        "MODE-01",
-        "MODE-02",
-        "MODE-03",
-        "MODE-04"
-      ],
-      "dependencies": [
-        "ADAPTER-PLATFORM",
-        "DAEMON-CORE"
-      ],
-      "status": "planned",
-      "allow_real_upstream": true,
-      "uniqueness_rule": "只定义 OpenClaw Gateway challenge/device auth/RPC fixture 和授权 live smoke；无凭据不得用 fixture 冒充通过。"
-    },
-    {
-      "plan_id": "ANDROID",
-      "suite_path": "docs/test/10-Android.json",
-      "owner": "Android App",
-      "id_prefix": [
-        "MOBILE-",
-        "ATTACH-",
-        "E2E-ANDROID-"
-      ],
-      "owned_ids": [
-        "MOBILE-01",
-        "MOBILE-02",
-        "MOBILE-03",
-        "MOBILE-04",
-        "MOBILE-05",
-        "MOBILE-06",
-        "MOBILE-07",
-        "MOBILE-08",
-        "MOBILE-09",
-        "ATTACH-01",
-        "MOBILE-10",
-        "MOBILE-11",
-        "MOBILE-12",
-        "MOBILE-13",
-        "MOBILE-14",
-        "MOBILE-15",
-        "MOBILE-16",
-        "MOBILE-17",
-        "MOBILE-18",
-        "MOBILE-19",
-        "MOBILE-20",
-        "MOBILE-21",
-        "MOBILE-22",
-        "MOBILE-23",
-        "MOBILE-24",
-        "MOBILE-25",
-        "MOBILE-26",
-        "MOBILE-27",
-        "MOBILE-28",
-        "MOBILE-29",
-        "MOBILE-30",
-        "MOBILE-31",
-        "MOBILE-V05-01",
-        "MOBILE-V05-02",
-        "MOBILE-V05-03",
-        "MOBILE-V05-04",
-        "MOBILE-V05-05",
-        "MOBILE-V05-06",
-        "MOBILE-V05-07",
-        "MOBILE-V05-08",
-        "MOBILE-V05-09",
-        "MOBILE-V05-10",
-        "MOBILE-V05-11",
-        "MOBILE-V05-12",
-        "MOBILE-V05-13",
-        "MOBILE-V05-14",
-        "MOBILE-V05-15",
-        "MOBILE-V05-16",
-        "MOBILE-V05-17",
-        "MOBILE-V05-18",
-        "MOBILE-V05-19",
-        "MOBILE-V05-20",
-        "MOBILE-V05-21",
-        "MOBILE-V05-22",
-        "MOBILE-V05-23",
-        "MOBILE-V05-24",
-        "MOBILE-V05-25",
-        "E2E-ANDROID-01",
-        "E2E-ANDROID-02"
-      ],
-      "consumed_ids": [
-        "PAIR-01",
-        "PAIR-02",
-        "PAIR-03",
-        "SESS-01",
-        "SESS-02",
-        "CTRL-01",
-        "CTRL-02",
-        "GIT-01",
-        "GIT-02",
-        "GIT-03",
-        "GIT-04",
-        "GIT-05",
-        "GIT-06",
-        "MODE-01",
-        "MODE-02",
-        "MODE-03",
-        "MODE-04",
-        "DELEG-06"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-REALTIME",
-        "DAEMON-GIT",
-        "ADAPTER-PLATFORM"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "Android widget/integration、生命周期、缓存、通知、附件、DiffView、子会话切入、会话快捷操作、文件浏览、深链、可访问性与命令面板客户端断言由此 suite 定义；跨层根因测试只消费所属 ID。"
-    },
-    {
-      "plan_id": "USAGE",
-      "suite_path": "docs/test/15-用量隐私.json",
-      "owner": "Relay / Daemon Usage",
-      "id_prefix": [
-        "USAGE-"
-      ],
-      "owned_ids": [
-        "USAGE-01"
-      ],
-      "consumed_ids": [
-        "DAEMON-RPC-01",
-        "SYNC-05"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-REALTIME",
-        "DAEMON-CORE"
-      ],
-      "status": "planned",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "只定义 usage 白名单字段、UTC 日桶、去重、保留和账户 scope 的根因测试；Android 图表只消费 USAGE-01，不能用 fixture 代替聚合安全测试。"
-    },
-    {
-      "plan_id": "DELEGATION",
-      "suite_path": "docs/test/14-Delegation.json",
-      "owner": "Adapter Platform / Relay / Android",
-      "id_prefix": [
-        "DELEG-",
-        "E2E-DELEG-"
-      ],
-      "owned_ids": [
-        "DELEG-01",
-        "DELEG-02",
-        "DELEG-03",
-        "DELEG-04",
-        "DELEG-05",
-        "DELEG-06",
-        "DELEG-07",
-        "E2E-DELEG-01"
-      ],
-      "consumed_ids": [
-        "ADPT-01",
-        "SESS-01",
-        "SESS-02",
-        "CTRL-01",
-        "CTRL-02",
-        "WORKSPACE-01",
-        "MODE-01"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-REALTIME",
-        "DAEMON-CORE",
-        "ADAPTER-PLATFORM",
-        "ANDROID"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": true,
-      "uniqueness_rule": "Delegation 协议、Relay 父子索引、Daemon mock 派发、权限边界、Android 确认卡及 mock full gate 只由此 suite 定义；真实跨 Provider smoke 必须单独标记 blocked 或 authorized。"
-    },
-    {
-      "plan_id": "WEB",
-      "suite_path": "docs/test/11-Web.json",
-      "owner": "Vue Web App",
-      "id_prefix": [
-        "WEB-",
-        "E2E-WEB-"
-      ],
-      "owned_ids": [
-        "WEB-01",
-        "WEB-02",
-        "WEB-03",
-        "WEB-04",
-        "WEB-05",
-        "WEB-06",
-        "WEB-07",
-        "E2E-WEB-01",
-        "E2E-WEB-02"
-      ],
-      "consumed_ids": [
-        "SESS-01",
-        "SESS-02",
-        "SYNC-01",
-        "GIT-01",
-        "GIT-02",
-        "SEC-04"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-REALTIME",
-        "DAEMON-GIT"
-      ],
-      "status": "planned",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "只定义 Web 只读页面、SSE cursor、PWA 缓存、设计 token、无障碍和 headed 浏览器行为；会话写权限仍由 Relay 测试定义。"
-    },
-    {
-      "plan_id": "ADMIN",
-      "suite_path": "docs/test/12-Admin.json",
-      "owner": "Vue Admin",
-      "id_prefix": [
-        "ADMIN-",
-        "E2E-ADMIN-"
-      ],
-      "owned_ids": [
-        "ADMIN-01",
-        "ADMIN-02",
-        "ADMIN-03",
-        "ADMIN-04",
-        "ADMIN-05",
-        "ADMIN-06",
-        "E2E-ADMIN-01",
-        "E2E-ADMIN-02"
-      ],
-      "consumed_ids": [
-        "PAIR-03",
-        "CTRL-01",
-        "SEC-01",
-        "SEC-04"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-IDENTITY",
-        "RELAY-REALTIME"
-      ],
-      "status": "planned",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "只定义 Admin 运维元数据、健康状态、脱敏展示、设计 token、无障碍和 headed 浏览器行为；服务器权限仍由 Relay suite 定义。"
-    },
-    {
-      "plan_id": "RELIABILITY-RELEASE",
-      "suite_path": "docs/test/13-可靠性发布.json",
-      "owner": "Deployment / Release",
-      "id_prefix": [
-        "DEPLOY-",
-        "PERF-",
-        "E2E-RELAY-"
-      ],
-      "owned_ids": [
-        "P0-DEPLOY-01",
-        "DEPLOY-01",
-        "DEPLOY-02",
-        "DEPLOY-03",
-        "DEPLOY-04",
-        "SYNC-04",
-        "PERF-01",
-        "PERF-02",
-        "PERF-03",
-        "E2E-RELAY-01",
-        "E2E-RELAY-02",
-        "DEPLOY-05",
-        "PERF-04",
-        "RELEASE-V06-01",
-        "RELEASE-V06-02",
-        "ROLLBACK-V06-01",
-        "RECORD-V06-01"
-      ],
-      "consumed_ids": [
-        "SEC-01",
-        "SEC-02",
-        "SEC-03",
-        "SEC-04"
-      ],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-IDENTITY",
-        "RELAY-REALTIME",
-        "DAEMON-CORE",
-        "DAEMON-GIT",
-        "ANDROID",
-        "WEB",
-        "ADMIN"
-      ],
-      "status": "planned",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "只定义跨层 full gate、性能、备份恢复、升级回滚和发布产物验证；真实 Provider gate 仍由各 ADAPTER_* suite 独立授权。"
-    },
-    {
-      "plan_id": "FOUNDATION-ACCEPTANCE",
-      "suite_path": "docs/test/基础验收用例.json",
-      "owner": "Cross-project QA",
-      "id_prefix": [],
-      "owned_ids": [],
-      "consumed_ids": [
-        "PAIR-01",
-        "PAIR-02",
-        "PAIR-03",
-        "TERM-01",
-        "SESS-01",
-        "SESS-02",
-        "CTRL-01",
-        "CTRL-02",
-        "GIT-01",
-        "GIT-02",
-        "GIT-03",
-        "ADPT-01",
-        "MODE-01",
-        "MODE-02",
-        "MODE-03",
-        "SEC-01",
-        "ADMIN-01",
-        "SYNC-01"
-      ],
-      "dependencies": [
-        "RELAY-IDENTITY",
-        "RELAY-REALTIME",
-        "DAEMON-CORE",
-        "DAEMON-GIT",
-        "ADAPTER-PLATFORM",
-        "ANDROID",
-        "ADMIN"
-      ],
-      "status": "planned",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "跨项目基础验收入口仅消费领域 suite 的稳定 ID，不能重新定义或更改根因测试归属。"
-    },
-    {
-      "plan_id": "ADAPTER-DSH",
-      "suite_path": "docs/test/16-Adapter-Dsh.json",
-      "owner": "Agent Sessions Platform",
-      "id_prefix": [
-        "ADPT-DSH"
-      ],
-      "owned_ids": [
-        "ADPT-DSH-01",
-        "ADPT-DSH-02",
-        "ADPT-DSH-03",
-        "ADPT-DSH-04",
-        "ADPT-DSH-05",
-        "ADPT-DSH-06",
-        "ADPT-DSH-07",
-        "ADPT-DSH-08",
-        "ADPT-DSH-09",
-        "ADPT-DSH-10",
-        "ADPT-DSH-11",
-        "ADPT-DSH-12",
-        "ADPT-DSH-13"
-      ],
-      "consumed_ids": []
-    },
-    {
-      "plan_id": "V08",
-      "suite_path": "docs/test/18-DSH本地工作区同步.json",
-      "owner": "Agent Sessions v0.8",
-      "id_prefix": [
-        "V08-"
-      ],
-      "owned_ids": [
-        "V08-01",
-        "V08-02",
-        "V08-03",
-        "V08-04",
-        "V08-05",
-        "V08-06",
-        "V08-07",
-        "V08-08",
-        "V08-09",
-        "V08-10",
-        "V08-11",
-        "V08-12",
-        "V08-13",
-        "V08-14",
-        "V08-15",
-        "V08-16",
-        "V08-17",
-        "V08-18",
-        "V08-19",
-        "V08-20",
-        "V08-21",
-        "V08-22",
-        "V08-23"
-      ],
-      "consumed_ids": [],
-      "dependencies": [
-        "DAEMON-CORE",
-        "RELAY-REALTIME",
-        "ADAPTER-DSH",
-        "WEB",
-        "ANDROID"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": true,
-      "uniqueness_rule": "v0.8 的 DSH 持久化、迁移、Resume/回放、工作区同步、Terminal 归属与客户端投影端到端验收由此 suite 定义；根因测试仍归各领域 suite。"
-    },
-    {
-      "plan_id": "V081",
-      "suite_path": "docs/test/19-DSH工作区主模式.json",
-      "owner": "Agent Sessions v0.8.1",
-      "id_prefix": [
-        "V081-"
-      ],
-      "owned_ids": [
-        "V081-01",
-        "V081-02",
-        "V081-03",
-        "V081-04",
-        "V081-05",
-        "V081-06",
-        "V081-07",
-        "V081-08",
-        "V081-09",
-        "V081-10"
-      ],
-      "consumed_ids": [
-        "V08-12"
-      ],
-      "dependencies": [
-        "V08",
-        "DAEMON-CORE",
-        "RELAY-REALTIME",
-        "WEB",
-        "ANDROID"
-      ],
-      "status": "completed",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "v0.8.1 只拥有 DSH 工作区主模式、工作区内创建/导入、跨端只读与可见交互的新增回归；V08-12 仅消费且必须保持 failed。"
-    },
-    {
-      "plan_id": "V07-RELEASE",
-      "suite_path": "docs/test/10-v0.7全链路.json",
-      "owner": "Agent Sessions v0.7",
-      "id_prefix": [
-        "V07-"
-      ],
-      "owned_ids": [
-        "V07-01",
-        "V07-02",
-        "V07-03",
-        "V07-04",
-        "V07-05",
-        "V07-06",
-        "V07-07",
-        "V07-08",
-        "V07-09",
-        "V07-10",
-        "V07-11",
-        "V07-12"
-      ],
-      "consumed_ids": [],
-      "dependencies": [
-        "PROTO-CRYPTO",
-        "RELAY-IDENTITY",
-        "RELAY-REALTIME",
-        "DAEMON-CORE",
-        "ADAPTER-OPENCODE",
-        "ANDROID",
-        "WEB"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": true,
-      "uniqueness_rule": "v0.7 的统一入口、OpenCode Zen 免费模型 smoke/full gate、会话内新建工作区跨层验收、headed 只读观察和录屏证据由此 suite 定义；根因测试仍归所属领域 suite，Android 实机明确排除。"
-    },
-    {
-      "plan_id": "V07-RELEASE",
-      "suite_path": "docs/test/17-Daemon会话命令与交互.json",
-      "owner": "Agent Sessions v0.7",
-      "id_prefix": [
-        "DCM-",
-        "AMI-"
-      ],
-      "owned_ids": [
-        "DCM-01",
-        "DCM-02",
-        "DCM-03",
-        "DCM-04",
-        "DCM-05",
-        "DCM-06",
-        "AMI-01",
-        "AMI-02",
-        "AMI-03",
-        "AMI-04"
-      ],
-      "consumed_ids": [],
-      "dependencies": [
-        "DAEMON-CORE",
-        "ADAPTER-OPENCODE",
-        "ANDROID"
-      ],
-      "status": "passed",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "daemon 会话命令/事件/生命周期单元矩阵与 App 消息交互契约；DCM/AMI 前缀独占。"
-    },
-    {
-      "plan_id": "V082",
-      "suite_path": "docs/test/20-DSH能力补全.json",
-      "owner": "Agent Sessions v0.8.2",
-      "id_prefix": [
-        "V082-"
-      ],
-      "owned_ids": [
-        "V082-01",
-        "V082-02",
-        "V082-03",
-        "V082-04",
-        "V082-05",
-        "V082-06",
-        "V082-07",
-        "V082-08",
-        "V082-09",
-        "V082-10",
-        "V082-11",
-        "V082-12",
-        "V082-13",
-        "V082-14",
-        "V082-15",
-        "V082-16",
-        "V082-17",
-        "V082-18",
-        "V082-19"
-      ],
-      "consumed_ids": [
-        "V08-12"
-      ],
-      "dependencies": [
-        "V081",
-        "V08"
-      ],
-      "status": "in_progress",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "v0.8.2 拥有 DSH 工具事件/effort/权限回流/能力矩阵/生命周期门控的新增回归；V08-12 仅消费且必须保持 failed 不被改写。桥未实现能力的用例以 blocked_on_bridge 如实登记，不伪造 native。"
-    },
-    {
-      "plan_id": "V083",
-      "suite_path": "docs/test/21-DSH ACP扩展能力.json",
-      "owner": "Agent Sessions v0.8.3",
-      "id_prefix": [
-        "V083-"
-      ],
-      "owned_ids": [
-        "V083-01",
-        "V083-02",
-        "V083-03",
-        "V083-04",
-        "V083-05",
-        "V083-06",
-        "V083-07",
-        "V083-08",
-        "V083-09",
-        "V083-10",
-        "V083-11",
-        "V083-12",
-        "V083-13",
-        "V083-14",
-        "V083-15",
-        "V083-16",
-        "V083-17",
-        "V083-18",
-        "V083-19",
-        "V083-20",
-        "V083-21",
-        "V083-22",
-        "V083-23",
-        "V083-24",
-        "V083-25",
-        "V083-26",
-        "V083-27"
-      ],
-      "consumed_ids": [
-        "V08-12"
-      ],
-      "dependencies": [
-        "V082",
-        "V081",
-        "V08"
-      ],
-      "status": "planned",
-      "allow_real_upstream": false,
-      "uniqueness_rule": "v0.8.3 拥有 DSH ACP 扩展能力收口的新增回归（permission mode、图像、session lifecycle、additionalDirectories、question/plan/goal/skill/delegation、能力矩阵与 Relay 安全）；V08-12 仅消费且历史 failed 证据不可改写，修复证据由 V083-07/V083-26 新增。契约唯一事实源为 ADR-014。真实模型用例（V083-26）须用户显式授权后运行。"
-    }
-  ]
+ "registry_version": 8,
+ "status": "in_progress",
+ "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
+ "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
+ "evidence_rule": "报告放在 e2e-verify/reports/<timestamp>/<plan_id>/，必须包含测试 ID、suite/fixture revision、命令、local_test、fixture_data、real_browser、headless、real_upstream、real_model、failure_class 和 remaining_risk；不得包含 token、正文、diff 或解密附件。",
+ "plan_id_rule": "TEST-RELEASE 维护本注册表与 gate 口径，不拥有业务测试 ID。RELIABILITY-RELEASE 拥有 P0-DEPLOY/DEPLOY/PERF/E2E-RELAY 与 SYNC-04。FOUNDATION-ACCEPTANCE 只消费领域 ID。",
+ "suites": [
+  {
+   "plan_id": "PROTO-CRYPTO",
+   "suite_path": "docs/test/00-工程协议密码学.json",
+   "owner": "Protocol/Security",
+   "id_prefix": [
+    "P0-TOOL-",
+    "P0-SCHEMA-",
+    "P0-CRYPTO-"
+   ],
+   "owned_ids": [
+    "P0-TOOL-01",
+    "P0-SCHEMA-01",
+    "P0-SCHEMA-02",
+    "P0-CRYPTO-01",
+    "SEC-02",
+    "SEC-03",
+    "SEC-04"
+   ],
+   "consumed_ids": [],
+   "dependencies": [],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "拥有 P0-TOOL/SCHEMA/CRYPTO 以及密码学、篡改、AAD、密钥撤销和轮换安全回归；P0-DEPLOY-01 例外归 RELIABILITY-RELEASE。"
+  },
+  {
+   "plan_id": "RELAY-IDENTITY",
+   "suite_path": "docs/test/01-Relay身份持久化.json",
+   "owner": "Relay Server",
+   "id_prefix": [
+    "AUTH-",
+    "PAIR-",
+    "RELAY-DB-",
+    "RELAY-REDIS-",
+    "MIG-"
+   ],
+   "owned_ids": [
+    "AUTH-01",
+    "AUTH-05",
+    "PAIR-01",
+    "PAIR-02",
+    "PAIR-03",
+    "PAIR-04",
+    "RELAY-DB-01",
+    "RELAY-DB-02",
+    "RELAY-DB-03",
+    "MIG-01",
+    "MIG-02",
+    "RELAY-REDIS-01"
+   ],
+   "consumed_ids": [
+    "SEC-02",
+    "SEC-03"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "认证、配对、设备撤销、持久化迁移和进程内 presence 重建根因测试只能由此 suite 定义；历史 ID RELAY-REDIS-01 保留但不表示 Redis 运行时依赖；密码学安全 ID 仅消费。"
+  },
+  {
+   "plan_id": "RELAY-REALTIME",
+   "suite_path": "docs/test/02-Relay实时同步.json",
+   "owner": "Relay Server",
+   "id_prefix": [
+    "HTTP-",
+    "SSE-",
+    "WS-",
+    "TERM-",
+    "SESS-",
+    "CTRL-",
+    "RELAY-LEASE-"
+   ],
+   "owned_ids": [
+    "HTTP-01",
+    "HTTP-02",
+    "HTTP-03",
+    "SSE-01",
+    "SSE-02",
+    "WS-01",
+    "WS-02",
+    "TERM-01",
+    "TERM-02",
+    "SESS-01",
+    "SESS-02",
+    "SESS-03",
+    "SESS-04",
+    "CTRL-01",
+    "CTRL-02",
+    "CTRL-03",
+    "CTRL-04",
+    "SYNC-01",
+    "SYNC-02",
+    "SYNC-05",
+    "RELAY-LEASE-01",
+    "RELAY-LEASE-02",
+    "RELAY-LEASE-03",
+    "SESS-05",
+    "SESS-06",
+    "SESS-07",
+    "SESS-08",
+    "SESS-09",
+    "SESS-10",
+    "SEC-01"
+   ],
+   "consumed_ids": [],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-IDENTITY"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "HTTP、账号 SSE、Terminal、Session、控制租约和 Relay 侧 outbox/cursor 的根因测试归此 suite；WS-01/02 是明确排除的历史 ID；SYNC-03 归 DAEMON-CORE，SYNC-04 归 RELIABILITY-RELEASE。"
+  },
+  {
+   "plan_id": "DAEMON-CORE",
+   "suite_path": "docs/test/03-Daemon核心安全.json",
+   "owner": "PC Daemon",
+   "id_prefix": [
+    "DAEMON-",
+    "WORKSPACE-"
+   ],
+   "owned_ids": [
+    "DAEMON-BOOT-01",
+    "DAEMON-BOOT-02",
+    "DAEMON-PROC-01",
+    "DAEMON-PROC-02",
+    "DAEMON-RPC-01",
+    "SYNC-03",
+    "WORKSPACE-01"
+   ],
+   "consumed_ids": [
+    "TERM-02"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-REALTIME"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "Daemon 生命周期、本地 SQLite、Keychain、重连 outbox、项目登记和 Workspace 路径安全由此 suite 定义；Terminal 协议仅消费。"
+  },
+  {
+   "plan_id": "DAEMON-GIT",
+   "suite_path": "docs/test/04-Daemon-Git只读.json",
+   "owner": "PC Daemon",
+   "id_prefix": [
+    "GIT-"
+   ],
+   "owned_ids": [
+    "GIT-01",
+    "GIT-02",
+    "GIT-03",
+    "GIT-04",
+    "GIT-05",
+    "GIT-06",
+    "GIT-07"
+   ],
+   "consumed_ids": [
+    "WORKSPACE-01"
+   ],
+   "dependencies": [
+    "DAEMON-CORE"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "Git parser、只读 RPC、snapshot drift、特殊文件和大 diff 的根因测试只由此 suite 定义。"
+  },
+  {
+   "plan_id": "ADAPTER-PLATFORM",
+   "suite_path": "docs/test/05-Adapter平台.json",
+   "owner": "Provider Adapter Platform",
+   "id_prefix": [
+    "MODE-"
+   ],
+   "owned_ids": [
+    "ADPT-01",
+    "MODE-01",
+    "MODE-02",
+    "MODE-03",
+    "MODE-04"
+   ],
+   "consumed_ids": [],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "DAEMON-CORE",
+    "RELAY-REALTIME"
+   ],
+   "status": "planned",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "统一 SPI、能力矩阵及 Plan/Goal/Skill 状态机的根因 contract 只由此 suite 定义；各 Provider 的 ADPT-<provider>-* 由专属 suite 定义。"
+  },
+  {
+   "plan_id": "ADAPTER-CLAUDE",
+   "suite_path": "docs/test/06-Adapter-Claude.json",
+   "owner": "Claude Adapter",
+   "id_prefix": [
+    "ADPT-CLAUDE-"
+   ],
+   "owned_ids": [
+    "ADPT-CLAUDE-01",
+    "ADPT-CLAUDE-02",
+    "ADPT-CLAUDE-03",
+    "ADPT-CLAUDE-04"
+   ],
+   "consumed_ids": [
+    "ADPT-01",
+    "MODE-01",
+    "MODE-02",
+    "MODE-03",
+    "MODE-04"
+   ],
+   "dependencies": [
+    "ADAPTER-PLATFORM",
+    "DAEMON-CORE"
+   ],
+   "status": "planned",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "只定义 Claude fixture、版本矩阵和授权 live smoke；无授权时真实上游 gate 必须保持 blocked。"
+  },
+  {
+   "plan_id": "ADAPTER-CODEX",
+   "suite_path": "docs/test/07-Adapter-Codex.json",
+   "owner": "Codex Adapter",
+   "id_prefix": [
+    "ADPT-CODEX-"
+   ],
+   "owned_ids": [
+    "ADPT-CODEX-01",
+    "ADPT-CODEX-02",
+    "ADPT-CODEX-03",
+    "ADPT-CODEX-04"
+   ],
+   "consumed_ids": [
+    "ADPT-01",
+    "MODE-01",
+    "MODE-02",
+    "MODE-03",
+    "MODE-04"
+   ],
+   "dependencies": [
+    "ADAPTER-PLATFORM",
+    "DAEMON-CORE"
+   ],
+   "status": "planned",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "只定义 Codex fixture、版本矩阵和授权 live smoke；未被证据证明的能力必须标为 unsupported。"
+  },
+  {
+   "plan_id": "ADAPTER-OPENCODE",
+   "suite_path": "docs/test/08-Adapter-OpenCode.json",
+   "owner": "OpenCode Adapter",
+   "id_prefix": [
+    "ADPT-OPENCODE-",
+    "HAPPY-OPENCODE-"
+   ],
+   "owned_ids": [
+    "ADPT-OPENCODE-01",
+    "ADPT-OPENCODE-02",
+    "ADPT-OPENCODE-03",
+    "ADPT-OPENCODE-04",
+    "ADPT-OPENCODE-05",
+    "ADPT-OPENCODE-06",
+    "HAPPY-OPENCODE-01",
+    "E2E-OPENCODE-01",
+    "ADPT-OPENCODE-07",
+    "ADPT-OPENCODE-08",
+    "ADPT-OPENCODE-09"
+   ],
+   "consumed_ids": [
+    "ADPT-01",
+    "MODE-01",
+    "MODE-02",
+    "MODE-03",
+    "MODE-04"
+   ],
+   "dependencies": [
+    "ADAPTER-PLATFORM",
+    "DAEMON-CORE"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "只定义 OpenCode 本地 API/SSE/session fixture、fail-closed capability contract、授权 CLI live smoke、Adapter transport live 与 Happy 对比一致性检查；真实 CLI 通过不能替代 Adapter transport，恢复不足时必须保留明确降级结果。"
+  },
+  {
+   "plan_id": "ADAPTER-OPENCLAW",
+   "suite_path": "docs/test/09-Adapter-OpenClaw.json",
+   "owner": "OpenClaw Adapter",
+   "id_prefix": [
+    "ADPT-OPENCLAW-"
+   ],
+   "owned_ids": [
+    "ADPT-OPENCLAW-01",
+    "ADPT-OPENCLAW-02",
+    "ADPT-OPENCLAW-03",
+    "ADPT-OPENCLAW-04"
+   ],
+   "consumed_ids": [
+    "ADPT-01",
+    "MODE-01",
+    "MODE-02",
+    "MODE-03",
+    "MODE-04"
+   ],
+   "dependencies": [
+    "ADAPTER-PLATFORM",
+    "DAEMON-CORE"
+   ],
+   "status": "planned",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "只定义 OpenClaw Gateway challenge/device auth/RPC fixture 和授权 live smoke；无凭据不得用 fixture 冒充通过。"
+  },
+  {
+   "plan_id": "ANDROID",
+   "suite_path": "docs/test/10-Android.json",
+   "owner": "Android App",
+   "id_prefix": [
+    "MOBILE-",
+    "ATTACH-",
+    "E2E-ANDROID-"
+   ],
+   "owned_ids": [
+    "MOBILE-01",
+    "MOBILE-02",
+    "MOBILE-03",
+    "MOBILE-04",
+    "MOBILE-05",
+    "MOBILE-06",
+    "MOBILE-07",
+    "MOBILE-08",
+    "MOBILE-09",
+    "ATTACH-01",
+    "MOBILE-10",
+    "MOBILE-11",
+    "MOBILE-12",
+    "MOBILE-13",
+    "MOBILE-14",
+    "MOBILE-15",
+    "MOBILE-16",
+    "MOBILE-17",
+    "MOBILE-18",
+    "MOBILE-19",
+    "MOBILE-20",
+    "MOBILE-21",
+    "MOBILE-22",
+    "MOBILE-23",
+    "MOBILE-24",
+    "MOBILE-25",
+    "MOBILE-26",
+    "MOBILE-27",
+    "MOBILE-28",
+    "MOBILE-29",
+    "MOBILE-30",
+    "MOBILE-31",
+    "MOBILE-V05-01",
+    "MOBILE-V05-02",
+    "MOBILE-V05-03",
+    "MOBILE-V05-04",
+    "MOBILE-V05-05",
+    "MOBILE-V05-06",
+    "MOBILE-V05-07",
+    "MOBILE-V05-08",
+    "MOBILE-V05-09",
+    "MOBILE-V05-10",
+    "MOBILE-V05-11",
+    "MOBILE-V05-12",
+    "MOBILE-V05-13",
+    "MOBILE-V05-14",
+    "MOBILE-V05-15",
+    "MOBILE-V05-16",
+    "MOBILE-V05-17",
+    "MOBILE-V05-18",
+    "MOBILE-V05-19",
+    "MOBILE-V05-20",
+    "MOBILE-V05-21",
+    "MOBILE-V05-22",
+    "MOBILE-V05-23",
+    "MOBILE-V05-24",
+    "MOBILE-V05-25",
+    "E2E-ANDROID-01",
+    "E2E-ANDROID-02"
+   ],
+   "consumed_ids": [
+    "PAIR-01",
+    "PAIR-02",
+    "PAIR-03",
+    "SESS-01",
+    "SESS-02",
+    "CTRL-01",
+    "CTRL-02",
+    "GIT-01",
+    "GIT-02",
+    "GIT-03",
+    "GIT-04",
+    "GIT-05",
+    "GIT-06",
+    "MODE-01",
+    "MODE-02",
+    "MODE-03",
+    "MODE-04",
+    "DELEG-06"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-REALTIME",
+    "DAEMON-GIT",
+    "ADAPTER-PLATFORM"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "Android widget/integration、生命周期、缓存、通知、附件、DiffView、子会话切入、会话快捷操作、文件浏览、深链、可访问性与命令面板客户端断言由此 suite 定义；跨层根因测试只消费所属 ID。"
+  },
+  {
+   "plan_id": "USAGE",
+   "suite_path": "docs/test/15-用量隐私.json",
+   "owner": "Relay / Daemon Usage",
+   "id_prefix": [
+    "USAGE-"
+   ],
+   "owned_ids": [
+    "USAGE-01"
+   ],
+   "consumed_ids": [
+    "DAEMON-RPC-01",
+    "SYNC-05"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-REALTIME",
+    "DAEMON-CORE"
+   ],
+   "status": "planned",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "只定义 usage 白名单字段、UTC 日桶、去重、保留和账户 scope 的根因测试；Android 图表只消费 USAGE-01，不能用 fixture 代替聚合安全测试。"
+  },
+  {
+   "plan_id": "DELEGATION",
+   "suite_path": "docs/test/14-Delegation.json",
+   "owner": "Adapter Platform / Relay / Android",
+   "id_prefix": [
+    "DELEG-",
+    "E2E-DELEG-"
+   ],
+   "owned_ids": [
+    "DELEG-01",
+    "DELEG-02",
+    "DELEG-03",
+    "DELEG-04",
+    "DELEG-05",
+    "DELEG-06",
+    "DELEG-07",
+    "E2E-DELEG-01"
+   ],
+   "consumed_ids": [
+    "ADPT-01",
+    "SESS-01",
+    "SESS-02",
+    "CTRL-01",
+    "CTRL-02",
+    "WORKSPACE-01",
+    "MODE-01"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-REALTIME",
+    "DAEMON-CORE",
+    "ADAPTER-PLATFORM",
+    "ANDROID"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "Delegation 协议、Relay 父子索引、Daemon mock 派发、权限边界、Android 确认卡及 mock full gate 只由此 suite 定义；真实跨 Provider smoke 必须单独标记 blocked 或 authorized。"
+  },
+  {
+   "plan_id": "WEB",
+   "suite_path": "docs/test/11-Web.json",
+   "owner": "Vue Web App",
+   "id_prefix": [
+    "WEB-",
+    "E2E-WEB-"
+   ],
+   "owned_ids": [
+    "WEB-01",
+    "WEB-02",
+    "WEB-03",
+    "WEB-04",
+    "WEB-05",
+    "WEB-06",
+    "WEB-07",
+    "E2E-WEB-01",
+    "E2E-WEB-02"
+   ],
+   "consumed_ids": [
+    "SESS-01",
+    "SESS-02",
+    "SYNC-01",
+    "GIT-01",
+    "GIT-02",
+    "SEC-04"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-REALTIME",
+    "DAEMON-GIT"
+   ],
+   "status": "planned",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "只定义 Web 只读页面、SSE cursor、PWA 缓存、设计 token、无障碍和 headed 浏览器行为；会话写权限仍由 Relay 测试定义。"
+  },
+  {
+   "plan_id": "ADMIN",
+   "suite_path": "docs/test/12-Admin.json",
+   "owner": "Vue Admin",
+   "id_prefix": [
+    "ADMIN-",
+    "E2E-ADMIN-"
+   ],
+   "owned_ids": [
+    "ADMIN-01",
+    "ADMIN-02",
+    "ADMIN-03",
+    "ADMIN-04",
+    "ADMIN-05",
+    "ADMIN-06",
+    "E2E-ADMIN-01",
+    "E2E-ADMIN-02"
+   ],
+   "consumed_ids": [
+    "PAIR-03",
+    "CTRL-01",
+    "SEC-01",
+    "SEC-04"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-IDENTITY",
+    "RELAY-REALTIME"
+   ],
+   "status": "planned",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "只定义 Admin 运维元数据、健康状态、脱敏展示、设计 token、无障碍和 headed 浏览器行为；服务器权限仍由 Relay suite 定义。"
+  },
+  {
+   "plan_id": "RELIABILITY-RELEASE",
+   "suite_path": "docs/test/13-可靠性发布.json",
+   "owner": "Deployment / Release",
+   "id_prefix": [
+    "DEPLOY-",
+    "PERF-",
+    "E2E-RELAY-"
+   ],
+   "owned_ids": [
+    "P0-DEPLOY-01",
+    "DEPLOY-01",
+    "DEPLOY-02",
+    "DEPLOY-03",
+    "DEPLOY-04",
+    "SYNC-04",
+    "PERF-01",
+    "PERF-02",
+    "PERF-03",
+    "E2E-RELAY-01",
+    "E2E-RELAY-02",
+    "DEPLOY-05",
+    "PERF-04",
+    "RELEASE-V06-01",
+    "RELEASE-V06-02",
+    "ROLLBACK-V06-01",
+    "RECORD-V06-01"
+   ],
+   "consumed_ids": [
+    "SEC-01",
+    "SEC-02",
+    "SEC-03",
+    "SEC-04"
+   ],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-IDENTITY",
+    "RELAY-REALTIME",
+    "DAEMON-CORE",
+    "DAEMON-GIT",
+    "ANDROID",
+    "WEB",
+    "ADMIN"
+   ],
+   "status": "planned",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "只定义跨层 full gate、性能、备份恢复、升级回滚和发布产物验证；真实 Provider gate 仍由各 ADAPTER_* suite 独立授权。"
+  },
+  {
+   "plan_id": "FOUNDATION-ACCEPTANCE",
+   "suite_path": "docs/test/基础验收用例.json",
+   "owner": "Cross-project QA",
+   "id_prefix": [],
+   "owned_ids": [],
+   "consumed_ids": [
+    "PAIR-01",
+    "PAIR-02",
+    "PAIR-03",
+    "TERM-01",
+    "SESS-01",
+    "SESS-02",
+    "CTRL-01",
+    "CTRL-02",
+    "GIT-01",
+    "GIT-02",
+    "GIT-03",
+    "ADPT-01",
+    "MODE-01",
+    "MODE-02",
+    "MODE-03",
+    "SEC-01",
+    "ADMIN-01",
+    "SYNC-01"
+   ],
+   "dependencies": [
+    "RELAY-IDENTITY",
+    "RELAY-REALTIME",
+    "DAEMON-CORE",
+    "DAEMON-GIT",
+    "ADAPTER-PLATFORM",
+    "ANDROID",
+    "ADMIN"
+   ],
+   "status": "planned",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "跨项目基础验收入口仅消费领域 suite 的稳定 ID，不能重新定义或更改根因测试归属。"
+  },
+  {
+   "plan_id": "ADAPTER-DSH",
+   "suite_path": "docs/test/16-Adapter-Dsh.json",
+   "owner": "Agent Sessions Platform",
+   "id_prefix": [
+    "ADPT-DSH"
+   ],
+   "owned_ids": [
+    "ADPT-DSH-01",
+    "ADPT-DSH-02",
+    "ADPT-DSH-03",
+    "ADPT-DSH-04",
+    "ADPT-DSH-05",
+    "ADPT-DSH-06",
+    "ADPT-DSH-07",
+    "ADPT-DSH-08",
+    "ADPT-DSH-09",
+    "ADPT-DSH-10",
+    "ADPT-DSH-11",
+    "ADPT-DSH-12",
+    "ADPT-DSH-13"
+   ],
+   "consumed_ids": []
+  },
+  {
+   "plan_id": "V08",
+   "suite_path": "docs/test/18-DSH本地工作区同步.json",
+   "owner": "Agent Sessions v0.8",
+   "id_prefix": [
+    "V08-"
+   ],
+   "owned_ids": [
+    "V08-01",
+    "V08-02",
+    "V08-03",
+    "V08-04",
+    "V08-05",
+    "V08-06",
+    "V08-07",
+    "V08-08",
+    "V08-09",
+    "V08-10",
+    "V08-11",
+    "V08-12",
+    "V08-13",
+    "V08-14",
+    "V08-15",
+    "V08-16",
+    "V08-17",
+    "V08-18",
+    "V08-19",
+    "V08-20",
+    "V08-21",
+    "V08-22",
+    "V08-23"
+   ],
+   "consumed_ids": [],
+   "dependencies": [
+    "DAEMON-CORE",
+    "RELAY-REALTIME",
+    "ADAPTER-DSH",
+    "WEB",
+    "ANDROID"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "v0.8 的 DSH 持久化、迁移、Resume/回放、工作区同步、Terminal 归属与客户端投影端到端验收由此 suite 定义；根因测试仍归各领域 suite。"
+  },
+  {
+   "plan_id": "V081",
+   "suite_path": "docs/test/19-DSH工作区主模式.json",
+   "owner": "Agent Sessions v0.8.1",
+   "id_prefix": [
+    "V081-"
+   ],
+   "owned_ids": [
+    "V081-01",
+    "V081-02",
+    "V081-03",
+    "V081-04",
+    "V081-05",
+    "V081-06",
+    "V081-07",
+    "V081-08",
+    "V081-09",
+    "V081-10"
+   ],
+   "consumed_ids": [
+    "V08-12"
+   ],
+   "dependencies": [
+    "V08",
+    "DAEMON-CORE",
+    "RELAY-REALTIME",
+    "WEB",
+    "ANDROID"
+   ],
+   "status": "completed",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "v0.8.1 只拥有 DSH 工作区主模式、工作区内创建/导入、跨端只读与可见交互的新增回归；V08-12 仅消费且必须保持 failed。"
+  },
+  {
+   "plan_id": "V07-RELEASE",
+   "suite_path": "docs/test/10-v0.7全链路.json",
+   "owner": "Agent Sessions v0.7",
+   "id_prefix": [
+    "V07-"
+   ],
+   "owned_ids": [
+    "V07-01",
+    "V07-02",
+    "V07-03",
+    "V07-04",
+    "V07-05",
+    "V07-06",
+    "V07-07",
+    "V07-08",
+    "V07-09",
+    "V07-10",
+    "V07-11",
+    "V07-12"
+   ],
+   "consumed_ids": [],
+   "dependencies": [
+    "PROTO-CRYPTO",
+    "RELAY-IDENTITY",
+    "RELAY-REALTIME",
+    "DAEMON-CORE",
+    "ADAPTER-OPENCODE",
+    "ANDROID",
+    "WEB"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "v0.7 的统一入口、OpenCode Zen 免费模型 smoke/full gate、会话内新建工作区跨层验收、headed 只读观察和录屏证据由此 suite 定义；根因测试仍归所属领域 suite，Android 实机明确排除。"
+  },
+  {
+   "plan_id": "V07-RELEASE",
+   "suite_path": "docs/test/17-Daemon会话命令与交互.json",
+   "owner": "Agent Sessions v0.7",
+   "id_prefix": [
+    "DCM-",
+    "AMI-"
+   ],
+   "owned_ids": [
+    "DCM-01",
+    "DCM-02",
+    "DCM-03",
+    "DCM-04",
+    "DCM-05",
+    "DCM-06",
+    "AMI-01",
+    "AMI-02",
+    "AMI-03",
+    "AMI-04"
+   ],
+   "consumed_ids": [],
+   "dependencies": [
+    "DAEMON-CORE",
+    "ADAPTER-OPENCODE",
+    "ANDROID"
+   ],
+   "status": "passed",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "daemon 会话命令/事件/生命周期单元矩阵与 App 消息交互契约；DCM/AMI 前缀独占。"
+  },
+  {
+   "plan_id": "V082",
+   "suite_path": "docs/test/20-DSH能力补全.json",
+   "owner": "Agent Sessions v0.8.2",
+   "id_prefix": [
+    "V082-"
+   ],
+   "owned_ids": [
+    "V082-01",
+    "V082-02",
+    "V082-03",
+    "V082-04",
+    "V082-05",
+    "V082-06",
+    "V082-07",
+    "V082-08",
+    "V082-09",
+    "V082-10",
+    "V082-11",
+    "V082-12",
+    "V082-13",
+    "V082-14",
+    "V082-15",
+    "V082-16",
+    "V082-17",
+    "V082-18",
+    "V082-19"
+   ],
+   "consumed_ids": [
+    "V08-12"
+   ],
+   "dependencies": [
+    "V081",
+    "V08"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "v0.8.2 拥有 DSH 工具事件/effort/权限回流/能力矩阵/生命周期门控的新增回归；V08-12 仅消费且必须保持 failed 不被改写。桥未实现能力的用例以 blocked_on_bridge 如实登记，不伪造 native。"
+  },
+  {
+   "plan_id": "V083",
+   "suite_path": "docs/test/21-DSH ACP扩展能力.json",
+   "owner": "Agent Sessions v0.8.3",
+   "id_prefix": [
+    "V083-"
+   ],
+   "owned_ids": [
+    "V083-01",
+    "V083-02",
+    "V083-03",
+    "V083-04",
+    "V083-05",
+    "V083-06",
+    "V083-07",
+    "V083-08",
+    "V083-09",
+    "V083-10",
+    "V083-11",
+    "V083-12",
+    "V083-13",
+    "V083-14",
+    "V083-15",
+    "V083-16",
+    "V083-17",
+    "V083-18",
+    "V083-19",
+    "V083-20",
+    "V083-21",
+    "V083-22",
+    "V083-23",
+    "V083-24",
+    "V083-25",
+    "V083-26",
+    "V083-27"
+   ],
+   "consumed_ids": [
+    "V08-12"
+   ],
+   "dependencies": [
+    "V082",
+    "V081",
+    "V08"
+   ],
+   "status": "planned",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "v0.8.3 拥有 DSH ACP 扩展能力收口的新增回归（permission mode、图像、session lifecycle、additionalDirectories、question/plan/goal/skill/delegation、能力矩阵与 Relay 安全）；V08-12 仅消费且历史 failed 证据不可改写，修复证据由 V083-07/V083-26 新增。契约唯一事实源为 ADR-014。真实模型用例（V083-26）须用户显式授权后运行。"
+  },
+  {
+   "plan_id": "V084",
+   "suite_path": "docs/test/22-DSH增量流式与回合状态.json",
+   "owner": "Agent Sessions v0.8.4",
+   "id_prefix": [
+    "V084-"
+   ],
+   "owned_ids": [
+    "V084-01",
+    "V084-02",
+    "V084-03",
+    "V084-04",
+    "V084-05",
+    "V084-06",
+    "V084-07",
+    "V084-08",
+    "V084-09",
+    "V084-10",
+    "V084-11",
+    "V084-12",
+    "V084-13",
+    "V084-14",
+    "V084-15",
+    "V084-16",
+    "V084-17"
+   ],
+   "consumed_ids": [
+    "V08-12"
+   ],
+   "dependencies": [
+    "V083",
+    "V082",
+    "V081",
+    "V08"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "v0.8.4 拥有细粒度回合状态与 ACP 流式输出的新增回归（TurnPhase 状态机、assistant/chunk 增量投影、thoughtVisibility thought 通道、背压/恢复收口、Flutter 打字机与性能、deterministic overlay、真实模型授权 gate）；V08-12 仅消费且历史 failed 证据不可改写。契约唯一事实源为 ADR-015。真实模型用例（V084-15）须用户显式授权后运行。"
+  }
+ ]
 }

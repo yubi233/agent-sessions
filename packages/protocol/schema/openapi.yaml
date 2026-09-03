@@ -1883,7 +1883,7 @@ components:
           minimum: 1
         event_type:
           type: string
-          enum: [session.lifecycle, turn.started, user.message, message.delta, message.completed, turn.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated, unknown]
+          enum: [session.lifecycle, turn.started, user.message, message.delta, message.thought_delta, message.completed, turn.completed, turn.phase, session.activity, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated, unknown]
         terminal_status:
           type: string
           enum: [idle, stopped]
@@ -1976,7 +1976,7 @@ components:
           format: int64
         event_type:
           type: string
-          enum: [session.lifecycle, turn.started, user.message, message.delta, message.completed, turn.completed, tool.call, tool.result, permission.request, permission.decision, user.question, plan.changed, goal.changed, skill.catalog_changed, usage.updated, file.changed, git.snapshot, command.updated, delegation.changed]
+          enum: [session.lifecycle, turn.started, user.message, message.delta, message.thought_delta, message.completed, turn.completed, turn.phase, session.activity, tool.call, tool.result, permission.request, permission.decision, user.question, plan.changed, goal.changed, skill.catalog_changed, usage.updated, file.changed, git.snapshot, command.updated, delegation.changed]
         terminal_status:
           type: string
           enum: [idle, stopped]
@@ -2406,7 +2406,7 @@ components:
           maxLength: 128
         event_type:
           type: string
-          enum: [session.lifecycle, turn.started, user.message, message.delta, message.completed, turn.completed, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated]
+          enum: [session.lifecycle, turn.started, user.message, message.delta, message.thought_delta, message.completed, turn.completed, turn.phase, session.activity, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated]
         terminal_status:
           type: string
           enum: [idle, stopped]

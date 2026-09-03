@@ -1853,7 +1853,7 @@ func daemonObservationTerminalStatus(eventType, status string) string {
 
 func daemonObservationEventType(value string) string {
 	switch value {
-	case "session.lifecycle", "turn.started", "user.message", "message.delta", "message.completed", "turn.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
+	case "session.lifecycle", "turn.started", "user.message", "message.delta", "message.thought_delta", "message.completed", "turn.completed", "turn.phase", "session.activity", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
 		return value
 	default:
 		return "unknown"

@@ -1,0 +1,321 @@
+{
+  "suite": "v084-dsh-streaming-turn-phase",
+  "description": "v0.8.4 细粒度会话状态与 ACP 流式输出：assistant/chunk 真正增量投影、TurnPhase 状态机与 dsh/turn/status 扩展、thoughtVisibility 默认 raw 的独立 thought 通道、背压/恢复收口与 Flutter 打字机 UI。契约唯一事实源为 ADR-015。",
+  "environment": {
+    "local": "隔离 SQLite、内存假桥/场景桥（fakebridge_test.go / fakescenarios_test.go）、受控 cordis.yml fixture",
+    "browser": "系统 Chrome headed（V084-12 gate）",
+    "flutter": "macOS fixture 窗口（V084-10/11 gate，需没有用户正在使用的 Agent Sessions 窗口）",
+    "dsh_overlay": "本地确定性真实 DSH bridge overlay（V084-14，不调用真实模型）",
+    "real": "真实 DSH 模型冒烟（V084-15，需用户显式授权，AGENT_SESSIONS_DSH_REAL=1）"
+  },
+  "cases": [
+    {
+      "id": "V084-01",
+      "title": "TurnPhase 状态转换、非法转换、terminal fence 与旧客户端 fallback",
+      "status": "passed",
+      "phase": "P0",
+      "category": "turn_phase_state_machine",
+      "priority": "P0",
+      "test_layer": "unit/contract",
+      "precondition": "ADR-015 §2.1 冻结转换表已实现为 internal/adapter/dsh/turnphase.go 的纯函数状态机。",
+      "steps": [
+        "运行 go test ./internal/adapter/dsh -run 'TestTurnPhase|TestParseTurnPhase'",
+        "覆盖主干链 queued→preparing→thinking→streaming→tool_running→streaming→finishing→completed 与 revision 单调推进",
+        "覆盖非法回退（streaming→thinking、thinking→preparing、cancelling→streaming 等）与同相位自环去重",
+        "覆盖终态 fence：completed/cancelled/failed 后的一切转换被拒绝且 revision 不推进",
+        "覆盖未知 phase/reason 字符串 fail-closed 与旧桥无投影时 queued→completed 兜底终态"
+      ],
+      "expected": "全部子测试通过；非法转换不推进 revision；终态无出边；未知值不映射近似相位。",
+      "cleanup": ["无（纯单元测试）"],
+      "evidence": ["internal/adapter/dsh/turnphase.go", "internal/adapter/dsh/turnphase_test.go", "docs/adr/ADR-015-细粒度回合状态与ACP流式输出.md"]
+    },
+    {
+      "id": "V084-02",
+      "title": "桥按 text-delta 发送有序 agent_message_chunk，空/重复/乱序拒绝",
+      "status": "planned",
+      "phase": "P1",
+      "category": "acp_streaming",
+      "priority": "P0",
+      "test_layer": "ACP bridge",
+      "precondition": "deepseek-harness 桥已监听 assistant/chunk 并在协商流式能力后按 delta 发帧；每 turn 维护 message identity 与 chunk sequence。",
+      "steps": [
+        "DSH vitest/fake bridge：发送含多个 text-delta 的 assistant/chunk 序列",
+        "断言每个 delta 产生独立 agent_message_chunk 且 _meta 身份（turn/step/seq）有序递增",
+        "注入空 chunk、重复 seq、乱序 seq、跨 session chunk",
+        "断言拒绝或计数，不产生空帧，不破坏后续合法帧顺序"
+      ],
+      "expected": "chunk 与 seq 一一对应有序；非法帧被拒绝/计数；assistant answer 事件不含 thought 或工具半截 JSON。",
+      "cleanup": ["关闭 fake bridge 进程"],
+      "evidence": ["deepseek-harness:packages/acp/acp/src/index.ts", "deepseek-harness 桥 vitest 套件"]
+    },
+    {
+      "id": "V084-03",
+      "title": "thought 通道：默认 raw 直接开启、hidden/summary 兼容降级、与 answer 分离",
+      "status": "planned",
+      "phase": "P1",
+      "category": "acp_thought",
+      "priority": "P0",
+      "test_layer": "ACP bridge",
+      "precondition": "thoughtVisibility 协商已实现（com.deepseek.dsh/extensions _meta）；reasoning-delta 源存在。",
+      "steps": [
+        "raw 模式（默认）：发送 reasoning-delta 序列，断言逐块 agent_thought_chunk 且独立 sequence",
+        "hidden 模式：断言无 thought 内容帧，仅 dsh/turn/status 驱动 thinking phase",
+        "summary 模式：断言 turn 结束时仅一帧计数级安全摘要，不含推理正文",
+        "三种模式断言 assistant_message_chunk 事件不包含任何 thought 文本"
+      ],
+      "expected": "默认 raw 无需显式开启；三种模式均不把 thought 拼入 answer；取消时 thought 通道独立收口。",
+      "cleanup": ["关闭 fake bridge 进程"],
+      "evidence": ["deepseek-harness:packages/acp/acp/src/index.ts", "docs/adr/ADR-015-细粒度回合状态与ACP流式输出.md §5"]
+    },
+    {
+      "id": "V084-04",
+      "title": "tool-call、permission、question 与 phase 的顺序和终态",
+      "status": "planned",
+      "phase": "P1/P2",
+      "category": "acp_interaction",
+      "priority": "P0",
+      "test_layer": "ACP bridge + adapter",
+      "precondition": "tool_call/tool_call_update、permission ask、question 扩展已接通（v0.8.3 事实）。",
+      "steps": [
+        "回放 tool 打开→phase=tool_running→等待权限→phase=waiting_permission→决策→tool_running→tool_close 的完整顺序",
+        "注入 question 请求与工具并发",
+        "断言 phase 事件 revision 单调、与 tool/permission 事件顺序一致、终态唯一"
+      ],
+      "expected": "交互请求不吞掉 phase 帧；每个交互与 phase 均有明确终态；无永久 pending。",
+      "cleanup": ["关闭 fake bridge 进程"],
+      "evidence": ["internal/adapter/dsh/handle.go", "internal/adapter/dsh/fakescenarios_test.go"]
+    },
+    {
+      "id": "V084-05",
+      "title": "load/replay 只发完整消息；resume 新 turn 恢复 cursor/identity",
+      "status": "planned",
+      "phase": "P1",
+      "category": "acp_recovery",
+      "priority": "P0",
+      "test_layer": "ACP bridge",
+      "precondition": "replaySession 路径与流式路径可区分（回放帧无流式 _meta）。",
+      "steps": [
+        "对含历史消息的 session 执行 session/load",
+        "断言回放只发送完整消息帧（映射 completed），无旧 token 增量重放",
+        "resume 后发送新 prompt，断言新 turn 使用新 turn/step identity 且增量从头计数"
+      ],
+      "expected": "回放与 live 分离；恢复后无重复拼接、无旧动画重放；identity 不跨 turn 复用。",
+      "cleanup": ["关闭 fake bridge 进程"],
+      "evidence": ["deepseek-harness:packages/acp/acp/src/index.ts replaySession"]
+    },
+    {
+      "id": "V084-06",
+      "title": "DSH mapper：agent_message_chunk → EventMessageDelta；completed 不重复",
+      "status": "planned",
+      "phase": "P2",
+      "category": "dsh_mapper",
+      "priority": "P0",
+      "test_layer": "unit/contract",
+      "precondition": "mapper 已按 _meta 区分 text-delta 帧与 committed 帧；旧帧（无 _meta）保持 completed 映射。",
+      "steps": [
+        "mapSessionUpdate 注入带 text-delta _meta 的 agent_message_chunk",
+        "断言产出 EventMessageDelta 且载荷白名单为 instance_id/message_id/text",
+        "注入 committed 帧，断言唯一 EventMessageCompleted 且全文替换同身份",
+        "注入无 _meta 旧帧，断言仍映射 EventMessageCompleted（回滚开关）"
+      ],
+      "expected": "delta/completed 映射正确；同 turn 只有一个权威 completed；中断帧标记 interrupted。",
+      "cleanup": ["无（纯单元测试）"],
+      "evidence": ["internal/adapter/dsh/mapper.go", "internal/adapter/dsh/mapper_test.go"]
+    },
+    {
+      "id": "V084-07",
+      "title": "message.delta/turn.phase envelope 的 schema、排序、幂等和重放",
+      "status": "planned",
+      "phase": "P2",
+      "category": "daemon_relay",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "relayEventType 已映射 message.thought_delta/turn.phase/session.activity；events.json/OpenAPI 枚举已冻结。",
+      "steps": [
+        "Daemon fixture 循环发送 delta/thought/phase 事件序列",
+        "断言 Relay envelope 事件类型与 events.json 枚举一致、seq 有序、重复上传幂等",
+        "断言断线重放后 cursor 推进且事件不丢不重"
+      ],
+      "expected": "envelope 通过协议形状门；排序/幂等/重放语义与既有 turn.completed 路径一致。",
+      "cleanup": ["销毁 fixture 存储"],
+      "evidence": ["internal/daemon/relay.go", "packages/protocol/schema/events.json"]
+    },
+    {
+      "id": "V084-08",
+      "title": "背压/取消：慢消费者、队列上限、close/dispose、取消 race、断线收口",
+      "status": "planned",
+      "phase": "P2",
+      "category": "reliability",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "事件通道与输出队列有界；Dispose/Abort 收口路径存在。",
+      "steps": [
+        "以慢消费者制造队列积压，断言暂停/丢弃计数可见，无静默丢 chunk",
+        "在流式中途 Dispose 与 Abort，断言 thought/text 通道与 phase 均以明确终态收口",
+        "模拟断线后 resume，断言无重复播放、无永久 pending"
+      ],
+      "expected": "所有路径有明确终态；timeout/EOF/close/dispose/cancel 不留无限 pending。",
+      "cleanup": ["销毁 fixture 进程与存储"],
+      "evidence": ["internal/adapter/dsh/handle.go", "internal/daemon/localdev_encoder.go"]
+    },
+    {
+      "id": "V084-09",
+      "title": "Flutter projection：按 message identity 累积/替换，跨 session 隔离，终态清账",
+      "status": "planned",
+      "phase": "P3",
+      "category": "flutter_projection",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "session_projection_controller 已按 sessionId+messageId 折叠 delta 并生成单一 streaming 节点。",
+      "steps": [
+        "注入同身份 delta 序列后接 completed，断言原子替换不重复",
+        "交错注入两个 session 的 delta，断言隔离不串流",
+        "注入 turn 终态，断言清账与 phase 归位"
+      ],
+      "expected": "打字机节点唯一、替换语义正确、跨会话零串扰、终态清账。",
+      "cleanup": ["无（组件测试）"],
+      "evidence": ["apps/mobile/lib/state/session_projection_controller.dart", "apps/mobile/test/session_projection_test.dart"]
+    },
+    {
+      "id": "V084-10",
+      "title": "Flutter 可见：thinking/streaming/tool/waiting/finishing/cancelled/failed UI 状态",
+      "status": "planned",
+      "phase": "P4",
+      "category": "flutter_visual",
+      "priority": "P0",
+      "test_layer": "E2E（macOS 可见窗口）",
+      "precondition": "phase→可见状态映射完成；固定 overlay 已改为 phase-aware 状态行。",
+      "steps": [
+        "run-macos fixture gate 驱动 V084 场景（VISUAL-MOBILE-36）",
+        "逐相位断言状态行文案、typewriter 连续增长、权限/问题面板切换",
+        "断言终态后回到可操作态、窄屏无溢出"
+      ],
+      "expected": "全部相位在真实窗口可见且无布局跳动；录屏仅作通过后的展示证据。",
+      "cleanup": ["关闭 Flutter 应用进程"],
+      "evidence": ["e2e-verify/mobile/run-macos.mjs", "e2e-verify/reports/"]
+    },
+    {
+      "id": "V084-11",
+      "title": "Flutter 性能：高频 chunk 节流、布局稳定、滚动/后台恢复、窄屏无溢出",
+      "status": "planned",
+      "phase": "P3/P4",
+      "category": "flutter_performance",
+      "priority": "P1",
+      "test_layer": "component + E2E",
+      "precondition": "delta 合并/节流已实现（帧级合并而非逐 token rebuild）。",
+      "steps": [
+        "组件测试以高频（≥50 chunk/s）delta 轰炸 projection",
+        "断言合并后 rebuild 次数有界、文本完整无损",
+        "可见窗口验证滚动锁定、后台恢复、窄屏无溢出"
+      ],
+      "expected": "无无限 layout/rebuild；输出零丢失；恢复后内容连续。",
+      "cleanup": ["关闭 Flutter 应用进程"],
+      "evidence": ["apps/mobile/test/", "apps/mobile/lib/state/session_projection_controller.dart"]
+    },
+    {
+      "id": "V084-12",
+      "title": "Web headed：phase 时间线、刷新/重连、只读 capability gate",
+      "status": "planned",
+      "phase": "P4",
+      "category": "web_e2e",
+      "priority": "P1",
+      "test_layer": "browser E2E（headed Chrome）",
+      "precondition": "Web 时间线已展示安全 phase/timeline；无新增未门控写入口。",
+      "steps": [
+        "headed Chrome 打开本地 fixture 会话详情",
+        "断言 phase 时间线顺序、刷新/重连恢复",
+        "断言写入口仍被 capability gate 拦截"
+      ],
+      "expected": "real_browser=true/headless=false；phase 顺序正确；只读边界不回退。",
+      "cleanup": ["关闭浏览器"],
+      "evidence": ["e2e-verify/run.mjs", "e2e-verify/reports/"]
+    },
+    {
+      "id": "V084-13",
+      "title": "OpenCode/Codex 既有 message delta/completed/tool/usage/abort 回归",
+      "status": "planned",
+      "phase": "P4",
+      "category": "cross_provider_regression",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "OpenCode/Codex 既有 delta 路径（ADPT-OPENCODE-02 等）不变。",
+      "steps": [
+        "运行既有 OpenCode/Codex adapter 测试与 Relay delta 消费回归",
+        "断言新 phase/thought 事件类型不改变其 completed/tool/usage/abort 语义"
+      ],
+      "expected": "既有套件全绿；无行为漂移。",
+      "cleanup": ["无"],
+      "evidence": ["internal/adapter/opencode/", "internal/adapter/codex/"]
+    },
+    {
+      "id": "V084-14",
+      "title": "DSH deterministic overlay full journey（不调用模型）",
+      "status": "planned",
+      "phase": "P4",
+      "category": "dsh_overlay",
+      "priority": "P0",
+      "test_layer": "E2E（本地确定性 overlay）",
+      "precondition": "dsh-v083-overlay 扩展为 v0.8.4 场景（text chunks、thinking、tool、waiting、finishing、cancelled、failed、replay、慢客户端）。",
+      "steps": [
+        "运行确定性 overlay 全旅程",
+        "断言每个场景的 phase 序列、delta 累积与终态收口与 ADR-015 一致"
+      ],
+      "expected": "overlay 为真实本地进程、fixture_data=true、real_model=false；全场景通过。",
+      "cleanup": ["关闭 overlay 进程"],
+      "evidence": ["e2e-verify/real/dsh-v084-overlay.mjs", "e2e-verify/reports/"]
+    },
+    {
+      "id": "V084-15",
+      "title": "真实模型 gate（需用户显式授权）",
+      "status": "planned",
+      "phase": "P5",
+      "category": "real_model",
+      "priority": "P1",
+      "test_layer": "real model gate",
+      "precondition": "用户显式授权（AGENT_SESSIONS_DSH_REAL=1）；凭据与额度可用。",
+      "steps": [
+        "DSH new → send 多 chunk 回复",
+        "观察 thinking/tool 状态与 phase 流",
+        "load/resume → send 复验恢复路径"
+      ],
+      "expected": "报告记录 provider/model、请求次数、usage、request id 与失败分类；不记录 prompt/回复正文/凭据。缺凭据或额度时如实记 blocked/partial。",
+      "cleanup": ["关闭真实会话与进程"],
+      "evidence": ["e2e-verify/real/", "e2e-verify/reports/"]
+    },
+    {
+      "id": "V084-16",
+      "title": "审计：凭据与私有 session id 不进入公共产物；thought 独立通道核验",
+      "status": "planned",
+      "phase": "P5",
+      "category": "audit",
+      "priority": "P0",
+      "test_layer": "audit",
+      "precondition": "全部 P0-P3 产物（日志、envelope、fixture、缓存、录屏）已生成。",
+      "steps": [
+        "扫描公共产物中的凭据、token、私有 session id",
+        "核验 raw thought 只进入独立 thought 通道且未混入 answer 事件",
+        "核验未声明 thought capability 的客户端被降级 hidden/summary 并计数"
+      ],
+      "expected": "零泄漏；raw reasoning 属终端所有者本地授权内容，审计只核验独立通道与协商边界。",
+      "cleanup": ["隔离并脱敏违规产物"],
+      "evidence": ["问题排查/", "e2e-verify/reports/"]
+    },
+    {
+      "id": "V084-17",
+      "title": "V081/V082/V083 回归：工作区、生命周期、扩展、工具事件与能力矩阵不回退",
+      "status": "planned",
+      "phase": "P4/P5",
+      "category": "regression",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "test:v084:local 统一回归入口已注册（含 V081/V082/V083 既有 gate）。",
+      "steps": [
+        "运行 task test:v084:local",
+        "核对 V081 工作区主模式、V082 工具时间线、V083 能力门控全部通过"
+      ],
+      "expected": "既有能力矩阵与历史 ID 证据不被改写；V08-12 failed 证据保持原样。",
+      "cleanup": ["无"],
+      "evidence": ["Taskfile.yml test:v084:local", "docs/test/测试套件索引.json"]
+    }
+  ]
+}
