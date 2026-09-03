@@ -99,8 +99,16 @@ void main() {
       find.byKey(Key('permission-approve-${permission.requestId}')),
     );
 
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
   });
 
@@ -414,8 +422,16 @@ void main() {
       isEmpty,
     );
 
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
     await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
     final stoppedSnapshot = await harness.relay.getSessionSnapshot(sessionId);
@@ -460,6 +476,37 @@ void main() {
     await _waitForVisible(tester, find.text('已停止'));
     final snapshot = await harness.relay.getSessionSnapshot(sessionId);
     expect(snapshot.session.status, MobileSessionStatus.stopped);
+  });
+
+  testWidgets('中断入口唯一：流式中草稿为空仅主按钮停止，草稿非空仅独立停止', (tester) async {
+    final (harness, _) = await _openSeededWritableSession(tester);
+
+    await _enterVisible(
+      tester,
+      find.byKey(const Key('session-composer-input')),
+      '触发一轮生成',
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+
+    // 草稿已清空：主按钮即停止（红色），独立停止按钮不出现——避免双中断入口。
+    await _waitForVisible(tester, find.byIcon(Icons.stop));
+    expect(find.byKey(const Key('session-stop-button')), findsNothing);
+
+    // 输入新草稿：主按钮切回排队语义，中断转移到独立停止按钮。
+    await tester.enterText(
+      find.byKey(const Key('session-composer-input')),
+      '排队下一句',
+    );
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(find.byKey(const Key('session-stop-button')), findsOneWidget);
+    final primary = tester.widget<IconButton>(
+      find.byKey(const Key('session-composer-primary-action')),
+    );
+    expect((primary.icon as Icon).icon, Icons.schedule_send_outlined);
+    expect(harness.relay.submittedCommandCount, 1);
   });
 
   testWidgets('MOBILE-V05-04/P3-B：提交失败显示 notice 且保留草稿', (tester) async {
@@ -660,8 +707,16 @@ void main() {
     expect(find.text('还有 1 条排队消息未显示'), findsNothing);
 
     // stop 后 running=false：多项默认折叠，只显示首尾，中间项隐藏并提示剩余。
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
     await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
     expect(find.text(first), findsOneWidget);
@@ -714,8 +769,16 @@ void main() {
     );
     await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
 
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
 
     // 单项无 count header：不显示折叠/展开 toggle，也不显示「还有 N 条」。
@@ -761,8 +824,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 80));
     }
     await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
 
     // 编辑态强制展开：点击第一项编辑后，折叠态被打破，中间项也可见。
@@ -851,8 +922,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 80));
     }
     await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
 
     final sessionId = (await harness.relay.listSessions()).single.id;
@@ -907,8 +986,16 @@ void main() {
       find.byKey(const Key('session-composer-primary-action')),
     );
     await _waitForVisible(tester, find.byKey(const Key('session-queue-dock')));
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
 
     harness.relay.setNetworkAvailable(false);
@@ -1092,8 +1179,16 @@ void main() {
       find.byKey(Key('permission-approve-${firstPermission.requestId}')),
     );
     await _waitForGone(tester, find.byKey(const Key('session-composer-chain')));
-    await _waitForEnabledIconButton(tester, const Key('session-stop-button'));
-    await _tapVisible(tester, find.byKey(const Key('session-stop-button')));
+    // 中断入口唯一：草稿为空时主按钮即停止（session-stop-button 仅在
+    // 运行中且草稿非空时出现）。
+    await _waitForEnabledIconButton(
+      tester,
+      const Key('session-composer-primary-action'),
+    );
+    await _tapVisible(
+      tester,
+      find.byKey(const Key('session-composer-primary-action')),
+    );
     await _waitForVisible(tester, find.text('已停止'));
 
     await _enterVisible(

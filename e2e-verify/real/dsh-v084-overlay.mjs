@@ -102,7 +102,7 @@ const mockSequence = argOf("--mock-sequence") ?? [
   "reasoning_success",  // P2 thought 回合
   "tool_call_success",  // P3 工具回合（工具结果后的续跑也取下一脚本项）
   "success",            // P3 续跑
-  "stall",              // P4 取消回合
+  "slow_success",       // P4 取消回合：流式中途被 session/cancel 掐断
   "stream_disconnect",  // P5 失败回合
 ].join(",");
 const mockChild = spawn(process.execPath, [
@@ -113,12 +113,15 @@ const mockChild = spawn(process.execPath, [
   "--sequence", mockSequence,
   "--repeat-last",
   "--chunk-size", "3",
-  "--chunk-delay-ms", "5",
+  "--chunk-delay-ms", "120",
   "--reasoning-text", "v084 确定性推理文本，用于 thought 通道断言。",
-  "--success-text", "v084 确定性回复文本，用于增量拼接断言。",
+  "--success-text",
+  "v084 确定性回复文本，用于增量拼接断言。" +
+    "这一段被故意拉长，让取消回合的流式输出拥有足够长的中断窗口。",
   "--tool-name", "bash",
   "--tool-arguments", JSON.stringify({ command: "echo v084-overlay" }),
 ], { cwd: dshRoot, stdio: ["ignore", "pipe", "pipe"] });
+const mockResults = [];
 const mockReady = new Promise((resolveReady, rejectReady) => {
   const timer = setTimeout(() => rejectReady(new Error("mock LLM 启动超时")), 30_000);
   mockChild.stdout.setEncoding("utf8");
@@ -130,6 +133,10 @@ const mockReady = new Promise((resolveReady, rejectReady) => {
         if (msg.type === "ready") {
           clearTimeout(timer);
           resolveReady(msg.baseURL);
+        } else if (msg.type === "request" || msg.type === "result") {
+          // 中断埋点：mock LLM 服务端记录的每个请求结果。被取消回合的
+          // outcome=client_closed + 部分 chunks 即"模型流被真实关闭"的证据。
+          mockResults.push(msg);
         }
       } catch { /* 启动期间的诊断行忽略 */ }
     }
@@ -390,6 +397,19 @@ async function main() {
   check("cancelled_stop_reason", result4.result?.stopReason === "cancelled", result4.result);
   const phases4 = phaseFrames.slice(baseline4.phases).map((frame) => frame.phase);
   check("phase_cancelled_terminal", phases4.includes("cancelling") && phases4.includes("cancelled"), phases4);
+  // 中断埋点（真实中断）：被取消回合的 LLM 流必须以 client_closed 结束——
+  // 即桥在取消时关闭了模型 HTTP 流，而不是让模型继续跑完。
+  await drain(500);
+  const interrupted = [...mockResults]
+    .reverse()
+    .find((entry) => entry.type === "result" && entry.behavior === "slow_success");
+  check(
+    "llm_stream_actually_interrupted",
+    interrupted !== undefined &&
+      interrupted.outcome === "client_closed" &&
+      interrupted.chunksSent > 0,
+    interrupted ?? {},
+  );
 
   // 6) P5 失败回合（mock: stream_disconnect）。
   const baseline5 = { phases: phaseFrames.length };

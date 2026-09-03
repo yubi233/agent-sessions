@@ -76,6 +76,21 @@ type handle struct {
 	// 投影做结构校验（冻结转换表 + revision 单调 + 终态 fence），合法帧映射为
 	// canonical turn.phase/session.activity 事件。读循环单 goroutine 访问。
 	turnPhases *turnPhaseRegistry
+
+	// 中断链路埋点（V084-08 补强）：abortRequested 记录客户端请求中断的次数；
+	// turnsCancelled 记录回合确实以 stopReason=cancelled 结算的次数。两者结合
+	// 回答"中断是否真正打断了 DSH 模型回合"——只发 cancel 而回合未取消说明
+	// 中断链路失效。单 goroutine（读循环/Send）内递增。
+	abortsRequested int64
+	turnsCancelled  int64
+}
+
+// instrumentSnapshot 返回中断链路埋点计数（诊断与回归断言用）。
+func (h *handle) instrumentSnapshot() map[string]int64 {
+	return map[string]int64{
+		"abort_requested": h.abortsRequested,
+		"turn_cancelled":  h.turnsCancelled,
+	}
 }
 
 // streamingEnvSwitch 是 v0.8.4 流式协商的回滚开关（ADR-015 §8）：
@@ -375,6 +390,10 @@ func (h *handle) sendPromptBlocks(ctx context.Context, prompt []map[string]any) 
 	// 回复正文。这里等待事件通道进入静默（或达到上限）再发终止标记，保证通知
 	// 先入队；Send 本就阻塞到回合结束，额外宽限不影响并发语义。
 	h.awaitInFlightNotifications(dshEventQuietWindow, dshEventDrainLimit)
+	// 中断埋点：回合以 cancelled 结算 = 中断真正打断了模型回合。
+	if response.StopReason == "cancelled" {
+		h.turnsCancelled++
+	}
 	// v0.8.4：prompt 终态合成兜底 phase——桥已发终态时 terminal fence 去重。
 	h.synthesizeTerminalPhase(response.StopReason)
 	h.pushEvent(adapter.Event{
@@ -414,8 +433,11 @@ func (h *handle) awaitInFlightNotifications(quiet, limit time.Duration) {
 }
 
 // Abort 发送 session/cancel 通知（通知型无应答帧；幂等，对空闲会话桥容错）。
+// 埋点 abortRequested 记录中断请求次数；回合是否真的被取消由 turnsCancelled
+// （prompt 以 stopReason=cancelled 结算）回答。
 func (h *handle) Abort(ctx context.Context) error {
 	_ = ctx
+	h.abortsRequested++
 	return h.notify("session/cancel", map[string]any{"sessionId": h.sessionID})
 }
 

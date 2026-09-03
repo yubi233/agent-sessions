@@ -83,6 +83,11 @@ class SessionController extends ChangeNotifier {
   final Map<String, String> _idempotencyKeys = {};
   // cursor 只在内存保存为会话序号；生命周期恢复不接触消息正文、密文或待发送内容。
   final Map<String, int> _sessionCursors = {};
+  // 回合在途：send 受理即置位，直到回合终态（completed/cancelled/failed）、
+  // abort/kill 或切换会话才清除。比 status==streaming 更早成立、更晚结束，
+  // 覆盖"乐观回显已并入、status 尚未翻到 streaming"的受理窗口，保证中断
+  // 按钮从发送那一刻起始终可用。
+  bool _turnInFlight = false;
   // v0.2/P2：composer 草稿只保存在内存（不落明文盘）；按会话隔离，切换页面/会话后仍可恢复。
   final Map<String, String> _composerDrafts = {};
   // v0.5：reference occurrences 与 transient queue 也按 session 隔离，不能随 widget 重建丢失。
@@ -166,6 +171,9 @@ class SessionController extends ChangeNotifier {
       _selectedLease != null && _selectedLease!.epoch > 0;
   bool get isStreaming =>
       selectedSession?.status == MobileSessionStatus.streaming;
+
+  /// 回合在途（见 [_turnInFlight]）。composer 以它决定主按钮是否为"中断"。
+  bool get isTurnInFlight => _turnInFlight;
   bool get isEmpty => _phase == SessionListPhase.ready && _sessions.isEmpty;
   int get selectedCursor => _cursorFor(_selectedSessionId);
 
@@ -877,6 +885,7 @@ class SessionController extends ChangeNotifier {
       if (blocked != null) _setError(blocked);
       return;
     }
+    _turnInFlight = false;
     await _submitCommand(
       sessionId: sessionId,
       operation: 'kill:$sessionId:${selectedSession?.lastSequence ?? 0}',
@@ -1003,6 +1012,10 @@ class SessionController extends ChangeNotifier {
       },
       awaitTurnCompletion: awaitTurnCompletion,
     );
+    if (accepted) {
+      _turnInFlight = true;
+      notifyListeners();
+    }
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
       _pendingOutgoingBySession.remove(sessionId);
       notifyListeners();
@@ -1025,12 +1038,22 @@ class SessionController extends ChangeNotifier {
             )) {
       return;
     }
-    await _submitCommand(
+    final accepted = await _submitCommand(
       sessionId: sessionId,
       operation: 'abort:$sessionId:${selectedSession?.lastSequence ?? 0}',
       kind: SessionCommandKind.abort,
       deviceId: deviceId!,
     );
+    // 中断受理即收敛本地在途状态：回合在途复位；乐观回显若尚未被 canonical
+    // user.message 并入（中断先于投递落地），按"未送达"撤回，避免出现一条
+    // 永远等不到回复的幻影消息；最后补拉快照，让"生成中"状态行立即归位。
+    _turnInFlight = false;
+    _pendingOutgoingBySession.remove(sessionId);
+    _errorMessage = null;
+    notifyListeners();
+    if (accepted) {
+      await _bestEffortRefreshAfterCommandFailure(sessionId);
+    }
   }
 
   Future<MobileSession?> forkFromMessage({
@@ -1918,6 +1941,7 @@ class SessionController extends ChangeNotifier {
     }
     final selectionGeneration = ++_selectionGeneration;
     _errorMessage = null;
+    _turnInFlight = false;
     _historyErrorMessage = null;
     _historyLoading = false;
     _selectedSessionId = sessionId;
@@ -2096,6 +2120,7 @@ class SessionController extends ChangeNotifier {
         }
       }
       if (kind == SessionCommandKind.send && completed) {
+        _turnInFlight = false;
         await _refreshControlsAfterTurn(sessionId);
       }
       if (kind == SessionCommandKind.send &&
@@ -2132,7 +2157,10 @@ class SessionController extends ChangeNotifier {
       _mergeSnapshot(latest, appendTimeline: true);
       completed = _snapshotCompletesTurn(latest);
     }
-    if (completed) await _refreshControlsAfterTurn(sessionId);
+    if (completed) {
+      _turnInFlight = false;
+      await _refreshControlsAfterTurn(sessionId);
+    }
   }
 
   Future<void> _refreshControlsAfterTurn(String sessionId) async {

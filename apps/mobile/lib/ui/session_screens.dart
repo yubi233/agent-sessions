@@ -4198,10 +4198,11 @@ class _SessionComposerState extends State<_SessionComposer> {
       canWrite: widget.canWrite,
     );
     final streaming = widget.sessions.isStreaming;
-    // v0.8.4：受理（乐观回显挂出）即视为运行中——主按钮在草稿清空后立刻
-    // 变为"中断"，覆盖 status 尚未翻到 streaming 的受理窗口。
-    final running =
-        streaming || widget.sessions.pendingOutgoingMessage != null;
+    // 回合在途（send 受理即置位，终态/中断/切会话才清除）+ 乐观回显窗口，
+    // 两者共同决定"运行中"；不受 status 尚未翻到 streaming 的受理窗口影响。
+    final running = streaming ||
+        widget.sessions.isTurnInFlight ||
+        widget.sessions.pendingOutgoingMessage != null;
     final input = _inputMachine.snapshot;
     final submitMode = _inputMachine.submit(
       running: streaming,
@@ -4478,7 +4479,7 @@ class _SessionComposerState extends State<_SessionComposer> {
                           : Icons.schedule_send_outlined,
                     ),
                   ),
-                  if (streaming)
+                  if (running && input.draft.trim().isNotEmpty)
                     IconButton(
                       key: const Key('session-stop-button'),
                       tooltip: '停止生成',

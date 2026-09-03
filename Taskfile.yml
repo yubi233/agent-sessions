@@ -253,7 +253,7 @@ tasks:
     cmds:
       - task: docs:verify
       - task: check
-      - go test ./internal/adapter/... ./internal/daemon/... ./internal/relay/... -run 'Test(V084|TurnPhase|TurnStatus|SynthesizeTerminal|MapTextDelta|MapEmptyTextDelta|MapCommitted|MapLegacy|MapThought|MapSessionUpdate|MapTool|MapSession|LocalDevEventEncoder|RelayEventType)' -count=1
+      - go test ./internal/adapter/... ./internal/daemon/... ./internal/relay/... -run 'Test(V084|TurnPhase|TurnStatus|SynthesizeTerminal|AbortInterrupts|MapTextDelta|MapEmptyTextDelta|MapCommitted|MapLegacy|MapThought|MapSessionUpdate|MapTool|MapSession|LocalDevEventEncoder|RelayEventType)' -count=1
       - cmd: cd apps/mobile && flutter analyze && flutter test test/v084_streaming_projection_test.dart test/v084_turn_status_row_test.dart test/session_projection_test.dart test/capability_controller_test.dart test/dsh_mode_test.dart test/session_controller_test.dart test/local_visual_fixture_test.dart --concurrency=1
       - pnpm --filter @agent-sessions/web test
       - pnpm --filter @agent-sessions/web build

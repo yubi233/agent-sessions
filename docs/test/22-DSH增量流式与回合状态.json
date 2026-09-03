@@ -195,13 +195,15 @@
         "在流式中途 Dispose 与 Abort，断言 thought/text 通道与 phase 均以明确终态收口",
         "模拟断线后 resume，断言无重复播放、无永久 pending"
       ],
-      "expected": "所有路径有明确终态；timeout/EOF/close/dispose/cancel 不留无限 pending。【v0.8.4 收口备注：取消 race/断线/dispose 收口由 overlay（cancelled/failed 终态）与桥 dispose 路径覆盖；慢消费者背压未单独成项——有界队列与丢弃计数已实现（adapter 事件通道 256 上限 + countDrop），残余风险低。】",
+      "expected": "所有路径有明确终态；timeout/EOF/close/dispose/cancel 不留无限 pending。【v0.8.4 收口备注（2026-09-04 已补强：Go 假桥中断埋点测试 + overlay client_closed 埋点，均通过）：取消 race/断线/dispose 收口由 overlay（cancelled/failed 终态）与桥 dispose 路径覆盖；慢消费者背压未单独成项——有界队列与丢弃计数已实现（adapter 事件通道 256 上限 + countDrop），残余风险低。】",
       "cleanup": [
         "销毁 fixture 进程与存储"
       ],
       "evidence": [
         "internal/adapter/dsh/handle.go",
-        "internal/daemon/localdev_encoder.go"
+        "internal/daemon/localdev_encoder.go",
+        "internal/adapter/dsh/abort_instrument_test.go（AbortInterruptsModelTurnWithInstrumentation：cancel 帧 + cancelled 终态 + abort_requested/turn_cancelled 埋点）",
+        "e2e-verify/reports/ADAPTER-DSH/v084-overlay-report-2026-09-03T20-32-54-692Z.json（llm_stream_actually_interrupted：mock LLM 流 client_closed，13 chunks 后被真实关闭）"
       ]
     },
     {
