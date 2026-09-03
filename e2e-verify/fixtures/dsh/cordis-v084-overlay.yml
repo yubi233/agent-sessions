@@ -1,0 +1,86 @@
+# v0.8.4 deterministic DSH bridge overlay（V084-14 / P4 必过门）：
+# 在生产 acp-demo 组合上以可脚本化 mock LLM（@deepseek-ai/dsh-llm-mock-server）
+# 驱动真实桥的流式投影 full journey——全程不调用真实模型（real_model=false）：
+#   text-delta 增量帧 / reasoning-delta raw thought / tool_call + 权限等待 /
+#   preparing→streaming→tool_running→finishing→completed 相位流 /
+#   stall + cancel → cancelled 终态 / stream_disconnect → failed 终态 /
+#   session/load 回放只发完整消息（无流式 _meta）。
+# mock LLM 由 overlay 脚本拉起并注入 V084_MOCK_BASE_URL；API key 校验关闭。
+
+- id: llm
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config:
+    providers:
+      mock-v084:
+        apiKeyEnv: V084_MOCK_API_KEY
+        api: openai-completions
+        baseURL: !!js "process.env.V084_MOCK_BASE_URL ?? 'http://127.0.0.1:18484/v1'"
+        models:
+          - id: mock-stream
+            input:
+              - text
+
+- id: sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js'
+
+- id: sandbox-policy
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js "process.env.DSH_SESSION_CWD ?? process.cwd()"
+
+- id: subprocess
+  name: '/Users/yubi/code/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+
+- id: bash
+  name: '/Users/yubi/code/deepseek-harness/packages/shell/bash-sandbox/lib/index.js'
+  config:
+    timeoutMs: 60000
+
+- id: approval
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-approval/lib/index.js'
+  config:
+    policy: ask
+
+# user-questions：桥 question 适配器服务面（交互回流仍为 model-gated，本 overlay 不触发）。
+- id: user-questions
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-questions/lib/index.js'
+- id: fs-sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/fs/fs-sandbox/lib/index.js'
+- id: token-meter
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/token-meter/lib/index.js'
+- id: commands
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/commands/lib/index.js'
+- id: compaction
+  name: '/Users/yubi/code/deepseek-harness/packages/compaction/compaction/lib/index.js'
+
+- id: agent-presets
+  name: '/Users/yubi/code/deepseek-harness/packages/preset/agent-presets/lib/index.js'
+  config:
+    default: standard
+    includeUserRoot: false
+    roots:
+      - path: '/Users/yubi/code/deepseek-harness/apps/cli/config/agent-presets'
+        trust: system
+
+- id: acp-agent
+  name: '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/index.js'
+  config:
+    provider: mock-v084
+    model: mock-stream
+    modelProviders:
+      mock-stream: mock-v084
+    toolUpdates: true
+    ignoreMcpServers: true
+    persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
+    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? 'none'"
+    workspaceContext:
+      maxBytes: 65536
+
+- id: permission
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/permission-presets/lib/index.js'
+  config:
+    presets:
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: ask

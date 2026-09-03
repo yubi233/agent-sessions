@@ -248,6 +248,37 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
       - node e2e-verify/mobile/record-macos.mjs --scope v082 --gate-report "$V082_FLUTTER_GATE_REPORT"
 
+  test:v084:local:
+    desc: v0.8.4 DSH 流式投影与回合相位本地统一回归入口（契约、Go/Flutter/Web、deterministic mock-LLM overlay、headed Chrome；不调用真实模型）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - go test ./internal/adapter/... ./internal/daemon/... ./internal/relay/... -run 'Test(V084|TurnPhase|TurnStatus|SynthesizeTerminal|MapTextDelta|MapEmptyTextDelta|MapCommitted|MapLegacy|MapThought|MapSessionUpdate|MapTool|MapSession|LocalDevEventEncoder|RelayEventType)' -count=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/v084_streaming_projection_test.dart test/v084_turn_status_row_test.dart test/session_projection_test.dart test/capability_controller_test.dart test/dsh_mode_test.dart test/session_controller_test.dart test/local_visual_fixture_test.dart --concurrency=1
+      - pnpm --filter @agent-sessions/web test
+      - pnpm --filter @agent-sessions/web build
+      - node e2e-verify/real/dsh-v084-overlay.mjs
+      - node e2e-verify/run.mjs --suite v082-dsh-capability-web
+      - node e2e-verify/run.mjs --suite v081-dsh-workspace-first
+      - git diff --check
+
+  test:v084:flutter:
+    desc: v0.8.4 流式投影 macOS 可见窗口 targeted gate（需先关闭用户正在使用的 Agent Sessions 窗口；不运行 Android）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs --test test/v084_streaming_projection_test.dart --test test/v084_turn_status_row_test.dart --case V084-P4 --visual-scenario VISUAL-MOBILE-36
+
+  record:v084:
+    desc: v0.8.4 流式投影 macOS fixture 录屏（需 VISUAL-MOBILE-36 可见 Flutter gate 报告；录屏内容先定：VISUAL-MOBILE-36 场景 5fps 连续帧，含 phase 状态行文案、thought 独立节点与打字机增量回答采样，不作为功能回归替代）
+    cmds:
+      - |
+        if [[ -z "${V084_FLUTTER_GATE_REPORT:-}" || ! -f "$V084_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v084 blocked: set V084_FLUTTER_GATE_REPORT to a passed V084 macOS gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v084 --gate-report "$V084_FLUTTER_GATE_REPORT"
+
   record:v083:
     desc: v0.8.3 DSH 能力门控 macOS fixture 录屏（需 VISUAL-MOBILE-35 可见 Flutter gate 报告；录屏内容先定：VISUAL-MOBILE-35 场景 5fps 连续帧，只读态会话详情 + unsupported 能力写入口不出现 + 能力 reason 可读采样，不作为功能回归替代）
     cmds:

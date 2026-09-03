@@ -1259,6 +1259,75 @@ class FixtureRelayRepository implements RelayRepository {
     if (message.isEmpty) {
       throw const RelayFailure(RelayFailureKind.validation, '请输入要发送的消息。');
     }
+    // v0.8.4（V084-10/VISUAL-MOBILE-36，ADR-015 §3/§5）：流式投影可见场景。
+    // 以固定、无敏感的本地 fixture 事件展示 phase 状态行 + thought 独立通道 +
+    // 打字机增量正文；时间线故意停在 streaming 中段，让可见窗口能同时捕捉
+    // 状态行、thought 节点与生长中的回答（终态收敛由组件与 overlay 测试覆盖）。
+    if (message.contains('v084 stream')) {
+      final now = _clock();
+      final base = state.nextSequence;
+      state.append(
+        eventType: 'message.user',
+        payload: {
+          'kind': 'user_message',
+          'label': '你',
+          'text': message,
+          'copy_text': message,
+          'created_at': now.toIso8601String(),
+          'message_id': 'fixture-message-$base',
+        },
+        now: now,
+      );
+      void phase(String name, int revision, String reason) {
+        state.append(
+          eventType: 'turn.phase',
+          payload: {
+            'kind': 'turn_phase',
+            'phase': name,
+            'reason': reason,
+            'revision': revision,
+            'turn_id': 'fixture-turn-1',
+          },
+          now: now,
+        );
+      }
+
+      void thought(String text, bool streaming) {
+        state.append(
+          eventType: 'message.thought.delta',
+          payload: {
+            'kind': 'assistant_thought',
+            'label': '思考中',
+            'text': text,
+            'streaming': streaming,
+            'visibility': 'raw',
+            'message_id': 'fixture-t1s1',
+          },
+          now: now,
+        );
+      }
+
+      phase('preparing', 1, 'turn_start');
+      phase('thinking', 2, 'first_thought_delta');
+      // 与 LocalDevEventEncoder 的累积语义一致：每帧回发全量已收文本，
+      // 客户端按"整体替换"折叠为单一生长节点。
+      thought('先拆解请求要点，确认输出范围。', true);
+      thought('先拆解请求要点，确认输出范围。再组织分步回答的措辞。', true);
+      phase('streaming', 3, 'first_text_delta');
+      state.append(
+        eventType: 'message.assistant.delta',
+        payload: const {
+          'kind': 'assistant_message',
+          'label': 'Assistant',
+          'text': '这是 v084 流式投影的增量回答：',
+          'streaming': true,
+          'message_id': 'fixture-t1s2',
+        },
+        now: now,
+      );
+      state.updateSession(status: MobileSessionStatus.streaming, now: now);
+      return;
+    }
     final now = _clock();
     final userSequence = state.nextSequence;
     state.append(

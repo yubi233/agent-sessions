@@ -22,6 +22,8 @@ enum LocalVisualScenario {
   dshSessionToolTimeline,
   // v0.8.3：DSH 能力门控可见场景（无 lease 只读态；unsupported 能力不渲染写入口）。
   dshCapabilityGates,
+  // v0.8.4（ADR-015 §3/§5）：流式投影可见场景（phase 状态行 + thought 通道 + 打字机）。
+  dshStreamingTurnPhase,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -66,6 +68,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'dsh-workspace-home' => LocalVisualScenario.dshWorkspaceHome,
   'dsh-session-tool-timeline' => LocalVisualScenario.dshSessionToolTimeline,
   'dsh-capability-gates' => LocalVisualScenario.dshCapabilityGates,
+  'dsh-streaming-turn-phase' =>
+    LocalVisualScenario.dshStreamingTurnPhase,
   'pairing-pending' => LocalVisualScenario.pairingPending,
   'session-list' => LocalVisualScenario.sessionList,
   'session-detail' => LocalVisualScenario.sessionDetail,
@@ -274,7 +278,8 @@ class LocalVisualFixture {
     // opaque 元数据，不注入任何路径/JSONL 位置/正文）。
     final isDshScenario = scenario == LocalVisualScenario.dshWorkspaceHome ||
         scenario == LocalVisualScenario.dshSessionToolTimeline ||
-        scenario == LocalVisualScenario.dshCapabilityGates;
+        scenario == LocalVisualScenario.dshCapabilityGates ||
+        scenario == LocalVisualScenario.dshStreamingTurnPhase;
     String? dshSessionId;
     if (isDshScenario) {
       relay.replaceTerminals([
@@ -319,6 +324,25 @@ class LocalVisualFixture {
         ),
       );
       dshSessionId = dshSession.id;
+      if (scenario == LocalVisualScenario.dshStreamingTurnPhase) {
+        // v0.8.4 流式场景：消息带 'v084 stream' 标记，fixture relay 生成
+        // turn_phase + assistant_thought + 打字机增量的本地开发时间线（ADR-015）。
+        final lease = await relay.acquireSessionLease(dshSession.id);
+        await relay.submitSessionCommand(
+          dshSession.id,
+          SessionCommandInput(
+            kind: SessionCommandKind.send,
+            idempotencyKey: 'visual-dsh-streaming-turn-phase-send',
+            leaseEpoch: lease.epoch,
+            deviceId: ownerDeviceId,
+            ciphertext: const {
+              'fixture_payload': {
+                'message': 'v084 stream 演示：展示相位状态行与思考通道。',
+              },
+            },
+          ),
+        );
+      }
       if (scenario == LocalVisualScenario.dshSessionToolTimeline) {
         // 时间线场景：fixture 发送一条消息，触发 fixture relay 生成完整的
         // 本地开发时间线（user_message → tool_activity → assistant_message），

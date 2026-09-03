@@ -105,9 +105,9 @@ void main() {
     await tester.tap(find.byKey(const Key('pairing-load-button')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(Key('pairing-qr-image-' + request.id)), findsOneWidget);
-    expect(find.byKey(Key('pairing-short-code-' + request.id)), findsOneWidget);
-    await tester.tap(find.byKey(Key('pairing-approve-' + request.id)));
+    expect(find.byKey(Key('pairing-qr-image-${request.id}')), findsOneWidget);
+    expect(find.byKey(Key('pairing-short-code-${request.id}')), findsOneWidget);
+    await tester.tap(find.byKey(Key('pairing-approve-${request.id}')));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('back-home-button')));
@@ -120,9 +120,9 @@ void main() {
       routeKey: const Key('device-android-owner-fixture'),
     );
     // fixture 设备 id 已带 device- 前缀，列表 tile 再加一层前缀（见 _DeviceTile）。
-    final deviceId = 'device-' + request.id;
-    expect(find.byKey(Key('device-' + deviceId)), findsOneWidget);
-    await tester.tap(find.byKey(Key('device-revoke-' + deviceId)));
+    final deviceId = 'device-${request.id}';
+    expect(find.byKey(Key('device-$deviceId')), findsOneWidget);
+    await tester.tap(find.byKey(Key('device-revoke-$deviceId')));
     await tester.pumpAndSettle();
     expect(find.textContaining('revoked'), findsOneWidget);
   });
@@ -167,7 +167,7 @@ void main() {
       find.byKey(const Key('pairing-request-id')),
     );
     expect(requestInput.controller!.text, PairingPayload.encode(request.id));
-    expect(find.byKey(Key('pairing-request-' + request.id)), findsOneWidget);
+    expect(find.byKey(Key('pairing-request-${request.id}')), findsOneWidget);
   });
 
   testWidgets('PAIR-01：无效扫码内容不会离开扫码页或请求 Relay', (tester) async {
@@ -246,7 +246,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('pairing-load-button')));
     await tester.pumpAndSettle();
-    expect(find.byKey(Key('pairing-request-' + request.id)), findsOneWidget);
+    expect(find.byKey(Key('pairing-request-${request.id}')), findsOneWidget);
   });
 
   testWidgets('MOBILE-01：恢复码不要求邮箱并恢复已绑定 owner', (tester) async {

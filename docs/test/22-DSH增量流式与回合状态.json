@@ -26,13 +26,19 @@
         "覆盖未知 phase/reason 字符串 fail-closed 与旧桥无投影时 queued→completed 兜底终态"
       ],
       "expected": "全部子测试通过；非法转换不推进 revision；终态无出边；未知值不映射近似相位。",
-      "cleanup": ["无（纯单元测试）"],
-      "evidence": ["internal/adapter/dsh/turnphase.go", "internal/adapter/dsh/turnphase_test.go", "docs/adr/ADR-015-细粒度回合状态与ACP流式输出.md"]
+      "cleanup": [
+        "无（纯单元测试）"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/turnphase.go",
+        "internal/adapter/dsh/turnphase_test.go",
+        "docs/adr/ADR-015-细粒度回合状态与ACP流式输出.md"
+      ]
     },
     {
       "id": "V084-02",
       "title": "桥按 text-delta 发送有序 agent_message_chunk，空/重复/乱序拒绝",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "acp_streaming",
       "priority": "P0",
@@ -45,13 +51,19 @@
         "断言拒绝或计数，不产生空帧，不破坏后续合法帧顺序"
       ],
       "expected": "chunk 与 seq 一一对应有序；非法帧被拒绝/计数；assistant answer 事件不含 thought 或工具半截 JSON。",
-      "cleanup": ["关闭 fake bridge 进程"],
-      "evidence": ["deepseek-harness:packages/acp/acp/src/index.ts", "deepseek-harness 桥 vitest 套件"]
+      "cleanup": [
+        "关闭 fake bridge 进程"
+      ],
+      "evidence": [
+        "deepseek-harness:packages/acp/acp/src/index.ts",
+        "deepseek-harness 桥 vitest 套件",
+        "e2e-verify/reports/ADAPTER-DSH/v084-overlay-report-2026-09-03T17-53-05-633Z.json"
+      ]
     },
     {
       "id": "V084-03",
       "title": "thought 通道：默认 raw 直接开启、hidden/summary 兼容降级、与 answer 分离",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "acp_thought",
       "priority": "P0",
@@ -64,13 +76,19 @@
         "三种模式断言 assistant_message_chunk 事件不包含任何 thought 文本"
       ],
       "expected": "默认 raw 无需显式开启；三种模式均不把 thought 拼入 answer；取消时 thought 通道独立收口。",
-      "cleanup": ["关闭 fake bridge 进程"],
-      "evidence": ["deepseek-harness:packages/acp/acp/src/index.ts", "docs/adr/ADR-015-细粒度回合状态与ACP流式输出.md §5"]
+      "cleanup": [
+        "关闭 fake bridge 进程"
+      ],
+      "evidence": [
+        "deepseek-harness:packages/acp/acp/src/index.ts",
+        "docs/adr/ADR-015-细粒度回合状态与ACP流式输出.md §5",
+        "e2e-verify/reports/ADAPTER-DSH/v084-overlay-report-2026-09-03T17-53-05-633Z.json"
+      ]
     },
     {
       "id": "V084-04",
       "title": "tool-call、permission、question 与 phase 的顺序和终态",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P2",
       "category": "acp_interaction",
       "priority": "P0",
@@ -82,13 +100,19 @@
         "断言 phase 事件 revision 单调、与 tool/permission 事件顺序一致、终态唯一"
       ],
       "expected": "交互请求不吞掉 phase 帧；每个交互与 phase 均有明确终态；无永久 pending。",
-      "cleanup": ["关闭 fake bridge 进程"],
-      "evidence": ["internal/adapter/dsh/handle.go", "internal/adapter/dsh/fakescenarios_test.go"]
+      "cleanup": [
+        "关闭 fake bridge 进程"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/handle.go",
+        "internal/adapter/dsh/fakescenarios_test.go",
+        "e2e-verify/reports/ADAPTER-DSH/v084-overlay-report-2026-09-03T17-53-05-633Z.json"
+      ]
     },
     {
       "id": "V084-05",
       "title": "load/replay 只发完整消息；resume 新 turn 恢复 cursor/identity",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "acp_recovery",
       "priority": "P0",
@@ -100,13 +124,18 @@
         "resume 后发送新 prompt，断言新 turn 使用新 turn/step identity 且增量从头计数"
       ],
       "expected": "回放与 live 分离；恢复后无重复拼接、无旧动画重放；identity 不跨 turn 复用。",
-      "cleanup": ["关闭 fake bridge 进程"],
-      "evidence": ["deepseek-harness:packages/acp/acp/src/index.ts replaySession"]
+      "cleanup": [
+        "关闭 fake bridge 进程"
+      ],
+      "evidence": [
+        "deepseek-harness:packages/acp/acp/src/index.ts replaySession",
+        "e2e-verify/reports/ADAPTER-DSH/v084-overlay-report-2026-09-03T17-53-05-633Z.json"
+      ]
     },
     {
       "id": "V084-06",
       "title": "DSH mapper：agent_message_chunk → EventMessageDelta；completed 不重复",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "dsh_mapper",
       "priority": "P0",
@@ -119,13 +148,18 @@
         "注入无 _meta 旧帧，断言仍映射 EventMessageCompleted（回滚开关）"
       ],
       "expected": "delta/completed 映射正确；同 turn 只有一个权威 completed；中断帧标记 interrupted。",
-      "cleanup": ["无（纯单元测试）"],
-      "evidence": ["internal/adapter/dsh/mapper.go", "internal/adapter/dsh/mapper_test.go"]
+      "cleanup": [
+        "无（纯单元测试）"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/mapper.go",
+        "internal/adapter/dsh/mapper_test.go"
+      ]
     },
     {
       "id": "V084-07",
       "title": "message.delta/turn.phase envelope 的 schema、排序、幂等和重放",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "daemon_relay",
       "priority": "P0",
@@ -137,8 +171,15 @@
         "断言断线重放后 cursor 推进且事件不丢不重"
       ],
       "expected": "envelope 通过协议形状门；排序/幂等/重放语义与既有 turn.completed 路径一致。",
-      "cleanup": ["销毁 fixture 存储"],
-      "evidence": ["internal/daemon/relay.go", "packages/protocol/schema/events.json"]
+      "cleanup": [
+        "销毁 fixture 存储"
+      ],
+      "evidence": [
+        "internal/daemon/relay.go",
+        "packages/protocol/schema/events.json",
+        "internal/adapter/dsh/turnstatus_test.go",
+        "internal/daemon/localdev_encoder_test.go"
+      ]
     },
     {
       "id": "V084-08",
@@ -155,13 +196,18 @@
         "模拟断线后 resume，断言无重复播放、无永久 pending"
       ],
       "expected": "所有路径有明确终态；timeout/EOF/close/dispose/cancel 不留无限 pending。",
-      "cleanup": ["销毁 fixture 进程与存储"],
-      "evidence": ["internal/adapter/dsh/handle.go", "internal/daemon/localdev_encoder.go"]
+      "cleanup": [
+        "销毁 fixture 进程与存储"
+      ],
+      "evidence": [
+        "internal/adapter/dsh/handle.go",
+        "internal/daemon/localdev_encoder.go"
+      ]
     },
     {
       "id": "V084-09",
       "title": "Flutter projection：按 message identity 累积/替换，跨 session 隔离，终态清账",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "flutter_projection",
       "priority": "P0",
@@ -173,13 +219,19 @@
         "注入 turn 终态，断言清账与 phase 归位"
       ],
       "expected": "打字机节点唯一、替换语义正确、跨会话零串扰、终态清账。",
-      "cleanup": ["无（组件测试）"],
-      "evidence": ["apps/mobile/lib/state/session_projection_controller.dart", "apps/mobile/test/session_projection_test.dart"]
+      "cleanup": [
+        "无（组件测试）"
+      ],
+      "evidence": [
+        "apps/mobile/lib/state/session_projection_controller.dart",
+        "apps/mobile/test/session_projection_test.dart",
+        "apps/mobile/test/v084_streaming_projection_test.dart"
+      ]
     },
     {
       "id": "V084-10",
       "title": "Flutter 可见：thinking/streaming/tool/waiting/finishing/cancelled/failed UI 状态",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "flutter_visual",
       "priority": "P0",
@@ -191,8 +243,16 @@
         "断言终态后回到可操作态、窄屏无溢出"
       ],
       "expected": "全部相位在真实窗口可见且无布局跳动；录屏仅作通过后的展示证据。",
-      "cleanup": ["关闭 Flutter 应用进程"],
-      "evidence": ["e2e-verify/mobile/run-macos.mjs", "e2e-verify/reports/"]
+      "cleanup": [
+        "关闭 Flutter 应用进程"
+      ],
+      "evidence": [
+        "e2e-verify/mobile/run-macos.mjs",
+        "e2e-verify/reports/",
+        "e2e-verify/reports/2026-09-03T17-41-26-424Z/MOBILE/mobile-01-macos.json",
+        "apps/mobile/test/v084_turn_status_row_test.dart",
+        "e2e-verify/screencasts/2026-09-03T17-45-17-862Z/MOBILE/visual-mobile-36-dsh-streaming-turn-phase.mp4"
+      ]
     },
     {
       "id": "V084-11",
@@ -209,13 +269,18 @@
         "可见窗口验证滚动锁定、后台恢复、窄屏无溢出"
       ],
       "expected": "无无限 layout/rebuild；输出零丢失；恢复后内容连续。",
-      "cleanup": ["关闭 Flutter 应用进程"],
-      "evidence": ["apps/mobile/test/", "apps/mobile/lib/state/session_projection_controller.dart"]
+      "cleanup": [
+        "关闭 Flutter 应用进程"
+      ],
+      "evidence": [
+        "apps/mobile/test/",
+        "apps/mobile/lib/state/session_projection_controller.dart"
+      ]
     },
     {
       "id": "V084-12",
       "title": "Web headed：phase 时间线、刷新/重连、只读 capability gate",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "web_e2e",
       "priority": "P1",
@@ -227,13 +292,19 @@
         "断言写入口仍被 capability gate 拦截"
       ],
       "expected": "real_browser=true/headless=false；phase 顺序正确；只读边界不回退。",
-      "cleanup": ["关闭浏览器"],
-      "evidence": ["e2e-verify/run.mjs", "e2e-verify/reports/"]
+      "cleanup": [
+        "关闭浏览器"
+      ],
+      "evidence": [
+        "e2e-verify/run.mjs",
+        "e2e-verify/reports/",
+        "e2e-verify/reports/2026-09-03T17-53-05-633Z.json 同一 task 运行的 v082/v081 headed suite 报告"
+      ]
     },
     {
       "id": "V084-13",
       "title": "OpenCode/Codex 既有 message delta/completed/tool/usage/abort 回归",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "cross_provider_regression",
       "priority": "P0",
@@ -244,13 +315,18 @@
         "断言新 phase/thought 事件类型不改变其 completed/tool/usage/abort 语义"
       ],
       "expected": "既有套件全绿；无行为漂移。",
-      "cleanup": ["无"],
-      "evidence": ["internal/adapter/opencode/", "internal/adapter/codex/"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/adapter/opencode/",
+        "internal/adapter/codex/"
+      ]
     },
     {
       "id": "V084-14",
       "title": "DSH deterministic overlay full journey（不调用模型）",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "dsh_overlay",
       "priority": "P0",
@@ -261,8 +337,14 @@
         "断言每个场景的 phase 序列、delta 累积与终态收口与 ADR-015 一致"
       ],
       "expected": "overlay 为真实本地进程、fixture_data=true、real_model=false；全场景通过。",
-      "cleanup": ["关闭 overlay 进程"],
-      "evidence": ["e2e-verify/real/dsh-v084-overlay.mjs", "e2e-verify/reports/"]
+      "cleanup": [
+        "关闭 overlay 进程"
+      ],
+      "evidence": [
+        "e2e-verify/real/dsh-v084-overlay.mjs",
+        "e2e-verify/reports/",
+        "e2e-verify/reports/ADAPTER-DSH/v084-overlay-report-2026-09-03T17-53-05-633Z.json"
+      ]
     },
     {
       "id": "V084-15",
@@ -279,8 +361,13 @@
         "load/resume → send 复验恢复路径"
       ],
       "expected": "报告记录 provider/model、请求次数、usage、request id 与失败分类；不记录 prompt/回复正文/凭据。缺凭据或额度时如实记 blocked/partial。",
-      "cleanup": ["关闭真实会话与进程"],
-      "evidence": ["e2e-verify/real/", "e2e-verify/reports/"]
+      "cleanup": [
+        "关闭真实会话与进程"
+      ],
+      "evidence": [
+        "e2e-verify/real/",
+        "e2e-verify/reports/"
+      ]
     },
     {
       "id": "V084-16",
@@ -297,13 +384,18 @@
         "核验未声明 thought capability 的客户端被降级 hidden/summary 并计数"
       ],
       "expected": "零泄漏；raw reasoning 属终端所有者本地授权内容，审计只核验独立通道与协商边界。",
-      "cleanup": ["隔离并脱敏违规产物"],
-      "evidence": ["问题排查/", "e2e-verify/reports/"]
+      "cleanup": [
+        "隔离并脱敏违规产物"
+      ],
+      "evidence": [
+        "问题排查/",
+        "e2e-verify/reports/"
+      ]
     },
     {
       "id": "V084-17",
       "title": "V081/V082/V083 回归：工作区、生命周期、扩展、工具事件与能力矩阵不回退",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4/P5",
       "category": "regression",
       "priority": "P0",
@@ -314,8 +406,13 @@
         "核对 V081 工作区主模式、V082 工具时间线、V083 能力门控全部通过"
       ],
       "expected": "既有能力矩阵与历史 ID 证据不被改写；V08-12 failed 证据保持原样。",
-      "cleanup": ["无"],
-      "evidence": ["Taskfile.yml test:v084:local", "docs/test/测试套件索引.json"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "Taskfile.yml test:v084:local",
+        "docs/test/测试套件索引.json"
+      ]
     }
   ]
 }

@@ -83,6 +83,16 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-35"]),
     requiredTestIds: Object.freeze(["V083-P4"]),
   }),
+  // v0.8.4：流式投影录屏范围。
+  // 内容先定——录制 VISUAL-MOBILE-36（dsh-streaming-turn-phase，ADR-015 §3/§5）：
+  //   1) phase-aware 状态行（思考中/生成中文案随相位切换，区别于 v0.8.3 固定文案）；
+  //   2) thought 独立通道节点（“思考中”reasoning 节点，不并入回答气泡）；
+  //   3) 打字机增量回答（fixture 时间线停在 streaming 中段，正文处于生长态）。
+  // 5fps 连续帧，仅作通过后的展示证据，不作为功能回归替代；前置 gate 报告必须 passed。
+  v084: Object.freeze({
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-36"]),
+    requiredTestIds: Object.freeze(["V084-P4"]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {

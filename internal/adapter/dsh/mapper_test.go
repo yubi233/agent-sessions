@@ -7,6 +7,60 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
+// TestMapUsageUpdateLegacyAndStandardFrames 钉住 usage 帧的两种桥形态：
+// 旧桥只带 usage/contextWindow；新桥（v0.8.4 标准 usage_update）额外带
+// used/size，且未知字段由 SDK 客户端剥离。mapper 对两种形态都必须产出
+// EventUsage，字段逐一透传。
+func TestMapUsageUpdateLegacyAndStandardFrames(t *testing.T) {
+	cases := []struct {
+		name  string
+		frame string
+	}{
+		{
+			name: "legacy bridge frame",
+			frame: `{
+				"sessionUpdate":"usage_update",
+				"usage":{"inputTokens":2879,"outputTokens":89,"cacheReadTokens":0,"reasoningTokens":17},
+				"contextWindow":65536
+			}`,
+		},
+		{
+			name: "standard superset frame (used/size + legacy fields)",
+			frame: `{
+				"sessionUpdate":"usage_update",
+				"used":2968,
+				"size":65536,
+				"usage":{"inputTokens":2879,"outputTokens":89,"cacheReadTokens":0,"reasoningTokens":17},
+				"contextWindow":65536
+			}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event, ok, variant := mapSessionUpdate("sess-1", json.RawMessage(tc.frame), nil)
+			if !ok || variant != "usage_update" {
+				t.Fatalf("map result = %+v ok=%v variant=%q", event, ok, variant)
+			}
+			if event.Type != adapter.EventUsage {
+				t.Fatalf("event type = %q, want usage", event.Type)
+			}
+			for key, want := range map[string]any{
+				"input_tokens":       int64(2879),
+				"output_tokens":      int64(89),
+				"cache_read_tokens":  int64(0),
+				"cache_write_tokens": int64(0),
+			} {
+				if event.Payload[key] != want {
+					t.Fatalf("payload[%q] = %v, want %v", key, event.Payload[key], want)
+				}
+			}
+			if event.Payload["context_window_tokens"] != int64(65536) {
+				t.Fatalf("context_window_tokens = %v", event.Payload["context_window_tokens"])
+			}
+		})
+	}
+}
+
 // TestMapSessionUpdateIncludesReplayUserMessage 覆盖回放用户消息映射（既有回归）。
 func TestMapSessionUpdateIncludesReplayUserMessage(t *testing.T) {
 	event, ok, variant := mapSessionUpdate("sess-1", json.RawMessage(`{

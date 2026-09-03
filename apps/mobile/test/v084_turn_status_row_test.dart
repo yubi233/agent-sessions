@@ -17,17 +17,6 @@ void main() {
     ),
   );
 
-  Future<String> statusText(WidgetTester tester, TurnPhase? phase) async {
-    await tester.pumpWidget(host(phase));
-    await tester.pump();
-    final row = find.byKey(const Key('session-turn-status-row'));
-    expect(row, findsOneWidget);
-    return tester.widget<Text>(find.descendant(of: row, matching: find.byType(Text))).data ??
-        tester
-            .widget<Text>(find.descendant(of: row, matching: find.byType(Text).first))
-            .data!;
-  }
-
   testWidgets('thinking 相位显示思考中', (tester) async {
     await tester.pumpWidget(host(TurnPhase.thinking));
     await tester.pump();
