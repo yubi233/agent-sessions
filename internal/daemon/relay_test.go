@@ -181,6 +181,61 @@ func TestRelayLoopFailsClosedForInterruptedStartedCommand(t *testing.T) {
 	}
 }
 
+// 回归：Relay 已把中断命令收敛为 expired（terminal 离线/lease 失效）时，Daemon 重启
+// 后提交 failed/DAEMON_RESTART_RECOVERY，Relay 回显权威终态 expired——Daemon 必须
+// 接受并落盘，而不是把 expired 当 "receipt incomplete" 无限重试（会阻塞后续所有命令
+// 投递，包括 workspace.sync_dsh 的专用通道建立）。
+func TestRelayLoopConvergesWhenRelayEchoesExpired(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	command := RelayCommand{
+		CommandID: "cmd-expired-echo", DeliverySeq: 1, SessionID: "sess-expired", Kind: "session.send", LeaseEpoch: 1,
+		TargetTerminalID: "term-expired", PayloadJSON: `{"session_id":"sess-expired","text":"hi"}`,
+	}
+	if inserted, err := store.RecordRelayCommand(command); err != nil || !inserted {
+		t.Fatalf("record command inserted=%v err=%v", inserted, err)
+	}
+	if err := store.MarkRelayCommandStarted(command.CommandID); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/daemon/commands/cmd-expired-echo/result" {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		// Relay 端命令已被过期收敛：重复 result 回显当前权威终态 expired。
+		_, _ = io.WriteString(w, `{"command_id":"cmd-expired-echo","delivery_seq":1,"status":"expired"}`)
+	}))
+	defer server.Close()
+
+	guard := &startGuardAdapter{}
+	runner := NewSessionRunner(store, map[string]adapter.Adapter{"test": guard}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer runner.Close(context.Background())
+	loop := NewRelayLoop(store, &RelayClient{BaseURL: server.URL, AccessToken: "fixture"}, runner, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := loop.processPending(context.Background()); err != nil {
+		t.Fatalf("process pending 必须接受 Relay 回显的 expired 终态: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("收敛前重试次数=%d，want 1（expired 终态必须一次性落盘）", requests)
+	}
+	stored, err := store.RelayCommandByID(command.CommandID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "completed" || stored.ResultStatus != "expired" {
+		t.Fatalf("本机状态未按 Relay 权威终态落盘: status=%q result_status=%q", stored.Status, stored.ResultStatus)
+	}
+	if guard.started {
+		t.Fatal("interrupted started command must not execute adapter again")
+	}
+}
+
 // P0-SCHEMA-02：Daemon 的本机执行错误必须投影为协议登记的稳定码，调用方不能从自由错误
 // 文本推断是否应重试、升级能力或创建新会话动作。
 func TestCommandErrorCodeUsesPublicProtocolCodes(t *testing.T) {

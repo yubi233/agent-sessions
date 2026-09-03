@@ -70,6 +70,26 @@ void main() {
     expect(event.label, 'Provider 错误');
     expect(event.text, contains('Provider 发送失败'));
   });
+  test('system_notice 透传上游结构化错误码', () {
+    final event = parse(8, 'session.error', {
+      'kind': 'system_notice',
+      'label': 'Provider 错误',
+      'text': '模型回合失败：quota',
+      'error_code': 'RATE_LIMIT',
+      'http_status': 429,
+    });
+    expect(event.kind, SessionTimelineKind.systemNotice);
+    expect(event.errorCode, 'RATE_LIMIT');
+    expect(event.httpStatus, 429);
+    // 缺省形状：无结构化字段不补零值猜测。
+    final plain = parse(9, 'session.error', {
+      'kind': 'system_notice',
+      'label': 'Provider 错误',
+      'text': 'x',
+    });
+    expect(plain.errorCode, isNull);
+    expect(plain.httpStatus, 0);
+  });
 
   test('未知 kind 与缺失 fixture 不崩溃并统一降级为占位', () {
     final unknown = parse(6, 'future.event', {

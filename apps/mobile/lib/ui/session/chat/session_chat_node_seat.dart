@@ -1279,12 +1279,39 @@ class _CompactSystemRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  node.label,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.w700,
-                  ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        node.label,
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: color,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (node.errorCode?.trim().isNotEmpty == true) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        key: Key('session-error-code-${node.sequence}'),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: scheme.errorContainer,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          node.httpStatus != 0
+                              ? '${node.errorCode} · ${node.httpStatus}'
+                              : node.errorCode!,
+                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: scheme.onErrorContainer,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 if (detail?.trim().isNotEmpty == true) ...[
                   const SizedBox(height: 4),

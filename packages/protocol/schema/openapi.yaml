@@ -2612,6 +2612,59 @@ components:
         default:
           type: string
           description: 只有同时存在于 options 中的默认选项才可使用。
+        model_details:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              context_window_tokens:
+                type: integer
+                format: int64
+              reasoning:
+                type: boolean
+              efforts:
+                type: array
+                items:
+                  type: string
+        model_groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityModelGroup"
+    CapabilityModelModel:
+      type: object
+      required: [provider, value, id, name, reasoning]
+      properties:
+        provider:
+          type: string
+        value:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        context_window_tokens:
+          type: integer
+          format: int64
+        reasoning:
+          type: boolean
+        efforts:
+          type: array
+          items:
+            type: string
+    CapabilityModelGroup:
+      type: object
+      required: [id, name, models]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityModelModel"
     CapabilityProvider:
       type: object
       required: [kind, version, available, capabilities]

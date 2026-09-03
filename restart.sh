@@ -62,6 +62,8 @@ DAEMON_TOKEN_SOURCE=""
 LOCAL_DEV_TERMINAL_DEVICE_ID=""
 LOCAL_OWNER_ACCESS_TOKEN=""
 LOCAL_OWNER_BOOTSTRAP_B64=""
+LOCAL_DEV_WORKSPACE_CONFIRMED=false
+DAEMON_HEARTBEAT_BASELINE=0
 
 STARTED_RELAY=false
 STARTED_WEB=false
@@ -585,6 +587,62 @@ wait_for_http() {
   return 1
 }
 
+local_dev_terminal_last_seen() {
+  local body
+  [[ -n "$LOCAL_OWNER_ACCESS_TOKEN" && -n "$LOCAL_DEV_TERMINAL_DEVICE_ID" ]] || return 1
+  body="$(curl --fail --silent --show-error --max-time 1 \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    "http://$RELAY_ADDR/v1/terminals" 2>/dev/null)" || return 1
+  printf '%s' "$body" | LOCAL_DEV_TERMINAL_DEVICE_ID="$LOCAL_DEV_TERMINAL_DEVICE_ID" python3 -c '
+import json, os, sys
+doc = json.load(sys.stdin)
+device_id = os.environ["LOCAL_DEV_TERMINAL_DEVICE_ID"]
+for item in doc.get("terminals", []):
+    if isinstance(item, dict) and item.get("device_id") == device_id:
+        print(int(item.get("last_seen_unix_ms") or 0))
+        raise SystemExit(0)
+raise SystemExit(1)
+'
+}
+
+# `go run` can stay alive while compiling even if the resulting Daemon exits
+# immediately. For the default local stack, require Relay to observe a newer
+# heartbeat before reporting readiness or starting Flutter.
+wait_for_daemon() {
+  local pid="$1" last_seen i
+  if [[ -z "$pid" ]]; then
+    echo "daemon: missing pid after start" >&2
+    return 1
+  fi
+  if [[ "$WITH_RELAY" != true ]] || ! truthy "$LOCAL_DEV_PAIRING" ||
+    [[ -z "$LOCAL_OWNER_ACCESS_TOKEN" || -z "$LOCAL_DEV_TERMINAL_DEVICE_ID" ]]; then
+    for i in $(seq 1 25); do
+      if ! is_running "$pid"; then
+        echo "daemon: exited before readiness; inspect $(component_log daemon)" >&2
+        return 1
+      fi
+      sleep 0.2
+    done
+    echo "daemon: process is running (Relay heartbeat not observable with external token)"
+    return 0
+  fi
+
+  for i in $(seq 1 300); do
+    if ! is_running "$pid"; then
+      echo "daemon: exited before first heartbeat; inspect $(component_log daemon)" >&2
+      return 1
+    fi
+    last_seen="$(local_dev_terminal_last_seen 2>/dev/null || true)"
+    if [[ "$last_seen" =~ ^[0-9]+$ ]] && (( last_seen > DAEMON_HEARTBEAT_BASELINE )); then
+      echo "daemon: ready (first heartbeat confirmed)"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "daemon: readiness timeout waiting for first heartbeat; inspect $(component_log daemon)" >&2
+  return 1
+}
+
 wait_for_flutter() {
   local pid="$1" attempts i logfile ready_seen=false
   logfile="$(component_log flutter)"
@@ -772,9 +830,13 @@ print(json.dumps(doc, separators=(",", ":")))' "$LOCAL_DEV_PROJECT_ID" "$termina
 }
 
 confirm_local_dev_workspace() {
+  if [[ "$LOCAL_DEV_WORKSPACE_CONFIRMED" == true ]]; then
+    return 0
+  fi
   require_command go || return 1
   go run ./apps/daemon workspace-confirm --state-dir "$DAEMON_STATE_DIR" \
     --workspace-id "$LOCAL_DEV_WORKSPACE_ID" --workspace-root "$ROOT_DIR"
+  LOCAL_DEV_WORKSPACE_CONFIRMED=true
 }
 
 
@@ -1024,8 +1086,15 @@ start_daemon() {
   if [[ "$FIXTURE_DAEMON" == true ]]; then
     args+=(--fixture-adapter)
   fi
-  start_process daemon "$(pid_file daemon)" "$(component_log daemon)" "$ROOT_DIR" "${args[@]}"
+  DAEMON_HEARTBEAT_BASELINE="$(local_dev_terminal_last_seen 2>/dev/null || printf '0')"
+  if ! [[ "$DAEMON_HEARTBEAT_BASELINE" =~ ^[0-9]+$ ]]; then
+    DAEMON_HEARTBEAT_BASELINE=0
+  fi
+  if ! start_process daemon "$(pid_file daemon)" "$(component_log daemon)" "$ROOT_DIR" "${args[@]}"; then
+    return 1
+  fi
   STARTED_DAEMON=true
+  wait_for_daemon "$(read_pid "$(pid_file daemon)")"
 }
 
 start_flutter() {
@@ -1111,6 +1180,18 @@ start_relay() {
   if [[ -n "$OPENCODE_DEFAULT_MODEL" ]]; then relay_probe_env+=(AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL="$OPENCODE_DEFAULT_MODEL"); fi
   if [[ -n "${OPENCODE_SERVER_USERNAME:-}" ]]; then relay_probe_env+=(OPENCODE_SERVER_USERNAME="$OPENCODE_SERVER_USERNAME"); fi
   if [[ -n "${OPENCODE_SERVER_PASSWORD:-}" ]]; then relay_probe_env+=(OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD"); fi
+  # DSH 桥配置必须与 Daemon 一致透传：Relay 侧能力矩阵（/v1/capabilities 与
+  # session controls）由内嵌 DSH Adapter 的 Detect 握手生成，桥加载的 cordis
+  # 决定渠道/模型/推理档位目录。只给 Daemon 传而漏掉 Relay，会让移动端看到
+  # 与真实会话执行不一致的模型目录（默认 config 的浅目录）。
+  if [[ -n "${AGENT_SESSIONS_DSH_BIN:-}" ]]; then relay_probe_env+=(AGENT_SESSIONS_DSH_BIN="$AGENT_SESSIONS_DSH_BIN"); fi
+  if [[ -n "${AGENT_SESSIONS_DSH_CONFIG:-}" ]]; then
+    relay_probe_env+=(AGENT_SESSIONS_DSH_CONFIG="$AGENT_SESSIONS_DSH_CONFIG")
+  elif [[ -f "$ROOT_DIR/cordis.yml" ]]; then
+    relay_probe_env+=(AGENT_SESSIONS_DSH_CONFIG="$ROOT_DIR/cordis.yml")
+  fi
+  if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_ROOT:-}" ]]; then relay_probe_env+=(AGENT_SESSIONS_DSH_PERSIST_ROOT="$AGENT_SESSIONS_DSH_PERSIST_ROOT"); fi
+  if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_COMPRESSION:-}" ]]; then relay_probe_env+=(AGENT_SESSIONS_DSH_PERSIST_COMPRESSION="$AGENT_SESSIONS_DSH_PERSIST_COMPRESSION"); fi
   if ! env "${relay_probe_env[@]}" RELAY_ADDR="$RELAY_ADDR" RELAY_DB_PATH="$RELAY_DB_PATH" "$ROOT_DIR/tools/relayctl.sh" up; then
     return 1
   fi
@@ -1202,6 +1283,11 @@ start_action() {
   if [[ "$WITH_DAEMON" == true ]] && ! ensure_daemon_token; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_FLUTTER" == true && "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
     if ! ensure_local_owner_bootstrap; then cleanup_start_failure; return 1; fi
+  fi
+  # 本机确认会另起一个 daemon CLI 进程并打开同一个 SQLite。必须在常驻
+  # Daemon 启动前串行完成，避免两个进程同时执行初始化迁移。
+  if [[ "$WITH_DAEMON" == true && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
+    if ! confirm_local_dev_workspace; then cleanup_start_failure; return 1; fi
   fi
   if [[ "$WITH_DAEMON" == true ]] && ! start_daemon; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then

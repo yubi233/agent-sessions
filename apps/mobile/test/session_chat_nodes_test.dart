@@ -70,6 +70,41 @@ void main() {
       expect(find.textContaining('permission'), findsNothing);
       expect(find.textContaining('question'), findsNothing);
     });
+    testWidgets('notice 节点展示上游结构化错误码徽标', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 300,
+              child: SessionChatView(
+                running: true,
+                nodes: const [
+                  ConversationNode(
+                    key: 'n5',
+                    kind: ConversationNodeKind.notice,
+                    sequence: 5,
+                    label: 'Provider 错误',
+                    text: '模型回合失败：quota',
+                    errorCode: 'RATE_LIMIT',
+                    httpStatus: 429,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+      expect(find.text('Provider 错误'), findsOneWidget);
+      expect(find.text('模型回合失败：quota'), findsOneWidget);
+      // 徽标展示 错误码 · HTTP 状态。
+      expect(find.text('RATE_LIMIT · 429'), findsOneWidget);
+      expect(
+        find.byKey(const Key('session-error-code-5')),
+        findsOneWidget,
+      );
+    });
 
     testWidgets('reader 离开底部后显示回到底部入口', (tester) async {
       final nodes = List<ConversationNode>.generate(

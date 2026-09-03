@@ -272,6 +272,157 @@ void main() {
     expect(find.textContaining('200.0k'), findsOneWidget);
   });
 
+  testWidgets('MOBILE-V05-09：多渠道分组目录展示渠道父级与同名模型子项', (tester) async {
+    const groups = [
+      CapabilityModelGroup(
+        id: 'alpha',
+        name: 'Alpha Cloud',
+        models: [
+          CapabilityModelOption(
+            provider: 'alpha',
+            value: 'dsh:model:alpha:shared',
+            id: 'shared',
+            name: 'Shared Alpha',
+          ),
+        ],
+      ),
+      CapabilityModelGroup(
+        id: 'beta',
+        name: 'Beta Gateway',
+        models: [
+          CapabilityModelOption(
+            provider: 'beta',
+            value: 'dsh:model:beta:shared',
+            id: 'shared',
+            name: 'Shared Beta',
+            contextWindowTokens: 320000,
+            reasoning: true,
+            efforts: ['high'],
+          ),
+        ],
+      ),
+    ];
+    final selected = <String>[];
+    await tester.pumpWidget(
+      _seatApp(
+        catalog: SessionModelCatalog(
+          model: 'dsh:model:beta:shared',
+          effort: null,
+          models: const [],
+          efforts: const [],
+          groups: groups,
+        ),
+        onSelectModel: (model) async {
+          selected.add(model);
+          return null;
+        },
+      ),
+    );
+
+    // 当前模型渲染友好名称而不是 opaque value。
+    expect(find.text('dsh:model:beta:shared'), findsNothing);
+    expect(find.text('Shared Beta'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('session-model-seat-trigger')));
+    await tester.pumpAndSettle();
+    // 两个渠道父级均显示；同名模型出现在各自渠道下。
+    // 弹层打开后，"Shared Beta" 同时出现在单行座与弹层子项中。
+    Finder inSheet(Finder finder) => find.descendant(
+      of: find.byKey(const Key('session-model-selection-sheet')),
+      matching: finder,
+    );
+    expect(find.text('Alpha Cloud'), findsOneWidget);
+    expect(find.text('Beta Gateway'), findsOneWidget);
+    expect(inSheet(find.text('Shared Alpha')), findsOneWidget);
+    expect(inSheet(find.text('Shared Beta')), findsOneWidget);
+    expect(
+      find.byKey(const Key('session-model-option-dsh:model:alpha:shared')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('session-model-option-dsh:model:beta:shared')),
+      findsOneWidget,
+    );
+
+    // 点击子模型提交 ACP 返回的 opaque value（不含渠道名猜测）。
+    await tester.tap(
+      find.byKey(const Key('session-model-option-dsh:model:alpha:shared')),
+    );
+    await tester.pumpAndSettle();
+    expect(selected, ['dsh:model:alpha:shared']);
+    expect(
+      find.byKey(const Key('session-model-selection-sheet')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('MOBILE-V05-09：分组目录中的选中态按 opaque value 匹配', (tester) async {
+    const groups = [
+      CapabilityModelGroup(
+        id: 'alpha',
+        name: 'Alpha Cloud',
+        models: [
+          CapabilityModelOption(
+            provider: 'alpha',
+            value: 'dsh:model:alpha:shared',
+            id: 'shared',
+            name: 'Shared Alpha',
+          ),
+        ],
+      ),
+      CapabilityModelGroup(
+        id: 'beta',
+        name: 'Beta Gateway',
+        models: [
+          CapabilityModelOption(
+            provider: 'beta',
+            value: 'dsh:model:beta:shared',
+            id: 'shared',
+            name: 'Shared Beta',
+          ),
+        ],
+      ),
+    ];
+    await tester.pumpWidget(
+      _seatApp(
+        catalog: SessionModelCatalog(
+          model: 'dsh:model:alpha:shared',
+          effort: null,
+          models: const [],
+          efforts: const [],
+          groups: groups,
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('session-model-seat-trigger')));
+    await tester.pumpAndSettle();
+    // 只有当前 opaque value 对应项被勾选，同名项不会被误标。
+    final alphaIcon = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('session-model-option-dsh:model:alpha:shared')),
+        matching: find.byType(Icon),
+      ),
+    );
+    final betaIcon = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('session-model-option-dsh:model:beta:shared')),
+        matching: find.byType(Icon),
+      ),
+    );
+    expect(alphaIcon.icon, Icons.check_circle);
+    expect(betaIcon.icon, Icons.circle_outlined);
+
+    // 关闭弹层后再开详情；目录统计按分组模型总数展示。
+    await tester.tap(find.byKey(const Key('session-model-selection-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('session-model-seat-details')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('模型 2 项，推理等级 0 项'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('session-model-details-close')));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('MOBILE-V05-09：能力均被阻断时不打开选择弹层', (tester) async {
     await tester.pumpWidget(
       _seatApp(

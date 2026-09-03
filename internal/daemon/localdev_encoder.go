@@ -220,11 +220,23 @@ func (e *LocalDevEventEncoder) localDevFixturePayload(sessionID string, event ad
 		if strings.TrimSpace(message) == "" {
 			return nil, false
 		}
-		return map[string]any{
+		notice := map[string]any{
 			"kind":  "system_notice",
 			"label": "Provider 错误",
 			"text":  message,
-		}, true
+		}
+		// 上游结构化错误事实（error_code/http_status/provider_request_id）由 DSH
+		// adapter 在 session_error payload 中携带，这里原样透传，客户端不必解析文本。
+		if code, _ := event.Payload["error_code"].(string); strings.TrimSpace(code) != "" {
+			notice["error_code"] = code
+		}
+		if status, ok := event.Payload["http_status"].(int); ok && status != 0 {
+			notice["http_status"] = status
+		}
+		if requestID, _ := event.Payload["provider_request_id"].(string); strings.TrimSpace(requestID) != "" {
+			notice["provider_request_id"] = requestID
+		}
+		return notice, true
 	default:
 		// turn_started/usage 等不进入本地开发时间线。
 		return nil, false

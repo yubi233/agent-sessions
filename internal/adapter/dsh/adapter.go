@@ -17,26 +17,11 @@ import (
 // 30s 宽裕量足以覆盖慢速磁盘；无调用方截止时间时才套用。
 const handshakeTimeout = 30 * time.Second
 
-// dshKnownModels 是能力矩阵向客户端暴露的模型目录（model_select Options）。
-// 它必须与仓库 cordis.yml 的 acp-agent.modelProviders + 对应 provider 的 models
-// 列表保持一致：桥的 set_config_option 按 modelProviders 路由并校验 provider
-// 目录，roster 之外的模型会被拒绝。gpt-5.5/gpt-5.6-terra 经 openai 路由
-// （用户自配凭据），默认模型是 Zen 免费池的 nemotron-3-ultra-free。
-// 新增/下线模型时需同步更新 cordis.yml 与此处。
-var dshKnownModels = []string{
-	"nemotron-3-ultra-free",
-	"nemotron-3.5-lightning-free",
-	"ling-3.0-flash-fin-free",
-	"mimo-v2.5-free",
-	"deepseek-v4-flash",
-	"gpt-5.5",
-	"gpt-5.6-terra",
+// ModelCatalog is returned by each ACP session handshake and cached for its lifetime.
+type ModelCatalog struct {
+	Groups  []adapter.ModelCapabilityGroup
+	Current adapter.ModelCapabilityModel
 }
-
-// dshDefaultModel 是能力矩阵的安全默认模型（model_select Default）。
-// 它必须存在于 dshKnownModels（spi.go 不变量），并与 cordis.yml 的
-// acp-agent.model 默认模型一致。
-const dshDefaultModel = "nemotron-3-ultra-free"
 
 // Adapter 是 DeepSeek Harness ACP 桥适配器（spi.Adapter 实现）。
 // Detect 做一次性真实握手（spawn 桥 + initialize）并缓存结果，之后不再触碰子进程；
@@ -54,6 +39,8 @@ type Adapter struct {
 	handshakeOK   bool
 	version       string
 	failReason    string
+	modelGroups   []adapter.ModelCapabilityGroup
+	defaultModel  string
 }
 
 // New 构造生产适配器（真实 dsh-acp-demo 子进程）。
@@ -163,8 +150,10 @@ func configuredPersistenceCompression() (string, error) {
 	return value, nil
 }
 
-// Detect 做一次性 ACP 握手并缓存：协议版本须为 1 才升级能力矩阵；
+// Detect 做 ACP 握手并缓存：协议版本须为 1 才升级能力矩阵；
 // 版本不符或握手失败 → 全部能力 unsupported、各带中文原因、Version 留空（fail-closed）。
+// 首次 Detect 成功即认定桥可用；此后每次真实会话握手（Start/Resume）都会把新的
+// 动态模型目录写回缓存（见 storeHandshake），能力矩阵不依赖编译期模型白名单。
 func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -193,8 +182,7 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 			err = fmt.Errorf("桥协议版本不符（protocolVersion=%v，要求 1）", info.ProtocolVersion)
 		} else {
 			// 版本门通过：采集桥 agentInfo 写入能力快照（ADR-013 §2）。
-			a.handshakeOK = true
-			a.version = info.AgentInfo.Version
+			a.storeHandshakeLocked(info)
 		}
 	}
 	a.handshakeDone = true
@@ -202,6 +190,30 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 		a.failReason = err.Error()
 	}
 	return a.matrixLocked(), nil
+}
+
+// storeHandshake 把一次成功的 ACP initialize（协议版本 1）写回适配器缓存。
+// Detect 之外的真实会话握手（Start/Resume）也会刷新：能力矩阵的模型目录因此是
+// "最近一次成功握手快照"——DSH 配置（渠道/模型/上下文窗口/推理档位）变化后，
+// 随下一次会话建立自动刷新，绝不依赖编译期模型白名单。
+func (a *Adapter) storeHandshake(info initializeResult) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.storeHandshakeLocked(info)
+}
+
+// storeHandshakeLocked 是 storeHandshake 的持锁变体（调用方须持 a.mu）。
+// 版本门未通过的握手不写回：保持既有快照（fail-closed，不因探测失败清空目录）。
+func (a *Adapter) storeHandshakeLocked(info initializeResult) {
+	if info.ProtocolVersion != 1 {
+		return
+	}
+	a.handshakeOK = true
+	a.handshakeDone = true
+	a.failReason = ""
+	a.version = info.AgentInfo.Version
+	a.modelGroups = info.ModelCatalog.Groups
+	a.defaultModel = info.ModelCatalog.Current.Value
 }
 
 // Capabilities 返回能力矩阵（复用 Detect 的一次性握手缓存）。
@@ -212,8 +224,9 @@ func (a *Adapter) Capabilities() adapter.Capabilities {
 
 // Start 启动一个 DSH ACP 会话：spawn 桥 → initialize → session/new(cwd=WorkspaceRoot)，
 // 返回实现 InstanceIDHandle 的 handle（InstanceID()=桥返回的真实 sessionId）。
-// req.Model 登记为期望模型，首个 Send 前经 session/set_config_option 下发；
-// 未声明时沿用桥配置（cordis.yml acp-agent.model）的默认路由。
+// req.Model 登记为期望模型（ACP 目录公布的 opaque route value），首个 Send 前经
+// session/set_config_option 下发；未声明时不覆盖，沿用 DSH 桥自身配置的默认路由
+// （目录由本次 initialize 握手带回，见 storeHandshake）。
 func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.Handle, error) {
 	if strings.TrimSpace(req.WorkspaceRoot) == "" {
 		return nil, errors.New("Start 需要 workspace root")
@@ -249,6 +262,9 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	if info.ProtocolVersion != 1 {
 		return fail(fmt.Errorf("dsh 协议版本不符: protocolVersion=%v", info.ProtocolVersion))
 	}
+	// 每次真实会话握手都刷新能力矩阵目录：DSH 配置变化后，下一次 Start/Resume
+	// 自动把新渠道/模型/档位目录写回适配器缓存（Capabilities/session controls 读取）。
+	a.storeHandshake(info)
 	// 会话 cwd 取调用方工作区（与 ACP session/new 的 cwd 语义一致）；mcpServers 固定空数组
 	// （桥对非空 mcpServers 直接抛 invalidParams，见 acp-demo validateSessionParams）。
 	newCtx, cancelNew := withTimeout(ctx, handshakeTimeout)
@@ -312,6 +328,8 @@ func (a *Adapter) resumeStreaming(ctx context.Context, req adapter.ResumeRequest
 	if info.ProtocolVersion != 1 {
 		return fail(fmt.Errorf("dsh 协议版本不符: protocolVersion=%v", info.ProtocolVersion))
 	}
+	// 恢复会话的握手同样刷新能力矩阵目录（与 Start 口径一致）。
+	a.storeHandshake(info)
 	h.setSessionID(strings.TrimSpace(req.InstanceID))
 	h.setReplayMode(req.ReplayHistory && ready != nil)
 	if ready != nil {
@@ -347,7 +365,7 @@ func (a *Adapter) resumeStreaming(ctx context.Context, req adapter.ResumeRequest
 // matrixLocked 根据握手缓存构造能力矩阵（调用方须持锁）。
 func (a *Adapter) matrixLocked() adapter.Capabilities {
 	if a.handshakeDone && a.handshakeOK {
-		return successMatrix(a.version)
+		return successMatrix(a.version, ModelCatalog{Groups: a.modelGroups, Current: adapter.ModelCapabilityModel{Value: a.defaultModel}})
 	}
 	return failClosedMatrix(a.failReason)
 }
@@ -369,7 +387,12 @@ func failClosedMatrix(reason string) adapter.Capabilities {
 }
 
 // successMatrix 是握手成功后的能力矩阵（spec §2 冻结口径）。
-func successMatrix(version string) adapter.Capabilities {
+func successMatrix(version string, catalogs ...ModelCatalog) adapter.Capabilities {
+	var catalog ModelCatalog
+	if len(catalogs) > 0 {
+		catalog = catalogs[0]
+	}
+	modelGroups := catalog.Groups
 	caps := make([]adapter.Capability, 0, len(adapter.CapabilityNames))
 	for _, name := range adapter.CapabilityNames {
 		status := adapter.CapabilityNative
@@ -425,16 +448,18 @@ func successMatrix(version string) adapter.Capabilities {
 			reason = "skill invoke admission 已接通（复用 prompt/cancel 生命周期）；真实执行复验待授权"
 		case "model_select":
 			// ACP session/set_config_option(configId=model) 已接入 Go handle：
-			// send 前 fail-closed 下发，目录来自 dshKnownModels（与 cordis.yml
-			// modelProviders 同步维护），Default 为 Zen 免费池默认模型。
+			// send 前 fail-closed 下发；目录由 initialize 的 DSH ACP 扩展动态提供。
 			status = adapter.CapabilityNative
 		case "effort_select":
-			// v0.8.2 P1：桥的 setSessionConfigOption 已支持 configId=thought_level
-			// （handle 的 SetEffort/applyEffort 已接通该通道）。但当前 Zen 免费池默认
-			// 模型不公布 reasoningEfforts 档位（目录为空），按计划风险条款保持
-			// unsupported：能切则切，切不了的档位绝不出现在目录中。
 			status = adapter.CapabilityUnsupported
-			reason = "桥支持 thought_level 通道，但当前模型池（Zen 免费池）无已公布档位；空目录不得冒充 native"
+			reason = "DSH ACP 当前模型目录未公布推理档位"
+			for _, group := range modelGroups {
+				for _, model := range group.Models {
+					if len(model.Efforts) > 0 {
+						status, reason = adapter.CapabilityNative, ""
+					}
+				}
+			}
 		case "attachments":
 			// v0.8.3 P5：桥 admission 已实现且 SendContent 通道就绪；生产链路剩余
 			// Relay opaque attachment ref（附件 id → Daemon 授权解密 → 图像块），
@@ -464,14 +489,51 @@ func successMatrix(version string) adapter.Capabilities {
 		}
 		capability := adapter.Capability{Name: name, Status: status, Reason: reason}
 		if name == "model_select" {
-			// Options/Default 是客户端渲染模型选择器的唯一来源；拷贝一份，
-			// 避免调用方改动切片影响后续矩阵。
-			capability.Options = append([]string(nil), dshKnownModels...)
-			capability.Default = dshDefaultModel
+			capability.ModelGroups = cloneModelGroups(modelGroups)
+			capability.ModelDetails = make(map[string]adapter.ModelCapabilityDetail)
+			for _, group := range modelGroups {
+				for _, model := range group.Models {
+					capability.Options = append(capability.Options, model.Value)
+					capability.ModelDetails[model.Value] = adapter.ModelCapabilityDetail{
+						ContextWindowTokens: model.ContextWindowTokens,
+						Reasoning:           model.Reasoning,
+						Efforts:             append([]string(nil), model.Efforts...),
+					}
+					if capability.Default == "" && model.Value != "" {
+						capability.Default = model.Value
+					}
+				}
+			}
+			capability.Default = catalog.Current.Value
+			if !catalogContains(capability.Options, capability.Default) {
+				capability.Default = ""
+			}
 		}
 		caps = append(caps, capability)
 	}
 	return adapter.Capabilities{Provider: "dsh", Version: version, Capabilities: caps}
+}
+
+func catalogContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneModelGroups(groups []adapter.ModelCapabilityGroup) []adapter.ModelCapabilityGroup {
+	cloned := make([]adapter.ModelCapabilityGroup, 0, len(groups))
+	for _, group := range groups {
+		copyGroup := adapter.ModelCapabilityGroup{ID: group.ID, Name: group.Name, Models: make([]adapter.ModelCapabilityModel, len(group.Models))}
+		copy(copyGroup.Models, group.Models)
+		for i := range copyGroup.Models {
+			copyGroup.Models[i].Efforts = append([]string(nil), group.Models[i].Efforts...)
+		}
+		cloned = append(cloned, copyGroup)
+	}
+	return cloned
 }
 
 // withTimeout 在 ctx 无截止时间时套上默认超时，避免桥异常时请求挂死；

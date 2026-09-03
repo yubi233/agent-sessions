@@ -5419,7 +5419,6 @@ class _SessionStatusStrip extends StatelessWidget {
                     : Theme.of(context).colorScheme.outline,
               ),
             ),
-
           ],
         ),
       ),
@@ -5726,6 +5725,9 @@ class _HappyComposerMetaRow extends StatelessWidget {
     final modelOptions = controls.models.isNotEmpty
         ? controls.models
         : modelCapability.options;
+    final modelGroups = controls.modelGroups.isNotEmpty
+        ? controls.modelGroups
+        : modelCapability.modelGroups;
     final selectedModel =
         controls.model ??
         controls.defaultModel ??
@@ -5754,6 +5756,7 @@ class _HappyComposerMetaRow extends StatelessWidget {
         effort: controls.effort,
         models: modelOptions,
         efforts: controls.efforts,
+        groups: modelGroups,
       ),
       modelCapability: modelCapability,
       effortCapability: capabilities.capability('effort_select'),
@@ -5787,6 +5790,9 @@ class _HappyComposerMetaRow extends StatelessWidget {
                 ? refreshed.models
                 : modelCapability.options,
             efforts: refreshed.efforts,
+            groups: refreshed.modelGroups.isNotEmpty
+                ? refreshed.modelGroups
+                : modelCapability.modelGroups,
           ),
           error: error,
         );

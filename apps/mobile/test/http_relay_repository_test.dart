@@ -683,6 +683,67 @@ void main() {
       expect(controls.goal, isNull);
     });
 
+    test('controls 透传 model_groups 分组目录与模型元数据', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.path, '/v1/sessions/session_1/controls');
+        return _jsonResponse({
+          'model': 'dsh:model:channel-b:shared',
+          'models': [
+            'dsh:model:channel-a:shared',
+            'dsh:model:channel-b:shared',
+          ],
+          'model_groups': [
+            {
+              'id': 'channel-a',
+              'name': 'Channel A',
+              'models': [
+                {
+                  'provider': 'channel-a',
+                  'value': 'dsh:model:channel-a:shared',
+                  'id': 'shared',
+                  'name': 'Shared Alpha',
+                },
+              ],
+            },
+            {
+              'id': 'channel-b',
+              'name': 'Channel B',
+              'models': [
+                {
+                  'provider': 'channel-b',
+                  'value': 'dsh:model:channel-b:shared',
+                  'id': 'shared',
+                  'name': 'Shared Beta',
+                  'context_window_tokens': 320000,
+                  'reasoning': true,
+                  'efforts': ['low', 'high'],
+                },
+              ],
+            },
+          ],
+        });
+      });
+
+      final controls = await _authenticatedRepository(
+        adapter,
+      ).getSessionControls('session_1');
+
+      expect(controls.model, 'dsh:model:channel-b:shared');
+      expect(controls.models, [
+        'dsh:model:channel-a:shared',
+        'dsh:model:channel-b:shared',
+      ]);
+      expect(controls.modelGroups, hasLength(2));
+      expect(controls.modelGroups[0].name, 'Channel A');
+      expect(controls.modelGroups[0].models.single.id, 'shared');
+      final beta = controls.modelGroups[1].models.single;
+      expect(beta.name, 'Shared Beta');
+      expect(beta.value, 'dsh:model:channel-b:shared');
+      expect(beta.contextWindowTokens, 320000);
+      expect(beta.reasoning, isTrue);
+      expect(beta.efforts, ['low', 'high']);
+    });
+
     test('message feedback 支持 lazy read、CAS put、conflict 和 delete', () async {
       var call = 0;
       final adapter = _FixtureHttpAdapter((options) {

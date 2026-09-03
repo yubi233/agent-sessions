@@ -69,6 +69,8 @@ class SessionProjectionController {
           sequence: event.sequence,
           label: event.label,
           text: _displayTextFor(event),
+          errorCode: event.errorCode,
+          httpStatus: event.httpStatus,
           isStreaming: event.isStreaming,
           toolStatus: event.toolStatus,
           safeReasoningSummary: _safeReasoningSummary(event),

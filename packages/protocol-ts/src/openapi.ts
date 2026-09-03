@@ -1458,6 +1458,31 @@ export interface components {
             options?: string[];
             /** @description 只有同时存在于 options 中的默认选项才可使用。 */
             default?: string;
+            model_details?: {
+                [key: string]: {
+                    /** Format: int64 */
+                    context_window_tokens?: number;
+                    reasoning?: boolean;
+                    efforts?: string[];
+                };
+            };
+            model_groups?: components["schemas"]["CapabilityModelGroup"][];
+        };
+        CapabilityModelModel: {
+            provider: string;
+            value: string;
+            id: string;
+            name: string;
+            description?: string;
+            /** Format: int64 */
+            context_window_tokens?: number;
+            reasoning: boolean;
+            efforts?: string[];
+        };
+        CapabilityModelGroup: {
+            id: string;
+            name: string;
+            models: components["schemas"]["CapabilityModelModel"][];
         };
         CapabilityProvider: {
             kind: string;

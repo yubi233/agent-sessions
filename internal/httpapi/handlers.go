@@ -615,6 +615,9 @@ func (a *API) handleSessionControls(c *gin.Context) {
 					for _, cap := range p.Capabilities {
 						if cap.Name == "model_select" && len(cap.Options) > 0 {
 							view["models"] = cap.Options
+							if len(cap.ModelGroups) > 0 {
+								view["model_groups"] = cap.ModelGroups
+							}
 							// default_model 只有在 Host 同时把它放进 options 时才
 							// 暴露，客户端不会因缺失投影而自行猜测模型。
 							if cap.Default != "" {

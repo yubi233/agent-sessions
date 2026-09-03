@@ -1041,9 +1041,13 @@ func (l *RelayLoop) resolveAndPersist(ctx context.Context, command RelayCommand,
 	return l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode)
 }
 
+// validRelayResultStatus 判定 Relay 回显的收据终态是否合法。Relay 对已收敛命令的
+// 重复 result 请求回显的是命令当前权威终态（含 cancelled/expired——终端离线或 lease
+// 失效时 Relay 会先收敛），而不是本次请求提交的状态；Daemon 必须以回显状态落盘并
+// 停止重试，否则 started 命令会在重启后永久卡在重连循环，阻塞后续所有命令投递。
 func validRelayResultStatus(status string) bool {
 	switch status {
-	case "succeeded", "failed", "rejected":
+	case "succeeded", "failed", "rejected", "cancelled", "expired":
 		return true
 	default:
 		return false

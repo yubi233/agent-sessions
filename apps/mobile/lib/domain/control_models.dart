@@ -33,6 +33,82 @@ class CapabilityModelDetail {
   final List<String> efforts;
 }
 
+class CapabilityModelOption {
+  const CapabilityModelOption({
+    required this.provider,
+    required this.value,
+    required this.id,
+    required this.name,
+    this.description,
+    this.contextWindowTokens = 0,
+    this.reasoning = false,
+    this.efforts = const [],
+  });
+
+  factory CapabilityModelOption.fromRelayJson(Map<String, dynamic> json) {
+    final provider = _nullableControlString(json['provider']) ?? '';
+    final value = _nullableControlString(json['value']) ?? '';
+    final id = _nullableControlString(json['id']) ?? '';
+    final name = _nullableControlString(json['name']) ?? id;
+    return CapabilityModelOption(
+      provider: provider,
+      value: value,
+      id: id,
+      name: name,
+      description: _nullableControlString(json['description']),
+      contextWindowTokens:
+          _intFromControlJson(json['context_window_tokens']) ?? 0,
+      reasoning: json['reasoning'] == true,
+      efforts: _stringListFromControlJson(json['efforts']),
+    );
+  }
+
+  final String provider;
+  final String value;
+  final String id;
+  final String name;
+  final String? description;
+  final int contextWindowTokens;
+  final bool reasoning;
+  final List<String> efforts;
+}
+
+class CapabilityModelGroup {
+  const CapabilityModelGroup({
+    required this.id,
+    required this.name,
+    required this.models,
+  });
+
+  factory CapabilityModelGroup.fromRelayJson(Map<String, dynamic> json) {
+    final id = _nullableControlString(json['id']) ?? '';
+    final rawModels = json['models'];
+    return CapabilityModelGroup(
+      id: id,
+      name: _nullableControlString(json['name']) ?? id,
+      models: rawModels is List
+          ? rawModels
+                .whereType<Map>()
+                .map(
+                  (item) => CapabilityModelOption.fromRelayJson(
+                    Map<String, dynamic>.from(item),
+                  ),
+                )
+                .where(
+                  (item) =>
+                      item.provider.isNotEmpty &&
+                      item.value.isNotEmpty &&
+                      item.id.isNotEmpty,
+                )
+                .toList(growable: false)
+          : const [],
+    );
+  }
+
+  final String id;
+  final String name;
+  final List<CapabilityModelOption> models;
+}
 
 /// 单项 capability 是 Relay/Daemon 声明的事实，客户端绝不根据 Provider 名称补猜。
 class CapabilityEntry {
@@ -43,6 +119,7 @@ class CapabilityEntry {
     this.options = const [],
     this.defaultOption,
     this.modelDetails = const {},
+    this.modelGroups = const [],
   });
 
   factory CapabilityEntry.fromRelayJson(Map<String, dynamic> json) {
@@ -74,10 +151,8 @@ class CapabilityEntry {
         final value = Map<String, dynamic>.from(entry.value as Map);
         final rawEfforts = value['efforts'];
         modelDetails[entry.key as String] = CapabilityModelDetail(
-          contextWindowTokens: _intFromControlJson(
-                value['context_window_tokens'],
-              ) ??
-              0,
+          contextWindowTokens:
+              _intFromControlJson(value['context_window_tokens']) ?? 0,
           reasoning: value['reasoning'] == true,
           efforts: rawEfforts is List
               ? rawEfforts.whereType<String>().toList(growable: false)
@@ -85,6 +160,18 @@ class CapabilityEntry {
         );
       }
     }
+    final rawModelGroups = json['model_groups'];
+    final modelGroups = rawModelGroups is List
+        ? rawModelGroups
+              .whereType<Map>()
+              .map(
+                (item) => CapabilityModelGroup.fromRelayJson(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .where((group) => group.id.isNotEmpty && group.models.isNotEmpty)
+              .toList(growable: false)
+        : const <CapabilityModelGroup>[];
     return CapabilityEntry(
       name: name.trim(),
       availability: availability,
@@ -98,6 +185,7 @@ class CapabilityEntry {
       options: options,
       defaultOption: defaultOption,
       modelDetails: modelDetails,
+      modelGroups: modelGroups,
     );
   }
 
@@ -113,6 +201,7 @@ class CapabilityEntry {
 
   /// 按 provider/model 索引的模型安全元数据。
   final Map<String, CapabilityModelDetail> modelDetails;
+  final List<CapabilityModelGroup> modelGroups;
 
   bool get isSupported => availability != CapabilityAvailability.unsupported;
 }
@@ -496,6 +585,7 @@ class SessionControlState {
     // v0.2/P3：模型/effort 目录与 usage 只来自已解密事件或 deterministic fixture。
     this.models = const [],
     this.efforts = const [],
+    this.modelGroups = const [],
     this.imageLimits,
     this.usage,
     // v0.3/P0：permission mode 选择器（Happy sessionSetAgentModes 对齐）。
@@ -513,6 +603,7 @@ class SessionControlState {
       skills = const [],
       models = const [],
       efforts = const [],
+      modelGroups = const [],
       imageLimits = null,
       usage = null,
       permissionMode = null,
@@ -526,6 +617,7 @@ class SessionControlState {
       effort: _nullableControlString(json['effort']),
       models: _stringListFromControlJson(json['models']),
       efforts: _stringListFromControlJson(json['efforts']),
+      modelGroups: _modelGroupsFromControlJson(json['model_groups']),
       usage: rawUsage is Map
           ? SessionUsageSummary.fromRelayJson(
               Map<String, dynamic>.from(rawUsage),
@@ -549,6 +641,7 @@ class SessionControlState {
   final List<SessionSkillDescriptor> skills;
   final List<String> models;
   final List<String> efforts;
+  final List<CapabilityModelGroup> modelGroups;
   final SessionImageLimits? imageLimits;
   final SessionUsageSummary? usage;
   final String? permissionMode;
@@ -565,6 +658,7 @@ class SessionControlState {
     List<SessionSkillDescriptor>? skills,
     List<String>? models,
     List<String>? efforts,
+    List<CapabilityModelGroup>? modelGroups,
     SessionImageLimits? imageLimits,
     SessionUsageSummary? usage,
     String? permissionMode,
@@ -579,6 +673,7 @@ class SessionControlState {
     skills: skills ?? this.skills,
     models: models ?? this.models,
     efforts: efforts ?? this.efforts,
+    modelGroups: modelGroups ?? this.modelGroups,
     imageLimits: imageLimits ?? this.imageLimits,
     usage: usage ?? this.usage,
     permissionMode: permissionMode ?? this.permissionMode,
@@ -840,5 +935,18 @@ List<String> _stringListFromControlJson(Object? value) => value is List
           .whereType<String>()
           .where((item) => item.trim().isNotEmpty)
           .map((item) => item.trim())
+          .toList(growable: false)
+    : const [];
+
+List<CapabilityModelGroup> _modelGroupsFromControlJson(Object? value) =>
+    value is List
+    ? value
+          .whereType<Map>()
+          .map(
+            (item) => CapabilityModelGroup.fromRelayJson(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .where((group) => group.id.isNotEmpty && group.models.isNotEmpty)
           .toList(growable: false)
     : const [];

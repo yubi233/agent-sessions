@@ -145,8 +145,9 @@ func (h *handle) markReplayComplete() {
 }
 
 // SetModel 应用运行期模型覆盖（session.model_select / session.send 的随行模型）。
-// 空值忽略：与 opencode 口径一致，避免清空后桥回退到未受控的配置默认。
-// SetModel 无 ctx 与错误返回，真正的下发发生在下一次 Send 前（applyModel）；
+// 值为客户端从 ACP 动态目录选择的 opaque route value（dsh:model:<provider>:<model>），
+// 本端只透传不解析。空值忽略：与 opencode 口径一致，避免清空后桥回退到未受控的
+// 配置默认。SetModel 无 ctx 与错误返回，真正的下发发生在下一次 Send 前（applyModel）；
 // 桥对不在目录内的模型会以 invalidParams 拒绝，失败在 Send 路径 fail-closed。
 func (h *handle) SetModel(model string) {
 	model = strings.TrimSpace(model)
@@ -159,8 +160,9 @@ func (h *handle) SetModel(model string) {
 }
 
 // applyModel 在 prompt 前把期望模型同步到桥（session/set_config_option，
-// configId=model，值为普通模型 id——桥按 modelProviders 路由并校验目录）。
-// 与上一次生效值相同则跳过；失败返回错误并交给 Send 的失败路径广播
+// configId=model）。值为 ACP 动态目录（initialize 的 model-catalog _meta）公布的
+// 无歧义 route value（dsh:model:<provider>:<model>），客户端原样提交、本端不按
+// 渠道名解析。与上一次生效值相同则跳过；失败返回错误并交给 Send 的失败路径广播
 // session_error/turn_completed，绝不带着旧模型继续发送。
 func (h *handle) applyModel(ctx context.Context) error {
 	h.mu.Lock()
@@ -226,6 +228,29 @@ func (h *handle) applyEffort(ctx context.Context) error {
 	return nil
 }
 
+// sessionErrorPayload 构造 session_error 事件载荷：消息文案恒携带，若底层错误是
+// 桥 JSON-RPC 错误（bridgeError）则把上游结构化事实（error_code/status/request_id）
+// 一并投影到事件，供 daemon/客户端透传；非桥错误不附加这些字段。
+func (h *handle) sessionErrorPayload(message string, err error) map[string]any {
+	payload := map[string]any{
+		"instance_id": h.sessionID,
+		"message":     message,
+	}
+	var bridgeErr *bridgeError
+	if errors.As(err, &bridgeErr) && bridgeErr != nil {
+		if bridgeErr.errorCode != "" {
+			payload["error_code"] = bridgeErr.errorCode
+		}
+		if bridgeErr.status != 0 {
+			payload["http_status"] = bridgeErr.status
+		}
+		if bridgeErr.requestID != "" {
+			payload["provider_request_id"] = bridgeErr.requestID
+		}
+	}
+	return payload
+}
+
 // Send 把文本作为 session/prompt 单文本块发送，阻塞到该 turn 结束（桥返回 stopReason）。
 // 取消当前 turn 请调用 Abort（cancel 通知会让桥以 stopReason=cancelled 结算本请求）。
 func (h *handle) Send(ctx context.Context, text string) error {
@@ -236,11 +261,8 @@ func (h *handle) Send(ctx context.Context, text string) error {
 	// （未知模型/不支持的档位/校验失败）时整轮 fail-closed，绝不带旧值静默发送。
 	if err := h.applyModel(ctx); err != nil {
 		h.pushEvent(adapter.Event{
-			Type: adapter.EventSessionError,
-			Payload: map[string]any{
-				"instance_id": h.sessionID,
-				"message":     fmt.Sprintf("模型切换失败：%v", err),
-			},
+			Type:    adapter.EventSessionError,
+			Payload: h.sessionErrorPayload(fmt.Sprintf("模型切换失败：%v", err), err),
 		})
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventTurnCompleted,
@@ -253,11 +275,8 @@ func (h *handle) Send(ctx context.Context, text string) error {
 	}
 	if err := h.applyEffort(ctx); err != nil {
 		h.pushEvent(adapter.Event{
-			Type: adapter.EventSessionError,
-			Payload: map[string]any{
-				"instance_id": h.sessionID,
-				"message":     fmt.Sprintf("推理档位切换失败：%v", err),
-			},
+			Type:    adapter.EventSessionError,
+			Payload: h.sessionErrorPayload(fmt.Sprintf("推理档位切换失败：%v", err), err),
 		})
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventTurnCompleted,
@@ -284,11 +303,8 @@ func (h *handle) sendPromptBlocks(ctx context.Context, prompt []map[string]any) 
 		// 失败也必须收敛回合状态：没有终止标记客户端会永远停留在“生成中”。
 		// 先发 session_error（UI 提示），再发 turn_completed（关掉 generating 态）。
 		h.pushEvent(adapter.Event{
-			Type: adapter.EventSessionError,
-			Payload: map[string]any{
-				"instance_id": h.sessionID,
-				"message":     fmt.Sprintf("模型回合失败：%v", err),
-			},
+			Type:    adapter.EventSessionError,
+			Payload: h.sessionErrorPayload(fmt.Sprintf("模型回合失败：%v", err), err),
 		})
 		h.pushEvent(adapter.Event{
 			Type: adapter.EventTurnCompleted,
@@ -466,6 +482,80 @@ type initializeResult struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"agentInfo"`
+	Meta struct {
+		Catalog acpModelCatalogWire `json:"com.deepseek.dsh/model-catalog"`
+	} `json:"_meta"`
+	ModelCatalog ModelCatalog `json:"-"`
+}
+
+type acpModelCatalogWire struct {
+	Version int `json:"version"`
+	Current struct {
+		Provider        string `json:"provider"`
+		Model           string `json:"model"`
+		Value           string `json:"value"`
+		ReasoningEffort string `json:"reasoningEffort"`
+	} `json:"current"`
+	Providers []struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Models []struct {
+			Value               string `json:"value"`
+			ID                  string `json:"id"`
+			Name                string `json:"name"`
+			Description         string `json:"description"`
+			ContextWindowTokens int64  `json:"contextWindowTokens"`
+			Reasoning           *struct {
+				Efforts []struct {
+					ID string `json:"id"`
+				} `json:"efforts"`
+			} `json:"reasoning"`
+		} `json:"models"`
+	} `json:"providers"`
+}
+
+func (catalog acpModelCatalogWire) project() ModelCatalog {
+	if catalog.Version != 1 {
+		return ModelCatalog{}
+	}
+	projected := ModelCatalog{}
+	for _, provider := range catalog.Providers {
+		group := adapter.ModelCapabilityGroup{ID: strings.TrimSpace(provider.ID), Name: strings.TrimSpace(provider.Name)}
+		if group.ID == "" {
+			continue
+		}
+		if group.Name == "" {
+			group.Name = group.ID
+		}
+		for _, model := range provider.Models {
+			item := adapter.ModelCapabilityModel{
+				Provider: group.ID, Value: strings.TrimSpace(model.Value), ID: strings.TrimSpace(model.ID),
+				Name: strings.TrimSpace(model.Name), Description: strings.TrimSpace(model.Description),
+				ContextWindowTokens: model.ContextWindowTokens, Reasoning: model.Reasoning != nil,
+			}
+			if item.Value == "" || item.ID == "" {
+				continue
+			}
+			if item.Name == "" {
+				item.Name = item.ID
+			}
+			if model.Reasoning != nil {
+				for _, effort := range model.Reasoning.Efforts {
+					if value := strings.TrimSpace(effort.ID); value != "" {
+						item.Efforts = append(item.Efforts, value)
+					}
+				}
+			}
+			group.Models = append(group.Models, item)
+			if item.Provider == catalog.Current.Provider && item.ID == catalog.Current.Model {
+				projected.Current = item
+			}
+		}
+		if len(group.Models) > 0 {
+			projected.Groups = append(projected.Groups, group)
+		}
+	}
+	return projected
 }
 
 // initialize 执行 ACP initialize 握手，返回协议版本与桥信息。
@@ -478,6 +568,7 @@ func (h *handle) initialize(ctx context.Context) (initializeResult, error) {
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return initializeResult{}, fmt.Errorf("解析 initialize 响应: %w", err)
 	}
+	res.ModelCatalog = res.Meta.Catalog.project()
 	return res, nil
 }
 
@@ -559,6 +650,41 @@ type rpcError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data"`
+}
+
+// bridgeError 是桥 JSON-RPC 错误的结构化投影。桥在 error.data 中携带上游
+// LlmFailure 事实（code/status/requestId，见 ACP internalError(data, detail)），
+// 本端逐字段投影供上层事件透传，客户端因此拿到结构化 error_code 而非文本。
+type bridgeError struct {
+	rpcCode   int    // JSON-RPC 错误码（如 -32603）
+	message   string // 桥提供的完整描述
+	errorCode string // 上游稳定错误分类（如 RATE_LIMIT/QUOTA），来自 error.data.code
+	status    int    // 上游 HTTP 状态（如 429），来自 error.data.status；0 表示缺失
+	requestID string // 上游请求标识，来自 error.data.requestId
+}
+
+func (e *bridgeError) Error() string {
+	return fmt.Sprintf("JSON-RPC 桥请求失败（code %d）: %s", e.rpcCode, e.message)
+}
+
+// wireError 从桥错误帧构造结构化错误：JSON-RPC 数值 code 与 message 恒保留，
+// error.data 中的 LlmFailure 字段（code/status/requestId）若存在则投影到
+// bridgeError 并以 %w 包装，调用方可用 errors.As 取出后透传 error_code/status。
+func wireError(method string, rpcErr *rpcError) error {
+	be := &bridgeError{rpcCode: rpcErr.Code, message: rpcErr.Message}
+	if len(rpcErr.Data) > 0 {
+		var data struct {
+			Code      string `json:"code"`
+			Status    int    `json:"status"`
+			RequestID string `json:"requestId"`
+		}
+		if json.Unmarshal(rpcErr.Data, &data) == nil {
+			be.errorCode = strings.TrimSpace(data.Code)
+			be.status = data.Status
+			be.requestID = strings.TrimSpace(data.RequestID)
+		}
+	}
+	return fmt.Errorf("JSON-RPC %s 失败: %w", method, be)
 }
 
 // hasID 判断帧是否携带 id（通知不带 id 字段）。
@@ -834,7 +960,7 @@ func (h *handle) resolvePending(id int64, msg rpcMessage) {
 	}
 	delete(h.pending, id)
 	if msg.Error != nil {
-		req.ch <- rpcResult{err: fmt.Errorf("JSON-RPC %s 失败（code %d）: %s", req.method, msg.Error.Code, msg.Error.Message)}
+		req.ch <- rpcResult{err: wireError(req.method, msg.Error)}
 		return
 	}
 	req.ch <- rpcResult{result: msg.Result}

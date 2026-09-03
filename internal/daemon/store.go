@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -111,10 +112,17 @@ type ConfirmedWorkspace struct {
 
 // OpenStore 打开或创建本地状态库。
 func OpenStore(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn, err := daemonSQLiteDSN(path)
 	if err != nil {
 		return nil, err
 	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// The CLI's workspace-confirm command can briefly overlap the long-lived
+	// daemon while both processes open/migrate this store. The DSN applies the
+	// wait policy to every pooled connection instead of only the first one.
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -125,6 +133,30 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+const daemonSQLiteBusyTimeoutMS = 10000
+
+// daemonSQLiteDSN injects connection-level SQLite settings used by every
+// process/connection that opens the local daemon store. In particular,
+// _busy_timeout prevents the short workspace-confirm helper from racing the
+// daemon's initial schema migration and making the daemon appear offline.
+func daemonSQLiteDSN(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("daemon sqlite path is required")
+	}
+	if !strings.HasPrefix(path, "file:") {
+		path = "file:" + path
+	}
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("parse daemon sqlite path: %w", err)
+	}
+	query := parsed.Query()
+	query.Set("_busy_timeout", strconv.Itoa(daemonSQLiteBusyTimeoutMS))
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
 }
 
 func (s *Store) migrate() error {

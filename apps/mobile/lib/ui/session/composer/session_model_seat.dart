@@ -16,12 +16,14 @@ class SessionModelCatalog {
     required this.effort,
     required this.models,
     required this.efforts,
+    this.groups = const [],
   });
 
   final String? model;
   final String? effort;
   final List<String> models;
   final List<String> efforts;
+  final List<CapabilityModelGroup> groups;
 }
 
 /// 目录刷新结果。刷新失败时仍带回当前安全投影，避免把旧目录误画成空目录。
@@ -97,7 +99,18 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
   bool get _canOpenPicker =>
       widget.providerAvailable && (!_modelDisabled || !_effortDisabled);
 
+  CapabilityModelOption? get _selectedModelOption {
+    for (final group in widget.catalog.groups) {
+      for (final model in group.models) {
+        if (model.value == widget.catalog.model) return model;
+      }
+    }
+    return null;
+  }
+
   String get _displayModel {
+    final option = _selectedModelOption;
+    if (option != null) return option.name;
     final model = widget.catalog.model?.trim();
     if (model != null && model.isNotEmpty) return model;
     final provider = widget.provider?.trim();
@@ -107,14 +120,25 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
 
   bool get _usesAutomaticReasoning {
     final effort = widget.catalog.effort?.trim();
-    return widget.modelDetail?.reasoning == true &&
+    return (widget.modelDetail?.reasoning == true ||
+            _selectedModelOption?.reasoning == true) &&
         (effort == null || effort.isEmpty) &&
-        widget.modelDetail?.efforts.isEmpty == true;
+        (widget.modelDetail?.efforts.isEmpty ??
+            _selectedModelOption?.efforts.isEmpty ??
+            true);
   }
 
   bool get _hasSelectableEfforts =>
       widget.catalog.efforts.isNotEmpty ||
+      _selectedModelOption?.efforts.isNotEmpty == true ||
       widget.modelDetail?.efforts.isNotEmpty == true;
+
+  int get _modelCount => widget.catalog.groups.isEmpty
+      ? widget.catalog.models.length
+      : widget.catalog.groups.fold(
+          0,
+          (count, group) => count + group.models.length,
+        );
 
   List<CapabilityEntry> get _effectiveCapabilities {
     if (widget.capabilities.isNotEmpty) return widget.capabilities;
@@ -233,7 +257,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                   key: const Key('session-model-details-catalog'),
                   label: '目录',
                   value:
-                      '模型 ${widget.catalog.models.length} 项，推理等级 ${widget.catalog.efforts.length} 项',
+                      '模型 $_modelCount 项，推理等级 ${widget.catalog.efforts.length} 项',
                 ),
                 const Divider(height: 20),
                 Text(
@@ -590,6 +614,7 @@ class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
                     key: const Key('session-model-selection-model-section'),
                     title: '模型',
                     options: _catalog.models,
+                    groups: _catalog.groups,
                     selected: _catalog.model,
                     optionPrefix: 'session-model-option-',
                     enabled: widget.modelEnabled,
@@ -625,6 +650,7 @@ class _PickerSection extends StatelessWidget {
   const _PickerSection({
     required this.title,
     required this.options,
+    this.groups = const [],
     required this.selected,
     required this.optionPrefix,
     required this.enabled,
@@ -637,6 +663,7 @@ class _PickerSection extends StatelessWidget {
 
   final String title;
   final List<String> options;
+  final List<CapabilityModelGroup> groups;
   final String? selected;
   final String optionPrefix;
   final bool enabled;
@@ -668,12 +695,44 @@ class _PickerSection extends StatelessWidget {
               ),
             ),
           )
-        else if (options.isEmpty)
+        else if (options.isEmpty && groups.isEmpty)
           Padding(
             key: emptyKey,
             padding: const EdgeInsets.all(8),
             child: const Text('当前目录为空，Host 尚未提供可用选项。'),
           )
+        else if (groups.isNotEmpty)
+          for (final group in groups) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 10, 8, 2),
+              child: Text(group.name, style: theme.textTheme.labelLarge),
+            ),
+            for (final option in group.models)
+              ListTile(
+                key: Key('$optionPrefix${option.value}'),
+                dense: true,
+                enabled: !selectionBusy,
+                leading: Icon(
+                  option.value == selected
+                      ? Icons.check_circle
+                      : Icons.circle_outlined,
+                  size: 18,
+                ),
+                title: Text(
+                  option.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: option.id == option.name
+                    ? null
+                    : Text(
+                        option.id,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                onTap: () => unawaited(onSelect(option.value)),
+              ),
+          ]
         else
           for (final option in options)
             ListTile(

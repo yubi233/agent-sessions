@@ -80,6 +80,48 @@ func TestLocalDevEventEncoderMapsWhitelistedEvents(t *testing.T) {
 	}
 }
 
+// 上游结构化错误事实（error_code/http_status/provider_request_id）必须原样进入
+// system_notice 的 fixture_payload，客户端无需解析 message 文本。
+func TestLocalDevEventEncoderCarriesStructuredSessionError(t *testing.T) {
+	raw := localDevEvent(t, adapter.EventSessionError, map[string]any{
+		"instance_id":         "ses-x",
+		"message":             "模型回合失败：quota",
+		"error_code":          "QUOTA",
+		"http_status":         429,
+		"provider_request_id": "req_provider_1",
+	})
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("envelope not json: %v", err)
+	}
+	fixture, ok := payload["fixture_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing fixture_payload: %v", payload)
+	}
+	if fixture["kind"] != "system_notice" || fixture["label"] != "Provider 错误" {
+		t.Fatalf("notice shape = %v", fixture)
+	}
+	if fixture["error_code"] != "QUOTA" {
+		t.Fatalf("error_code = %v, want QUOTA", fixture["error_code"])
+	}
+	if fixture["http_status"] != float64(429) {
+		t.Fatalf("http_status = %v, want 429", fixture["http_status"])
+	}
+	if fixture["provider_request_id"] != "req_provider_1" {
+		t.Fatalf("provider_request_id = %v", fixture["provider_request_id"])
+	}
+	// 无结构化字段的错误保持原形状（不补空字段）。
+	plain := localDevEvent(t, adapter.EventSessionError, map[string]any{"message": "plain"})
+	var plainPayload map[string]any
+	if err := json.Unmarshal([]byte(plain), &plainPayload); err != nil {
+		t.Fatalf("plain envelope not json: %v", err)
+	}
+	plainFixture := plainPayload["fixture_payload"].(map[string]any)
+	if _, has := plainFixture["error_code"]; has {
+		t.Fatalf("plain notice must not carry error_code: %v", plainFixture)
+	}
+}
+
 // (V083-10) user_question → question_request 词汇映射：request_id 关联 + questions
 // 数组透传（intent/detail 完整保留）；缺 request_id 不产生事件。
 func TestLocalDevEventEncoderMapsUserQuestion(t *testing.T) {

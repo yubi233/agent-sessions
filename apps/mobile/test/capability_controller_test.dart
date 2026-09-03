@@ -78,6 +78,158 @@ void main() {
       );
     });
 
+    test('model_groups 解析渠道父级、推理档位与上下文窗口', () {
+      final parsed = CapabilityMatrix.fromRelayJson({
+        'providers': [
+          {
+            'kind': 'dsh',
+            'version': '0.1.0',
+            'available': true,
+            'capabilities': [
+              {
+                'name': 'model_select',
+                'status': 'native',
+                'options': [
+                  'dsh:model:channel-a:shared',
+                  'dsh:model:channel-b:shared',
+                ],
+                'default': 'dsh:model:channel-b:shared',
+                // 真实 adapter 同时填充 model_details（键=opaque value）。
+                'model_details': {
+                  'dsh:model:channel-b:shared': {
+                    'context_window_tokens': 320000,
+                    'reasoning': true,
+                    'efforts': ['low', 'high'],
+                  },
+                },
+                'model_groups': [
+                  {
+                    'id': 'channel-a',
+                    'name': 'Channel A',
+                    'models': [
+                      {
+                        'provider': 'channel-a',
+                        'value': 'dsh:model:channel-a:shared',
+                        'id': 'shared',
+                        'name': 'Shared Alpha',
+                        'context_window_tokens': 128000,
+                        'reasoning': false,
+                        'efforts': [],
+                      },
+                    ],
+                  },
+                  {
+                    'id': 'channel-b',
+                    'name': 'Channel B',
+                    'models': [
+                      {
+                        'provider': 'channel-b',
+                        'value': 'dsh:model:channel-b:shared',
+                        'id': 'shared',
+                        'name': 'Shared Beta',
+                        'context_window_tokens': 320000,
+                        'reasoning': true,
+                        'efforts': ['low', 'high'],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      final capability = parsed.provider('dsh').capability('model_select');
+      // 同名模型被保留在各自渠道父级下，不塌缩。
+      expect(capability.modelGroups, hasLength(2));
+      expect(capability.modelGroups[0].id, 'channel-a');
+      expect(capability.modelGroups[0].name, 'Channel A');
+      expect(capability.modelGroups[0].models, hasLength(1));
+      final alpha = capability.modelGroups[0].models.single;
+      expect(alpha.provider, 'channel-a');
+      expect(alpha.id, 'shared');
+      expect(alpha.name, 'Shared Alpha');
+      expect(alpha.contextWindowTokens, 128000);
+      expect(alpha.reasoning, isFalse);
+      expect(alpha.efforts, isEmpty);
+      final beta = capability.modelGroups[1].models.single;
+      expect(beta.provider, 'channel-b');
+      expect(beta.value, 'dsh:model:channel-b:shared');
+      expect(beta.contextWindowTokens, 320000);
+      expect(beta.reasoning, isTrue);
+      expect(beta.efforts, ['low', 'high']);
+      // 目录 options 仍以 Host 声明的无歧义 value 呈现。
+      expect(capability.options, [
+        'dsh:model:channel-a:shared',
+        'dsh:model:channel-b:shared',
+      ]);
+      expect(capability.defaultOption, 'dsh:model:channel-b:shared');
+      // model_details 目录也保留该 opaque value 键（供详情查询）。
+      final detail = parsed
+          .provider('dsh')
+          .modelDetailFor('model_select', 'dsh:model:channel-b:shared');
+      expect(detail?.contextWindowTokens, 320000);
+      expect(detail?.reasoning, isTrue);
+      expect(detail?.efforts, ['low', 'high']);
+    });
+
+    test('model_groups 缺失或格式错误时安全降级为空目录', () {
+      final parsed = CapabilityMatrix.fromRelayJson({
+        'providers': [
+          {
+            'kind': 'dsh',
+            'version': '0.1.0',
+            'available': true,
+            'capabilities': [
+              {
+                'name': 'model_select',
+                'status': 'native',
+                'options': ['dsh:model:channel-a:shared'],
+                'default': 'dsh:model:channel-a:shared',
+              },
+            ],
+          },
+        ],
+      });
+      final capability = parsed.provider('dsh').capability('model_select');
+      expect(capability.modelGroups, isEmpty);
+      // 空组/无 provider 组会被过滤，非法项不进入目录。
+      final filtered = CapabilityMatrix.fromRelayJson({
+        'providers': [
+          {
+            'kind': 'dsh',
+            'version': '0.1.0',
+            'available': true,
+            'capabilities': [
+              {
+                'name': 'model_select',
+                'status': 'native',
+                'options': ['valid'],
+                'model_groups': [
+                  {'id': '', 'name': 'Empty', 'models': []},
+                  {
+                    'id': 'missing-provider',
+                    'name': 'Broken',
+                    'models': [
+                      {
+                        'value': 'v-no-provider',
+                        'id': 'x',
+                        'name': 'No Provider',
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      final filteredCapability = filtered
+          .provider('dsh')
+          .capability('model_select');
+      expect(filteredCapability.modelGroups, isEmpty);
+    });
+
     test('未知 capability 状态和能力读取失败均 fail-closed', () async {
       final parsed = CapabilityMatrix.fromRelayJson({
         'providers': [

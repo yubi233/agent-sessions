@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // DAEMON-BOOT-01：本地状态可打开、写入与读取。
@@ -20,6 +22,62 @@ func TestStoreSetGet(t *testing.T) {
 	v, err := s.Get("device_id")
 	if err != nil || v != "dev-1" {
 		t.Fatalf("get = %q err=%v", v, err)
+	}
+}
+
+// DAEMON-BOOT-02：workspace-confirm 与常驻 Daemon 短暂重叠写同一状态库时，
+// 后到的写操作应等待锁释放，不能直接以 SQLITE_BUSY (261) 启动失败。
+func TestStoreWaitsForConcurrentWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.db")
+	first, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	defer first.Close()
+	second, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("open second store: %v", err)
+	}
+	defer second.Close()
+	var busyTimeout int
+	if err := second.db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("read busy timeout: %v", err)
+	}
+	if busyTimeout != daemonSQLiteBusyTimeoutMS {
+		t.Fatalf("busy_timeout=%d want %d", busyTimeout, daemonSQLiteBusyTimeoutMS)
+	}
+
+	tx, err := first.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin writer: %v", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO local_state(key,value) VALUES('lock-holder','1')`); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("hold write lock: %v", err)
+	}
+
+	written := make(chan error, 1)
+	go func() {
+		written <- second.Set("waiting-writer", "1")
+	}()
+
+	select {
+	case err := <-written:
+		_ = tx.Rollback()
+		t.Fatalf("second writer returned before lock release: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("release writer: %v", err)
+	}
+	select {
+	case err := <-written:
+		if err != nil {
+			t.Fatalf("second writer after lock release: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second writer did not continue after lock release")
 	}
 }
 

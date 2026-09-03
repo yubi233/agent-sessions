@@ -28,6 +28,26 @@ type ModelCapabilityDetail struct {
 	Efforts             []string `json:"efforts,omitempty"`
 }
 
+// ModelCapabilityModel is one exact provider/model route advertised by DSH ACP.
+// Value is the opaque ACP selector value and must be submitted unchanged.
+type ModelCapabilityModel struct {
+	Provider            string   `json:"provider"`
+	Value               string   `json:"value"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Description         string   `json:"description,omitempty"`
+	ContextWindowTokens int64    `json:"context_window_tokens,omitempty"`
+	Reasoning           bool     `json:"reasoning"`
+	Efforts             []string `json:"efforts,omitempty"`
+}
+
+// ModelCapabilityGroup is a parent channel and its dynamically advertised models.
+type ModelCapabilityGroup struct {
+	ID     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	Models []ModelCapabilityModel `json:"models"`
+}
+
 // Capability 描述单项能力状态与原因。
 // Options 是 additive 选项目录（model/effort/permission_mode 等）：空表示不暴露目录，
 // 客户端按 Status 决定入口是否可用，按 Options 渲染选择列表。
@@ -41,6 +61,8 @@ type Capability struct {
 	Default string `json:"default,omitempty"`
 	// ModelDetails 只对 model_select 生效，以模型引用为键提供上下文/推理白名单元数据。
 	ModelDetails map[string]ModelCapabilityDetail `json:"model_details,omitempty"`
+	// ModelGroups preserves ACP's provider-parent/model-child directory.
+	ModelGroups []ModelCapabilityGroup `json:"model_groups,omitempty"`
 }
 
 // Capabilities 返回 Provider 的能力矩阵。

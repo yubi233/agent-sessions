@@ -154,6 +154,25 @@ func methodOf(msg map[string]any) string {
 	return m
 }
 
+var fakeACPModelValues = []string{"dsh:model:channel-a:model-a", "dsh:model:channel-b:model-b"}
+
+func fakeACPModelCatalog() map[string]any {
+	return map[string]any{
+		"version": 1,
+		"current": map[string]any{"provider": "channel-a", "model": "model-a", "value": fakeACPModelValues[0]},
+		"providers": []any{
+			map[string]any{"id": "channel-a", "name": "Channel A", "models": []any{
+				map[string]any{"value": fakeACPModelValues[0], "id": "model-a", "name": "Model A"},
+			}},
+			map[string]any{"id": "channel-b", "name": "Channel B", "models": []any{
+				map[string]any{"value": fakeACPModelValues[1], "id": "model-b", "name": "Model B", "reasoning": map[string]any{
+					"efforts": []any{map[string]any{"id": "low"}, map[string]any{"id": "high"}},
+				}},
+			}},
+		},
+	}
+}
+
 // respondByMethod 是常用脚本：按请求 method 注入固定应答（id 回显请求 id）；
 // session/cancel 为通知，无应答。set_config_option 按桥语义回成功空对象。
 func respondByMethod(t *testing.T, sessionID string) func(fb *fakeBridge, msg map[string]any) {
@@ -167,6 +186,7 @@ func respondByMethod(t *testing.T, sessionID string) func(fb *fakeBridge, msg ma
 				"result": map[string]any{
 					"protocolVersion": 1,
 					"agentInfo":       map[string]any{"name": "deepseek-harness-acp", "version": "0.0.1"},
+					"_meta":           map[string]any{"com.deepseek.dsh/model-catalog": fakeACPModelCatalog()},
 				},
 			})
 		case "session/new":
@@ -268,14 +288,14 @@ func TestCapabilitiesMatchResumeAndModelTruth(t *testing.T) {
 	if modelSelect.Status != adapter.CapabilityNative || modelSelect.Reason != "" {
 		t.Fatalf("model_select 能力不真实: %+v", modelSelect)
 	}
-	if len(modelSelect.Options) != len(dshKnownModels) {
-		t.Fatalf("model_select Options 数量 = %d, want %d", len(modelSelect.Options), len(dshKnownModels))
+	if len(modelSelect.Options) != len(fakeACPModelValues) {
+		t.Fatalf("model_select Options 数量 = %d, want %d", len(modelSelect.Options), len(fakeACPModelValues))
 	}
 	seen := map[string]bool{}
 	for _, model := range modelSelect.Options {
 		seen[model] = true
 	}
-	for _, model := range dshKnownModels {
+	for _, model := range fakeACPModelValues {
 		if !seen[model] {
 			t.Fatalf("model_select Options 缺少 %q: %v", model, modelSelect.Options)
 		}
@@ -284,6 +304,95 @@ func TestCapabilitiesMatchResumeAndModelTruth(t *testing.T) {
 	if modelSelect.Default == "" || !seen[modelSelect.Default] {
 		t.Fatalf("model_select Default %q 必须存在于 Options %v", modelSelect.Default, modelSelect.Options)
 	}
+}
+
+// 目录是"最近一次成功 ACP 握手快照"：Start/Resume 的 initialize 必须把新目录
+// 回写适配器缓存，否则 DSH 配置变化后能力矩阵会长期停留在 Detect 时的旧目录。
+func TestSessionHandshakeRefreshesModelCatalog(t *testing.T) {
+	catalogV2 := map[string]any{
+		"version": 1,
+		"current": map[string]any{"provider": "gamma", "model": "other", "value": "dsh:model:gamma:other"},
+		"providers": []any{
+			map[string]any{"id": "gamma", "name": "Gamma Gateway", "models": []any{
+				map[string]any{"value": "dsh:model:gamma:other", "id": "other", "name": "Other", "reasoning": map[string]any{
+					"efforts": []any{map[string]any{"id": "high"}},
+				}},
+			}},
+		},
+	}
+	// factory 按调用次序返回不同目录的假桥：Detect 看到 v1（旧配置），
+	// 随后一次 Start 看到 v2（DSH 配置已变化）。
+	var spawns int
+	factory := func() (BridgeTransport, error) {
+		spawns++
+		fb := newFakeBridge()
+		fb.script = func(fb *fakeBridge, msg map[string]any) {
+			switch methodOf(msg) {
+			case "initialize":
+				catalog := fakeACPModelCatalog()
+				if spawns >= 2 {
+					catalog = catalogV2
+				}
+				fb.push(t, map[string]any{
+					"jsonrpc": "2.0", "id": frameID(msg),
+					"result": map[string]any{
+						"protocolVersion": 1,
+						"agentInfo":       map[string]any{"name": "deepseek-harness-acp", "version": "0.0.1"},
+						"_meta":           map[string]any{"com.deepseek.dsh/model-catalog": catalog},
+					},
+				})
+			case "session/new":
+				fb.push(t, map[string]any{
+					"jsonrpc": "2.0", "id": frameID(msg),
+					"result": map[string]any{"sessionId": "refresh-session"},
+				})
+			}
+		}
+		return fb, nil
+	}
+	a := NewWithTransport(factory)
+	first, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got := modelSelectOptions(first); len(got) != len(fakeACPModelValues) || got[0] != fakeACPModelValues[0] {
+		t.Fatalf("Detect 目录与 v1 假桥不符: %v", got)
+	}
+	// 新会话握手（Start）刷新目录：即使 Detect 已完成，能力矩阵也必须跟随新配置。
+	h, err := a.Start(context.Background(), adapter.StartRequest{WorkspaceRoot: "/tmp/dsh-ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Dispose(context.Background()) })
+	if spawns != 2 {
+		t.Fatalf("Start 未走第二次桥 spawn: %d", spawns)
+	}
+	refreshed := a.Capabilities()
+	options := modelSelectOptions(refreshed)
+	if len(options) != 1 || options[0] != "dsh:model:gamma:other" {
+		t.Fatalf("Start 握手后目录未刷新: %v", options)
+	}
+	for _, capability := range refreshed.Capabilities {
+		switch capability.Name {
+		case "model_select":
+			if capability.Default != "dsh:model:gamma:other" {
+				t.Fatalf("Default 未随握手刷新: %q", capability.Default)
+			}
+		case "effort_select":
+			if capability.Status != adapter.CapabilityNative {
+				t.Fatalf("v2 目录公布推理档位但 effort_select 未升 native: %+v", capability)
+			}
+		}
+	}
+}
+
+func modelSelectOptions(caps adapter.Capabilities) []string {
+	for _, capability := range caps.Capabilities {
+		if capability.Name == "model_select" {
+			return append([]string(nil), capability.Options...)
+		}
+	}
+	return nil
 }
 
 // 修改返回的 Options 切片不得污染后续矩阵（successMatrix 每次拷贝目录）。
@@ -304,7 +413,7 @@ func TestModelSelectOptionsAreCopiedPerMatrix(t *testing.T) {
 		}
 	}
 	for _, capability := range a.Capabilities().Capabilities {
-		if capability.Name == "model_select" && capability.Options[0] != dshKnownModels[0] {
+		if capability.Name == "model_select" && capability.Options[0] != fakeACPModelValues[0] {
 			t.Fatalf("Options 被外部修改污染: %v", capability.Options)
 		}
 	}
@@ -586,6 +695,49 @@ func TestSendPromptFailureEmitsTerminalEvents(t *testing.T) {
 	}
 	if second.Payload["stop_reason"] != "error" {
 		t.Fatalf("stop_reason = %v, want error", second.Payload["stop_reason"])
+	}
+}
+
+// 上游 LlmFailure 事实（error.data 的 code/status/requestId）必须随 session_error
+// 事件结构化透传，客户端不依赖解析 message 文本。
+func TestSendPromptFailureCarriesStructuredErrorCode(t *testing.T) {
+	const sessionID = "sess-err-code"
+	fb := newFakeBridge()
+	fb.script = func(fb *fakeBridge, msg map[string]any) {
+		if methodOf(msg) == "session/prompt" {
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": frameID(msg),
+				"error": map[string]any{
+					"code":    -32603,
+					"message": "Internal error: turn failed: 429: rate limit",
+					"data":    map[string]any{"code": "RATE_LIMIT", "status": 429, "requestId": "req_abc123"},
+				},
+			})
+			return
+		}
+		respondByMethod(t, sessionID)(fb, msg)
+	}
+	h := startWithFake(t, fb)
+
+	if err := h.Send(context.Background(), "触发限流"); err == nil {
+		t.Fatal("prompt 失败必须返回错误")
+	}
+
+	first := <-h.Events()
+	if first.Type != adapter.EventSessionError {
+		t.Fatalf("第一个事件 = %q, want session_error", first.Type)
+	}
+	if got := first.Payload["error_code"]; got != "RATE_LIMIT" {
+		t.Fatalf("error_code = %v, want RATE_LIMIT", got)
+	}
+	if got := first.Payload["http_status"]; got != 429 {
+		t.Fatalf("http_status = %v, want 429", got)
+	}
+	if got := first.Payload["provider_request_id"]; got != "req_abc123" {
+		t.Fatalf("provider_request_id = %v, want req_abc123", got)
+	}
+	if _, ok := first.Payload["message"].(string); !ok {
+		t.Fatal("message 必须保留可读文案")
 	}
 }
 

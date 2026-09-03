@@ -958,8 +958,14 @@ type BootstrapRequest struct {
 // CapabilityItem defines model for CapabilityItem.
 type CapabilityItem struct {
 	// Default 只有同时存在于 options 中的默认选项才可使用。
-	Default *string `json:"default,omitempty"`
-	Name    string  `json:"name"`
+	Default      *string `json:"default,omitempty"`
+	ModelDetails *map[string]struct {
+		ContextWindowTokens *int64    `json:"context_window_tokens,omitempty"`
+		Efforts             *[]string `json:"efforts,omitempty"`
+		Reasoning           *bool     `json:"reasoning,omitempty"`
+	} `json:"model_details,omitempty"`
+	ModelGroups *[]CapabilityModelGroup `json:"model_groups,omitempty"`
+	Name        string                  `json:"name"`
 
 	// Options Host 明确提供的安全选项目录；空值表示没有可选择项。
 	Options *[]string            `json:"options,omitempty"`
@@ -969,6 +975,25 @@ type CapabilityItem struct {
 
 // CapabilityItemStatus defines model for CapabilityItem.Status.
 type CapabilityItemStatus string
+
+// CapabilityModelGroup defines model for CapabilityModelGroup.
+type CapabilityModelGroup struct {
+	Id     string                 `json:"id"`
+	Models []CapabilityModelModel `json:"models"`
+	Name   string                 `json:"name"`
+}
+
+// CapabilityModelModel defines model for CapabilityModelModel.
+type CapabilityModelModel struct {
+	ContextWindowTokens *int64    `json:"context_window_tokens,omitempty"`
+	Description         *string   `json:"description,omitempty"`
+	Efforts             *[]string `json:"efforts,omitempty"`
+	Id                  string    `json:"id"`
+	Name                string    `json:"name"`
+	Provider            string    `json:"provider"`
+	Reasoning           bool      `json:"reasoning"`
+	Value               string    `json:"value"`
+}
 
 // CapabilityProvider defines model for CapabilityProvider.
 type CapabilityProvider struct {

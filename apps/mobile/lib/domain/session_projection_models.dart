@@ -124,6 +124,8 @@ class ConversationNode {
     required this.sequence,
     required this.label,
     this.text,
+    this.errorCode,
+    this.httpStatus = 0,
     this.isStreaming = false,
     this.toolStatus,
     this.safeReasoningSummary,
@@ -149,6 +151,13 @@ class ConversationNode {
   final int sequence;
   final String label;
   final String? text;
+
+  /// 上游 Provider 稳定错误分类（如 RATE_LIMIT/QUOTA），notice/error 节点可见。
+  final String? errorCode;
+
+  /// 上游 HTTP 状态（如 429）；0 表示缺失。
+  final int httpStatus;
+
   final bool isStreaming;
   final String? toolStatus;
 

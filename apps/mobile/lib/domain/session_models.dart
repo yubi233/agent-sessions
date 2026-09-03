@@ -772,6 +772,8 @@ class SessionTimelineEvent {
     required this.kind,
     required this.label,
     this.text,
+    this.errorCode,
+    this.httpStatus = 0,
     this.isStreaming = false,
     this.toolStatus,
     this.permission,
@@ -809,6 +811,8 @@ class SessionTimelineEvent {
       kind: kind,
       label: _nullableString(payload['label']) ?? _fallbackTimelineLabel(kind),
       text: _nullableString(payload['text']),
+      errorCode: _nullableString(payload['error_code']),
+      httpStatus: payload['http_status'] is int ? payload['http_status'] as int : 0,
       isStreaming: payload['streaming'] == true,
       toolStatus: _nullableString(payload['tool_status']),
       permission: permission,
@@ -833,6 +837,10 @@ class SessionTimelineEvent {
   final SessionTimelineKind kind;
   final String label;
   final String? text;
+  /// 上游 Provider 稳定错误分类（如 RATE_LIMIT/QUOTA），来自 system_notice.error_code。
+  final String? errorCode;
+  /// 上游 HTTP 状态（如 429），来自 system_notice.http_status；0 表示缺失。
+  final int httpStatus;
   final bool isStreaming;
   final String? toolStatus;
   final TimelinePermissionRequest? permission;
