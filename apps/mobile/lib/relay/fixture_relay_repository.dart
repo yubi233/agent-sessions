@@ -1460,12 +1460,8 @@ class FixtureRelayRepository implements RelayRepository {
 
   void _appendStart(_FixtureSessionState state) {
     final now = _clock();
-    if (state.session.status == MobileSessionStatus.stopped) {
-      throw const RelayFailure(
-        RelayFailureKind.forbidden,
-        '已结束的 fixture 会话不能重新启动。',
-      );
-    }
+    // 与真实 daemon 语义对齐：stopped 会话允许 start（resume 重建本机实例），
+    // 客户端"发送前自动恢复"依赖这一行为（ADR-013/ADR-015 恢复路径）。
     state.append(
       eventType: 'session.started',
       payload: const {

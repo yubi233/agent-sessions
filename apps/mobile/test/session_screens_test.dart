@@ -425,7 +425,9 @@ void main() {
     await _waitForGone(tester, find.byKey(const Key('session-queue-dock')));
     final sentSnapshot = await harness.relay.getSessionSnapshot(sessionId);
     expect(_snapshotContainsText(sentSnapshot, queuedText), isTrue);
-    expect(harness.relay.submittedCommandCount, 3);
+    // 计数口径：send(1)+stop(1)+自动 start(1)+send-all(1)=4。停止后发送会
+    // 自动补 session.start（恢复本机实例），与真实 daemon resume 语义一致。
+    expect(harness.relay.submittedCommandCount, 4);
   });
 
   testWidgets('MOBILE-V05-04/P3-B：提交失败显示 notice 且保留草稿', (tester) async {
@@ -832,12 +834,12 @@ void main() {
       find.byKey(const Key('session-queue-row-queue-1')),
     );
     // 被发送项已落进 Relay（同时作为 Chat 用户消息展示），队列行移除、keep 项保留。
-    // 计数口径：send(1)+stop(1)+steer(1)=3。
+    // 计数口径：send(1)+stop(1)+自动 start(1)+steer(1)=4（停止后发送自动恢复）。
     final sentSnapshot = await harness.relay.getSessionSnapshot(sessionId);
     expect(_snapshotContainsText(sentSnapshot, steer), isTrue);
     expect(find.byKey(const Key('session-queue-row-queue-1')), findsNothing);
     expect(find.text(keep), findsOneWidget);
-    expect(harness.relay.submittedCommandCount, 3);
+    expect(harness.relay.submittedCommandCount, 4);
   });
 
   testWidgets('MOBILE-V05-07/P5-A：steer 发送失败保留排队项并以 composer notice 呈现', (

@@ -936,6 +936,20 @@ class SessionController extends ChangeNotifier {
     );
   }
 
+  /// daemon 重启/实例回收后，原空闲会话在移动端呈 stopped；直接 send 会被
+  /// 执行端以 local_state_missing 拒绝（时间线浮出"请先启动会话"）。与写权
+  /// 自动获取同一体验方向：发送前对 stopped 会话自动补一次 session.start
+  /// （resume 重建本机实例）；启动失败仍走显式错误面，不静默吞掉。
+  Future<bool> _ensureSessionRunnableForSend({
+    required String deviceId,
+    required bool canWrite,
+  }) async {
+    if (selectedSession?.status != MobileSessionStatus.stopped) {
+      return true;
+    }
+    return startSelectedSession(deviceId: deviceId, canWrite: canWrite);
+  }
+
   Future<void> sendMessage({
     required String message,
     required String? deviceId,
@@ -956,6 +970,14 @@ class SessionController extends ChangeNotifier {
             )) {
       return;
     }
+    // 已停止会话先自动恢复，再发送；避免 daemon 重启后用户被"请先启动会话"阻断。
+    if (!await _ensureSessionRunnableForSend(
+      deviceId: deviceId!,
+      canWrite: canWrite,
+    )) {
+      _setError('会话自动启动未成功，请先手动启动会话再发送。');
+      return;
+    }
     // 同一条待发送内容重试复用幂等键；成功后的新输入会生成新的 action key。
     final operation =
         'send:$sessionId:${selectedSession?.lastSequence ?? 0}:$trimmed';
@@ -969,7 +991,7 @@ class SessionController extends ChangeNotifier {
       sessionId: sessionId,
       operation: operation,
       kind: SessionCommandKind.send,
-      deviceId: deviceId!,
+      deviceId: deviceId,
       ciphertext: {
         'fixture_payload': {
           'message': trimmed,

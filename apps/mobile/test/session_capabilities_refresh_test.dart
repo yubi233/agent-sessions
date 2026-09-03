@@ -1,8 +1,6 @@
-import 'dart:math';
 
 import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
-import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
