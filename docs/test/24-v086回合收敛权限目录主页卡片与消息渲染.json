@@ -119,7 +119,7 @@
   {
    "id": "V086-06",
    "title": "deterministic overlay：历史会话（空目录）→ start → 目录到达 → 可选可切换 → current_mode_update 回流一致",
-   "status": "planned",
+   "status": "passed",
    "phase": "P3",
    "category": "e2e_overlay",
    "priority": "P0",
@@ -133,7 +133,8 @@
     "结束清理本轮桥子进程与端口"
    ],
    "evidence": [
-    "e2e-verify/reports/（阶段5回填）"
+    "e2e-verify/real/dsh-v086-overlay.mjs（真实 dsh-acp-demo + mock LLM）",
+    "e2e-verify/reports/ADAPTER-DSH/v086-overlay-2026-09-04T22-34-41-953Z.json（8/8 checks：modes_advertised/瞬时自愈无错误面/非瞬时快速失败无重试噪音）"
    ],
    "remaining_risk": "dsh-v086-overlay 场景脚本未创建（本轮以 fixture 契约测试承载收敛链路）；随实机权限恢复后补"
   },
@@ -186,7 +187,7 @@
   {
    "id": "V086-09",
    "title": "承接：历史漂移套件修复或退役；refs schema 裁决落地；在飞改动独立提交回归",
-   "status": "partial",
+   "status": "passed",
    "phase": "P4",
    "category": "carryover",
    "priority": "P2",
@@ -202,8 +203,9 @@
     "无"
    ],
    "evidence": [
-    "commit 14e57b3/8e2e7a1（在飞收口已由用户完成）",
-    "阶段8回填"
+    "漂移套件收口：p4-web-readonly / p4-web-read-transport testid 对齐（secondary-sessions-list+toggle）重跑 passed（headed，real_browser=true）；v08-dsh-readonly 退役删除（UI 契约已被工作区浏览器取代，v085-readonly-workspaces-web 超替代 passed）",
+    "refs schema 裁决（2026-09-05）：维持契约测试锁定（commands/events schema 只定义外层信封，ciphertext 对 Relay 不透明；不做 $defs 信息性定义）——记录于迭代计划 P0",
+    "Keystore unwrap 实机：按用户约束（不做 Android 实机）显式排除"
    ]
   },
   {

@@ -7,7 +7,6 @@ import { p4AdminReadonly } from "../suites/p4-admin-readonly.mjs";
 import { p4WebReadTransport } from "../suites/p4-web-read-transport.mjs";
 import { p4WebReadonly } from "../suites/p4-web-readonly.mjs";
 import { p5OpencodeCapabilities } from "../suites/p5-opencode-capabilities.mjs";
-import { v08DshReadonly } from "../suites/v08-dsh-readonly.mjs";
 import { v081DshWorkspaceFirst } from "../suites/v081-dsh-workspace-first.mjs";
 import { v082DshCapabilityWeb } from "../suites/v082-dsh-capability-web.mjs";
 import { v085AbortTrajectoryWeb } from "../suites/v085-abort-trajectory-web.mjs";
@@ -22,7 +21,6 @@ export const registry = [
   p4WebReadonly,
   p4WebReadTransport,
   p5OpencodeCapabilities,
-  v08DshReadonly,
   v081DshWorkspaceFirst,
   v082DshCapabilityWeb,
   v085AbortTrajectoryWeb,

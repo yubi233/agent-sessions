@@ -300,7 +300,9 @@ async function loginWeb(page, webBase, account) {
 
 async function openSession(page, sessionID) {
   await page.click('a[href="#/sessions"]');
-  await page.getByTestId("sessions-list").waitFor({ state: "visible", timeout: 10_000 });
+  // v0.8.6：普通会话列表需先切换（默认展示 DSH 工作区浏览器）。
+  await page.getByTestId("secondary-sessions-toggle").click();
+  await page.getByTestId("secondary-sessions-list").waitFor({ state: "visible", timeout: 10_000 });
   await page.getByTestId(`session-link-${sessionID}`).click();
   await page.getByTestId("session-detail-meta").waitFor({ state: "visible", timeout: 10_000 });
 }

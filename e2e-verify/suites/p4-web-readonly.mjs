@@ -48,7 +48,9 @@ export const p4WebReadonly = {
 
       // 会话列表：fixture 会话可见且可进入详情。
       await page.click('a[href="#/sessions"]');
-      await page.getByTestId("sessions-list").waitFor({ state: "visible" });
+      // v0.8.6：会话页默认展示 DSH 工作区浏览器，普通会话列表需先切换。
+      await page.getByTestId("secondary-sessions-toggle").click();
+      await page.getByTestId("secondary-sessions-list").waitFor({ state: "visible" });
       await page
         .getByTestId(`session-link-${sessionId}`)
         .waitFor({ state: "visible" });
@@ -117,7 +119,9 @@ export const p4WebReadonly = {
       // 窄屏视口：会话列表无横向溢出。
       await page.setViewportSize({ width: 375, height: 720 });
       await page.click('a[href="#/sessions"]');
-      await page.getByTestId("sessions-list").waitFor({ state: "visible" });
+      // v0.8.6：会话页默认展示 DSH 工作区浏览器，普通会话列表需先切换。
+      await page.getByTestId("secondary-sessions-toggle").click();
+      await page.getByTestId("secondary-sessions-list").waitFor({ state: "visible" });
       const overflow = await page.evaluate(() => {
         const doc = document.documentElement;
         return doc.scrollWidth > doc.clientWidth + 1;
