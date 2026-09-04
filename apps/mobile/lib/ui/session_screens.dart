@@ -4933,6 +4933,10 @@ class _ComposerControlStrip extends StatelessWidget {
           isExpanded: true,
           decoration: InputDecoration(
             labelText: '权限',
+            // v0.8.6 B：目录为空时的禁用必须附原因——不再渲染无解释空壳
+            //（目录未同步时提示恢复路径：启动会话后自动获取）。
+            helperText: sessions.permissionDirectoryHint ?? ' ',
+            helperMaxLines: 2,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             isDense: true,
             contentPadding: const EdgeInsets.symmetric(

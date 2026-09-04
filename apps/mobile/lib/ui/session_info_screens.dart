@@ -123,8 +123,23 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
         'throughput=${usage.decodeThroughput ?? ''}',
       );
     }
+    // v0.8.6 B：权限能力如实投影——capability 支持情况与原因、当前生效
+    // mode、目录快照都可见；不支持的 provider 在这里给出解释（入口隐藏的
+    // 原因可追溯），不伪造能力。
+    final permissionCapability = provider.capabilities
+        .where((entry) => entry.name == 'permission_mode')
+        .firstOrNull;
+    if (permissionCapability != null) {
+      final reason = permissionCapability.reason?.trim();
+      buffer.writeln(
+        '权限模式能力: ${permissionCapability.availability.label}'
+        '${reason == null || reason.isEmpty ? '' : '（$reason）'}',
+      );
+    }
     if (controls.permissionMode != null) {
       buffer.writeln('权限模式: ${controls.permissionMode}');
+    }
+    if (controls.availablePermissionModes.isNotEmpty) {
       buffer.writeln(
         '可用权限模式: ${controls.availablePermissionModes.join(', ')}',
       );

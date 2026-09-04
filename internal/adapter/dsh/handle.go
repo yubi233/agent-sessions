@@ -877,8 +877,21 @@ func (h *handle) handleNotification(msg rpcMessage) {
 	if json.Unmarshal(params.Update, &probe) == nil && probe.SessionUpdate == "current_mode_update" {
 		if probe.CurrentModeID != "" {
 			h.modesMu.Lock()
+			// v0.8.6 B：mode 变化即时回传 Relay——只有当前选中项真的变化才推
+			// 内部标记事件（事件泵据此调 syncModeInfo 重上行；不进时间线），
+			// 目录不变不重复上行。
+			changed := h.modes.CurrentModeID != probe.CurrentModeID
 			h.modes.CurrentModeID = probe.CurrentModeID
 			h.modesMu.Unlock()
+			if changed {
+				h.pushEvent(adapter.Event{
+					Type: adapter.EventModesChanged,
+					Payload: map[string]any{
+						"instance_id":  h.sessionID,
+						"current_mode": probe.CurrentModeID,
+					},
+				})
+			}
 		}
 		return
 	}

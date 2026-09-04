@@ -306,7 +306,7 @@ tasks:
       - go test ./internal/daemon -run 'TestV086' -count=1
       # 阶段4（B 组 mode 目录回传）落地后追加 adapter/dsh 的 TestV086 行。
       # 阶段3-6（A/E 组 controller、B/C/D 组 UI）：
-      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_trajectory_view_test.dart test/session_model_seat_test.dart test/model_effort_preferences_test.dart test/session_screens_test.dart --concurrency=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_trajectory_view_test.dart test/session_model_seat_test.dart test/model_effort_preferences_test.dart test/v086_permission_test.dart test/v086_turn_convergence_test.dart test/session_screens_test.dart --concurrency=1
       - pnpm --filter @agent-sessions/web test
       - git diff --check
 

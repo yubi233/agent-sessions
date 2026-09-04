@@ -113,6 +113,10 @@ const (
 	// 分开建模，绝不并入回答正文。
 	EventTurnPhase       EventType = "turn_phase"
 	EventSessionActivity EventType = "session_activity"
+	// EventModesChanged 是 v0.8.6 B 的内部标记事件（不进 canonical 时间线）：
+	// current_mode_update 改变句柄内 mode 快照后由 dsh handle 推出，事件泵据此
+	// 调 syncModeInfo 把最新目录重上行 Relay（有变化才推，天然去重）。
+	EventModesChanged EventType = "modes_changed"
 	EventThoughtDelta    EventType = "message_thought_delta"
 )
 

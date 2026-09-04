@@ -101,6 +101,15 @@ class SessionController extends ChangeNotifier {
   bool isTurnTimedOut(String? sessionId) =>
       sessionId != null && _turnTimedOut.contains(sessionId);
 
+  /// v0.8.6 B：权限目录为空时的禁用原因（capability 支持但目录未同步）。
+  /// capability 不支持或只读等其它阻断由 controlBlockedReason 负责。
+  String? get permissionDirectoryHint {
+    final capability = selectedProviderCapabilities.capability('permission_mode');
+    if (!capability.isSupported) return null;
+    if (_controls.availablePermissionModes.isNotEmpty) return null;
+    return '权限目录未同步——启动会话后自动获取。';
+  }
+
   String? get pendingOutgoingMessage => _selectedSessionId == null
       ? null
       : _pendingOutgoingBySession[_selectedSessionId!];
@@ -922,7 +931,7 @@ class SessionController extends ChangeNotifier {
       if (blocked != null) _setError(blocked);
       return false;
     }
-    return _submitCommand(
+    final accepted = await _submitCommand(
       sessionId: sessionId,
       operation: 'start:$sessionId:${selectedSession?.lastSequence ?? 0}',
       kind: SessionCommandKind.start,
@@ -935,6 +944,11 @@ class SessionController extends ChangeNotifier {
         },
       },
     );
+    // v0.8.6 B：start 受理后立即刷新 controls（mode 目录等事实秒级到达）。
+    if (accepted) {
+      unawaited(_refreshControlsAfterTurn(sessionId));
+    }
+    return accepted;
   }
 
   String? killBlockedReason({required bool canWrite}) =>
@@ -1247,12 +1261,17 @@ class SessionController extends ChangeNotifier {
       if (blocked != null) _setError(blocked);
       return;
     }
-    await _submitCommand(
+    final accepted = await _submitCommand(
       sessionId: sessionId,
       operation: 'resume:$sessionId:${selectedSession?.lastSequence ?? 0}',
       kind: SessionCommandKind.resume,
       deviceId: deviceId!,
     );
+    // v0.8.6 B：resume 会触发 daemon 重新上行 mode 目录等 controls 事实，
+    // 回执成功后立即刷新（目录秒级到达，不等回合或重进页面）。
+    if (accepted) {
+      unawaited(_refreshControlsAfterTurn(sessionId));
+    }
   }
 
   /// resume 入口的阻断原因；离线状态也允许发起（与发送不同），只要求 capability 与 lease。
@@ -1930,6 +1949,12 @@ class SessionController extends ChangeNotifier {
     final blocked = controlBlockedReason('permission_mode', canWrite: canWrite);
     if (sessionId == null || blocked != null) {
       if (blocked != null) _setError(blocked);
+      return;
+    }
+    // v0.8.6 B：停止会话的 mode.set 会命中药 daemon 的 local_state_missing，
+    // 客户端预检拦截并给出可执行原因（启动会话后再切换）。
+    if (selectedSession?.status == MobileSessionStatus.stopped) {
+      _setError('会话未运行，启动后可切换权限模式。');
       return;
     }
     final controls = _controls;

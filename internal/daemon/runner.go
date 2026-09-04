@@ -986,6 +986,12 @@ func (r *SessionRunner) forwardEventsWithReplay(sessionID string, h adapter.Hand
 		}
 	}
 	processEvent := func(ev adapter.Event) bool {
+		// v0.8.6 B：mode 目录变化标记——重上行最新目录后即消费，不写时间线、
+		// 不进事件出口（必须先于任何 writeEvent/续命逻辑）。
+		if ev.Type == adapter.EventModesChanged {
+			r.syncModeInfo(sessionID, h)
+			return true
+		}
 		if ev.Type == adapter.EventTurnStarted {
 			// 新的忙碌标记开启新回合；上一回合的终态不能抑制本回合中断告警。
 			terminalSeen = false

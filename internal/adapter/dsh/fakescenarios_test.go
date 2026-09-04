@@ -206,14 +206,18 @@ func TestCurrentModeUpdateUpdatesModeSnapshot(t *testing.T) {
 		respondByMethod(t, sessionID)(fb, msg)
 	}
 	h := startWithFake(t, fb)
-	// v0.8.3 P3：current_mode_update 不再按变体丢弃，而是更新句柄内的
-	// mode 目录快照（SessionModeHandle.Modes() 的真相源）；mode 不是 canonical
-	// 事件，事件通道必须保持安静。
+	// v0.8.3 P3：current_mode_update 更新句柄内的 mode 目录快照
+	// （SessionModeHandle.Modes() 的真相源）。v0.8.6 B：mode 变化会推出一条
+	// 内部 modes_changed 标记事件（事件泵据此重上行目录；它不是 canonical
+	// 事件，不会进入 Relay 时间线），因此事件通道上恰有一条标记帧。
 	pushModeUpdate(t, fb, sessionID, "danger-full-access")
 	select {
 	case ev := <-h.Events():
-		t.Fatalf("current_mode_update 不应产生 canonical 事件: %+v", ev)
+		if ev.Type != adapter.EventModesChanged {
+			t.Fatalf("current_mode_update 只应产生内部 modes_changed 标记: %+v", ev)
+		}
 	case <-time.After(300 * time.Millisecond):
+		t.Fatalf("current_mode_update 应推出内部 modes_changed 标记")
 	}
 	hh := h.(*handle)
 	info := hh.Modes()
