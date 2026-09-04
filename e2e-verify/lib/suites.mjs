@@ -10,6 +10,7 @@ import { p5OpencodeCapabilities } from "../suites/p5-opencode-capabilities.mjs";
 import { v08DshReadonly } from "../suites/v08-dsh-readonly.mjs";
 import { v081DshWorkspaceFirst } from "../suites/v081-dsh-workspace-first.mjs";
 import { v082DshCapabilityWeb } from "../suites/v082-dsh-capability-web.mjs";
+import { v085AbortTrajectoryWeb } from "../suites/v085-abort-trajectory-web.mjs";
 
 // registry 是本仓库 headed 浏览器回归的唯一事实源。
 export const registry = [
@@ -23,4 +24,5 @@ export const registry = [
   v08DshReadonly,
   v081DshWorkspaceFirst,
   v082DshCapabilityWeb,
+  v085AbortTrajectoryWeb,
 ];

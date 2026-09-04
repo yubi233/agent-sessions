@@ -1159,15 +1159,24 @@ func validDaemonEventType(value string) bool {
 // validateDaemonTerminalStatus 检查 Daemon 对终态事件提供的稳定状态投影。
 // 该字段不能被用于把任意中间事件伪装成终态；未知值也必须拒绝，避免
 // Relay/Flutter 在不同实现间产生不一致的 running/idle/stopped 解释。
+// v0.8.5：session.aborted 是 Abort 成功的非敏感停止事实，允许其携带 stopped
+// （Relay 无需解密 payload 即可把会话投影为 stopped；只接受 stopped，不接受 idle）。
 func validateDaemonTerminalStatus(eventType, terminalStatus string) error {
 	status := strings.TrimSpace(terminalStatus)
 	if status == "" {
 		return nil // 兼容旧 Daemon；turn.completed 缺省按 idle 处理。
 	}
-	if eventType != "turn.completed" || (status != SessionIdle && status != SessionStopped) {
-		return protocol.NewError(protocol.ErrInvalidRequest, "invalid daemon terminal status")
+	switch eventType {
+	case "turn.completed":
+		if status == SessionIdle || status == SessionStopped {
+			return nil
+		}
+	case "session.aborted":
+		if status == SessionStopped {
+			return nil
+		}
 	}
-	return nil
+	return protocol.NewError(protocol.ErrInvalidRequest, "invalid daemon terminal status")
 }
 
 // sessionStatusForDaemonEvent 将公开生命周期投影收口为 Relay 会话状态。

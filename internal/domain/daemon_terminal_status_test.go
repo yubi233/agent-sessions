@@ -128,6 +128,47 @@ func TestDaemonUploadEventRejectsInvalidTerminalStatusProjection(t *testing.T) {
 	}
 }
 
+// V085-18/24：session.aborted 是 Abort 成功的非敏感停止事实。validateDaemonTerminalStatus
+// 必须放行 session.aborted+stopped（Relay 不解密 payload 即可投影 stopped），但拒绝
+// session.aborted+idle 与在非终态事件上携带任意 status（保持 fail-closed 白名单）。
+func TestDaemonUploadEventSessionAbortedStatusProjection(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		eventType   string
+		status      string
+		wantAllowed bool
+	}{
+		{name: "aborted stopped allowed", eventType: "session.aborted", status: SessionStopped, wantAllowed: true},
+		{name: "aborted idle rejected", eventType: "session.aborted", status: SessionIdle, wantAllowed: false},
+		{name: "aborted running rejected", eventType: "session.aborted", status: "running", wantAllowed: false},
+		{name: "nonterminal stopped still rejected", eventType: "message.completed", status: SessionStopped, wantAllowed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDaemonTerminalStatus(tc.eventType, tc.status)
+			if tc.wantAllowed && err != nil {
+				t.Fatalf("validate(%q, %q) unexpectedly rejected: %v", tc.eventType, tc.status, err)
+			}
+			if !tc.wantAllowed && err == nil {
+				t.Fatalf("validate(%q, %q) unexpectedly succeeded", tc.eventType, tc.status)
+			}
+		})
+	}
+
+	// 端到端：真实 UploadEvent 上传 session.aborted(stopped) 后，会话状态收敛为 stopped。
+	ctx := context.Background()
+	svc, repo, sessionID, commandID := newDaemonEventStatusFixture(t)
+	if _, err := svc.UploadEvent(ctx, daemonStatusEventInputForEvent(sessionID, commandID, "session.aborted", SessionStopped, "evt-aborted")); err != nil {
+		t.Fatalf("upload session.aborted: %v", err)
+	}
+	session, err := repo.SessionByID(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if session.Status != SessionStopped {
+		t.Fatalf("session status=%q, want %q", session.Status, SessionStopped)
+	}
+}
+
 func TestDaemonUploadEventDoesNotReopenTerminalTurnForCommandUpdate(t *testing.T) {
 	ctx := context.Background()
 	svc, repo, sessionID, commandID := newDaemonEventStatusFixture(t)
