@@ -3,6 +3,7 @@ package dsh
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -505,5 +506,62 @@ func TestP5MatrixUpgradedAfterDeterministicGate(t *testing.T) {
 		if c := byName[name]; c.Status != adapter.CapabilityUnsupported {
 			t.Fatalf("%s 不得因 subagent 投影升格", name)
 		}
+	}
+}
+
+// V085-12：new/load/resume 响应 _meta 回带 agent preset（v0.8.5 §3.8）。
+// 桥只在会话 joined 预设时携带 com.deepseek.dsh/agent-preset 键；handle 解析并
+// 暴露 AgentPreset()，供 runner 上行到 Relay 作只读投影。无键/空值清空快照。
+func TestAgentPresetFromSessionStateMeta(t *testing.T) {
+	const sessionID = "sess-v085-preset"
+	fb := newFakeBridge()
+	base := respondByMethod(t, sessionID)
+	fb.script = func(fb *fakeBridge, msg map[string]any) {
+		if methodOf(msg) == "session/new" {
+			fb.push(t, map[string]any{
+				"jsonrpc": "2.0", "id": frameID(msg),
+				"result": map[string]any{
+					"sessionId": sessionID,
+					"modes": map[string]any{
+						"currentModeId":  "default",
+						"availableModes": []map[string]any{{"id": "default", "name": "默认"}},
+					},
+					"_meta": map[string]any{
+						"com.deepseek.dsh/agent-preset": "standard",
+					},
+				},
+			})
+			return
+		}
+		base(fb, msg)
+	}
+	a := NewWithTransport(func() (BridgeTransport, error) { return fb, nil })
+	h, err := a.Start(context.Background(), adapter.StartRequest{WorkspaceRoot: "/tmp/dsh-ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = h.Dispose(context.Background()) })
+
+	presetHandle, ok := h.(interface{ AgentPreset() string })
+	if !ok {
+		t.Fatalf("handle 未实现 AgentPreset()")
+	}
+	if got := presetHandle.AgentPreset(); got != "standard" {
+		t.Fatalf("AgentPreset() = %q, want standard", got)
+	}
+
+	// 无键响应清空快照（最近一次会话状态为事实）：直接以同包私有方法验证。
+	inner, ok := h.(*handle)
+	if !ok {
+		t.Fatalf("handle 类型断言失败")
+	}
+	inner.storeAgentPreset(json.RawMessage(`{"com.deepseek.dsh/model-catalog":{}}`))
+	if got := presetHandle.AgentPreset(); got != "" {
+		t.Fatalf("无键 meta 后 AgentPreset() = %q, want empty", got)
+	}
+	// 畸形 _meta JSON 同样清空（fail-closed，不保留旧值）。
+	inner.storeAgentPreset(json.RawMessage(`{"com.deepseek.dsh/agent-preset":`))
+	if got := presetHandle.AgentPreset(); got != "" {
+		t.Fatalf("畸形 meta 后 AgentPreset() = %q, want empty", got)
 	}
 }
