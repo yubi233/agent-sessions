@@ -342,6 +342,25 @@ func (c *RelayClient) UploadEvent(ctx context.Context, event RelayEvent) error {
 
 // UploadUsage 只上传白名单整数计数与 UTC 日桶（ADR-010）。usage key 由 Daemon
 // 对来源事件生成，重复上传返回同一 canonical receipt，不重复累加。
+// SessionModeItem 是上行 mode 目录行的最小安全投影（v0.8.5 §3.4）。
+type SessionModeItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// SyncSessionModes 把会话级 permission mode 目录快照上行到 Relay（PUT 端点）。
+// 这是会话运行期 handle 的事实；签名由 postJSON 在 Signer 非 nil 时自动附加
+// （兼容窗口内旧 bearer 放行由 Relay 端处理）。失败只记录不阻断主流程。
+func (c *RelayClient) SyncSessionModes(ctx context.Context, sessionID, modeID string, modes []SessionModeItem) error {
+	body := map[string]any{
+		"protocol_version":           daemonProtocolVersion,
+		"mode_id":                    modeID,
+		"available_permission_modes": modes,
+	}
+	return c.postJSON(ctx, "/v1/daemon/sessions/"+sessionID+"/modes", body, &struct{}{})
+}
+
 func (c *RelayClient) UploadUsage(ctx context.Context, usage RelayUsage) error {
 	body := map[string]any{
 		"usage_key": usage.UsageKey, "provider": usage.Provider, "utc_day": usage.UTCDay,
@@ -608,8 +627,35 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 	}
 	if runner != nil {
 		runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
+		runner.SetModeInfoSink(loop.enqueueModeInfo)
 	}
 	return loop
+}
+
+// enqueueModeInfo 是 runner mode 目录的本机出口（v0.8.5 §3.4）：把会话级
+// mode 快照异步上行到 Relay。上行失败只记录日志，不阻断 start/setMode 命令
+// 兑现（目录下次同步会再覆盖）；commandCtx 失效时用短超时上下文兜底。
+func (l *RelayLoop) enqueueModeInfo(sessionID string, info adapter.SessionModeInfo) {
+	if l.Client == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	modes := make([]SessionModeItem, 0, len(info.AvailableModes))
+	for _, mode := range info.AvailableModes {
+		modes = append(modes, SessionModeItem{
+			ID: mode.ID, Name: mode.Name, Description: mode.Description,
+		})
+	}
+	go func() {
+		ctx := context.Background()
+		if l.commandCtx != nil {
+			ctx = l.commandCtx
+		}
+		if err := l.Client.SyncSessionModes(ctx, sessionID, info.CurrentModeID, modes); err != nil {
+			if l.Logger != nil {
+				l.Logger.Warn("sync session modes failed", "session", sessionID, "error", err)
+			}
+		}
+	}()
 }
 
 // RunWithRetry 保持每次只有一条真实 SSE 连接，并使用有界指数退避重连。

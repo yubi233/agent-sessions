@@ -381,6 +381,10 @@ var migrations = []string{
 	`ALTER TABLE workspaces ADD COLUMN origin TEXT NOT NULL DEFAULT 'managed';`,
 	// display_name 是从 Daemon 扫描项目 basename 派生的安全投影，绝不保存完整 root。
 	`ALTER TABLE workspaces ADD COLUMN display_name TEXT NOT NULL DEFAULT '';`,
+	// v0.8.5：会话级 permission mode 目录（mode id 快照 + available modes JSON），
+	// 由 Daemon 上行同步（Relay 不解析/不校验 mode 语义，只存快照供 controls 下发）。
+	`ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE sessions ADD COLUMN available_permission_modes TEXT NOT NULL DEFAULT '[]';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。
@@ -432,11 +436,25 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureSessionPermissionModeColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
 func ensureSessionEventCreatedAtColumn(db *sql.DB) error {
 	return ensureTableColumn(db, "session_events", "created_at_unix_ms", `ALTER TABLE session_events ADD COLUMN created_at_unix_ms INTEGER NOT NULL DEFAULT 0`)
+}
+
+// ensureSessionPermissionModeColumns 用存在性检查补齐 sessions.permission_mode 与
+// available_permission_modes（v0.8.5 §3.4）。两列都是非敏感 mode id 快照（不含
+// 正文/路径），重复执行幂等；错位存量库与编号迁移中断路径都由此守卫兜底。
+func ensureSessionPermissionModeColumns(db *sql.DB) error {
+	if err := ensureTableColumn(db, "sessions", "permission_mode", `ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	return ensureTableColumn(db, "sessions", "available_permission_modes", `ALTER TABLE sessions ADD COLUMN available_permission_modes TEXT NOT NULL DEFAULT '[]'`)
 }
 
 // ensureArchivedAtColumn 用存在性检查补齐 sessions.archived_at_unix_ms。

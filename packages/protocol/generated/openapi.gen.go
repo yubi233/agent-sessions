@@ -1303,6 +1303,23 @@ type DaemonObservationSession struct {
 	Status   string  `json:"status"`
 }
 
+// DaemonSessionModeItem defines model for DaemonSessionModeItem.
+type DaemonSessionModeItem struct {
+	Description *string `json:"description,omitempty"`
+	Id          string  `json:"id"`
+	Name        *string `json:"name,omitempty"`
+}
+
+// DaemonSessionModesRequest defines model for DaemonSessionModesRequest.
+type DaemonSessionModesRequest struct {
+	AvailablePermissionModes []DaemonSessionModeItem `json:"available_permission_modes"`
+
+	// ModeId 当前选中的 permission mode id。
+	ModeId          string                  `json:"mode_id"`
+	ProtocolVersion int                     `json:"protocol_version"`
+	Signature       *map[string]interface{} `json:"signature,omitempty"`
+}
+
 // DaemonSessionObservation Flutter P2-F 只读观察投影。该资源不返回会话/命令/Terminal 的 opaque 标识，也不返回原始密文 envelope。
 type DaemonSessionObservation struct {
 	Commands []DaemonCommandObservation     `json:"commands"`
@@ -1916,6 +1933,9 @@ type DaemonHelloJSONRequestBody = DaemonHelloRequest
 // RecoverDaemonSessionsJSONRequestBody defines body for RecoverDaemonSessions for application/json ContentType.
 type RecoverDaemonSessionsJSONRequestBody = DaemonSessionRecoveryRequest
 
+// SyncDaemonSessionModesJSONRequestBody defines body for SyncDaemonSessionModes for application/json ContentType.
+type SyncDaemonSessionModesJSONRequestBody = DaemonSessionModesRequest
+
 // UploadUsageEventJSONRequestBody defines body for UploadUsageEvent for application/json ContentType.
 type UploadUsageEventJSONRequestBody = UploadUsageEventRequest
 
@@ -2151,6 +2171,9 @@ type ServerInterface interface {
 
 	// (POST /v1/daemon/sessions/recover)
 	RecoverDaemonSessions(c *gin.Context)
+
+	// (PUT /v1/daemon/sessions/{id}/modes)
+	SyncDaemonSessionModes(c *gin.Context, id string)
 
 	// (POST /v1/daemon/usage/events)
 	UploadUsageEvent(c *gin.Context)
@@ -2674,6 +2697,31 @@ func (siw *ServerInterfaceWrapper) RecoverDaemonSessions(c *gin.Context) {
 	}
 
 	siw.Handler.RecoverDaemonSessions(c)
+}
+
+// SyncDaemonSessionModes operation middleware
+func (siw *ServerInterfaceWrapper) SyncDaemonSessionModes(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.SyncDaemonSessionModes(c, id)
 }
 
 // UploadUsageEvent operation middleware
@@ -3500,6 +3548,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/daemon/hello", wrapper.DaemonHello)
 	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)
 	router.POST(options.BaseURL+"/v1/daemon/sessions/recover", wrapper.RecoverDaemonSessions)
+	router.PUT(options.BaseURL+"/v1/daemon/sessions/:id/modes", wrapper.SyncDaemonSessionModes)
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/ack", wrapper.AcknowledgeDaemonCommand)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/result", wrapper.ResolveDaemonCommand)

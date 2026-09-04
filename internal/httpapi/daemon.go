@@ -271,6 +271,54 @@ func (a *API) handleDaemonCommandAck(c *gin.Context) {
 	writeOK(c, newDaemonCommandReceiptView(receipt))
 }
 
+type daemonSessionModesRequest struct {
+	ProtocolVersion int                     `json:"protocol_version"`
+	ModeID          string                  `json:"mode_id"`
+	AvailableModes  []daemonModeItem        `json:"available_permission_modes"`
+	Signature       authz.TerminalSignature `json:"signature"`
+}
+
+// daemonModeItem 是 mode 目录行的最小安全投影（v0.8.5 §3.4）。只含 id/name 等
+// 非敏感展示元数据；Relay 不做任何 mode 语义判断，仅原样快照后经 controls 下发。
+type daemonModeItem struct {
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// handleDaemonSessionModes 接收 Daemon 上行的会话级 permission mode 目录快照。
+// 这是会话运行期 handle 的事实（new/load/resume 响应与 current_mode_update），
+// Relay 侧没有任何解密能力，只能由拥有该会话的 Daemon 主动同步（签名校验 +
+// home Terminal 归属校验，见 domain SyncSessionPermissionModes）。
+func (a *API) handleDaemonSessionModes(c *gin.Context) {
+	var req daemonSessionModesRequest
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon session modes"))
+		return
+	}
+	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
+		return
+	}
+	modes := make([]map[string]string, 0, len(req.AvailableModes))
+	for _, item := range req.AvailableModes {
+		if strings.TrimSpace(item.ID) == "" {
+			writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "mode id required"))
+			return
+		}
+		modes = append(modes, map[string]string{"id": item.ID, "name": item.Name, "description": item.Description})
+	}
+	modesJSON, _ := json.Marshal(modes)
+	if err := a.Daemons.SyncSessionPermissionModes(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
+		c.Param("id"), strings.TrimSpace(req.ModeID), string(modesJSON)); err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, gin.H{"ok": true})
+}
+
 type daemonCommandResultRequest struct {
 	ProtocolVersion int                     `json:"protocol_version"`
 	DeliverySeq     int64                   `json:"delivery_seq"`

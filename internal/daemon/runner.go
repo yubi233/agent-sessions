@@ -103,6 +103,10 @@ type SessionRunner struct {
 	// eventSinkResult 供回放路径确认事件已进入本机 outbox；普通 sink 仍保留旧的
 	// 无返回值形状，避免 fixture/嵌入方被迫改接口。
 	eventSinkResult func(sessionID string, event adapter.Event) error
+	// modeInfoSink 在会话 handle 的 mode 目录可读后异步上行（v0.8.5 §3.4）；
+	// runner 不直接发 HTTP，连接层（RelayLoop）注册此 sink 并经 RelayClient 上传。
+	modeInfoSinkMu sync.RWMutex
+	modeInfoSink   func(sessionID string, info adapter.SessionModeInfo)
 
 	// eventSeq 保存每个 session 最近分配的 canonical 序号。Provider handle 的
 	// 序号只覆盖 Provider 事件，runner 自己生成的 user_message/断流终态也必须
@@ -162,6 +166,31 @@ func (r *SessionRunner) SetEventSinkResult(sink func(sessionID string, event ada
 	defer r.eventSinkMu.Unlock()
 	r.eventSink = nil
 	r.eventSinkResult = sink
+}
+
+// SetModeInfoSink 设置会话级 permission mode 目录的本机出口（v0.8.5 §3.4）。
+// sink 由连接层注册并在收到 info 后经 RelayClient.SyncSessionModes 上传；
+// 未注册 sink 时静默跳过（本地 fixture 无 Relay 时仍可运行）。
+func (r *SessionRunner) SetModeInfoSink(sink func(sessionID string, info adapter.SessionModeInfo)) {
+	r.modeInfoSinkMu.Lock()
+	defer r.modeInfoSinkMu.Unlock()
+	r.modeInfoSink = sink
+}
+
+// syncModeInfo 读取 handle 的会话级 mode 目录并交给连接层上行。只有实现了
+// SessionModeHandle 的 handle 才有目录事实；其它 handle 静默跳过（不伪造空目录）。
+func (r *SessionRunner) syncModeInfo(sessionID string, handle adapter.Handle) {
+	modeHandle, ok := handle.(adapter.SessionModeHandle)
+	if !ok {
+		return
+	}
+	info := modeHandle.Modes()
+	r.modeInfoSinkMu.RLock()
+	sink := r.modeInfoSink
+	r.modeInfoSinkMu.RUnlock()
+	if sink != nil {
+		sink(sessionID, info)
+	}
 }
 
 // ConsumeCommand 消费 outbox 中的一条 Relay 命令。
@@ -319,6 +348,7 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	r.mu.Lock()
 	r.handles[sessionID] = &runningSession{handle: handle, cancel: cancel}
 	r.mu.Unlock()
+	r.syncModeInfo(sessionID, handle) // v0.8.5 §3.4：新会话 mode 目录上行
 
 	var first adapter.Event
 	var instanceID string
@@ -684,6 +714,7 @@ func (r *SessionRunner) resumeSession(ctx context.Context, cmd Command) error {
 		}
 		r.handles[sessionID] = registered
 		r.mu.Unlock()
+		r.syncModeInfo(sessionID, handle) // v0.8.5 §3.4：resume 后 mode 目录上行
 		if old != nil {
 			_ = old.handle.Dispose(context.Background())
 		}
@@ -1458,8 +1489,10 @@ func (r *SessionRunner) setMode(ctx context.Context, cmd Command) error {
 	if err := modeHandle.SetMode(ctx, modeID); err != nil {
 		return fmt.Errorf("权限 mode 切换失败: %w", err)
 	}
-	// mode 状态的客户端可见性走 set_mode 命令回执与能力矩阵目录；mode 不是
-	// 错误也不是 canonical 事件，不伪造事件流流量。
+	// v0.8.5 §3.4：set_mode 成功后把 handle 的最新 mode 目录上行到 Relay，
+	// 使 controls 能下发 permission_mode/available_permission_modes（mode 不是
+	// canonical 事件，不伪造事件流流量，只同步目录快照）。
+	r.syncModeInfo(sessionID, rs.handle)
 	return nil
 }
 

@@ -128,6 +128,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.POST("/commands/:id/dsh-import-result", a.handleDaemonDSHImportResult)
 		daemon.POST("/commands/:id/readonly-response", a.handleDaemonWebReadResponse)
 		daemon.POST("/events", a.handleDaemonEventUpload)
+		// v0.8.5 §3.4：Daemon 上行会话级 permission mode 目录快照（Terminal 签名 + home 归属）。
+		daemon.PUT("/sessions/:id/modes", a.handleDaemonSessionModes)
 
 		// Usage（ADR-010）：Terminal 上传白名单计数，账号只读聚合摘要。
 		daemon.POST("/usage/events", a.handleUsageUpload)
@@ -638,6 +640,20 @@ func (a *API) handleSessionControls(c *gin.Context) {
 			}
 		}
 	}
+	// v0.8.5 §3.4：会话级 permission mode 目录由 Daemon 上行同步到会话行；
+	// 目录为空时不下发字段，客户端维持禁用 + 原因（与计划契约一致，不冒充可点）。
+	if session, err := a.Sessions.GetSession(c.Request.Context(), sessionID); err == nil {
+		if strings.TrimSpace(session.PermissionMode) != "" {
+			view["permission_mode"] = session.PermissionMode
+		}
+		if strings.TrimSpace(session.AvailablePermissionModesJSON) != "" && session.AvailablePermissionModesJSON != "[]" {
+			// 移动端目录契约是 mode id 字符串数组（与能力矩阵 options 同构）；
+			// Relay 存储对象行（含名称），但下发只取 id，不向客户端暴露多余元数据。
+			if ids, err := permissionModeIDs(session.AvailablePermissionModesJSON); err == nil {
+				view["available_permission_modes"] = ids
+			}
+		}
+	}
 	writeOK(c, view)
 }
 
@@ -1001,6 +1017,25 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 
 // modelFromCommandCiphertext 从 session.model_select 命令的 fixture envelope 中提取模型。
 // 真实 E2EE 下 Relay 不解密，保留空值；本地开发/fixture 路径下用于同步会话展示模型。
+// permissionModeIDs 把 Relay 存储的 mode 对象行 JSON 压缩为 id 字符串数组（v0.8.5 §3.4）。
+// 存储格式来自 Daemon 上行（含 id/name/description），controls 下发只取 id，
+// 与能力矩阵 options / 移动端 List<String> 契约保持一致；解析失败返回空。
+func permissionModeIDs(modesJSON string) ([]string, error) {
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(modesJSON), &rows); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if id := strings.TrimSpace(row.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
 func modelFromCommandCiphertext(raw json.RawMessage) string {
 	var envelope struct {
 		Ciphertext struct {

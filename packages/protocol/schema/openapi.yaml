@@ -1185,6 +1185,34 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "426":
           description: terminal protocol is below the supported compatibility window
+  /v1/daemon/sessions/{id}/modes:
+    put:
+      operationId: syncDaemonSessionModes
+      description: 仅拥有该会话的 home Terminal 可调用（v0.8.5 §3.4）。Daemon 把会话级 permission mode 目录快照（mode_id + available_permission_modes）上行同步到 Relay；Relay 只存快照不解释语义，经 GET /v1/sessions/{id}/controls 以 mode id 字符串数组下发，供移动端权限模式下拉渲染。目录为空时 controls 不下发字段，客户端维持禁用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonSessionModesRequest"
+      responses:
+        "200":
+          description: mode catalog snapshot persisted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "426":
+          description: terminal protocol is below the supported compatibility window
+
   /v1/daemon/commands/stream:
     get:
       operationId: streamDaemonCommands
@@ -2185,6 +2213,31 @@ components:
           minimum: 1
         signature:
           $ref: "#/components/schemas/TerminalSignature"
+    DaemonSessionModesRequest:
+      type: object
+      required: [protocol_version, mode_id, available_permission_modes]
+      properties:
+        protocol_version:
+          type: integer
+        mode_id:
+          type: string
+          description: 当前选中的 permission mode id。
+        available_permission_modes:
+          type: array
+          items:
+            $ref: "#/components/schemas/DaemonSessionModeItem"
+        signature:
+          type: object
+    DaemonSessionModeItem:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
     DaemonSessionRecoveryRequest:
       type: object
       additionalProperties: false

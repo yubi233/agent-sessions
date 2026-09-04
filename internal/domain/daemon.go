@@ -948,6 +948,41 @@ func (s *DaemonService) StoreWebReadResponse(ctx context.Context, accountID, dev
 
 // UploadEvent 写入与 command 绑定的 canonical event。Relay 不解密 event envelope，且 event_id
 // 先在同一事务占位，避免失联重试时重复追加 session_events。
+// SyncSessionPermissionModes 保存 Daemon 上行同步的会话级 permission mode 目录快照
+// (v0.8.5 §3.4)。校验：设备必须是已登记 Terminal，会话必须属于该账号，且会话
+// workspace 的 home Terminal 必须就是当前 Terminal——mode 目录是运行期 handle 的
+// 事实，只有拥有该会话的 Daemon 可以写，其它 Terminal/账号一律 fail-closed。
+// modesJSON 只允许合法 JSON 数组文本 (<= 64 条)，Relay 不解释 mode 语义。
+func (s *DaemonService) SyncSessionPermissionModes(ctx context.Context, accountID, deviceID, role, sessionID, modeID, modesJSON string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return protocol.NewError(protocol.ErrInvalidRequest, "session_id required")
+	}
+	terminal, err := s.TerminalForDevice(ctx, accountID, deviceID, role)
+	if err != nil {
+		return err
+	}
+	session, err := s.repo.SessionByID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if session.AccountID != accountID {
+		return ErrScopeDenied
+	}
+	workspace, err := s.repo.WorkspaceByID(ctx, session.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	if workspace.TerminalID != terminal.ID {
+		return ErrScopeDenied
+	}
+	if modesJSON != "" {
+		var raw []json.RawMessage
+		if err := json.Unmarshal([]byte(modesJSON), &raw); err != nil || len(raw) > 64 {
+			return protocol.NewError(protocol.ErrInvalidRequest, "available_permission_modes must be a JSON array (<=64)")
+		}
+	}
+	return s.repo.SetSessionPermissionModes(ctx, session.ID, modeID, modesJSON)
+}
 func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (DaemonEventResult, error) {
 	if err := validateDaemonProtocol(in.ProtocolVersion); err != nil {
 		return DaemonEventResult{}, err

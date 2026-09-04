@@ -747,6 +747,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/daemon/sessions/{id}/modes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description 仅拥有该会话的 home Terminal 可调用（v0.8.5 §3.4）。Daemon 把会话级 permission mode 目录快照（mode_id + available_permission_modes）上行同步到 Relay；Relay 只存快照不解释语义，经 GET /v1/sessions/{id}/controls 以 mode id 字符串数组下发，供移动端权限模式下拉渲染。目录为空时 controls 不下发字段，客户端维持禁用。 */
+        put: operations["syncDaemonSessionModes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/daemon/commands/stream": {
         parameters: {
             query?: never;
@@ -1252,6 +1269,18 @@ export interface components {
         DaemonHeartbeatRequest: {
             protocol_version: number;
             signature?: components["schemas"]["TerminalSignature"];
+        };
+        DaemonSessionModesRequest: {
+            protocol_version: number;
+            /** @description 当前选中的 permission mode id。 */
+            mode_id: string;
+            available_permission_modes: components["schemas"]["DaemonSessionModeItem"][];
+            signature?: Record<string, never>;
+        };
+        DaemonSessionModeItem: {
+            id: string;
+            name?: string;
+            description?: string;
         };
         /** @description Daemon 进程启动后的一次性历史收口声明：调用方断言同一 Terminal 的上一进程已死亡。端点幂等，重试安全。 */
         DaemonSessionRecoveryRequest: {
@@ -2853,6 +2882,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DaemonSessionRecoveryResponse"];
                 };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description terminal protocol is below the supported compatibility window */
+            426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    syncDaemonSessionModes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonSessionModesRequest"];
+            };
+        };
+        responses: {
+            /** @description mode catalog snapshot persisted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
