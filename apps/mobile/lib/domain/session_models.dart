@@ -625,7 +625,7 @@ enum SessionCommandKind {
   modelSelect('session.model_select'),
   effortSelect('session.effort_select'),
   // v0.3/P0：permission mode 选择与 goal 文本编辑（Happy sessionSetAgentModes / goal 编辑对齐）。
-  permissionModeSelect('session.permission_mode'),
+  permissionModeSelect('mode.set'),  // v0.8.5 §3.5：权威契约与 Daemon runner 对齐（mode.set + mode_id，无旧别名）
   goalEdit('goal.edit'),
   // v0.5/P5-E2：模型设置中的 Goal clear 仍走统一会话命令链路，不在 UI 直接清本地状态。
   goalClear('goal.clear'),

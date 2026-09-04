@@ -1817,7 +1817,7 @@ class SessionController extends ChangeNotifier {
       kind: SessionCommandKind.permissionModeSelect,
       deviceId: deviceId!,
       ciphertext: {
-        'fixture_payload': {'permission_mode': mode},
+        'fixture_payload': {'mode_id': mode},  // v0.8.5 §3.5：payload key 与 runner 对齐
       },
       onAccepted: () => _controls = controls.copyWith(permissionMode: mode),
     );

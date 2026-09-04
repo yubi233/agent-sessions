@@ -1568,7 +1568,7 @@ class FixtureRelayRepository implements RelayRepository {
     Map<String, dynamic>? ciphertext,
   ) {
     final mode =
-        (ciphertext?['fixture_payload'] as Map?)?['permission_mode'] as String?;
+        (ciphertext?['fixture_payload'] as Map?)?['mode_id'] as String?;  // v0.8.5 §3.5
     if (mode == null ||
         !state.controls.availablePermissionModes.contains(mode)) {
       throw const RelayFailure(

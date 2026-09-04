@@ -360,6 +360,49 @@ void main() {
     });
   });
 
+  test('V085-07 mode.set：wire kind/payload 与 Daemon 权威契约对齐', () async {
+    // v0.8.5 §3.5：移动端 permissionModeSelect 的 wire 必须为 mode.set + mode_id
+    //（旧 session.permission_mode/permission_mode 会被 Daemon 拒为 unsupported）。
+    final relay = _CapturingControlsRelay(clock: () => _now);
+    await _prepareOwner(relay);
+    final controller = SessionController(
+      relay: relay,
+      clock: () => _now,
+      random: _DeterministicRandom(),
+    );
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    expect(await controller.refreshSelectedControls(), isNull);
+    // fixture 目录预置 default/plan/acceptEdits/danger-full-access。
+    expect(
+      controller.controls.availablePermissionModes,
+      contains('acceptEdits'),
+    );
+
+    await controller.selectPermissionMode(
+      mode: 'acceptEdits',
+      deviceId: _ownerDeviceId,
+      canWrite: true,
+    );
+    expect(controller.errorMessage, isNull);
+    expect(controller.controls.permissionMode, 'acceptEdits');
+
+    final submitted = relay.submitted.lastWhere(
+      (command) => command.kind == SessionCommandKind.permissionModeSelect,
+    );
+    // 权威契约：kind=mode.set、payload key=mode_id。
+    expect(submitted.kind.wireValue, 'mode.set');
+    final payload =
+        submitted.ciphertext?['fixture_payload'] as Map<String, dynamic>;
+    expect(payload['mode_id'], 'acceptEdits');
+  });
+
   test('MOBILE-V07 会话切换时乐观回显不跨会话泄漏', () async {
     final relay = _DelayedEchoRelay(clock: () => _now);
     await _prepareOwner(relay);
@@ -631,14 +674,8 @@ void main() {
       await controller.stopStreaming(deviceId: _ownerDeviceId, canWrite: true);
 
       // failed 终态必须浮出且不产生“已中止”伪证轨迹。
-      expect(
-        controller.errorMessage,
-        contains('中止命令未成功'),
-      );
-      expect(
-        controller.timeline.any((event) => event.label == '已中止'),
-        isFalse,
-      );
+      expect(controller.errorMessage, contains('中止命令未成功'));
+      expect(controller.timeline.any((event) => event.label == '已中止'), isFalse);
     });
 
     test('start 后可通过 kill 结束 fixture 进程并进入 stopped', () async {
