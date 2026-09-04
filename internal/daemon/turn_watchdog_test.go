@@ -1,9 +1,9 @@
 // 回合看门狗契约测试（v0.8.6 A① / V086-11）：
-// 1) 静默回合（send 受理后执行端零事件）在窗口到期时必须产出脱敏
-//    session_error + turn_completed(stop_reason=watchdog_timeout)；
-// 2) 持续产出的事件会为看门狗续命，慢回合不误报；终态事件撤防；
-// 3) 用户 abort 撤防——用户主动停止后不得再补发看门狗失败；
-// 4) 窗口置 0 = 关闭（回滚开关），行为与无看门狗一致。
+//  1. 静默回合（send 受理后执行端零事件）在窗口到期时必须产出脱敏
+//     session_error + turn_completed(stop_reason=watchdog_timeout)；
+//  2. 持续产出的事件会为看门狗续命，慢回合不误报；终态事件撤防；
+//  3. 用户 abort 撤防——用户主动停止后不得再补发看门狗失败；
+//  4. 窗口置 0 = 关闭（回滚开关），行为与无看门狗一致。
 package daemon
 
 import (

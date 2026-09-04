@@ -117,7 +117,7 @@ const (
 	// current_mode_update 改变句柄内 mode 快照后由 dsh handle 推出，事件泵据此
 	// 调 syncModeInfo 把最新目录重上行 Relay（有变化才推，天然去重）。
 	EventModesChanged EventType = "modes_changed"
-	EventThoughtDelta    EventType = "message_thought_delta"
+	EventThoughtDelta EventType = "message_thought_delta"
 )
 
 // Event 是一条规范化事件。私有 Provider 字段不进入公共协议。
