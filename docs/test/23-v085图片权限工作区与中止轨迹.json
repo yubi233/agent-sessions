@@ -107,22 +107,25 @@
     {
       "id": "V085-05",
       "title": "refs → SendContent image block → 桥 admission → overlay 回复（cordis image yml）",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "image_send",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "node e2e-verify/real/dsh-v085-image-overlay.mjs（5/5 checks passed）",
+        "真实 image-capable 模型部署 gate 未授权"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "e2e-verify/real/dsh-v085-image-overlay.mjs",
+        "e2e-verify/fixtures/dsh/cordis-v085-image.yml",
+        "e2e-verify/reports/ADAPTER-DSH/v085-image-overlay-2026-09-04T12-48-38-828Z.json",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.17"
       ]
     },
     {

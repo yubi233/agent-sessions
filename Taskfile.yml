@@ -290,6 +290,8 @@ tasks:
       - go test ./internal/relay -run 'TestV085|TestV081SessionView|TestP3ATTACH01' -count=1
       - go test ./internal/daemon -run 'TestDSHWorkspaceScanner|TestConfirmExistingDSHWorkspace' -count=1
       - go test ./internal/adapter/dsh -run 'TestMapUsageUpdateCarriesTimingMeta|TestAgentPresetFromSessionStateMeta' -count=1
+      # V085-05 图片成功路径 deterministic overlay（真实 dsh 桥 + mock LLM，不调真实模型）。
+      - node e2e-verify/real/dsh-v085-image-overlay.mjs
       - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_timeline_parsing_test.dart test/session_trajectory_view_test.dart test/session_stats_context_test.dart test/session_model_seat_test.dart test/dsh_mode_test.dart test/local_visual_fixture_test.dart --concurrency=1
       - pnpm --filter @agent-sessions/web test
       - pnpm --filter @agent-sessions/web build
