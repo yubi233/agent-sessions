@@ -93,6 +93,16 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-36"]),
     requiredTestIds: Object.freeze(["V084-P4"]),
   }),
+  // v0.8.5：中止与轨迹时间录屏范围。
+  // 内容先定——录制 VISUAL-MOBILE-37（dsh-abort-trajectory，实施记录 23）：
+  //   1) 会话详情时间线出现发送消息后唯一的“已中止 · HH:mm:ss”系统通知轨迹；
+  //   2) 会话状态收敛为 stopped（中止按钮已失效，不能重复中止）；
+  //   3) 缺失历史时间的事件显示“时间未知”（widget 测试覆盖，窗口画面采可用样本）。
+  // 5fps 连续帧，仅作通过后的展示证据，不作为功能回归替代；前置 gate 报告必须 passed。
+  v085: Object.freeze({
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-37"]),
+    requiredTestIds: Object.freeze(["V085-23"]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {

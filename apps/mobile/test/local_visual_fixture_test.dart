@@ -48,6 +48,27 @@ void main() {
     );
   });
 
+  test('V085-23：中止轨迹视觉场景预置“已中止 · 时间”并投影 stopped', () async {
+    final fixture = await LocalVisualFixture.create('dsh-abort-trajectory');
+
+    expect(fixture, isNotNull);
+    expect(fixture!.scenario, LocalVisualScenario.dshAbortTrajectory);
+    expect(fixture.sessionId, isNotNull);
+    final sessions = await fixture.relay.listSessions();
+    final dsh = sessions.single;
+    expect(dsh.provider, 'dsh');
+    expect(dsh.status, MobileSessionStatus.stopped);
+    // 快照时间线必须包含唯一的“已中止”系统通知，且携带 created_at 时间
+    //（可见窗口的“已中止 · HH:mm:ss”由轨迹行渲染，时间断言见轨迹 widget 测试）。
+    final snapshot = await fixture.relay.getSessionSnapshot(dsh.id);
+    final timeline = snapshot.events
+        .map(SessionTimelineEvent.fromRelayEvent)
+        .toList(growable: false);
+    final aborted = timeline.where((event) => event.label == '已中止');
+    expect(aborted, hasLength(1), reason: '中止场景必须且只能产生一条“已中止”轨迹');
+    expect(aborted.single.createdAt, isNotNull);
+  });
+
   group('MOBILE-02 本地可见 fixture', () {
     test('会话列表场景预置分组会话、当前选择所需的流式事件和无敏感展示数据', () async {
       final fixture = await LocalVisualFixture.create('session-list');

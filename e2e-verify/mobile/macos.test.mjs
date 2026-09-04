@@ -211,6 +211,8 @@ test("P2/P3/P4/P5/V081 截图场景在 runner 中固定登记，避免录制前�
       "VISUAL-MOBILE-30",
       "VISUAL-MOBILE-31",
       "VISUAL-MOBILE-32",
+      // v0.8.5：中止与轨迹时间可见场景（V085-23 / VISUAL-MOBILE-37）。
+      "VISUAL-MOBILE-37",
     ],
   );
 });

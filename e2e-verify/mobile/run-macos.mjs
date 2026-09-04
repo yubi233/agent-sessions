@@ -248,6 +248,13 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-32-v05-composer-dock",
     localVisualScenario: "session-detail",
   }),
+  // v0.8.5 中止与轨迹时间：发送后中止，轨迹出现唯一“已中止 · HH:mm:ss”，
+  // 缺失时间显示“时间未知”；会话投影 stopped（实施记录 23 收口条件）。
+  Object.freeze({
+    id: "VISUAL-MOBILE-37",
+    directory: "visual-mobile-37-dsh-abort-trajectory",
+    localVisualScenario: "dsh-abort-trajectory",
+  }),
 ]);
 
 function wait(milliseconds) {

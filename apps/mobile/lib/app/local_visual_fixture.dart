@@ -24,6 +24,9 @@ enum LocalVisualScenario {
   dshCapabilityGates,
   // v0.8.4（ADR-015 §3/§5）：流式投影可见场景（phase 状态行 + thought 通道 + 打字机）。
   dshStreamingTurnPhase,
+  // v0.8.5：中止与轨迹时间可见场景（发送后中止：唯一“已中止 · HH:mm:ss”轨迹，
+  // 缺失时间条目显示“时间未知”，与实施记录 23 收口条件一致）。
+  dshAbortTrajectory,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -70,6 +73,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'dsh-capability-gates' => LocalVisualScenario.dshCapabilityGates,
   'dsh-streaming-turn-phase' =>
     LocalVisualScenario.dshStreamingTurnPhase,
+  'dsh-abort-trajectory' => LocalVisualScenario.dshAbortTrajectory,
   'pairing-pending' => LocalVisualScenario.pairingPending,
   'session-list' => LocalVisualScenario.sessionList,
   'session-detail' => LocalVisualScenario.sessionDetail,
@@ -279,7 +283,8 @@ class LocalVisualFixture {
     final isDshScenario = scenario == LocalVisualScenario.dshWorkspaceHome ||
         scenario == LocalVisualScenario.dshSessionToolTimeline ||
         scenario == LocalVisualScenario.dshCapabilityGates ||
-        scenario == LocalVisualScenario.dshStreamingTurnPhase;
+        scenario == LocalVisualScenario.dshStreamingTurnPhase ||
+        scenario == LocalVisualScenario.dshAbortTrajectory;
     String? dshSessionId;
     if (isDshScenario) {
       relay.replaceTerminals([
@@ -358,6 +363,33 @@ class LocalVisualFixture {
             ciphertext: const {
               'fixture_payload': {'message': '请展示 DSH fixture 的工具活动时间线。'},
             },
+          ),
+        );
+      }
+      if (scenario == LocalVisualScenario.dshAbortTrajectory) {
+        // v0.8.5 中止场景：先发送一条进入生成中的消息，再提交 abort，fixture
+        // 产生唯一的“已中止 · HH:mm:ss”轨迹并投影 stopped；展示发送时间与
+        // 中止时间都真实可见（实施记录 23 收口条件）。
+        final lease = await relay.acquireSessionLease(dshSession.id);
+        await relay.submitSessionCommand(
+          dshSession.id,
+          SessionCommandInput(
+            kind: SessionCommandKind.send,
+            idempotencyKey: 'visual-dsh-abort-send',
+            leaseEpoch: lease.epoch,
+            deviceId: ownerDeviceId,
+            ciphertext: const {
+              'fixture_payload': {'message': '你好'},
+            },
+          ),
+        );
+        await relay.submitSessionCommand(
+          dshSession.id,
+          SessionCommandInput(
+            kind: SessionCommandKind.abort,
+            idempotencyKey: 'visual-dsh-abort-stop',
+            leaseEpoch: lease.epoch,
+            deviceId: ownerDeviceId,
           ),
         );
       }
