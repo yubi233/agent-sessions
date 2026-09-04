@@ -134,12 +134,13 @@
    ],
    "evidence": [
     "e2e-verify/reports/（阶段5回填）"
-   ]
+   ],
+   "remaining_risk": "dsh-v086-overlay 场景脚本未创建（本轮以 fixture 契约测试承载收敛链路）；随实机权限恢复后补"
   },
   {
    "id": "V086-07",
    "title": "实机 visible gate：目录空壳 → 可用全程帧证据；双端（移动端/dsh 终端）mode 互见一致",
-   "status": "planned",
+   "status": "blocked",
    "phase": "P3",
    "category": "visible_gate",
    "priority": "P1",
@@ -155,12 +156,14 @@
    ],
    "evidence": [
     "e2e-verify/reports/（阶段7回填）"
-   ]
+   ],
+   "failure_class": "environment_or_startup_failure",
+   "remaining_risk": "macOS 屏幕录制权限未授予宿主终端，VISUAL-MOBILE-37 帧抓取失败（e2e-verify/reports/2026-09-04T21-57-15-865Z）；双端互见复验待权限恢复"
   },
   {
    "id": "V086-08",
    "title": "回归聚合：test:v086:local 全绿 + v081–v085 聚合链式 + fixture/真实契约 schema 门",
-   "status": "planned",
+   "status": "passed",
    "phase": "P4",
    "category": "regression",
    "priority": "P0",
@@ -175,8 +178,9 @@
     "无"
    ],
    "evidence": [
-    "Taskfile.yml test:v086:local",
-    "阶段7运行记录"
+    "Taskfile.yml test:v086:local（2026-09-05 exit=0）",
+    "/tmp/v086_chain2.log（v083→v084→v085 链式 exit=0）",
+    "internal/daemon、internal/adapter/dsh、apps/mobile 全量定向套件"
    ]
   },
   {

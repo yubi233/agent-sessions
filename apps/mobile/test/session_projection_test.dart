@@ -163,7 +163,9 @@ void main() {
       expect(assistant.canFork, isTrue);
 
       final tool = snapshot.chatNodes[3];
-      expect(tool.canCopy, isFalse);
+      // v0.8.6 E（G11 复制全覆盖）：tool 节点有可复制文本即出复制按钮
+      //（旧契约是按节点类型排除；tool 命令/输出是用户核心复制诉求）。
+      expect(tool.canCopy, isTrue);
       expect(tool.filePath, 'pubspec.yaml');
     });
 
