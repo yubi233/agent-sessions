@@ -87,6 +87,12 @@ type SessionRunner struct {
 	// 使用它；空值会交给 Adapter/服务端按既有兼容语义处理，绝不猜测其它 Provider。
 	DefaultModel string
 
+	// 回合看门狗（v0.8.6 A①，详见 turn_watchdog.go）：按会话维护沉默窗口计时器，
+	// 回合在途且持续无事件时由 daemon 补发失败事实，客户端不再永久"生成中"。
+	watchdogMu         sync.Mutex
+	watchdogs          map[string]*time.Timer
+	turnWatchdogWindow time.Duration
+
 	mu      sync.Mutex
 	handles map[string]*runningSession // key: sessionID
 	// resumeGeneration 用来使旧恢复协程的完成回调失效，避免旧句柄在新一轮恢复后
@@ -143,8 +149,11 @@ func NewSessionRunner(store *Store, adapters map[string]adapter.Adapter, logger 
 		resumeGeneration: map[string]uint64{},
 		eventSeq:         map[string]int64{},
 		eventCount:       map[string]int{},
-		rootCtx:          ctx,
-		rootCancel:       cancel,
+		// 看门狗窗口从环境读取（AGENT_SESSIONS_TURN_WATCHDOG_MS，0=关闭）。
+		turnWatchdogWindow: turnWatchdogWindowFromEnv(),
+		watchdogs:          map[string]*time.Timer{},
+		rootCtx:            ctx,
+		rootCancel:         cancel,
 	}
 }
 
@@ -615,6 +624,8 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 			})
 			return err
 		}
+		// 混合内容回合受理：布防回合看门狗（沉默窗口内无事件则补发失败事实）。
+		r.armTurnWatchdog(sessionID)
 		return nil
 	}
 	if err := rs.handle.Send(ctx, text); err != nil {
@@ -637,6 +648,9 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 		})
 		return err
 	}
+	// 文本回合受理：布防回合看门狗（沉默窗口内无任何执行端事件则补发失败
+	// 事实事件；慢回合的持续产出会不断续命，不会误报）。
+	r.armTurnWatchdog(sessionID)
 	return nil
 }
 
@@ -668,6 +682,9 @@ func (r *SessionRunner) abortSession(ctx context.Context, cmd Command) error {
 	}
 	// Abort 成功只表示 Provider 已接受取消请求；Provider 后续的 cancelled
 	// turn_completed 仍负责最终状态收口，不能在这里伪造第二条终态。
+	// v0.8.6 A①：用户主动中止即撤防回合看门狗——中止后执行端恢复产出与否，
+	// 都不应再由看门狗补发"回合超时"失败事实。
+	r.disarmTurnWatchdog(sessionID)
 	r.emitEvent(sessionID, adapter.Event{
 		Type: adapter.EventSessionAborted,
 		Payload: map[string]any{
@@ -1004,6 +1021,14 @@ func (r *SessionRunner) forwardEventsWithReplay(sessionID string, h adapter.Hand
 				return false
 			}
 		}
+		// v0.8.6 A①：每个执行端事件都是"回合仍在推进"的证据，重置看门狗沉默
+		// 窗口（桥侧重试发出的可见事件同样续命）；终态事件直接撤防。
+		switch ev.Type {
+		case adapter.EventTurnCompleted, adapter.EventSessionAborted:
+			r.disarmTurnWatchdog(sessionID)
+		default:
+			r.resetTurnWatchdog(sessionID)
+		}
 		return true
 	}
 	if len(initial) > 0 && initial[0].Type != "" {
@@ -1068,6 +1093,7 @@ func (r *SessionRunner) forwardEventsWithReplay(sessionID string, h adapter.Hand
 				return
 			}
 		case <-fwdCtx.Done():
+			r.disarmTurnWatchdog(sessionID)
 			return
 		case <-replaySignal:
 			// 下一轮会先消费回放完成信号并排空事件队列。

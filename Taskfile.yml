@@ -302,8 +302,9 @@ tasks:
     cmds:
       - task: docs:verify
       - task: check
-      # 阶段2/4（A/B 组 daemon 契约）：看门狗、mode 目录回传与三时机、controls 扩展——测试落地后启用：
-      # - go test ./internal/daemon ./internal/adapter/dsh -run 'TestV086' -count=1
+      # 阶段2（A 组 daemon 契约）：回合看门狗（静默触发/事件续命/abort 撤防/关闭开关）。
+      - go test ./internal/daemon -run 'TestV086' -count=1
+      # 阶段4（B 组 mode 目录回传）落地后追加 adapter/dsh 的 TestV086 行。
       # 阶段3-6（A/E 组 controller、B/C/D 组 UI）：
       - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_trajectory_view_test.dart test/session_model_seat_test.dart test/model_effort_preferences_test.dart test/session_screens_test.dart --concurrency=1
       - pnpm --filter @agent-sessions/web test
