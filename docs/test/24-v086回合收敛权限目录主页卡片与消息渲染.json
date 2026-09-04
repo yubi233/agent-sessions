@@ -312,7 +312,7 @@
   {
    "id": "V086-15",
    "title": "消息 Markdown：GFM 语法面渲染契约（###/表格/列表/行内/代码块）、流式 partial 不抛错、HTML/图片不渲染不加载",
-   "status": "planned",
+   "status": "passed",
    "phase": "P2",
    "category": "ui",
    "priority": "P1",
@@ -326,13 +326,15 @@
     "无"
    ],
    "evidence": [
-    "阶段6回填"
+    "apps/mobile/lib/ui/session/chat/session_markdown_text.dart（SessionMarkdownText GFM 渲染器）",
+    "apps/mobile/test/v086_markdown_test.dart（5 项：语法面/partial/HTML/图片/链接）",
+    "pubspec.yaml markdown ^7.2.2"
    ]
   },
   {
    "id": "V086-16",
    "title": "复制按钮全覆盖：流式中/未终态 assistant、tool/思考/notice 节点按钮出现且内容正确，大文本截断按裁决",
-   "status": "planned",
+   "status": "passed",
    "phase": "P2",
    "category": "ui",
    "priority": "P1",
@@ -346,7 +348,8 @@
     "无"
    ],
    "evidence": [
-    "阶段6回填"
+    "apps/mobile/lib/state/session_projection_controller.dart（_canCopy 重写 + 64K 截断）",
+    "apps/mobile/test/v086_markdown_test.dart（复制全覆盖 2 项）"
    ]
   },
   {

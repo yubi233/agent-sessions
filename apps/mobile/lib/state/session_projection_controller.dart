@@ -244,18 +244,38 @@ class SessionProjectionController {
     SessionTimelineEvent event,
     ConversationNodeKind nodeKind,
   ) {
-    final copyText = event.copyText ?? _displayTextFor(event);
+    var copyText = event.copyText ?? _displayTextFor(event);
     if (!_canCopy(event, nodeKind)) return null;
-    return copyText?.trim().isNotEmpty == true ? copyText : null;
+    if (copyText == null || copyText.trim().isEmpty) return null;
+    if (copyText.length > _maxCopyTextLength) {
+      copyText =
+          '${copyText.substring(0, _maxCopyTextLength)}…（内容过长，已截断）';
+    }
+    return copyText;
   }
 
+  // v0.8.6 E（G11）：复制上限 64K 字符。tool 输出等可能极长，超限截断并
+  // 标注，避免一次复制把整段日志拖进剪贴板。
+  static const int _maxCopyTextLength = 64 * 1024;
+
+  /// v0.8.6 E（G11，复制全覆盖）：门控从"按节点类型 + completedTurn"改为
+  /// "有可复制文本即出按钮"——流式中/未终态回合的 assistant 已产出文本、
+  /// tool 命令与输出、思考摘要、通知与错误都必须可复制（实机 A① 事故中
+  /// 卡死回合的回复完全无法复制是核心痛点）。pendingSteering 乐观回显仍仅
+  /// user 可复制（assistant 尚无内容可复制）。
   bool _canCopy(SessionTimelineEvent event, ConversationNodeKind nodeKind) {
     final text = event.copyText ?? _displayTextFor(event);
     if (text?.trim().isNotEmpty != true) return false;
     if (event.pendingSteering) return nodeKind == ConversationNodeKind.user;
     return switch (nodeKind) {
-      ConversationNodeKind.user => true,
-      ConversationNodeKind.assistant => event.completedTurn,
+      ConversationNodeKind.user ||
+      ConversationNodeKind.assistant ||
+      ConversationNodeKind.reasoning ||
+      ConversationNodeKind.tool ||
+      ConversationNodeKind.notice ||
+      ConversationNodeKind.error => true,
+      // command/compaction/turnTail/retry/encrypted 是生命周期或投影内部
+      // 节点，不提供复制。
       _ => false,
     };
   }

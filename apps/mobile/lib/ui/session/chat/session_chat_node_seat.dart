@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../domain/session_projection_models.dart';
+import 'session_markdown_text.dart';
 import '../../../state/session_message_feedback_controller.dart';
 
 typedef SessionForkHandler = Future<void> Function(String messageId);
@@ -240,6 +241,9 @@ class _AssistantTailStatus extends StatelessWidget {
   }
 }
 
+/// v0.8.6 D（G10）：助手消息 Markdown 渲染入口。实现迁入
+/// SessionMarkdownText（GFM 语法面 + display-safe 边界），本类只保留调用点
+/// 兼容的薄包装。
 class _DisplaySafeMarkdown extends StatelessWidget {
   const _DisplaySafeMarkdown({required this.text, required this.color});
 
@@ -247,136 +251,10 @@ class _DisplaySafeMarkdown extends StatelessWidget {
   final Color color;
 
   @override
-  Widget build(BuildContext context) {
-    final base = Theme.of(context).textTheme.bodyMedium?.copyWith(color: color);
-    final children = <Widget>[];
-    var fenced = false;
-    final code = <String>[];
-    for (final line in text.split('\n')) {
-      if (line.trimLeft().startsWith('```')) {
-        if (fenced) {
-          children.add(_MarkdownCodeBlock(text: code.join('\n')));
-          code.clear();
-        }
-        fenced = !fenced;
-        continue;
-      }
-      if (fenced) {
-        code.add(line);
-        continue;
-      }
-      if (line.startsWith('# ')) {
-        children.add(
-          Text(
-            line.substring(2),
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: color,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        );
-      } else if (line.startsWith('## ')) {
-        children.add(
-          Text(
-            line.substring(3),
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: color,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        );
-      } else if (line.startsWith('- ') || line.startsWith('* ')) {
-        children.add(
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('• ', style: base),
-              Expanded(
-                child: _InlineMarkdown(text: line.substring(2), style: base),
-              ),
-            ],
-          ),
-        );
-      } else if (line.isEmpty) {
-        children.add(const SizedBox(height: 6));
-      } else {
-        children.add(_InlineMarkdown(text: line, style: base));
-      }
-    }
-    if (code.isNotEmpty) {
-      children.add(_MarkdownCodeBlock(text: code.join('\n')));
-    }
-    return Column(
-      key: const Key('session-assistant-markdown'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: children,
-    );
-  }
+  Widget build(BuildContext context) =>
+      SessionMarkdownText(text: text, color: color);
 }
 
-class _InlineMarkdown extends StatelessWidget {
-  const _InlineMarkdown({required this.text, required this.style});
-
-  final String text;
-  final TextStyle? style;
-
-  @override
-  Widget build(BuildContext context) {
-    final spans = <InlineSpan>[];
-    final expression = RegExp(r'(`[^`]+`|\*\*[^*]+\*\*)');
-    var cursor = 0;
-    for (final match in expression.allMatches(text)) {
-      if (match.start > cursor) {
-        spans.add(TextSpan(text: text.substring(cursor, match.start)));
-      }
-      final token = match.group(0)!;
-      if (token.startsWith('`')) {
-        spans.add(
-          TextSpan(
-            text: token.substring(1, token.length - 1),
-            style: style?.copyWith(
-              fontFamily: 'monospace',
-              backgroundColor: Theme.of(
-                context,
-              ).colorScheme.surfaceContainerHighest,
-            ),
-          ),
-        );
-      } else {
-        spans.add(
-          TextSpan(
-            text: token.substring(2, token.length - 2),
-            style: style?.copyWith(fontWeight: FontWeight.w700),
-          ),
-        );
-      }
-      cursor = match.end;
-    }
-    if (cursor < text.length) spans.add(TextSpan(text: text.substring(cursor)));
-    return Text.rich(TextSpan(style: style, children: spans));
-  }
-}
-
-class _MarkdownCodeBlock extends StatelessWidget {
-  const _MarkdownCodeBlock({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    constraints: const BoxConstraints(maxHeight: 180),
-    margin: const EdgeInsets.symmetric(vertical: 4),
-    padding: const EdgeInsets.all(10),
-    color: Theme.of(context).colorScheme.surfaceContainerHighest,
-    child: SingleChildScrollView(
-      child: SelectableText(
-        text,
-        style: const TextStyle(fontFamily: 'monospace'),
-      ),
-    ),
-  );
-}
 
 class _PendingSteeringBadge extends StatelessWidget {
   const _PendingSteeringBadge({required this.foreground});
