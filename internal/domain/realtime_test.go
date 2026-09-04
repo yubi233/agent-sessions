@@ -84,16 +84,28 @@ func TestAcquireLeaseFencing(t *testing.T) {
 	if e1 != 1 {
 		t.Fatalf("epoch 1 = %d", e1)
 	}
+	// 同设备重取是幂等续期：epoch 原位保留，绝不作废自己在飞命令。
 	e2, err := svc.AcquireLease(context.Background(), sessID, "android-1", "")
 	if err != nil {
-		t.Fatalf("acquire 2: %v", err)
+		t.Fatalf("acquire 2 (renew): %v", err)
 	}
-	if e2 != 2 {
-		t.Fatalf("epoch 2 = %d", e2)
+	if e2 != e1 {
+		t.Fatalf("renewed epoch = %d want unchanged %d", e2, e1)
 	}
-	// 其他 Android 抢租约应被拒（只保留一个写端）。
-	if _, err := svc.AcquireLease(context.Background(), sessID, "android-2", ""); err != ErrLeaseConflict {
-		t.Fatalf("want ErrLeaseConflict for other writer, got %v", err)
+	// 其他 Android 获取是接管：epoch 递增，写端唯一性由 epoch fencing 保证。
+	e3, err := svc.AcquireLease(context.Background(), sessID, "android-2", "")
+	if err != nil {
+		t.Fatalf("acquire 3 (takeover): %v", err)
+	}
+	if e3 != e1+1 {
+		t.Fatalf("takeover epoch = %d want %d", e3, e1+1)
+	}
+	// 接管后旧设备用旧 epoch 提交命令被 fence（写端唯一）。
+	if _, err := svc.SubmitCommand(context.Background(), CommandInput{
+		AccountID: "acct", DeviceID: "android-1", Role: RoleAndroidOwner,
+		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "stale-fence", LeaseEpoch: e1,
+	}); err != ErrLeaseConflict {
+		t.Fatalf("stale writer after takeover error=%v want lease conflict", err)
 	}
 }
 
@@ -132,9 +144,19 @@ func TestSubmitCommandFencesLeaseAndTargetInstanceInTransaction(t *testing.T) {
 	}); err != ErrTargetStale {
 		t.Fatalf("old instance error=%v want target stale", err)
 	}
-	// 同一设备续租使 epoch 递增，模拟客户端在检查后才提交的旧命令。
+	// 另一设备接管使 epoch 递增到 2，原设备夺回递增到 3：
+	// 错误设备与旧 epoch 提交的命令都必须被 fencing 拒绝。
+	if _, err := svc.AcquireLease(ctx, sessID, "dev-2", "inst-current"); err != nil {
+		t.Fatalf("takeover lease: %v", err)
+	}
+	if _, err := svc.SubmitCommand(ctx, CommandInput{
+		AccountID: "acct", DeviceID: "dev", Role: RoleAndroidOwner,
+		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "old-device", LeaseEpoch: 1, TargetInstanceID: "inst-current",
+	}); err != ErrLeaseConflict {
+		t.Fatalf("wrong device error=%v want lease conflict", err)
+	}
 	if _, err := svc.AcquireLease(ctx, sessID, "dev", "inst-current"); err != nil {
-		t.Fatalf("renew lease: %v", err)
+		t.Fatalf("re-take lease: %v", err)
 	}
 	if _, err := svc.SubmitCommand(ctx, CommandInput{
 		AccountID: "acct", DeviceID: "dev", Role: RoleAndroidOwner,
@@ -144,7 +166,7 @@ func TestSubmitCommandFencesLeaseAndTargetInstanceInTransaction(t *testing.T) {
 	}
 	accepted, err := svc.SubmitCommand(ctx, CommandInput{
 		AccountID: "acct", DeviceID: "dev", Role: RoleAndroidOwner,
-		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "current", LeaseEpoch: 2, TargetInstanceID: "inst-current",
+		SessionID: sessID, Kind: "session.abort", IdempotencyKey: "current", LeaseEpoch: 3, TargetInstanceID: "inst-current",
 	})
 	if err != nil || accepted.ID == "" {
 		t.Fatalf("current command=%+v err=%v", accepted, err)

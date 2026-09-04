@@ -38,6 +38,7 @@ func run(args []string) error {
 	relayBase := fs.String("relay-base", "", "Relay base URL（也可由本机 state/环境提供）")
 	accessToken := fs.String("access-token", "", "Daemon device bearer（建议使用环境变量，不会打印）")
 	fixtureAdapter := fs.Bool("fixture-adapter", false, "使用 deterministic fixture Adapter；仅本地测试")
+	requeueFailedEvents := fs.Bool("requeue-failed-events", false, "run 启动时把全部 failed 状态的 Relay 事件死信复位为 pending（人工恢复入口；重复 event_id 由 Relay 幂等去重）")
 	workspaceID := fs.String("workspace-id", "", "Relay Workspace ID（仅 workspace-confirm 使用）")
 	workspaceRoot := fs.String("workspace-root", "", "已确认 Git 根目录（仅 workspace-confirm 使用）")
 	sub := ""
@@ -69,7 +70,7 @@ func run(args []string) error {
 	case "doctor":
 		return cmdDoctor()
 	case "run":
-		return cmdRun(st, *relayBase, *accessToken, *fixtureAdapter)
+		return cmdRun(st, *relayBase, *accessToken, *fixtureAdapter, *requeueFailedEvents)
 	case "runner":
 		// 本地 outbox -> Adapter 兑现演示（Relay 连接未实现，不假装已连）。
 		return cmdRunner(st)
@@ -151,8 +152,17 @@ func cmdDoctor() error {
 
 // cmdRun 启动真实 Relay REST+SSE 循环。凭据只从显式 flag、当前环境变量或 Daemon 本机 state 读取，
 // 不读取浏览器/其他 CLI 登录态；生产 event DEK 只从 Daemon 环境读取，未配置时会 fail-closed 地扣留事件。
-func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter bool) error {
+func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, requeueFailedEvents bool) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if requeueFailedEvents {
+		// 人工恢复入口：把 failed 事件（含曾被 RELAY_REJECTED_PERMANENT 的死信）
+		// 全量复位为 pending。重复 event_id 由 Relay 幂等去重，重放安全。
+		requeued, err := st.RequeueFailedRelayEvents()
+		if err != nil {
+			return fmt.Errorf("requeue failed relay events: %w", err)
+		}
+		logger.Info("requeued failed relay events", "count", requeued)
+	}
 	if relayBase == "" {
 		relayBase = os.Getenv("AGENT_SESSIONS_RELAY_BASE")
 	}

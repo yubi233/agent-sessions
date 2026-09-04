@@ -1096,9 +1096,10 @@ func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (D
 		if cmd.SessionID != in.SessionID {
 			return ErrScopeDenied
 		}
-		if err := validateCommandFence(ctx, tx, cmd); err != nil {
-			return err
-		}
+		// 事件上传只校验命令存在性与终端归属，不做 lease epoch fence：
+		// 回合是会话所有的后台任务，epoch 翻转（含在飞命令被接管作废）不得把
+		// 已发生的事实性事件打成死信——客户端必须最终收到 turn 终态
+		// （ADR-009 决策 5 的 fence 范围仅限命令 ack/执行，不含事件上传）。
 		if err := tx.CreateDaemonEventReceipt(ctx, store.DaemonEventReceiptRow{
 			EventID: in.EventID, TerminalID: terminal.ID, CommandID: in.CommandID, SessionID: in.SessionID,
 			CreatedAtUnixMS: s.now().UnixMilli(),
@@ -1257,8 +1258,19 @@ func validWebReadResponseEnvelope(raw string) bool {
 }
 
 func validDaemonEventType(value string) bool {
+	// 与 packages/protocol/schema/events.json 的 event_type enum 保持一致
+	// （单一真值）；缺了就会把合法事件打成 400 永久死信（V085-25：v0.8.4 的
+	// message.thought_delta / turn.phase 从未进过白名单，真实流式回合的
+	// reasoning/相位帧全部被拒收）。
 	switch value {
-	case "session.lifecycle", "session.aborted", "turn.started", "user.message", "message.delta", "message.completed", "turn.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
+	case "session.lifecycle", "session.aborted", "turn.started", "user.message",
+		"message.delta", "message.thought_delta", "message.completed",
+		"turn.completed", "turn.phase", "session.activity",
+		"tool.call", "tool.result",
+		"permission.request", "permission.decision", "user.question",
+		"plan.changed", "goal.changed", "skill.catalog_changed",
+		"usage.updated", "file.changed", "git.snapshot", "command.updated",
+		"delegation.changed":
 		return true
 	}
 	return false

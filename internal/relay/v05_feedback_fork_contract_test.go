@@ -180,7 +180,9 @@ func TestV05SessionForkHTTPContract(t *testing.T) {
 		t.Fatalf("child snapshot contract unexpected: status=%d body=%s", childSnapshot.Code, childSnapshot.Body.String())
 	}
 
-	nextEpoch := p2SessionLeaseEpoch(t, env, owner.AccessToken, parentID)
+	// 另一 Android 设备接管使 epoch 递增：原设备携旧 epoch 的 fork 必须被拒。
+	secondDevice := env.pairAndroidOwner(t, owner, "v05-fork-second-android")
+	nextEpoch := p2SessionLeaseEpoch(t, env, secondDevice.AccessToken, parentID)
 	if stale := env.do(t, http.MethodPost, "/v1/sessions/"+parentID+"/forks", map[string]any{
 		"message_id":      "assistant-msg-10",
 		"idempotency_key": "fork-key-stale",

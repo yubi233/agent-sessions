@@ -82,16 +82,17 @@ func TestLeaseCompetitionLoad(t *testing.T) {
 	pair := env.registerAs(t, "perf@test.dev")
 	sessID, _ := env.createSession(t, pair.AccessToken, pair.AccountID)
 
-	// 两个 android 设备并发抢租约；只有第一个能拿到 epoch=1，其余被拒或递增。
-	// 这里用 owner 设备连续抢，验证 epoch 严格递增且最终唯一写端。
+	// 同设备并发抢是幂等续期（epoch 不变）；跨设备竞争才递增。
+	// 两个 android 设备并发抢租约：epoch 只能前进，最终唯一写端由 fencing 保证。
+	second := env.pairAndroidOwner(t, pair, "perf-second-android")
 	var wg sync.WaitGroup
-	epochs := make([]int64, 0, 8)
+	epochs := make([]int64, 0, 16)
 	var mu sync.Mutex
 	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
+		wg.Add(2)
+		go func(token string) {
 			defer wg.Done()
-			resp := env.do(t, "POST", "/v1/sessions/"+sessID+"/lease", nil, pair.AccessToken)
+			resp := env.do(t, "POST", "/v1/sessions/"+sessID+"/lease", nil, token)
 			if resp.Code == 200 {
 				var lr struct {
 					LeaseEpoch int64 `json:"lease_epoch"`
@@ -101,7 +102,20 @@ func TestLeaseCompetitionLoad(t *testing.T) {
 				epochs = append(epochs, lr.LeaseEpoch)
 				mu.Unlock()
 			}
-		}()
+		}(pair.AccessToken)
+		go func(token string) {
+			defer wg.Done()
+			resp := env.do(t, "POST", "/v1/sessions/"+sessID+"/lease", nil, token)
+			if resp.Code == 200 {
+				var lr struct {
+					LeaseEpoch int64 `json:"lease_epoch"`
+				}
+				_ = json.Unmarshal([]byte(resp.Body.String()), &lr)
+				mu.Lock()
+				epochs = append(epochs, lr.LeaseEpoch)
+				mu.Unlock()
+			}
+		}(second.AccessToken)
 	}
 	wg.Wait()
 	if len(epochs) == 0 {

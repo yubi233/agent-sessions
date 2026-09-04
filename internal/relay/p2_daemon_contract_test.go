@@ -163,7 +163,9 @@ func TestP2DaemonRejectsStaleLeaseBeforeStart(t *testing.T) {
 	if command.Code != http.StatusAccepted || submitted.ID == "" {
 		t.Fatalf("submit stale command status=%d body=%s", command.Code, command.Body.String())
 	}
-	if next := p2SessionLeaseEpoch(t, env, owner.AccessToken, sessionID); next != epoch+1 {
+	// 另一 Android 设备接管使 epoch 递增：在飞命令被作废，started ack 只回 expired 权威回执。
+	second := env.pairAndroidOwner(t, owner, "p2-stale-second-android")
+	if next := p2SessionLeaseEpoch(t, env, second.AccessToken, sessionID); next != epoch+1 {
 		t.Fatalf("lease epoch=%d want %d", next, epoch+1)
 	}
 
@@ -612,7 +614,15 @@ func TestP2RelayDaemonRestartAndMultiTerminalRecovery(t *testing.T) {
 	}
 	waitP2CanonicalEvents(t, env, sessionA, 1)
 	waitP2CanonicalEvents(t, env, sessionB, 1)
-	if renewed := p2SessionLeaseEpoch(t, env, owner.AccessToken, sessionA); renewed != leaseABefore.Epoch+1 {
+	// 重启后同设备续期：epoch 保持接管后的值（>1 且未递增，证明租约被持久化而非重置）。
+	// 命令均已 succeeded（终态）后，另一 Android 设备接管（epoch 1→2）再同设备
+	// 续期（保持 2）：证明 Relay 重启没有重置租约——若租约丢失被重置，接管只能
+	// 得到 1，续期也仍是 1。
+	secondAndroid := env.pairAndroidOwner(t, owner, "p2-restart-second-android")
+	if bumped := p2SessionLeaseEpoch(t, env, secondAndroid.AccessToken, sessionA); bumped != leaseABefore.Epoch+1 {
+		t.Fatalf("takeover lease epoch=%d want %d", bumped, leaseABefore.Epoch+1)
+	}
+	if renewed := p2SessionLeaseEpoch(t, env, secondAndroid.AccessToken, sessionA); renewed != leaseABefore.Epoch+1 {
 		t.Fatalf("Relay restart reset lease epoch: renewed=%d previous=%d", renewed, leaseABefore.Epoch)
 	}
 
@@ -1401,6 +1411,36 @@ func TestP2ReadOnlyWorkspaceCommandStaysOpaqueAcrossRelay(t *testing.T) {
 
 // pairTerminal 只为隔离 Relay fixture 发行 terminal bearer；生产配对 UI 的凭据交付仍由
 // P3/P5 的加密配对流程承担，测试不能把直接签发当成用户流程证据。
+// pairAndroidOwner 在同一账号下配对第二台 Android 控制端（可写），用于 lease
+// 接管语义的契约测试：同设备续期不 bump epoch，跨设备接管才 +1。
+func (e *testEnv) pairAndroidOwner(t *testing.T, owner authPair, name string) authPair {
+	t.Helper()
+	pending := e.do(t, http.MethodPost, "/v1/pairing/requests", map[string]any{
+		"role": "android", "display_name": name, "platform": "test",
+		"identity_public_key": "idk-" + name, "encryption_public_key": "ekk-" + name,
+	}, owner.AccessToken)
+	if pending.Code != http.StatusCreated {
+		t.Fatalf("create android pairing status=%d body=%s", pending.Code, pending.Body.String())
+	}
+	var pairing struct {
+		ID string `json:"id"`
+	}
+	decodeW1(t, pending.Body.Bytes(), &pairing)
+	approved := e.do(t, http.MethodPost, "/v1/pairing/requests/"+pairing.ID+"/approve", nil, owner.AccessToken)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("approve android pairing status=%d body=%s", approved.Code, approved.Body.String())
+	}
+	var device struct {
+		ID string `json:"id"`
+	}
+	decodeW1(t, approved.Body.Bytes(), &device)
+	tokens, err := domain.NewAuthService(e.repo).IssueForDevice(t.Context(), owner.AccountID, device.ID)
+	if err != nil {
+		t.Fatalf("issue android device token: %v", err)
+	}
+	return authPair{AccountID: owner.AccountID, AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken, DeviceID: device.ID}
+}
+
 func (e *testEnv) pairTerminal(t *testing.T, owner authPair, name string) authPair {
 	t.Helper()
 	pending := e.do(t, http.MethodPost, "/v1/pairing/requests", map[string]any{

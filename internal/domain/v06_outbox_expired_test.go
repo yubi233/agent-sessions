@@ -27,8 +27,8 @@ func TestAcquireLeaseExpiresStaleEpochCommands(t *testing.T) {
 	// 终态命令不受影响：succeeded 保持历史。
 	cmdDone := submitExpiredFixtureCommand(t, repo, svc, sessionID, epoch1, "expired-done", CommandSucceeded)
 
-	// epoch 2：新控制权生效，旧 epoch 的未终态命令必须同事务过期。
-	epoch2, err := svc.AcquireLease(ctx, sessionID, "dev-owner", "")
+	// epoch 2：另一设备接管新控制权生效，旧 epoch 的未终态命令必须同事务过期。
+	epoch2, err := svc.AcquireLease(ctx, sessionID, "dev-owner-2", "")
 	if err != nil {
 		t.Fatalf("acquire lease 2: %v", err)
 	}

@@ -87,14 +87,21 @@ func TestCTRL02StaleEpochFenced(t *testing.T) {
 	if f.LeaseEpoch != 1 {
 		t.Fatalf("first lease epoch=%d want 1", f.LeaseEpoch)
 	}
-	// 再次抢 lease 得到 epoch=2。
+	// 同设备立即重取是幂等续期：epoch 原位保留（不递增、不作废在飞命令）。
 	second := env.do(t, http.MethodPost, "/v1/sessions/"+sessID+"/lease", nil, pair.AccessToken)
 	var s struct {
 		LeaseEpoch int64 `json:"lease_epoch"`
 	}
 	_ = json.Unmarshal(second.Body.Bytes(), &s)
+	if s.LeaseEpoch != 1 {
+		t.Fatalf("renew lease epoch=%d want unchanged 1", s.LeaseEpoch)
+	}
+	// 另一 Android 设备获取是接管：epoch 递增到 2。
+	secondDevice := env.pairAndroidOwner(t, pair, "fence-second-android")
+	takeover := env.do(t, http.MethodPost, "/v1/sessions/"+sessID+"/lease", nil, secondDevice.AccessToken)
+	_ = json.Unmarshal(takeover.Body.Bytes(), &s)
 	if s.LeaseEpoch != 2 {
-		t.Fatalf("second lease epoch=%d want 2", s.LeaseEpoch)
+		t.Fatalf("takeover lease epoch=%d want 2", s.LeaseEpoch)
 	}
 	// 省略/传 0 不能作为“当前 lease”通配符，否则旧命令可绕过 fencing。
 	missing := env.do(t, http.MethodPost, "/v1/sessions/"+sessID+"/commands", map[string]any{
@@ -103,17 +110,17 @@ func TestCTRL02StaleEpochFenced(t *testing.T) {
 	if missing.Code != http.StatusBadRequest {
 		t.Fatalf("missing epoch submit status=%d want 400 body=%s", missing.Code, missing.Body.String())
 	}
-	// 用旧 epoch=1 提交命令应被拒绝（TARGET_INSTANCE_STALE）。
+	// 旧设备用旧 epoch=1 提交命令应被拒绝（接管后 device/epoch 双重失配，409）。
 	submit := env.do(t, http.MethodPost, "/v1/sessions/"+sessID+"/commands", map[string]any{
 		"kind": "session.abort", "idempotency_key": "ik-stale", "lease_epoch": 1,
 	}, pair.AccessToken)
 	if submit.Code != http.StatusConflict {
 		t.Fatalf("stale epoch submit status=%d want 409 body=%s", submit.Code, submit.Body.String())
 	}
-	// 用新 epoch=2 提交命令成功。
+	// 接管设备用新 epoch=2 提交命令成功。
 	ok := env.do(t, http.MethodPost, "/v1/sessions/"+sessID+"/commands", map[string]any{
 		"kind": "session.abort", "idempotency_key": "ik-new", "lease_epoch": 2,
-	}, pair.AccessToken)
+	}, secondDevice.AccessToken)
 	if ok.Code != http.StatusAccepted {
 		t.Fatalf("new epoch submit status=%d want 202 body=%s", ok.Code, ok.Body.String())
 	}

@@ -195,7 +195,16 @@ func TestDelegationRejectsUnsafeBoundariesAndReadOnlyWrites(t *testing.T) {
 		t.Fatalf("cross workspace status=%d body=%s", crossWorkspace.Code, crossWorkspace.Body.String())
 	}
 
+	// 另一 Android 设备接管（epoch=first+1）后原设备夺回（epoch=first+2）：
+	// firstEpoch 从此成为旧 epoch，携带它的委托创建必须被 fence。
+	secondDevice := env.pairAndroidOwner(t, pair, "delegation-second-android")
+	if takeover := sessionLeaseEpoch(t, env, secondDevice.AccessToken, parentID); takeover != firstEpoch+1 {
+		t.Fatalf("takeover epoch=%d want %d", takeover, firstEpoch+1)
+	}
 	secondEpoch := sessionLeaseEpoch(t, env, pair.AccessToken, parentID)
+	if secondEpoch != firstEpoch+2 {
+		t.Fatalf("second epoch=%d want %d", secondEpoch, firstEpoch+2)
+	}
 	stale := env.do(t, http.MethodPost, "/v1/sessions/"+parentID+"/delegations", delegationCreatePayload(
 		workspaceID, "codex", "delegation-stale", firstEpoch,
 	), pair.AccessToken)

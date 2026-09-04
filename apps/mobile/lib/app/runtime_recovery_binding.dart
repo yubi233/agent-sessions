@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,9 +11,17 @@ import 'providers.dart';
 /// 平台适配层只把 Flutter 生命周期和链路类型翻译为业务无关状态。
 /// connectivity_plus 不能证明互联网或 Relay 一定可达，真正恢复仍由只读 snapshot 请求验证。
 class RuntimeRecoveryBinding extends ConsumerStatefulWidget {
-  const RuntimeRecoveryBinding({required this.child, super.key});
+  const RuntimeRecoveryBinding({
+    required this.child,
+    this.desktopPlatformOverride,
+    super.key,
+  });
 
   final Widget child;
+
+  /// 测试注入覆盖；null 时按 defaultTargetPlatform 判定桌面/移动。
+  /// 桌面判定见 [_RuntimeRecoveryBindingState._isDesktopPlatform]。
+  final bool? desktopPlatformOverride;
 
   @override
   ConsumerState<RuntimeRecoveryBinding> createState() =>
@@ -42,7 +51,12 @@ class _RuntimeRecoveryBindingState extends ConsumerState<RuntimeRecoveryBinding>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final visibility = state == AppLifecycleState.resumed
+    // 桌面端（macOS/Windows/Linux）窗口失焦产生 inactive/hidden，但进程仍完整
+    // 前台运行——只有 detached/paused 才算真后台；移动端保留旧语义
+    // （inactive 是瞬时过渡，非 resumed 一律按后台处理）。
+    // 把桌面失焦误判为后台会让本地 lease 失效，回前台重新获取 lease 触发
+    // Relay epoch 翻转，长回合会被自己的续期打死（V085-25 事故根因之一）。
+    final visibility = _isForeground(state)
         ? MobileAppVisibility.foreground
         : MobileAppVisibility.background;
     unawaited(
@@ -50,6 +64,28 @@ class _RuntimeRecoveryBindingState extends ConsumerState<RuntimeRecoveryBinding>
           .read(sessionRecoveryControllerProvider)
           .reportAppVisibility(visibility),
     );
+  }
+
+  bool _isForeground(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      return true;
+    }
+    final desktop =
+        widget.desktopPlatformOverride ?? _detectDesktopPlatform();
+    if (!desktop) {
+      return false;
+    }
+    // 桌面：detached 才是进程级退出；inactive/hidden 仍是可见可渲染的前台。
+    return state != AppLifecycleState.detached;
+  }
+
+  bool _detectDesktopPlatform() {
+    if (kIsWeb) {
+      return false;
+    }
+    return defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.linux;
   }
 
   Future<void> _startConnectivityObservation() async {

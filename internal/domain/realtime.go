@@ -729,10 +729,14 @@ func checkLeaseWithRepo(ctx context.Context, repo store.Repository, sessionID, d
 	return nil
 }
 
-// AcquireLease 抢占写控制权；返回当前 epoch。竞态时只保留一个写端。
-// epoch 递增的同一事务内，旧 epoch 下仍未终态（accepted/running）的 Daemon 命令
-// 一并收敛为 expired：它们已不可能被合法执行，必须 fail-closed 而不是永久滞留，
-// 也不能留给迟到的 result 复活。
+// AcquireLease 获取写控制权；返回当前 epoch。竞态时只保留一个写端。
+// 同设备重复获取是幂等续期：epoch 原位保留、不作废旧命令——续期不得伤害在飞
+// 回合（回合是会话所有的后台任务，fence 只仲裁新命令准入）。
+// 不同设备获取是接管：epoch 递增，同一事务内旧 epoch 下仍未终态
+// （accepted/running）的 Daemon 命令一并收敛为 expired——它们已不可能被合法
+// 执行，必须 fail-closed 而不是永久滞留，也不能留给迟到的 result 复活；被作废
+// 命令所属回合的事件上传不再受 epoch fence（见 UploadEvent），客户端仍能收到
+// 既有回合的终态。
 func (s *SessionService) AcquireLease(ctx context.Context, sessionID, deviceID, instanceID string) (int64, error) {
 	var epoch int64
 	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
@@ -740,10 +744,15 @@ func (s *SessionService) AcquireLease(ctx context.Context, sessionID, deviceID, 
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err == nil {
-			if lease.DeviceID != "" && lease.DeviceID != deviceID {
-				return ErrLeaseConflict
+		if err == nil && lease.DeviceID == deviceID {
+			epoch = lease.Epoch
+			renewed := store.LeaseRow{SessionID: sessionID, DeviceID: deviceID, Epoch: epoch, InstanceID: lease.InstanceID}
+			if instanceID != "" {
+				renewed.InstanceID = instanceID
 			}
+			return tx.AcquireLease(ctx, renewed)
+		}
+		if err == nil {
 			epoch = lease.Epoch + 1
 		} else {
 			epoch = 1

@@ -130,7 +130,9 @@ func TestP3ATTACH01RejectsUnsafeUploadPaths(t *testing.T) {
 	}
 
 	staleEpoch := epoch
-	_ = p3AcquireLease(t, env, sessionID, pair.AccessToken)
+	// 另一 Android 设备接管使 epoch 递增：原设备携旧 epoch 的分块上传必须被拒。
+	secondDevice := env.pairAndroidOwner(t, pair, "p3-second-android")
+	_ = p3AcquireLease(t, env, sessionID, secondDevice.AccessToken)
 	if response := env.do(t, http.MethodPost, "/v1/attachments/chunks", p3ChunkRequest(
 		"att_p3_stale", sessionID, staleEpoch, 0, 1, "stale", "stale-a",
 	), pair.AccessToken); response.Code != http.StatusConflict {

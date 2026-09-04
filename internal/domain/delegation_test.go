@@ -86,9 +86,9 @@ func TestDelegationCreatesIndependentChildAndKeepsParentOpaque(t *testing.T) {
 		t.Fatalf("child session = %+v err=%v", child, err)
 	}
 
-	// parent renew 后 epoch=2；将它带到 child 必须被 fencing，证明 child 写操作不复用 parent lease。
-	if parentEpoch, err := sessions.AcquireLease(ctx, parentID, "android-owner", ""); err != nil || parentEpoch != 2 {
-		t.Fatalf("renew parent lease = %d err=%v", parentEpoch, err)
+	// 另一设备接管 parent 使 epoch=2；将它带到 child 必须被 fencing，证明 child 写操作不复用 parent lease。
+	if parentEpoch, err := sessions.AcquireLease(ctx, parentID, "android-owner-2", ""); err != nil || parentEpoch != 2 {
+		t.Fatalf("takeover parent lease = %d err=%v", parentEpoch, err)
 	}
 	if _, err := sessions.SubmitCommand(ctx, CommandInput{
 		AccountID: "acct", DeviceID: "android-owner", Role: RoleAndroidOwner,
