@@ -136,6 +136,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.GET("/attachments/:id", a.handleDaemonReadAttachment)
 		// v0.8.5 §3.2 / ADR-016：home Terminal 上行会话内容 DEK wrap。
 		daemon.PUT("/sessions/:id/content-dek", a.handleDaemonPutContentDEK)
+		// v0.8.5 §3.2 / ADR-016：home Terminal 获取会话 owner 公钥（wrap DEK 用）。
+		daemon.GET("/sessions/:id/owner-key", a.handleDaemonOwnerEncryptionKey)
 
 		// Usage（ADR-010）：Terminal 上传白名单计数，账号只读聚合摘要。
 		daemon.POST("/usage/events", a.handleUsageUpload)

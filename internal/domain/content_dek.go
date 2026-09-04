@@ -118,3 +118,41 @@ func (s *AttachmentService) ContentDEKForSession(ctx context.Context, accountID,
 	}
 	return ContentDEKProjection{}, ErrContentDEKNotFound
 }
+
+// OwnerEncryptionKeyForSession 返回会话 owner（android_owner active）设备的
+// encryption_public_key（ADR-016 §2 数据流）：home Terminal 在会话启动时用它
+// Wrap 本机生成的会话 DEK 并上行。home Terminal 归属校验同附件读取；多个 owner
+// 设备时返回 bootstrap 首个 active android_owner（wrap 按设备逐一发放是后续扩展）。
+func (s *DaemonService) OwnerEncryptionKeyForSession(ctx context.Context, accountID, deviceID, role, sessionID string) (ownerKey, ownerDeviceID string, err error) {
+	terminal, err := s.TerminalForDevice(ctx, accountID, deviceID, role)
+	if err != nil {
+		return "", "", err
+	}
+	session, err := s.repo.SessionByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", ErrSessionNotFound
+		}
+		return "", "", err
+	}
+	if session.AccountID != accountID {
+		return "", "", ErrScopeDenied
+	}
+	workspace, err := s.repo.WorkspaceByID(ctx, session.WorkspaceID)
+	if err != nil {
+		return "", "", err
+	}
+	if workspace.TerminalID != terminal.ID {
+		return "", "", ErrScopeDenied
+	}
+	devices, err := s.repo.ListDevices(ctx, accountID)
+	if err != nil {
+		return "", "", err
+	}
+	for _, device := range devices {
+		if device.Role == RoleAndroidOwner && device.Status == DeviceActive && strings.TrimSpace(device.EncryptionPublicKey) != "" {
+			return device.EncryptionPublicKey, device.ID, nil
+		}
+	}
+	return "", "", ErrContentDEKNotFound
+}

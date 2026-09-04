@@ -781,6 +781,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/daemon/sessions/{id}/owner-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 仅拥有该会话的 home Terminal 可调用（v0.8.5 §3.2 / ADR-016 §2）。返回会话 owner（active android_owner）的 encryption_public_key 与设备 id，供 Daemon wrap 本机生成的会话 DEK 后上行；无 owner 密钥 → 404（fail-closed）。 */
+        get: operations["getDaemonSessionOwnerKey"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/daemon/sessions/{id}/content-dek": {
         parameters: {
             query?: never;
@@ -1328,6 +1345,10 @@ export interface components {
             recipient_device_id: string;
             /** Format: byte */
             wrapped_dek: string;
+        };
+        SessionOwnerKey: {
+            encryption_public_key: string;
+            device_id: string;
         };
         DaemonContentDEKPutRequest: {
             protocol_version: number;
@@ -3031,6 +3052,37 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             /** @description terminal protocol is below the supported compatibility window */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getDaemonSessionOwnerKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description owner encryption key projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionOwnerKey"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description no active owner key for this session */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

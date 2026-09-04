@@ -1607,6 +1607,12 @@ type SessionList struct {
 	Sessions []Session `json:"sessions"`
 }
 
+// SessionOwnerKey defines model for SessionOwnerKey.
+type SessionOwnerKey struct {
+	DeviceId            string `json:"device_id"`
+	EncryptionPublicKey string `json:"encryption_public_key"`
+}
+
 // SessionSnapshot defines model for SessionSnapshot.
 type SessionSnapshot struct {
 	Events  []CipherEvent `json:"events"`
@@ -2217,6 +2223,9 @@ type ServerInterface interface {
 	// (PUT /v1/daemon/sessions/{id}/modes)
 	SyncDaemonSessionModes(c *gin.Context, id string)
 
+	// (GET /v1/daemon/sessions/{id}/owner-key)
+	GetDaemonSessionOwnerKey(c *gin.Context, id string)
+
 	// (POST /v1/daemon/usage/events)
 	UploadUsageEvent(c *gin.Context)
 
@@ -2817,6 +2826,31 @@ func (siw *ServerInterfaceWrapper) SyncDaemonSessionModes(c *gin.Context) {
 	}
 
 	siw.Handler.SyncDaemonSessionModes(c, id)
+}
+
+// GetDaemonSessionOwnerKey operation middleware
+func (siw *ServerInterfaceWrapper) GetDaemonSessionOwnerKey(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetDaemonSessionOwnerKey(c, id)
 }
 
 // UploadUsageEvent operation middleware
@@ -3670,6 +3704,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)
 	router.POST(options.BaseURL+"/v1/daemon/sessions/recover", wrapper.RecoverDaemonSessions)
 	router.PUT(options.BaseURL+"/v1/daemon/sessions/:id/modes", wrapper.SyncDaemonSessionModes)
+	router.GET(options.BaseURL+"/v1/daemon/sessions/:id/owner-key", wrapper.GetDaemonSessionOwnerKey)
 	router.PUT(options.BaseURL+"/v1/daemon/sessions/:id/content-dek", wrapper.PutDaemonSessionContentDEK)
 	router.GET(options.BaseURL+"/v1/daemon/attachments/:id", wrapper.ReadDaemonAttachment)
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)

@@ -112,6 +112,10 @@ type SessionRunner struct {
 	// 会话 DEK Open），明文只经内存；未注册 sink 时 refs 命令 fail-closed。
 	attachmentFetchSinkMu sync.RWMutex
 	attachmentFetchSink   func(ctx context.Context, sessionID, attachmentID string) ([]byte, error)
+	// dekSink 在会话启动成功后触发会话内容 DEK 的生成与 wrap 上行（v0.8.5 §3.2）。
+	// runner 不直接发 HTTP：连接层注册（SessionDEKManager），失败只记日志不阻断 start。
+	dekSinkMu sync.RWMutex
+	dekSink   func(ctx context.Context, sessionID string) error
 
 	// eventSeq 保存每个 session 最近分配的 canonical 序号。Provider handle 的
 	// 序号只覆盖 Provider 事件，runner 自己生成的 user_message/断流终态也必须
@@ -189,6 +193,14 @@ func (r *SessionRunner) SetAttachmentFetchSink(sink func(ctx context.Context, se
 	r.attachmentFetchSinkMu.Lock()
 	defer r.attachmentFetchSinkMu.Unlock()
 	r.attachmentFetchSink = sink
+}
+
+// SetDEKPublisher 设置会话内容 DEK 的本机出口（v0.8.5 §3.2）：start 成功后由
+// 连接层注册（SessionDEKManager.EnsureAndPublishDEK），失败只记日志不阻断 start。
+func (r *SessionRunner) SetDEKPublisher(pub func(ctx context.Context, sessionID string) error) {
+	r.dekSinkMu.Lock()
+	defer r.dekSinkMu.Unlock()
+	r.dekSink = pub
 }
 
 // syncModeInfo 读取 handle 的会话级 mode 目录并交给连接层上行。只有实现了
@@ -367,6 +379,17 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	r.handles[sessionID] = &runningSession{handle: handle, cancel: cancel}
 	r.mu.Unlock()
 	r.syncModeInfo(sessionID, handle) // v0.8.5 §3.4：新会话 mode 目录上行
+	// v0.8.5 §3.2：新会话内容 DEK 生成 + wrap 上行（连接层异步，失败不阻断 start）。
+	r.dekSinkMu.RLock()
+	dekPublish := r.dekSink
+	r.dekSinkMu.RUnlock()
+	if dekPublish != nil {
+		go func() {
+			if err := dekPublish(context.Background(), sessionID); err != nil {
+				r.logger.Warn("session DEK publish failed", "session", sessionID, "error", err)
+			}
+		}()
+	}
 
 	var first adapter.Event
 	var instanceID string

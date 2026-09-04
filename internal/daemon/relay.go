@@ -402,6 +402,49 @@ func (c *RelayClient) FetchAttachment(ctx context.Context, attachmentID string) 
 	return out, nil
 }
 
+// OwnerEncryptionKey 是 Relay owner-key 端点的投影（ADR-016 §2）。
+type OwnerEncryptionKey struct {
+	EncryptionPublicKey string `json:"encryption_public_key"`
+	DeviceID            string `json:"device_id"`
+}
+
+// FetchOwnerEncryptionKey 经 owner-key 端点获取会话 owner 的 encryption_public_key
+// 与设备 id（home Terminal 归属由 Relay 校验）。GET 幂等只读不签名。
+func (c *RelayClient) FetchOwnerEncryptionKey(ctx context.Context, sessionID string) (OwnerEncryptionKey, error) {
+	var out OwnerEncryptionKey
+	if strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.AccessToken) == "" {
+		return out, errors.New("relay base URL or daemon credential missing")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/daemon/sessions/"+sessionID+"/owner-key", nil)
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	response, err := c.restClient().Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return out, readRelayHTTPError(response)
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// PublishContentDEK 把会话 DEK 的 wrapped 载荷上行到 Relay（ADR-016 §3.1）。
+func (c *RelayClient) PublishContentDEK(ctx context.Context, sessionID, dekID string, wrapped []byte, recipientDeviceID string) error {
+	body := map[string]any{
+		"protocol_version":    daemonProtocolVersion,
+		"dek_id":              dekID,
+		"wrapped_dek":         wrapped,
+		"recipient_device_id": recipientDeviceID,
+	}
+	return c.putJSON(ctx, "/v1/daemon/sessions/"+sessionID+"/content-dek", body, &struct{}{})
+}
+
 func (c *RelayClient) UploadUsage(ctx context.Context, usage RelayUsage) error {
 	body := map[string]any{
 		"usage_key": usage.UsageKey, "provider": usage.Provider, "utc_day": usage.UTCDay,
@@ -489,6 +532,48 @@ func (c *RelayClient) Stream(ctx context.Context, afterDeliverySeq int64, consum
 
 func (c *RelayClient) postJSON(ctx context.Context, path string, body any, output any) error {
 	return c.postJSONSigned(ctx, path, body, "", output)
+}
+
+// putJSON 发送 PUT JSON；Signer 非 nil 时附加 Terminal 签名（daemon body PUT 端点用）。
+func (c *RelayClient) putJSON(ctx context.Context, path string, body any, output any) error {
+	return c.putJSONSigned(ctx, path, body, "", output)
+}
+
+func (c *RelayClient) putJSONSigned(ctx context.Context, path string, body any, nonceOverride string, output any) error {
+	if strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.AccessToken) == "" {
+		return errors.New("relay base URL or daemon credential missing")
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	if c.Signer != nil {
+		raw, err = c.signBody(path, raw, nonceOverride)
+		if err != nil {
+			return err
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := c.restClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return readRelayHTTPError(response)
+	}
+	if output == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(output); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // postJSONSigned 发送 POST JSON；Signer 非 nil 时为请求附加 v0.6 Terminal 签名。
@@ -669,8 +754,20 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 	if runner != nil {
 		runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
 		runner.SetModeInfoSink(loop.enqueueModeInfo)
+		runner.SetDEKPublisher(loop.enqueueSessionDEK)
 	}
 	return loop
+}
+
+// enqueueSessionDEK 是 runner 会话内容 DEK 的本机出口（v0.8.5 §3.2 / ADR-016）：
+// 首次启动该会话时生成并持久化本机 DEK，随后 wrap 上行到 Relay（owner 设备读取用）。
+// 上行失败只记日志（本机 DEK 已就绪供解密；下次 start 幂等重试）。
+func (l *RelayLoop) enqueueSessionDEK(ctx context.Context, sessionID string) error {
+	if l.Client == nil || l.Store == nil {
+		return nil
+	}
+	manager := NewSessionDEKManager(l.Store, l.Client)
+	return manager.EnsureAndPublishDEK(ctx, sessionID)
 }
 
 // enqueueModeInfo 是 runner mode 目录的本机出口（v0.8.5 §3.4）：把会话级

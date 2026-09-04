@@ -281,6 +281,24 @@ type contentDEKPutRequest struct {
 	Signature         authz.TerminalSignature `json:"signature"`
 }
 
+// ownerKeyView 是 owner 公钥的最小安全投影：只含 encryption_public_key 本体。
+type ownerKeyView struct {
+	EncryptionPublicKey string `json:"encryption_public_key"`
+	DeviceID            string `json:"device_id"`
+}
+
+// handleDaemonOwnerEncryptionKey 是 Daemon 获取会话 owner 公钥的端点（ADR-016 §2）：
+// home Terminal 在会话启动时用它 wrap 本机 DEK 并上行；GET 幂等只读不签名。
+func (a *API) handleDaemonOwnerEncryptionKey(c *gin.Context) {
+	subj := subject(c)
+	key, deviceID, err := a.Daemons.OwnerEncryptionKeyForSession(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, ownerKeyView{EncryptionPublicKey: key, DeviceID: deviceID})
+}
+
 // handleDaemonPutContentDEK 是 Daemon 鉴权的会话内容 DEK 登记端点（ADR-016 §3.1）。
 // 归属与幂等校验在 domain（home Terminal、recipient active owner、异 id 拒绝）。
 func (a *API) handleDaemonPutContentDEK(c *gin.Context) {

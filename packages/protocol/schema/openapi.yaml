@@ -1238,6 +1238,31 @@ paths:
         "426":
           description: terminal protocol is below the supported compatibility window
 
+  /v1/daemon/sessions/{id}/owner-key:
+    get:
+      operationId: getDaemonSessionOwnerKey
+      description: 仅拥有该会话的 home Terminal 可调用（v0.8.5 §3.2 / ADR-016 §2）。返回会话 owner（active android_owner）的 encryption_public_key 与设备 id，供 Daemon wrap 本机生成的会话 DEK 后上行；无 owner 密钥 → 404（fail-closed）。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: owner encryption key projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionOwnerKey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: no active owner key for this session
   /v1/daemon/sessions/{id}/content-dek:
     put:
       operationId: putDaemonSessionContentDEK
@@ -2307,6 +2332,14 @@ components:
         wrapped_dek:
           type: string
           format: byte
+    SessionOwnerKey:
+      type: object
+      required: [encryption_public_key, device_id]
+      properties:
+        encryption_public_key:
+          type: string
+        device_id:
+          type: string
     DaemonContentDEKPutRequest:
       type: object
       required: [protocol_version, dek_id, wrapped_dek, recipient_device_id, signature]

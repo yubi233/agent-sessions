@@ -125,3 +125,40 @@ func firstOwnerDeviceID(t *testing.T, env *testEnv, token string) string {
 	}
 	return ""
 }
+
+// V085-01c（ADR-016 §2）：home Terminal 获取会话 owner 公钥端点。
+// 返回 active android_owner 的 encryption_public_key + device_id；非 home Terminal 403。
+func TestV085OwnerEncryptionKeyEndpoint(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v085-ownerkey@test.dev")
+	// registerAs 的 owner 无密钥；bootstrap 一个带 encryption_public_key 的 owner 设备。
+	bootstrapW1Owner(t, env, owner.AccessToken)
+	terminal := env.pairTerminal(t, owner, "v085-ownerkey-terminal")
+	terminalID := daemonHello(t, env, terminal.AccessToken)
+	_ = terminalID
+	sessionID, _ := env.createBoundSession(t, owner, terminalID, "v085-ownerkey")
+
+	// home Terminal 读取 owner 公钥。
+	read := env.do(t, http.MethodGet, "/v1/daemon/sessions/"+sessionID+"/owner-key", nil, terminal.AccessToken)
+	if read.Code != http.StatusOK {
+		t.Fatalf("owner key status=%d body=%s", read.Code, read.Body.String())
+	}
+	var view struct {
+		EncryptionPublicKey string `json:"encryption_public_key"`
+		DeviceID            string `json:"device_id"`
+	}
+	if err := json.Unmarshal(read.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v body=%s", err, read.Body.String())
+	}
+	if view.EncryptionPublicKey == "" || view.DeviceID == "" {
+		t.Fatalf("owner key empty: %+v", view)
+	}
+
+	// 非 home Terminal 403。
+	other := env.pairTerminal(t, owner, "v085-ownerkey-other")
+	daemonHello(t, env, other.AccessToken)
+	forbidden := env.do(t, http.MethodGet, "/v1/daemon/sessions/"+sessionID+"/owner-key", nil, other.AccessToken)
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("other terminal status=%d body=%s", forbidden.Code, forbidden.Body.String())
+	}
+}
