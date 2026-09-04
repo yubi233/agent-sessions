@@ -364,13 +364,14 @@
         "session/prompt 携带文本 + 32x16 纯红 PNG（zlib 内联生成 canonical base64，RGB 220,30,30）→ 真实模型回合 committed（stopReason=end_turn）。",
         "断言 image_prompt_accepted / image_turn_committed / real_model_saw_image_content（整段回复匹配 /红|red/i），投影 usage_update 与 usage-timing _meta；transcript 脱敏（不落 prompt/回复全文/图片 base64/凭据/完整 session id）。"
       ],
-      "expected": "6/6 checks PASS、报告 status=passed（real_model=true、real_upstream=true、fixture_data=false、credential_source=env）；2026-09-04 实测：单请求单回合 usage in 238/out 1017 tokens、turn 65.26s（ttft 26.4s）、回复即颜色中文名。",
+      "expected": "6/6 checks PASS、报告 status=passed（real_model=true、real_upstream=true、fixture_data=false、credential_source=env）；2026-09-04 实测：单请求单回合 usage in 238/out 1017 tokens、turn 65.26s（ttft 26.4s）、回复即颜色中文名。同日追加复测 gpt-5.6-terra @ api.paktf.sbs（生产 openai provider 数值）同 6/6 passed：usage in 1972/out 25、turn 5.96s、回复 sha256 与 grok 轮一致。",
       "cleanup": [
         "桥 SIGTERM、临时目录删除；报告/transcript 落 e2e-verify/reports/ADAPTER-DSH/（gitignored，不入库）"
       ],
       "evidence": [
         "e2e-verify/real/v085-real-image-gate.mjs",
         "e2e-verify/reports/ADAPTER-DSH/v085-real-image-2026-09-04T15-21-50-150Z.json",
+        "e2e-verify/reports/ADAPTER-DSH/v085-real-image-2026-09-04T15-55-55-656Z.json",
         "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.24",
         "docs/zh/迭代计划/迭代计划v0.8.5.md"
       ],
