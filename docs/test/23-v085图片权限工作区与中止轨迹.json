@@ -38,22 +38,25 @@
     {
       "id": "V085-02",
       "title": "会话内容密钥 wrap 下发、无密钥 fail-closed、撤销后禁选、Relay 不见明文",
-      "status": "planned",
+      "status": "partial",
       "phase": "P0",
       "category": "crypto/key_distribution",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "go test ./internal/daemon -run TestSessionRunnerSendRoutesAttachmentRefs -count=1",
+        "DEK 解密接线 + 移动端 refs 发送 + 真实桥 overlay（后续阶段）"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "internal/daemon/runner.go(fixturePayload.Attachments/attachmentFetchSink/sendMessage refs 分支)",
+        "internal/daemon/relay.go(FetchAttachment)",
+        "internal/daemon/runner_test.go(TestSessionRunnerSendRoutesAttachmentRefs 等 4 项)",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.16"
       ]
     },
     {
