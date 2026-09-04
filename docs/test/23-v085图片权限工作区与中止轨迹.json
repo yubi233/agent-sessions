@@ -86,22 +86,25 @@
     {
       "id": "V085-04",
       "title": "Daemon 鉴权附件读取端点、lease/fencing、哈希不符拒绝、字节不落日志",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "daemon_attachment_read",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "go test ./internal/relay -run TestV085DaemonAttachmentRead -count=1",
+        "go test ./internal/relay -run TestV085ContentDEK -count=1"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "internal/relay/attachment_read_contract_test.go（home Terminal 读取/越权 403/未完成拒）",
+        "internal/relay/content_dek_contract_test.go（无 DEK 404/异 id 409）",
+        "internal/httpapi/error.go（密文不回显/脱敏）",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.9/§4.15"
       ]
     },
     {
@@ -131,22 +134,25 @@
     {
       "id": "V085-06",
       "title": "拒绝矩阵：text-only/缺服务/MIME/超限/无授权/跨 session，逐分支脱敏原因",
-      "status": "planned",
+      "status": "partial",
       "phase": "P1",
       "category": "image_rejection_matrix",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "cd deepseek-harness && npx vitest run packages/acp/acp/tests/content.spec.ts packages/acp/acp/tests/v083-capabilities.spec.ts（21 passed）",
+        "真实 image-capable 模型部署 text-only 对照与超限 headed 复验待授权"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "桥 content.spec.ts + v083-capabilities.spec.ts（21 项：image 广告双条件/缺 attachments 服务 false/模型 inputModalities 不支持 false/MIME 白名单）",
+        "e2e-verify/real/dsh-v083-overlay.mjs（text-only 生产组合 image=false 负向广告）",
+        "internal/daemon/runner_test.go（哈希不符拒绝/refs+images 互斥/无 sink fail-closed）",
+        "internal/relay（无引用授权 403）"
       ]
     },
     {
@@ -302,43 +308,45 @@
     {
       "id": "V085-13",
       "title": "回归：OpenCode/Codex、V081–V084 suites、fixture 对齐",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "regression",
       "priority": "P1",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "task test:v085:local（2026-09-04 全绿）"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "task test:v085:local 全绿（docs/check/Go 契约/Flutter/Web/overlay/中止回归）",
+        "go test ./internal/relay ./internal/daemon ./internal/domain ./internal/store 全绿"
       ]
     },
     {
       "id": "V085-14",
       "title": "可见 gate：Flutter（权限/图片/显示四项）+ headed Chrome 只读投影；审计无明文",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "visible_gate",
       "priority": "P1",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "node e2e-verify/run.mjs --suite v085-readonly-workspaces-web",
+        "node e2e-verify/mobile/run-macos.mjs --visual-scenario VISUAL-MOBILE-38"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "e2e-verify/suites/v085-readonly-workspaces-web.mjs（headed passed）",
+        "VISUAL-MOBILE-38 可见 gate（reports/2026-09-04T12-02-28-023Z）",
+        "record:v085 录屏（37+38 MP4）"
       ]
     },
     {
