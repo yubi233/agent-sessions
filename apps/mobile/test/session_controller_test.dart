@@ -594,8 +594,51 @@ void main() {
 
       await controller.stopStreaming(deviceId: _ownerDeviceId, canWrite: true);
       expect(controller.selectedSession?.status, MobileSessionStatus.stopped);
-      expect(controller.timeline.any((event) => event.label == '已停止'), isTrue);
+      expect(controller.timeline.any((event) => event.label == '已中止'), isTrue);
+      final aborted = controller.timeline.firstWhere(
+        (event) => event.label == '已中止',
+      );
+      expect(aborted.createdAt, _now);
       expect(controller.errorMessage, isNull);
+    });
+
+    test('V085-22 stopStreaming 在 abort 命令 failed 时浮出失败且不伪装中止', () async {
+      // 真实链路中 Abort 命令回执与 canonical 投影分开到达；若执行端以 failed
+      // 收口（如 Provider 中止失败），客户端必须浮出可见错误，不能把受理当成功。
+      final relay = _FailingCommandRelay(clock: () => _now);
+      await _prepareOwner(relay);
+      final controller = SessionController(
+        relay: relay,
+        clock: () => _now,
+        random: _DeterministicRandom(),
+      );
+      await controller.initialize();
+      // codex 声明 abort capability；建立会话并获取 lease 后直接提交 abort，
+      // 让 abort 命令走完整的回执确认链路（父类 fixture 命令即时 succeeded，
+      // 本 relay 把终态固定为 failed 以覆盖失败分支）。
+      final created = await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'codex',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      expect(created, isNotNull);
+      await controller.acquireSelectedLease(
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      await controller.stopStreaming(deviceId: _ownerDeviceId, canWrite: true);
+
+      // failed 终态必须浮出且不产生“已中止”伪证轨迹。
+      expect(
+        controller.errorMessage,
+        contains('中止命令未成功'),
+      );
+      expect(
+        controller.timeline.any((event) => event.label == '已中止'),
+        isFalse,
+      );
     });
 
     test('start 后可通过 kill 结束 fixture 进程并进入 stopped', () async {

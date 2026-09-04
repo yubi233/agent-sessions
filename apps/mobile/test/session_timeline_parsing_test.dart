@@ -91,6 +91,62 @@ void main() {
     expect(plain.httpStatus, 0);
   });
 
+  test('Relay 顶层 created_at_unix_ms 解析为 canonical 时间', () {
+    final event = RelaySessionEvent.fromRelayJson({
+      'event_seq': 10,
+      'event_type': 'session.aborted',
+      'created_at_unix_ms': DateTime.utc(2026, 8, 14, 9, 30, 12)
+          .millisecondsSinceEpoch,
+      'envelope': {
+        'fixture_payload': {'kind': 'system_notice', 'label': '已中止'},
+      },
+    });
+    expect(event.createdAt, DateTime.utc(2026, 8, 14, 9, 30, 12));
+    final parsed = SessionTimelineEvent.fromRelayEvent(event);
+    expect(parsed.createdAt, event.createdAt);
+  });
+
+  test('payload created_at 优先于 Relay 顶层时间', () {
+    final relayTime = DateTime.utc(2026, 8, 14, 9, 30, 12);
+    final payloadTime = DateTime.utc(2026, 8, 14, 9, 30, 15);
+    final parsed = SessionTimelineEvent.fromRelayEvent(
+      RelaySessionEvent(
+        sequence: 11,
+        eventType: 'session.aborted',
+        createdAt: relayTime,
+        envelope: {
+          'fixture_payload': {
+            'kind': 'system_notice',
+            'label': '已中止',
+            'created_at': payloadTime.toIso8601String(),
+          },
+        },
+      ),
+    );
+    expect(parsed.createdAt, payloadTime);
+  });
+
+  test('不可解密占位事件也保留顶层时间，缺失时保持未知', () {
+    final time = DateTime.utc(2026, 8, 14, 9, 30, 18);
+    final withTime = SessionTimelineEvent.fromRelayEvent(
+      RelaySessionEvent(
+        sequence: 12,
+        eventType: 'future.event',
+        createdAt: time,
+        envelope: const {'alg': 'fixture-aead', 'ciphertext': 'opaque'},
+      ),
+    );
+    final withoutTime = SessionTimelineEvent.fromRelayEvent(
+      const RelaySessionEvent(
+        sequence: 13,
+        eventType: 'future.event',
+        envelope: {'alg': 'fixture-aead', 'ciphertext': 'opaque'},
+      ),
+    );
+    expect(withTime.createdAt, time);
+    expect(withoutTime.createdAt, isNull);
+  });
+
   test('未知 kind 与缺失 fixture 不崩溃并统一降级为占位', () {
     final unknown = parse(6, 'future.event', {
       'kind': 'hologram_message',

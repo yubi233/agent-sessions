@@ -476,6 +476,7 @@ class RelaySessionEvent {
     required this.sequence,
     required this.eventType,
     required this.envelope,
+    this.createdAt,
   });
 
   factory RelaySessionEvent.fromRelayJson(Map<String, dynamic> json) {
@@ -488,12 +489,14 @@ class RelaySessionEvent {
       sequence: sequence.toInt(),
       eventType: _requiredSessionString(json, 'event_type'),
       envelope: Map<String, dynamic>.from(envelope),
+      createdAt: _dateTimeFromUnixMillis(json['created_at_unix_ms']),
     );
   }
 
   final int sequence;
   final String eventType;
   final Map<String, dynamic> envelope;
+  final DateTime? createdAt;
 }
 
 class SessionSnapshot {
@@ -865,6 +868,7 @@ class SessionTimelineEvent {
         sequence: event.sequence,
         kind: SessionTimelineKind.encryptedPlaceholder,
         label: '已收到加密会话事件',
+        createdAt: event.createdAt,
       );
     }
     final payload = Map<String, dynamic>.from(fixture);
@@ -883,7 +887,7 @@ class SessionTimelineEvent {
       permission: permission,
       question: question,
       messageId: _nullableString(payload['message_id']),
-      createdAt: _nullableDateTime(payload['created_at']),
+      createdAt: _nullableDateTime(payload['created_at']) ?? event.createdAt,
       copyText: _nullableString(payload['copy_text']),
       completedTurn: payload['completed_turn'] == true,
       forkAvailable: payload['fork_available'] == true,
@@ -1065,6 +1069,11 @@ DateTime? _nullableDateTimeFromMillis(Object? value) =>
     value is num && value.toInt() > 0
     ? DateTime.fromMillisecondsSinceEpoch(value.toInt(), isUtc: true)
     : null;
+
+// Relay event timestamps are canonical generation times in Unix milliseconds.
+// Invalid or absent values intentionally remain unknown for historical events.
+DateTime? _dateTimeFromUnixMillis(Object? value) =>
+    _nullableDateTimeFromMillis(value);
 
 List<String> _stringList(Object? value) => value is List
     ? value

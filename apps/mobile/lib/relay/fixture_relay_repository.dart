@@ -1494,8 +1494,8 @@ class FixtureRelayRepository implements RelayRepository {
       eventType: 'session.aborted',
       payload: const {
         'kind': 'system_notice',
-        'label': '已停止',
-        'text': 'Android 控制端已停止当前 fixture 流。',
+        'label': '已中止',
+        'text': 'Android 控制端已中止当前 fixture 回合。',
       },
       now: now,
     );
@@ -2024,11 +2024,14 @@ class _FixtureSessionState {
     required DateTime now,
   }) {
     final sequence = nextSequence;
+    final eventPayload = Map<String, dynamic>.from(payload);
+    eventPayload.putIfAbsent('created_at', () => now.toIso8601String());
     events.add(
       RelaySessionEvent(
         sequence: sequence,
         eventType: eventType,
-        envelope: {'fixture_payload': payload},
+        envelope: {'fixture_payload': eventPayload},
+        createdAt: now,
       ),
     );
     session = session.copyWith(

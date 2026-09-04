@@ -1044,16 +1044,47 @@ class SessionController extends ChangeNotifier {
       kind: SessionCommandKind.abort,
       deviceId: deviceId!,
     );
-    // 中断受理即收敛本地在途状态：回合在途复位；乐观回显若尚未被 canonical
-    // user.message 并入（中断先于投递落地），按"未送达"撤回，避免出现一条
-    // 永远等不到回复的幻影消息；最后补拉快照，让"生成中"状态行立即归位。
-    _turnInFlight = false;
-    _pendingOutgoingBySession.remove(sessionId);
-    _errorMessage = null;
-    notifyListeners();
     if (accepted) {
-      await _bestEffortRefreshAfterCommandFailure(sessionId);
+      // Abort 的命令回执和 canonical session.aborted/stopped 投影可能分开
+      // 抵达。先确认命令成功，再用有界增量轮询等 Relay 投影完成，避免刷新过早
+      // 错过可见的“已中止”轨迹。
+      _turnInFlight = false;
+      _pendingOutgoingBySession.remove(sessionId);
+      _errorMessage = null;
+      notifyListeners();
+      await _awaitAbortProjection(sessionId);
     }
+  }
+
+  Future<void> _awaitAbortProjection(String sessionId) async {
+    const attempts = 12;
+    var latestCursor = _cursorFor(sessionId);
+    for (var i = 0; i < attempts; i++) {
+      try {
+        final snapshot = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: latestCursor,
+        );
+        if (_selectedSessionId != sessionId) return;
+        _mergeSnapshot(snapshot, appendTimeline: true);
+        latestCursor = _cursorFor(sessionId);
+        final hasAbortedEvent = snapshot.events.any((event) {
+          if (event.eventType == 'session.aborted') return true;
+          final parsed = SessionTimelineEvent.fromRelayEvent(event);
+          return parsed.label == '已中止';
+        });
+        if (hasAbortedEvent ||
+            snapshot.session.status == MobileSessionStatus.stopped) {
+          return;
+        }
+      } catch (_) {
+        // Keep the local state recoverable; the next foreground/cursor refresh
+        // can still pick up a delayed canonical event.
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    // Timeout is intentionally silent. A later cursor recovery may still add
+    // the canonical abort record; this path never claims success on its behalf.
   }
 
   Future<MobileSession?> forkFromMessage({
@@ -2091,6 +2122,15 @@ class SessionController extends ChangeNotifier {
           throw RelayFailure(
             RelayFailureKind.protocol,
             '消息发送失败（命令 ${terminal.status}），请查看时间线中的失败提示。',
+          );
+        }
+      }
+      if (kind == SessionCommandKind.abort) {
+        final terminal = await _awaitCommandReceipt(receipt.id);
+        if (terminal != null && terminal.status != 'succeeded') {
+          throw RelayFailure(
+            RelayFailureKind.protocol,
+            '中止命令未成功（${terminal.status}），当前回合仍可能继续。',
           );
         }
       }

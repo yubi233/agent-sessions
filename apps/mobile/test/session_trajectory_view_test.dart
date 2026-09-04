@@ -60,7 +60,9 @@ void main() {
     );
 
     // 点击可见记录行打开检查器（取最近窗口靠前的一行，避免底部越界）。
-    final firstVisibleRow = find.byKey(const Key('trajectory-row-trajectory:3'));
+    final firstVisibleRow = find.byKey(
+      const Key('trajectory-row-trajectory:3'),
+    );
     await tester.ensureVisible(firstVisibleRow);
     await tester.pumpAndSettle();
     await tester.tap(firstVisibleRow);
@@ -76,10 +78,7 @@ void main() {
       find.byKey(const Key('session-trajectory-inspector-close')),
     );
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('session-trajectory-inspector')),
-      findsNothing,
-    );
+    expect(find.byKey(const Key('session-trajectory-inspector')), findsNothing);
 
     // 加载更早轨迹后，最近窗口扩展，按钮消失。
     await tester.scrollUntilVisible(
@@ -92,9 +91,7 @@ void main() {
           )
           .first,
     );
-    await tester.tap(
-      find.byKey(const Key('session-trajectory-load-older')),
-    );
+    await tester.tap(find.byKey(const Key('session-trajectory-load-older')));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('session-trajectory-load-older')),
@@ -156,9 +153,7 @@ void main() {
           )
           .first,
     );
-    await tester.tap(
-      find.byKey(const Key('session-trajectory-mode-toggle')),
-    );
+    await tester.tap(find.byKey(const Key('session-trajectory-mode-toggle')));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('session-trajectory-range-clear')),
@@ -166,9 +161,69 @@ void main() {
     );
   });
 
-  testWidgets('MOBILE-V05-11/P6-B：搜索索引节流保留 streaming partial', (
-    tester,
-  ) async {
+  testWidgets('V085-20/21：轨迹标题显示本地时间，缺失时间显示未知且长名称可省略', (tester) async {
+    final records = [
+      TrajectoryRecord(
+        key: 'trajectory:aborted',
+        sequence: 1,
+        kind: ConversationNodeKind.notice,
+        label: '已中止',
+        createdAt: DateTime.utc(2026, 8, 14, 9, 30, 12),
+        turnId: 'turn-1',
+      ),
+      const TrajectoryRecord(
+        key: 'trajectory:legacy',
+        sequence: 2,
+        kind: ConversationNodeKind.encrypted,
+        label: '历史加密事件',
+        turnId: 'turn-1',
+      ),
+      TrajectoryRecord(
+        key: 'trajectory:long',
+        sequence: 3,
+        kind: ConversationNodeKind.notice,
+        label: '这是一个很长很长很长很长的系统通知名称',
+        createdAt: DateTime.utc(2026, 8, 14, 9, 30, 13),
+        turnId: 'turn-1',
+      ),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 260,
+            child: SessionTrajectoryView(
+              records: records,
+              inspectTarget: null,
+              onInspectConsumed: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final abortedRow = find.byKey(
+      const Key('trajectory-row-trajectory:aborted'),
+    );
+    final legacyRow = find.byKey(const Key('trajectory-row-trajectory:legacy'));
+    final longRow = find.byKey(const Key('trajectory-row-trajectory:long'));
+    await tester.ensureVisible(abortedRow);
+    await tester.pump();
+    final local = records.first.createdAt!.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    final ss = local.second.toString().padLeft(2, '0');
+    expect(find.textContaining('已中止 · $hh:$mm:$ss'), findsOneWidget);
+    await tester.ensureVisible(legacyRow);
+    await tester.pump();
+    expect(find.textContaining('历史加密事件 · 时间未知'), findsOneWidget);
+    await tester.ensureVisible(longRow);
+    await tester.pump();
+    expect(longRow, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('MOBILE-V05-11/P6-B：搜索索引节流保留 streaming partial', (tester) async {
     final items = records(count: 4);
     await tester.pumpWidget(
       MaterialApp(

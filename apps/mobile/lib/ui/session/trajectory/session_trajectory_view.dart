@@ -394,7 +394,11 @@ class _TrajectoryToolbar extends StatelessWidget {
             onChanged: onQueryChanged,
           ),
           const SizedBox(height: 6),
-          Row(
+          // 窄屏下筛选项允许换行，避免三个 FilterChip 把轨迹工具栏撑出屏幕；
+          // 轨迹行本身仍使用原有单行标题并由 Flexible 负责省略。
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
             children: [
               FilterChip(
                 key: const Key('session-trajectory-mode-toggle'),
@@ -402,14 +406,12 @@ class _TrajectoryToolbar extends StatelessWidget {
                 selected: equalWidth,
                 onSelected: onEqualWidth,
               ),
-              const SizedBox(width: 6),
               FilterChip(
                 key: const Key('session-trajectory-fold-turns'),
                 label: const Text('折叠轮次'),
                 selected: foldTurns,
                 onSelected: onFoldTurns,
               ),
-              const SizedBox(width: 6),
               FilterChip(
                 key: const Key('session-trajectory-fold-calls'),
                 label: const Text('折叠调用'),
@@ -437,6 +439,16 @@ class _TrajectoryRow extends StatelessWidget {
   final bool equalWidth;
   final bool selected;
   final VoidCallback onTap;
+
+  String _timeLabel() {
+    final value = record.createdAt;
+    if (value == null) return '时间未知';
+    final local = value.toLocal();
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    final ss = local.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -488,7 +500,7 @@ class _TrajectoryRow extends StatelessWidget {
                     children: [
                       Flexible(
                         child: Text(
-                          record.label,
+                          '${record.label} · ${_timeLabel()}',
                           style: theme.textTheme.titleSmall,
                         ),
                       ),
