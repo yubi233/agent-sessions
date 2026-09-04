@@ -285,7 +285,12 @@ tasks:
       - task: docs:verify
       - task: check
       - go test ./internal/daemon ./internal/store ./internal/domain ./internal/adapter/... -run 'Test(SessionRunnerAbort|RelayLoopAsyncSendAbort|RelayEventOutboxPreserves|SessionRunnerStartPersists|SessionRunnerSendFailureEmits|OpenEnsuresSessionEventCreatedAt|OpenFreshDatabaseHasSessionEventCreatedAt|Migrate)' -count=1
-      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_timeline_parsing_test.dart test/session_trajectory_view_test.dart --concurrency=1
+      # v0.8.5 主计划契约（V085-03/07/08/09/10/11/12）：附件读取端点、mode 目录、
+      # workspace 显示名与发现口径、usage timing、agent preset。
+      - go test ./internal/relay -run 'TestV085|TestV081SessionView|TestP3ATTACH01' -count=1
+      - go test ./internal/daemon -run 'TestDSHWorkspaceScanner|TestConfirmExistingDSHWorkspace' -count=1
+      - go test ./internal/adapter/dsh -run 'TestMapUsageUpdateCarriesTimingMeta|TestAgentPresetFromSessionStateMeta' -count=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_timeline_parsing_test.dart test/session_trajectory_view_test.dart test/session_stats_context_test.dart test/session_model_seat_test.dart test/dsh_mode_test.dart test/local_visual_fixture_test.dart --concurrency=1
       - pnpm --filter @agent-sessions/web test
       - pnpm --filter @agent-sessions/web build
       - git diff --check
