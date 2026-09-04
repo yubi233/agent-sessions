@@ -442,6 +442,10 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureSessionContentDEKColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -460,6 +464,13 @@ func ensureSessionPermissionModeColumns(db *sql.DB) error {
 		return err
 	}
 	return ensureTableColumn(db, "sessions", "agent_preset_id", `ALTER TABLE sessions ADD COLUMN agent_preset_id TEXT NOT NULL DEFAULT ''`)
+}
+
+// ensureSessionContentDEKColumn 补齐 sessions.content_dek_id（v0.8.5 §3.2 / ADR-016）：
+// 会话内容 DEK 的 opaque id（非敏感；wrapped blob 在 device_key_wraps 表），
+// 无 DEK 会话保持空串（fail-closed）。重复执行幂等。
+func ensureSessionContentDEKColumn(db *sql.DB) error {
+	return ensureTableColumn(db, "sessions", "content_dek_id", `ALTER TABLE sessions ADD COLUMN content_dek_id TEXT NOT NULL DEFAULT ''`)
 }
 
 // ensureArchivedAtColumn 用存在性检查补齐 sessions.archived_at_unix_ms。

@@ -683,6 +683,31 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
+  /v1/sessions/{id}/content-dek:
+    get:
+      operationId: getSessionContentDEK
+      description: owner/write 设备读取本会话自己的 wrapped DEK（v0.8.5 §3.2 / ADR-016 §3.2）。只回当前 bearer 设备的 wrap；无 DEK/无本设备 wrap → 404（fail-closed，客户端显示「等待会话附件密钥」）；响应不回显明文、不落日志。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: wrapped dek projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionContentDEK"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: no content dek for this session or device
   /v1/sessions/{id}/snapshot:
     get:
       operationId: getSessionSnapshot
@@ -1213,6 +1238,35 @@ paths:
         "426":
           description: terminal protocol is below the supported compatibility window
 
+  /v1/daemon/sessions/{id}/content-dek:
+    put:
+      operationId: putDaemonSessionContentDEK
+      description: 仅拥有该会话的 home Terminal 可调用（v0.8.5 §3.2 / ADR-016 §3.1）。把会话内容 DEK 的 wrapped blob 上行登记；Relay 只存 device_key_wraps 不解释内容，会话 content_dek_id 关联；同 dek_id 幂等、异 dek_id 409 拒绝（防降级覆盖）；recipient 必须是同账号 active android_owner。wrapped_dek 不回显、不落日志。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonContentDEKPutRequest"
+      responses:
+        "200":
+          description: stored
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: session not found
+        "409":
+          description: content dek conflict
   /v1/daemon/attachments/{id}:
     get:
       operationId: readDaemonAttachment
@@ -2240,6 +2294,32 @@ components:
         protocol_version:
           type: integer
           minimum: 1
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
+    SessionContentDEK:
+      type: object
+      required: [dek_id, recipient_device_id, wrapped_dek]
+      properties:
+        dek_id:
+          type: string
+        recipient_device_id:
+          type: string
+        wrapped_dek:
+          type: string
+          format: byte
+    DaemonContentDEKPutRequest:
+      type: object
+      required: [protocol_version, dek_id, wrapped_dek, recipient_device_id, signature]
+      properties:
+        protocol_version:
+          type: integer
+        dek_id:
+          type: string
+        wrapped_dek:
+          type: string
+          format: byte
+        recipient_device_id:
+          type: string
         signature:
           $ref: "#/components/schemas/TerminalSignature"
     DaemonAttachmentRead:

@@ -476,6 +476,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}/content-dek": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description owner/write 设备读取本会话自己的 wrapped DEK（v0.8.5 §3.2 / ADR-016 §3.2）。只回当前 bearer 设备的 wrap；无 DEK/无本设备 wrap → 404（fail-closed，客户端显示「等待会话附件密钥」）；响应不回显明文、不落日志。 */
+        get: operations["getSessionContentDEK"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions/{id}/snapshot": {
         parameters: {
             query?: never;
@@ -757,6 +774,23 @@ export interface paths {
         get?: never;
         /** @description 仅拥有该会话的 home Terminal 可调用（v0.8.5 §3.4）。Daemon 把会话级 permission mode 目录快照（mode_id + available_permission_modes）上行同步到 Relay；Relay 只存快照不解释语义，经 GET /v1/sessions/{id}/controls 以 mode id 字符串数组下发，供移动端权限模式下拉渲染。目录为空时 controls 不下发字段，客户端维持禁用。 */
         put: operations["syncDaemonSessionModes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/daemon/sessions/{id}/content-dek": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description 仅拥有该会话的 home Terminal 可调用（v0.8.5 §3.2 / ADR-016 §3.1）。把会话内容 DEK 的 wrapped blob 上行登记；Relay 只存 device_key_wraps 不解释内容，会话 content_dek_id 关联；同 dek_id 幂等、异 dek_id 409 拒绝（防降级覆盖）；recipient 必须是同账号 active android_owner。wrapped_dek 不回显、不落日志。 */
+        put: operations["putDaemonSessionContentDEK"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1288,6 +1322,20 @@ export interface components {
         DaemonHeartbeatRequest: {
             protocol_version: number;
             signature?: components["schemas"]["TerminalSignature"];
+        };
+        SessionContentDEK: {
+            dek_id: string;
+            recipient_device_id: string;
+            /** Format: byte */
+            wrapped_dek: string;
+        };
+        DaemonContentDEKPutRequest: {
+            protocol_version: number;
+            dek_id: string;
+            /** Format: byte */
+            wrapped_dek: string;
+            recipient_device_id: string;
+            signature: components["schemas"]["TerminalSignature"];
         };
         DaemonAttachmentRead: {
             attachment_id: string;
@@ -2411,6 +2459,37 @@ export interface operations {
             409: components["responses"]["Conflict"];
         };
     };
+    getSessionContentDEK: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description wrapped dek projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionContentDEK"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description no content dek for this session or device */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getSessionSnapshot: {
         parameters: {
             query?: {
@@ -2952,6 +3031,46 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             /** @description terminal protocol is below the supported compatibility window */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putDaemonSessionContentDEK: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonContentDEKPutRequest"];
+            };
+        };
+        responses: {
+            /** @description stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description session not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description content dek conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

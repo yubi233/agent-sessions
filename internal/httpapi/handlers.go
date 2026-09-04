@@ -51,6 +51,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.GET("/sessions", a.handleListSessions)
 		auth.GET("/audit", a.handleListAudit)
 		auth.GET("/sessions/:id/controls", a.handleSessionControls)
+		// v0.8.5 §3.2 / ADR-016：owner 读取会话内容密钥 wrap（只回本设备）。
+		auth.GET("/sessions/:id/content-dek", a.handleSessionContentDEK)
 		auth.GET("/sessions/:id/snapshot", a.handleSessionSnapshot)
 		auth.GET("/sessions/:id/feedback", a.handleListMessageFeedback)
 		auth.GET("/sessions/:id/feedback/:messageID", a.handleGetMessageFeedback)
@@ -132,6 +134,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.PUT("/sessions/:id/modes", a.handleDaemonSessionModes)
 		// v0.8.5 §3.3：Daemon 鉴权附件密文只读端点（归属校验在 domain，GET 幂等只读）。
 		daemon.GET("/attachments/:id", a.handleDaemonReadAttachment)
+		// v0.8.5 §3.2 / ADR-016：home Terminal 上行会话内容 DEK wrap。
+		daemon.PUT("/sessions/:id/content-dek", a.handleDaemonPutContentDEK)
 
 		// Usage（ADR-010）：Terminal 上传白名单计数，账号只读聚合摘要。
 		daemon.POST("/usage/events", a.handleUsageUpload)
@@ -589,6 +593,28 @@ func (a *API) handleListProjects(c *gin.Context) {
 
 // handleSessionControls 返回会话 composer 可安全展示的白名单控制投影。
 // 真实 Plan/Goal/Skill 正文仍只能来自客户端已解密事件；这里不返回 prompt、回复或 Provider payload。
+// contentDEKView 是 owner 读取 wrapped DEK 的最小响应（ADR-016 §3.2）。
+// wrapped_dek 只回给请求设备自身；响应不回显明文与可识别元数据。
+type contentDEKView struct {
+	DEKID       string `json:"dek_id"`
+	RecipientID string `json:"recipient_device_id"`
+	WrappedDEK  []byte `json:"wrapped_dek"`
+}
+
+// handleSessionContentDEK 是 owner/write 读取会话内容密钥 wrap 的端点（ADR-016 §3.2）。
+// 无 DEK/无本设备 wrap → 404（fail-closed，客户端显示「等待会话附件密钥」）。
+func (a *API) handleSessionContentDEK(c *gin.Context) {
+	subj := subject(c)
+	projection, err := a.Attachments.ContentDEKForSession(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, contentDEKView{
+		DEKID: projection.DEKID, RecipientID: projection.RecipientID, WrappedDEK: projection.WrappedDEK,
+	})
+}
+
 func (a *API) handleSessionControls(c *gin.Context) {
 	sessionID := c.Param("id")
 	projection, err := a.Usage.SessionProjection(c.Request.Context(), subject(c).AccountID, sessionID)

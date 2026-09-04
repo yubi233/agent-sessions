@@ -101,6 +101,8 @@ type Repository interface {
 	SetSessionPermissionModes(ctx context.Context, id, modeID, modesJSON string) error
 	// SetSessionAgentPreset 保存会话 joined 的 DSH agent preset id 快照（v0.8.5 §3.8）。
 	SetSessionAgentPreset(ctx context.Context, id, presetID string) error
+	// SetSessionContentDEK 记录会话内容 DEK 的 opaque id（ADR-016）；空串清除。
+	SetSessionContentDEK(ctx context.Context, id, dekID string) error
 	SessionByParentForkKey(ctx context.Context, parentSessionID, idempotencyKey string) (SessionRow, error)
 	CreateInstance(ctx context.Context, i InstanceRow) error
 	InstanceByID(ctx context.Context, id string) (InstanceRow, error)
@@ -408,6 +410,9 @@ type SessionRow struct {
 	AvailablePermissionModesJSON string
 	// AgentPresetID 是会话实际 joined 的 DSH agent preset（v0.8.5 §3.8，只读投影）。
 	AgentPresetID string
+	// ContentDEKID 是会话内容 DEK 的 opaque id（v0.8.5 §3.2 / ADR-016）；空串表示
+	// 尚无内容密钥（附件 fail-closed）。wrapped blob 在 device_key_wraps 表，不在此列。
+	ContentDEKID string
 }
 
 // InstanceRow 是 session_instances 表的行投影。

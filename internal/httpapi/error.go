@@ -83,6 +83,10 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "attachment not found")
 	case errors.Is(err, domain.ErrAttachmentConflict), errors.Is(err, domain.ErrAttachmentAlreadyClosed):
 		return http.StatusConflict, protocol.NewError(protocol.ErrIdempotencyConflict, "attachment upload conflict")
+	case errors.Is(err, domain.ErrContentDEKNotFound):
+		return http.StatusNotFound, protocol.NewError(protocol.ErrInvalidRequest, "content dek not found")
+	case errors.Is(err, domain.ErrContentDEKConflict):
+		return http.StatusConflict, protocol.NewError(protocol.ErrIdempotencyConflict, "content dek conflict")
 	case errors.Is(err, domain.ErrAttachmentIncomplete):
 		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "attachment upload incomplete")
 	case errors.Is(err, domain.ErrAttachmentInvalid), errors.Is(err, domain.ErrAttachmentChunkOrder):

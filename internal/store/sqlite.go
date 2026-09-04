@@ -587,11 +587,11 @@ func (r *sqliteRepo) SessionByID(ctx context.Context, id string) (SessionRow, er
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id
 		   FROM sessions WHERE id=?`, id).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil
@@ -608,7 +608,7 @@ func (r *sqliteRepo) ListArchivedSessions(ctx context.Context, accountID string)
 func (r *sqliteRepo) ListRunningSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
 	const query = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,last_activity_at_unix_ms,
-		permission_mode,available_permission_modes,agent_preset_id
+		permission_mode,available_permission_modes,agent_preset_id,content_dek_id
 		FROM sessions WHERE account_id=? AND status='running' ORDER BY last_activity_at_unix_ms ASC, id ASC`
 	return r.scanSessions(ctx, query, accountID)
 }
@@ -616,7 +616,7 @@ func (r *sqliteRepo) ListRunningSessions(ctx context.Context, accountID string) 
 func (r *sqliteRepo) listSessions(ctx context.Context, accountID string, archived bool) ([]SessionRow, error) {
 	const selectSessions = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id
 		 FROM sessions`
 	var query string
 	if archived {
@@ -640,7 +640,7 @@ func (r *sqliteRepo) scanSessions(ctx context.Context, query string, args ...any
 		var s SessionRow
 		if err := rows.Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -701,6 +701,13 @@ func (r *sqliteRepo) SetSessionPermissionModes(ctx context.Context, id, modeID, 
 	return err
 }
 
+// SetSessionContentDEK 记录会话内容 DEK 的 opaque id（v0.8.5 §3.2 / ADR-016）。
+// 空字符串清除（无 DEK 会话 fail-closed）；wrapped blob 由 device_key_wraps 承载。
+func (r *sqliteRepo) SetSessionContentDEK(ctx context.Context, id, dekID string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET content_dek_id=? WHERE id=?`, dekID, id)
+	return err
+}
+
 // SetSessionAgentPreset 保存会话 joined 的 DSH agent preset id（v0.8.5 §3.8）。
 // 空字符串表示会话未 joined 预设（清空快照）。
 func (r *sqliteRepo) SetSessionAgentPreset(ctx context.Context, id, presetID string) error {
@@ -713,12 +720,12 @@ func (r *sqliteRepo) SessionByParentForkKey(ctx context.Context, parentSessionID
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id
 		   FROM sessions WHERE parent_session_id=? AND fork_idempotency_key=?`,
 		parentSessionID, idempotencyKey).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil

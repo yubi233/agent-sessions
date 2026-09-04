@@ -1218,6 +1218,17 @@ type DaemonCommandResultRequest struct {
 // DaemonCommandResultRequestStatus defines model for DaemonCommandResultRequest.Status.
 type DaemonCommandResultRequestStatus string
 
+// DaemonContentDEKPutRequest defines model for DaemonContentDEKPutRequest.
+type DaemonContentDEKPutRequest struct {
+	DekId             string `json:"dek_id"`
+	ProtocolVersion   int    `json:"protocol_version"`
+	RecipientDeviceId string `json:"recipient_device_id"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
+	Signature  TerminalSignature `json:"signature"`
+	WrappedDek []byte            `json:"wrapped_dek"`
+}
+
 // DaemonDeliveredCommand defines model for DaemonDeliveredCommand.
 type DaemonDeliveredCommand struct {
 	Ciphertext map[string]interface{} `json:"ciphertext"`
@@ -1584,6 +1595,13 @@ type Session struct {
 	WorkspaceName *string `json:"workspace_name,omitempty"`
 }
 
+// SessionContentDEK defines model for SessionContentDEK.
+type SessionContentDEK struct {
+	DekId             string `json:"dek_id"`
+	RecipientDeviceId string `json:"recipient_device_id"`
+	WrappedDek        []byte `json:"wrapped_dek"`
+}
+
 // SessionList defines model for SessionList.
 type SessionList struct {
 	Sessions []Session `json:"sessions"`
@@ -1948,6 +1966,9 @@ type DaemonHelloJSONRequestBody = DaemonHelloRequest
 // RecoverDaemonSessionsJSONRequestBody defines body for RecoverDaemonSessions for application/json ContentType.
 type RecoverDaemonSessionsJSONRequestBody = DaemonSessionRecoveryRequest
 
+// PutDaemonSessionContentDEKJSONRequestBody defines body for PutDaemonSessionContentDEK for application/json ContentType.
+type PutDaemonSessionContentDEKJSONRequestBody = DaemonContentDEKPutRequest
+
 // SyncDaemonSessionModesJSONRequestBody defines body for SyncDaemonSessionModes for application/json ContentType.
 type SyncDaemonSessionModesJSONRequestBody = DaemonSessionModesRequest
 
@@ -2190,6 +2211,9 @@ type ServerInterface interface {
 	// (POST /v1/daemon/sessions/recover)
 	RecoverDaemonSessions(c *gin.Context)
 
+	// (PUT /v1/daemon/sessions/{id}/content-dek)
+	PutDaemonSessionContentDEK(c *gin.Context, id string)
+
 	// (PUT /v1/daemon/sessions/{id}/modes)
 	SyncDaemonSessionModes(c *gin.Context, id string)
 
@@ -2252,6 +2276,9 @@ type ServerInterface interface {
 
 	// (POST /v1/sessions/{id}/commands)
 	SubmitSessionCommand(c *gin.Context, id string)
+
+	// (GET /v1/sessions/{id}/content-dek)
+	GetSessionContentDEK(c *gin.Context, id string)
 
 	// (GET /v1/sessions/{id}/delegations)
 	ListSessionDelegations(c *gin.Context, id string)
@@ -2742,6 +2769,31 @@ func (siw *ServerInterfaceWrapper) RecoverDaemonSessions(c *gin.Context) {
 	siw.Handler.RecoverDaemonSessions(c)
 }
 
+// PutDaemonSessionContentDEK operation middleware
+func (siw *ServerInterfaceWrapper) PutDaemonSessionContentDEK(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.PutDaemonSessionContentDEK(c, id)
+}
+
 // SyncDaemonSessionModes operation middleware
 func (siw *ServerInterfaceWrapper) SyncDaemonSessionModes(c *gin.Context) {
 
@@ -3216,6 +3268,31 @@ func (siw *ServerInterfaceWrapper) SubmitSessionCommand(c *gin.Context) {
 	siw.Handler.SubmitSessionCommand(c, id)
 }
 
+// GetSessionContentDEK operation middleware
+func (siw *ServerInterfaceWrapper) GetSessionContentDEK(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetSessionContentDEK(c, id)
+}
+
 // ListSessionDelegations operation middleware
 func (siw *ServerInterfaceWrapper) ListSessionDelegations(c *gin.Context) {
 
@@ -3573,6 +3650,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/v1/sessions", wrapper.ListSessions)
 	router.POST(options.BaseURL+"/v1/sessions", wrapper.CreateSession)
 	router.POST(options.BaseURL+"/v1/sessions/:id/lease", wrapper.AcquireSessionLease)
+	router.GET(options.BaseURL+"/v1/sessions/:id/content-dek", wrapper.GetSessionContentDEK)
 	router.GET(options.BaseURL+"/v1/sessions/:id/snapshot", wrapper.GetSessionSnapshot)
 	router.GET(options.BaseURL+"/v1/sessions/:id/delegations", wrapper.ListSessionDelegations)
 	router.POST(options.BaseURL+"/v1/sessions/:id/delegations", wrapper.CreateSessionDelegation)
@@ -3592,6 +3670,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)
 	router.POST(options.BaseURL+"/v1/daemon/sessions/recover", wrapper.RecoverDaemonSessions)
 	router.PUT(options.BaseURL+"/v1/daemon/sessions/:id/modes", wrapper.SyncDaemonSessionModes)
+	router.PUT(options.BaseURL+"/v1/daemon/sessions/:id/content-dek", wrapper.PutDaemonSessionContentDEK)
 	router.GET(options.BaseURL+"/v1/daemon/attachments/:id", wrapper.ReadDaemonAttachment)
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/ack", wrapper.AcknowledgeDaemonCommand)

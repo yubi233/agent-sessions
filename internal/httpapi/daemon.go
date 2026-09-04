@@ -271,6 +271,38 @@ func (a *API) handleDaemonCommandAck(c *gin.Context) {
 	writeOK(c, newDaemonCommandReceiptView(receipt))
 }
 
+// contentDEKPutRequest 是 Terminal 上行的会话内容密钥 wrap（v0.8.5 §3.2 / ADR-016 §3.1）。
+// wrapped_dek 对 Relay 不透明：只落 device_key_wraps，不回显、不落日志。
+type contentDEKPutRequest struct {
+	ProtocolVersion   int                     `json:"protocol_version"`
+	DEKID             string                  `json:"dek_id"`
+	WrappedDEK        []byte                  `json:"wrapped_dek"`
+	RecipientDeviceID string                  `json:"recipient_device_id"`
+	Signature         authz.TerminalSignature `json:"signature"`
+}
+
+// handleDaemonPutContentDEK 是 Daemon 鉴权的会话内容 DEK 登记端点（ADR-016 §3.1）。
+// 归属与幂等校验在 domain（home Terminal、recipient active owner、异 id 拒绝）。
+func (a *API) handleDaemonPutContentDEK(c *gin.Context) {
+	subj := subject(c)
+	var req contentDEKPutRequest
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed content dek put"))
+		return
+	}
+	// 与 modes 上行一致：daemon body PUT 必须带 Terminal 签名。
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
+		return
+	}
+	if err := a.Daemons.PutSessionContentDEK(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, c.Param("id"), req.DEKID, req.WrappedDEK, req.RecipientDeviceID); err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, gin.H{"status": "stored"})
+}
+
 // attachmentReadView 是 Daemon 附件读取的 wire 投影（v0.8.5 §3.3）：
 // 只回传密文与白名单字段；任何文件名/明文正文都不出现在响应或日志。
 type attachmentReadView struct {
