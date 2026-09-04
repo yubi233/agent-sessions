@@ -315,7 +315,9 @@
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "task test:v085:local（2026-09-04 全绿）"
+        "task test:v085:local（2026-09-04 全绿）",
+        "task test:v083:local → test:v084:local（2026-09-04 链式全绿：Go adapter 定向含 opencode/codex 能力契约、Flutter/Web 定向、v083/v084 overlay、v082+v081 headed suites）",
+        "node e2e-verify/run.mjs --suite p5-opencode-capabilities（OpenCode 能力矩阵 headed，2026-09-04 passed）"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
@@ -323,7 +325,9 @@
       ],
       "evidence": [
         "task test:v085:local 全绿（docs/check/Go 契约/Flutter/Web/overlay/中止回归）",
-        "go test ./internal/relay ./internal/daemon ./internal/domain ./internal/store 全绿"
+        "task test:v083:local / test:v084:local 链式全绿（2026-09-04，实施记录 24 §4.25）",
+        "go test ./internal/relay ./internal/daemon ./internal/domain ./internal/store 全绿",
+        "e2e-verify/suites/p5-opencode-capabilities.mjs（OpenCode 能力矩阵 headed 回归）"
       ]
     },
     {
