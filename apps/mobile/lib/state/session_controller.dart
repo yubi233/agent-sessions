@@ -81,8 +81,26 @@ class SessionController extends ChangeNotifier {
   /// 非空时该会话的 Chat 时间线尾部渲染乐观回显气泡；规范化事件合并后立即清账，
   /// 会话切换互不泄漏。
   final Map<String, String> _pendingOutgoingBySession = <String, String>{};
+  // v0.8.6 A①：会话级"回合超时"标记。客户端轮询窗口（前台+后台约 2 分钟）
+  // 耗尽仍无终态时置位，UI 据此把"处理中"收敛为显式超时文案；迟到的
+  // daemon 看门狗 / Provider 终态事件到达后按事件校正清除。
+  final Set<String> _turnTimedOut = <String>{};
+
+  /// 回合轮询窗口（v0.8.6 A① 参数化以便测试）：前台 120×500ms=60s，后台再
+  /// 120×500ms=60s，总约 2 分钟后显式超时。生产保持既有口径不变。
+  @visibleForTesting
+  int foregroundPollAttempts = 120;
+  @visibleForTesting
+  int backgroundPollAttempts = 120;
+  @visibleForTesting
+  Duration pollInterval = const Duration(milliseconds: 500);
 
   /// 当前选中会话尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
+  /// 该会话的回合是否已被客户端判定超时（V086-11）：UI 据此把"处理中"
+  /// 状态条替换为显式超时文案，并停止无限转圈。
+  bool isTurnTimedOut(String? sessionId) =>
+      sessionId != null && _turnTimedOut.contains(sessionId);
+
   String? get pendingOutgoingMessage => _selectedSessionId == null
       ? null
       : _pendingOutgoingBySession[_selectedSessionId!];
@@ -1037,6 +1055,21 @@ class SessionController extends ChangeNotifier {
       _setError('会话自动启动未成功，请先手动启动会话再发送。');
       return;
     }
+    // v0.8.6 A②：上一回合未终态时的同文本重发会被 Relay 幂等去重（不产生
+    // 新的 canonical 事件），第二次设置的乐观回显永远等不到清账，实机表现为
+    // 同一条消息两条气泡。这里直接拦截：用户应等待终态或点击中断后再发送。
+    if (_turnInFlight) {
+      String? lastUserText;
+      for (final event in _timeline) {
+        if (event.kind == SessionTimelineKind.userMessage) {
+          lastUserText = event.text;
+        }
+      }
+      if (lastUserText == trimmed) {
+        _setError('相同消息仍在处理中：请等待回合结束，或点击中断后再发送。');
+        return;
+      }
+    }
     // 同一条待发送内容重试复用幂等键；成功后的新输入会生成新的 action key。
     final operation =
         'send:$sessionId:${selectedSession?.lastSequence ?? 0}:$trimmed';
@@ -1066,6 +1099,8 @@ class SessionController extends ChangeNotifier {
     );
     if (accepted) {
       _turnInFlight = true;
+      // 新回合受理即清除上一轮的本地超时标记（重新计时）。
+      _turnTimedOut.remove(sessionId);
       // v0.8.5 §3.1：受理成功后清空该会话附件队列（refs 已随密文发送，
       // 保留会让同一批附件在下次发送时被重复引用）。
       if (_attachmentsBySession[sessionId]?.isNotEmpty ?? false) {
@@ -1103,6 +1138,8 @@ class SessionController extends ChangeNotifier {
       deviceId: deviceId!,
     );
     if (accepted) {
+      // 用户主动中止即清除本地超时标记（与 daemon 看门狗撤防同口径）。
+      _turnTimedOut.remove(sessionId);
       // Abort 的命令回执和 canonical session.aborted/stopped 投影可能分开
       // 抵达。先确认命令成功，再用有界增量轮询等 Relay 投影完成，避免刷新过早
       // 错过可见的“已中止”轨迹。
@@ -2254,9 +2291,9 @@ class SessionController extends ChangeNotifier {
       if (kind == SessionCommandKind.send && !completed && awaitTurnCompletion) {
         // 免费模型一轮常见 30-60s；轮询窗口必须覆盖典型回合并，
         // 否则回复落地后客户端仍停留在“生成中”，只能重进会话恢复。
-        const attempts = 120;
+        final attempts = foregroundPollAttempts;
         for (var i = 0; i < attempts; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 500));
+          await Future<void>.delayed(pollInterval);
           latest = await _relay.getSessionSnapshot(
             sessionId,
             afterSequence: latest.session.lastSequence,
@@ -2274,10 +2311,11 @@ class SessionController extends ChangeNotifier {
         _turnInFlight = false;
         await _refreshControlsAfterTurn(sessionId);
       }
-      if (kind == SessionCommandKind.send &&
-          !completed &&
-          !awaitTurnCompletion) {
-        // UI 受理即返回：剩余轮询转后台，composer 立刻把主按钮切换为"中断"。
+      if (kind == SessionCommandKind.send && !completed) {
+        // ignore: avoid_print
+        // v0.8.6 A①：前台窗口（60s）结束仍无终态时，必须继续后台轮询直到
+        // 有界总窗口（再 60s）。原实现只覆盖 awaitTurnCompletion=false 的
+        // 调用方；默认路径 60s 后无人续驱，"处理中"会永久驻留。
         unawaited(_pollTurnCompletionInBackground(sessionId, latest));
       }
       return true;
@@ -2291,10 +2329,11 @@ class SessionController extends ChangeNotifier {
     String sessionId,
     SessionSnapshot latest,
   ) async {
-    const attempts = 120;
+    final attempts = backgroundPollAttempts;
+    // ignore: avoid_print
     var completed = _snapshotCompletesTurn(latest);
     for (var i = 0; i < attempts && !completed; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await Future<void>.delayed(pollInterval);
       try {
         latest = await _relay.getSessionSnapshot(
           sessionId,
@@ -2310,7 +2349,18 @@ class SessionController extends ChangeNotifier {
     }
     if (completed) {
       _turnInFlight = false;
+      _turnTimedOut.remove(sessionId);
       await _refreshControlsAfterTurn(sessionId);
+    } else {
+      // v0.8.6 A①：后台窗口耗尽仍无终态——显式收敛为"回合超时"，不再允许
+      // "处理中"永久驻留：复位在途标记（composer 恢复发送）、清账乐观回显
+      // （canonical user_message 已在时间线中或本次发送已失败）、置会话级
+      // 超时标记供状态条展示；迟到的 daemon 看门狗事实事件会按事件校正。
+      _turnInFlight = false;
+      _turnTimedOut.add(sessionId);
+      _pendingOutgoingBySession.remove(sessionId);
+      // ignore: avoid_print
+      notifyListeners();
     }
   }
 
@@ -2413,6 +2463,13 @@ class SessionController extends ChangeNotifier {
       session,
       ..._sessions.where((item) => item.id != snapshot.session.id),
     ];
+    // v0.8.6 A①：终态事实优先于本地超时提示——迟到的 daemon 看门狗事件或
+    // Provider 终态到达时，按事件校正、清除本地"回合超时"标记。
+    if (_turnTimedOut.isNotEmpty &&
+        (incoming.any((event) => event.completedTurn) ||
+            snapshot.session.status != MobileSessionStatus.streaming)) {
+      _turnTimedOut.remove(snapshot.session.id);
+    }
     final priorCursor = _cursorFor(snapshot.session.id);
     final highestIncoming = incoming.fold<int>(
       priorCursor,

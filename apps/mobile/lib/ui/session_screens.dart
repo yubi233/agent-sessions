@@ -1941,6 +1941,8 @@ class _SessionChatView extends StatelessWidget {
           sessions.isStreaming || (sessions.pendingOutgoingMessage != null),
       // v0.8.4（ADR-015 §3）：phase-aware 状态行文案。
       turnPhase: projection.turnPhase,
+      // v0.8.6 A①：客户端回合超时标记——超时横幅替代无限转圈。
+      turnTimedOut: sessions.isTurnTimedOut(sessionId),
       leading: _SessionRecoveryStrip(
         controller: recovery,
         sessionId: sessionId,
@@ -2211,6 +2213,9 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
           ),
           status: _SessionStatusStrip(
             session: session,
+            // v0.8.6 A③：回合在途时 header 显示"执行中"，与状态条同源，
+            // 不再出现"空闲"与"处理中"并存的矛盾。
+            turnInFlight: sessions.isTurnInFlight,
             hasLease: sessions.hasSelectedLease,
             canWrite: app.canManageDevices,
             provider: sessions.selectedProviderCapabilities,
@@ -5302,6 +5307,7 @@ class _ReadOnlyBanner extends StatelessWidget {
 class _SessionStatusStrip extends StatelessWidget {
   const _SessionStatusStrip({
     required this.session,
+    required this.turnInFlight,
     required this.hasLease,
     required this.canWrite,
     required this.provider,
@@ -5309,6 +5315,11 @@ class _SessionStatusStrip extends StatelessWidget {
   });
 
   final MobileSession? session;
+
+  /// v0.8.6 A③：回合在途（客户端视角）。session.status 投影只由 canonical
+  /// 事件驱动，回合启动后到首个 step 事件之间恒为 idle——这里用它把 header
+  /// 状态行同源收敛为"执行中"。
+  final bool turnInFlight;
   final bool hasLease;
   final bool canWrite;
 
@@ -5318,7 +5329,7 @@ class _SessionStatusStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = _sessionStatusPresentation(session);
+    final status = _sessionStatusPresentation(session, turnInFlight: turnInFlight);
     final statusColor = _sessionStatusColor(context, status.tone);
     // v0.9：lease 在写操作时自动获取（见 SessionController._submitCommand），
     // 不再是需要用户手动点按的前置状态；这里只区分只读与可写。
@@ -5874,8 +5885,20 @@ String _sessionStatusLineText(MobileSession session) {
 }
 
 /// 会话状态完全来自 Relay/Terminal，上次活动时间不参与状态推断。
-_SessionStatusPresentation _sessionStatusPresentation(MobileSession? session) {
+/// v0.8.6 A③：回合在途而 status 投影尚未收到任何 step 事件时（恒 idle 的
+/// 窗口期），header 显示"执行中"——与状态条/相位行同源，消除矛盾表面。
+_SessionStatusPresentation _sessionStatusPresentation(
+  MobileSession? session, {
+  bool turnInFlight = false,
+}) {
   final status = session?.status;
+  if (turnInFlight && status == MobileSessionStatus.idle) {
+    return const _SessionStatusPresentation(
+      label: '执行中',
+      tone: _SessionStatusTone.info,
+      icon: Icons.autorenew_outlined,
+    );
+  }
   return switch (status) {
     MobileSessionStatus.idle => const _SessionStatusPresentation(
       label: '空闲',

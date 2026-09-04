@@ -19,6 +19,7 @@ class SessionChatView extends StatefulWidget {
     required this.nodes,
     required this.running,
     this.turnPhase,
+    this.turnTimedOut = false,
     this.emptyHero,
     this.leading,
     this.footer = const [],
@@ -39,6 +40,11 @@ class SessionChatView extends StatefulWidget {
   final bool running;
   /// v0.8.4（ADR-015 §3）：最近的回合相位；null 时状态行回退通用生成态文案。
   final TurnPhase? turnPhase;
+
+  /// v0.8.6 A①：客户端判定回合超时（轮询窗口耗尽仍无终态）。为 true 时用
+  /// 显式超时横幅替代"处理中"状态条，不再无限转圈；迟到的终态事实事件
+  /// 到达后 controller 会按事件校正清除该标记。
+  final bool turnTimedOut;
   final Widget? emptyHero;
 
   /// 位于消息流上方的会话级控制带（如子会话面板）。它属于 Chat 投影上下文，
@@ -254,7 +260,14 @@ class _SessionChatViewState extends State<SessionChatView> {
         // v0.5/回归修复：streaming 状态行固定为一个可见 overlay，而不是懒加载列表项。
         // 这样即使滚动到底部时 footer（如子会话面板）较高，streaming indicator 也始终在树中，
         // 不会因为 ListView 未 build 视口外的行而被测试或用户跳过。
-        if (widget.running)
+        if (widget.turnTimedOut)
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 12,
+            child: const _TurnTimeoutRow(),
+          )
+        else if (widget.running)
           Positioned(
             left: 16,
             right: 16,
@@ -427,6 +440,42 @@ class _FileOpenErrorDialog extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// v0.8.6 A①：回合超时横幅。轮询窗口耗尽仍无终态时替代"处理中"状态条，
+/// 给出明确失败语义与恢复动作提示；终态事实事件到达后由 controller 清除标记。
+class _TurnTimeoutRow extends StatelessWidget {
+  const _TurnTimeoutRow();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        key: const Key('session-turn-timeout-row'),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: theme.colorScheme.errorContainer,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.timer_off_outlined,
+                size: 16, color: theme.colorScheme.error),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '回合超时：执行端长时间无响应。可点击中断后重发，或检查终端状态。',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.error),
+              ),
+            ),
+          ],
         ),
       ),
     );
