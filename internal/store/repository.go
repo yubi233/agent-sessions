@@ -400,7 +400,7 @@ type SessionRow struct {
 	LastActivityAtUnixMS int64
 	// PermissionMode 与 AvailablePermissionModesJSON 是会话级 mode 快照（v0.8.5 §3.4）：
 	// 由 Daemon 上行同步，只含 mode id/名称等非敏感元数据；空串/[] 表示尚无快照。
-	PermissionMode                string
+	PermissionMode               string
 	AvailablePermissionModesJSON string
 }
 
