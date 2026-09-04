@@ -145,16 +145,17 @@
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
+        "go test ./internal/relay -run TestV085SessionMode -count=1",
         "cd apps/mobile && flutter test test/session_controller_test.dart --plain-name V085-07 --concurrency=1",
-        "会话级 mode 目录上行通道打通后 overlay/headed 复验"
+        "headed gate（P4 阶段回填）"
       ],
-      "expected": "wire 契约（mode.set+mode_id）已对齐并有契约测试；controls 目录输出与真实链路可点待通道打通",
+      "expected": "controls 输出 permission_mode/available_permission_modes；目录空不下发（Go 层与 wire 契约已过，headed gate 待 P4）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "apps/mobile/lib/domain/session_models.dart",
-        "apps/mobile/lib/state/session_controller.dart",
+        "internal/httpapi/handlers.go(handleSessionControls/permissionModeIDs)",
+        "internal/relay/session_modes_contract_test.go",
         "apps/mobile/test/session_controller_test.dart",
         "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md"
       ]
@@ -162,22 +163,25 @@
     {
       "id": "V085-08",
       "title": "mobile→relay→daemon→桥 set_mode→回执+current_mode_update 清账、danger 确认",
-      "status": "planned",
+      "status": "partial",
       "phase": "P1",
       "category": "mode_set",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "go test ./internal/relay -run TestV085SessionMode -count=1",
+        "真实桥 overlay：mode.set 上行目录到 controls（P4 阶段）"
       ],
-      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "expected": "mobile mode.set → relay → daemon 目录上行 → controls 反映新 mode（Go relay 契约已过，桥 overlay/headed 待 P4）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "internal/relay/session_modes_contract_test.go(TestV085SessionModeSelectRefreshesControls)",
+        "internal/daemon/runner.go(syncModeInfo)",
+        "internal/daemon/relay.go(enqueueModeInfo)",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md"
       ]
     },
     {
