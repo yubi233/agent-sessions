@@ -27,6 +27,9 @@ enum LocalVisualScenario {
   // v0.8.5：中止与轨迹时间可见场景（发送后中止：唯一“已中止 · HH:mm:ss”轨迹，
   // 缺失时间条目显示“时间未知”，与实施记录 23 收口条件一致）。
   dshAbortTrajectory,
+  // v0.8.5 主计划可见场景：工作区显示名（无写死兜底）+ Agent 预设只读 label +
+  // usage timing chips（首字/解码）+ 权限 mode 目录可点（实施记录 24 收口条件）。
+  dshV085ReadonlyProjections,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -74,6 +77,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'dsh-streaming-turn-phase' =>
     LocalVisualScenario.dshStreamingTurnPhase,
   'dsh-abort-trajectory' => LocalVisualScenario.dshAbortTrajectory,
+  'dsh-v085-readonly-projections' =>
+    LocalVisualScenario.dshV085ReadonlyProjections,
   'pairing-pending' => LocalVisualScenario.pairingPending,
   'session-list' => LocalVisualScenario.sessionList,
   'session-detail' => LocalVisualScenario.sessionDetail,
@@ -284,7 +289,8 @@ class LocalVisualFixture {
         scenario == LocalVisualScenario.dshSessionToolTimeline ||
         scenario == LocalVisualScenario.dshCapabilityGates ||
         scenario == LocalVisualScenario.dshStreamingTurnPhase ||
-        scenario == LocalVisualScenario.dshAbortTrajectory;
+        scenario == LocalVisualScenario.dshAbortTrajectory ||
+        scenario == LocalVisualScenario.dshV085ReadonlyProjections;
     String? dshSessionId;
     if (isDshScenario) {
       relay.replaceTerminals([
@@ -390,6 +396,46 @@ class LocalVisualFixture {
             idempotencyKey: 'visual-dsh-abort-stop',
             leaseEpoch: lease.epoch,
             deviceId: ownerDeviceId,
+          ),
+        );
+      }
+      if (scenario == LocalVisualScenario.dshV085ReadonlyProjections) {
+        // v0.8.5 主计划可见场景（实施记录 24）：以用户案例中的 money 工作区建独立
+        // 会话——副标题显示工作区显示名（无写死兜底）、Agent preset 只读 label、
+        // usage timing chips（fixture controls 已带 ttft/decode）、权限 mode 目录
+        // 可点（default/plan/acceptEdits/danger-full-access，均来自 controls）。
+        relay.replaceWorkspaces(const [
+          MobileWorkspace(
+            id: 'ws-dsh-visual-money',
+            projectId: 'dsh-visual-money',
+            terminalId: 'term-dsh-visual',
+            origin: MobileWorkspaceOrigin.dsh,
+            displayName: 'money',
+            status: 'active',
+          ),
+        ]);
+        final moneySession = await relay.createSession(
+          CreateMobileSessionInput(
+            workspaceId: 'ws-dsh-visual-money',
+            provider: 'dsh',
+            deviceId: ownerDeviceId,
+            // v0.8.5 §3.8：会话实际 joined 的预设（standard）经 sessionView 只读投影，
+            // fixture 与真实 Relay 同构注入——生产链路选择器不渲染，label 只读展示。
+            agentPresetId: 'standard',
+          ),
+        );
+        dshSessionId = moneySession.id;
+        final lease = await relay.acquireSessionLease(moneySession.id);
+        await relay.submitSessionCommand(
+          moneySession.id,
+          SessionCommandInput(
+            kind: SessionCommandKind.send,
+            idempotencyKey: 'visual-dsh-v085-readonly-send',
+            leaseEpoch: lease.epoch,
+            deviceId: ownerDeviceId,
+            ciphertext: const {
+              'fixture_payload': {'message': '展示 v0.8.5 只读投影与权限目录。'},
+            },
           ),
         );
       }

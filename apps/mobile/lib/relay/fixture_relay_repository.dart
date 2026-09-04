@@ -1966,6 +1966,10 @@ SessionControlState _fixtureControlsForProvider(String provider) =>
         cacheReadTokens: 61000,
         cacheCreationTokens: 800,
         contextWindowTokens: 100000,
+        // v0.8.5 §3.7：fixture 对齐真实链路 timing 投影——chips 在 ttft/throughput
+        // 有值时显示真实读数（“首字 x.xs / 解码 xx tok/s”），缺省时保持隐藏。
+        ttftMs: 734,
+        decodeThroughput: 42.5,
       ),
       // v0.3/P0：permission mode 目录（Happy permissionMode 对齐）。
       // v0.5/P5：含 danger-full-access 用于风险确认回归；custom 预设不作为可点菜单项。

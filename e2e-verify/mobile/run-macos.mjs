@@ -255,6 +255,13 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-37-dsh-abort-trajectory",
     localVisualScenario: "dsh-abort-trajectory",
   }),
+  // v0.8.5 主计划只读投影：副标题工作区显示名（money，无写死兜底）+ Agent 预设
+  // 只读 label + usage timing chips（首字/解码）+ 权限 mode 目录可点（实施记录 24）。
+  Object.freeze({
+    id: "VISUAL-MOBILE-38",
+    directory: "visual-mobile-38-dsh-v085-readonly-projections",
+    localVisualScenario: "dsh-v085-readonly-projections",
+  }),
 ]);
 
 function wait(milliseconds) {
