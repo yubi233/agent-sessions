@@ -30,6 +30,7 @@ import {
 } from "./macos.mjs";
 import {
   captureMacosWindowFrameSeries,
+  captureMacosWindowOrScreenFrameSeries,
   materializeStrictWindowEvidenceFrames,
   selectStrictWindowEvidenceFrames,
   waitForFlutterRenderFrameSeries,
@@ -374,7 +375,8 @@ export async function recordMacosVisualScenario({
   observeWindow,
   sandboxNamespace = null,
   runPrebuiltApp = runMacosPrebuiltApp,
-  captureFrames = captureMacosWindowFrameSeries,
+  // v0.8.6：窗口级抓帧失败（Space/Stage Manager 组合）时回退主屏捕获。
+  captureFrames = captureMacosWindowOrScreenFrameSeries,
   waitForFlutterRenderFrames = waitForFlutterRenderFrameSeries,
   waitForStableFrame = wait,
   waitForWindowExit = waitForNoMacosWindows,

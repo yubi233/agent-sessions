@@ -110,6 +110,19 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-37", "VISUAL-MOBILE-38"]),
     requiredTestIds: Object.freeze(["V085-23", "V085-14"]),
   }),
+  // v0.8.6：回合收敛/权限目录/主页终端卡片/消息渲染录屏范围。
+  // 内容先定（Taskfile record:v086，2026-09-05）：
+  //   A) VISUAL-MOBILE-37（dsh-abort-trajectory）：可见窗口回归——中止轨迹与
+  //      超时收敛同源的状态条/横幅在录屏中为自动采集态；
+  //   B) VISUAL-MOBILE-38（dsh-v085-readonly-projections）：会话页 UI 连续帧
+  //      稳定（Markdown 渲染与复制按钮的画面为自动采集态，可点性由 widget/
+  //      契约测试断言）。
+  // 5fps 连续帧，仅作通过后的展示证据，不作为功能回归替代；前置 gate 报告
+  // 必须 passed。
+  v086: Object.freeze({
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-37", "VISUAL-MOBILE-38"]),
+    requiredTestIds: Object.freeze([]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {

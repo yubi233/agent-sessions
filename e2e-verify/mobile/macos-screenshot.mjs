@@ -143,6 +143,43 @@ export async function captureMacosWindowScreenshot({
 }
 
 /// 在稳定的本地 fixture 场景内按固定帧率抓取窗口，避免把视觉证据绑定到单一测试回调时刻。
+/// v0.8.6：主屏级回退捕获（`screencapture -m`）。窗口级 `-l <windowId>` 在
+/// 部分 Space/Stage Manager 组合下会失败，即使屏幕录制权限已授予；回退到
+/// 主屏帧仍是真实屏幕证据，capture_mode 标注 macos-screen 以便审计区分。
+export async function captureMacosScreenScreenshot({
+  outputPath,
+  captureBinary = "screencapture",
+}) {
+  mkdirSync(dirname(outputPath), { recursive: true });
+  const result = await execFileResult(
+    captureBinary,
+    ["-x", "-m", "-t", "png", outputPath],
+    { timeout: 15_000, windowsHide: true, maxBuffer: 32_000 },
+  );
+  if (result.code !== 0) {
+    throw new Error("macOS screencapture 主屏截图失败。");
+  }
+  return inspectMacosScreenshotFile({
+    outputPath,
+    captureMode: "macos-screen",
+  });
+}
+
+/// 窗口捕获优先、主屏回退的帧序列捕获器（v0.8.6）：逐帧回退，单帧失败不
+/// 影响其余帧；全部失败时抛出原始窗口错误，保持既有失败语义。
+export async function captureMacosWindowOrScreenFrameSeries(options) {
+  const { windowId } = options;
+  const withFallback = async (frameOptions) => {
+    try {
+      return await captureMacosWindowScreenshot(frameOptions);
+    } catch (windowError) {
+      if (!(windowId > 0)) throw windowError;
+      return captureMacosScreenScreenshot(frameOptions);
+    }
+  };
+  return captureMacosWindowFrameSeries({ ...options, capture: withFallback });
+}
+
 export async function captureMacosWindowFrameSeries({
   windowId,
   outputDirectory,
