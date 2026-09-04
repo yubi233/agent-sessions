@@ -142,8 +142,12 @@ abstract interface class RelayRepository {
   Future<CapabilityMatrix> getCapabilities();
 
   /// v0.2/P3：会话内容密钥（DEK）可用性。fixture 表示本机已持有该会话内容密钥；
-  /// 真实 Relay 尚未部署 E2EE 内容密钥通道时保持 false（附件入口 fail-closed）。
+  /// 真实 Relay 返回 content-dek 端点成功时才为 true（附件入口 fail-closed）。
   Future<bool> sessionContentKeyAvailable(String sessionId);
+
+  /// v0.8.5 §3.2 / ADR-016：读取本设备可解开的会话 DEK wrapped 载荷。
+  /// 无 DEK 或非本设备 wrap 时返回 null（fail-closed）；字节搬运不解密。
+  Future<WrappedContentDEK?> fetchSessionContentDEK(String sessionId);
 
   /// Plan/Goal/Skill 摘要只来自本地已解密事件或 deterministic fixture；Relay 不返回明文控制内容。
   Future<SessionControlState> getSessionControls(String sessionId);

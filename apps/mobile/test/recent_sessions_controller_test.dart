@@ -503,6 +503,10 @@ class _ListOverridingRelay implements RelayRepository {
       _delegate.sessionContentKeyAvailable(sessionId);
 
   @override
+  Future<WrappedContentDEK?> fetchSessionContentDEK(String sessionId) =>
+      _delegate.fetchSessionContentDEK(sessionId);
+
+  @override
   Future<SessionControlState> getSessionControls(String sessionId) =>
       _delegate.getSessionControls(sessionId);
 

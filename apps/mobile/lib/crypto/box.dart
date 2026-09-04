@@ -185,4 +185,48 @@ class CryptoBox {
 
   static String _hex(List<int> bytes) =>
       bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+
+  /// v0.8.5 §3.2 / ADR-016 §3.1c：解开 Daemon wrap 的会话 DEK（wrapped_dek 载荷
+  /// = sender_pub(32 X25519) || nonce(12) || AES-256-GCM(dek)，与 Go WrapDEK 同构：
+  /// ECDH(设备私钥, sender 公钥) → HKDF-SHA256(shared, 'agent-sessions-wrap', 'dek-wrap')
+  /// → AES-GCM(dek, aad='dek-wrap-v1')。私钥来自本机 secure storage，不出设备。
+  static Future<Uint8List> unwrapSessionDEK({
+    required Uint8List wrappedPayload,
+    required Uint8List encryptionPrivateKeyBytes,
+  }) async {
+    if (wrappedPayload.length < 44) {
+      throw StateError('wrapped dek payload too short');
+    }
+    final senderPublic = SimplePublicKey(
+      wrappedPayload.sublist(0, 32),
+      type: KeyPairType.x25519,
+    );
+    final recipientKeyPair = await X25519().newKeyPairFromSeed(encryptionPrivateKeyBytes);
+    final shared = await X25519().sharedSecretKey(
+      keyPair: recipientKeyPair,
+      remotePublicKey: senderPublic,
+    );
+    final wrapKey = await Hkdf(
+      hmac: Hmac.sha256(),
+      outputLength: 32,
+    ).deriveKey(
+      secretKey: shared,
+      nonce: utf8.encode('agent-sessions-wrap'),
+      info: utf8.encode('dek-wrap'),
+    );
+    final nonce = wrappedPayload.sublist(32, 44);
+    final combined = wrappedPayload.sublist(44);
+    if (combined.length < 16) {
+      throw StateError('wrapped dek ciphertext too short');
+    }
+    final splitAt = combined.length - 16;
+    final box = SecretBox(
+      combined.sublist(0, splitAt),
+      nonce: nonce,
+      mac: Mac(combined.sublist(splitAt)),
+    );
+    return Uint8List.fromList(
+      await _aesGcm.decrypt(box, secretKey: wrapKey, aad: utf8.encode('dek-wrap-v1')),
+    );
+  }
 }

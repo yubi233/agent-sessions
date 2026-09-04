@@ -1366,6 +1366,43 @@ void main() {
     });
   });
 
+  group('V085-01 content-dek 读取契约（http）', () {
+    test('GET 返回本设备 wrapped 载荷字节且保持 dek_id', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        expect(options.method, 'GET');
+        expect(options.path, '/v1/sessions/sess-dek-9/content-dek');
+        // Go []byte 的标准 base64（可含 padding）。
+        return _jsonResponse({
+          'dek_id': 'dek-sess-dek-9',
+          'wrapped_dek': 'AAAAAA==',
+        });
+      });
+      final repository = _authenticatedRepository(adapter);
+      final wrapped = await repository.fetchSessionContentDEK('sess-dek-9');
+      expect(wrapped, isNotNull);
+      expect(wrapped!.dekId, 'dek-sess-dek-9');
+      expect(wrapped.wrappedBytes, isNotEmpty);
+      expect(await repository.sessionContentKeyAvailable('sess-dek-9'), isTrue);
+    });
+
+    test('404 表示会话无 DEK → fetch 返回 null 且可用性 false（fail-closed）', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        return _jsonResponse({'error': 'content dek not found'}, statusCode: 404);
+      });
+      final repository = _authenticatedRepository(adapter);
+      expect(await repository.fetchSessionContentDEK('sess-dek-9'), isNull);
+      expect(await repository.sessionContentKeyAvailable('sess-dek-9'), isFalse);
+    });
+
+    test('空载荷视为无 DEK（不向 picker 放行）', () async {
+      final adapter = _FixtureHttpAdapter((options) {
+        return _jsonResponse({'dek_id': '', 'wrapped_dek': ''});
+      });
+      final repository = _authenticatedRepository(adapter);
+      expect(await repository.fetchSessionContentDEK('sess-dek-9'), isNull);
+    });
+  });
+
   group('MOBILE-01 owner access token 过期的 401 自动刷新重放', () {
     test('首个请求 401 后用 refresh token 换新并重放，新令牌写回存储', () async {
       final calls = <RequestOptions>[];

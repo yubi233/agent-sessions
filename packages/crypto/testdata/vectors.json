@@ -93,5 +93,11 @@
       "aad_hash": "44966ae89846c291d96e79b0f1524b3f479c6069d295221268271eac67022f03",
       "payload_version": 1
     }
+  },
+  {
+    "name": "dek-wrap-v1",
+    "owner_private_key_b64url": "8er9VSXfXbqImE97-plEorx60nEqqu0ozmIq6uMZYHU",
+    "wrapped_dek_payload_b64url": "x4Aq3TBwSQChE3xvn8jvB3PVXmdY-rbl15gfnuO9vSzOcFR52TUEqm-ho_m-sFSa7764NvRi5PpKWv1t0FJ7oOXVJo5JVg7IqPMJUCBxyk8ULooWmwVnbKCIdE0",
+    "expected_dek": "0123456789abcdef0123456789abcdef"
   }
 ]

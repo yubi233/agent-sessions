@@ -1142,6 +1142,15 @@ class FixtureRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<WrappedContentDEK?> fetchSessionContentDEK(String sessionId) async {
+    // fixture 附件草稿是预密封的确定性字节，不经真实 DEK wrap 通道：
+    // 可用性（contentKeysReady）放行入口，但 fetch 返回 null——解密语义由
+    // fixture picker/密文块模拟，真实 unwrap 只在 http 链（providers）发生。
+    _sessionState(sessionId);
+    return null;
+  }
+
+  @override
   Future<AttachmentReceipt> uploadAttachmentChunk(
     AttachmentChunkUploadInput input,
   ) async {

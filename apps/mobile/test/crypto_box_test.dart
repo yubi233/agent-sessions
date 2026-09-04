@@ -16,6 +16,10 @@ void main() {
 
   group('P0-CRYPTO-01 Dart golden vectors', () {
     for (final raw in vectors.cast<Map<String, dynamic>>()) {
+      // dek-wrap-v1 向量由 unwrap 组单独消费（无 envelope/aad 字段）。
+      if (raw['envelope'] == null) {
+        continue;
+      }
       test(raw['name'] as String, () async {
         final envelope = Map<String, dynamic>.from(raw['envelope'] as Map);
         final aad = Map<String, dynamic>.from(raw['aad'] as Map);
@@ -120,6 +124,24 @@ void main() {
         ),
         throwsA(isA<Object>()),
       );
+    });
+  });
+
+  group('v0.8.5/ADR-016 Dart unwrap golden vector（与 Go WrapDEK 跨端互操作）', () {
+    test('Go 生成的 wrapped payload 可用本机 X25519 私钥解开还原会话 DEK', () async {
+      final wrapVector = vectors.cast<Map<String, dynamic>>()
+          .firstWhere((raw) => raw['name'] == 'dek-wrap-v1');
+      final ownerPrivate = base64Url.decode(base64Url.normalize(
+        wrapVector['owner_private_key_b64url'] as String,
+      ));
+      final payload = base64Url.decode(base64Url.normalize(
+        wrapVector['wrapped_dek_payload_b64url'] as String,
+      ));
+      final dek = await CryptoBox.unwrapSessionDEK(
+        wrappedPayload: Uint8List.fromList(payload),
+        encryptionPrivateKeyBytes: Uint8List.fromList(ownerPrivate),
+      );
+      expect(utf8.decode(dek), wrapVector['expected_dek']);
     });
   });
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 /// Relay 的设备角色是服务端授权事实，客户端只负责展示与提交请求。
 enum DeviceRole {
@@ -304,4 +305,17 @@ String _requiredString(Map<String, dynamic> json, String field) {
     throw FormatException('响应缺少 $field。');
   }
   return value;
+}
+
+/// v0.8.5 §3.2 / ADR-016：Relay content-dek 读取端点的最小投影。
+/// wrapped_dek 载荷对 Relay 不透明（daemon wrap 产物，格式见 ADR-016 §3.1c），
+/// 客户端只搬运字节，解密由本机 X25519 私钥在本进程完成。
+class WrappedContentDEK {
+  const WrappedContentDEK({required this.dekId, required this.wrappedBytes});
+
+  /// 会话内容 DEK 的稳定 id（device_key_wraps 主键，格式 `dek-<sessionID>`）。
+  final String dekId;
+
+  /// wrapped 载荷原始字节：sender_pub(32) || nonce(12) || AES-256-GCM(dek)。
+  final Uint8List wrappedBytes;
 }

@@ -1,6 +1,8 @@
 package crypto
 
 import (
+	"crypto/ecdh"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -28,6 +30,10 @@ func TestGoldenVectors(t *testing.T) {
 	}
 	for _, v := range vectors {
 		t.Run(v.Name, func(t *testing.T) {
+			// dek-wrap-v1 向量由 TestDEKWrapGoldenVector 单独消费（无 DEKHex/Envelope）。
+			if v.DEKHex == "" {
+				return
+			}
 			dek, err := hex.DecodeString(v.DEKHex)
 			if err != nil {
 				t.Fatal(err)
@@ -82,6 +88,53 @@ func TestWrapUnwrapDEK(t *testing.T) {
 	}
 	if hex.EncodeToString(got) != hex.EncodeToString(dek) {
 		t.Fatal("dek wrap mismatch")
+	}
+}
+
+// TestDEKWrapGoldenVector 验证共享 vectors.json 的 dek-wrap-v1 载荷：
+// owner 私钥（base64url）解开 wrapped payload 还原期望 DEK——同一向量被
+// 移动端 crypto_box_test 消费，保证 Go wrap 与 Dart unwrap 跨端互操作。
+func TestDEKWrapGoldenVector(t *testing.T) {
+	raw, err := os.ReadFile(testdata("vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all []struct {
+		Name        string `json:"name"`
+		OwnerPriv   string `json:"owner_private_key_b64url"`
+		Payload     string `json:"wrapped_dek_payload_b64url"`
+		ExpectedDEK string `json:"expected_dek"`
+	}
+	if err := json.Unmarshal(raw, &all); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range all {
+		if v.Name != "dek-wrap-v1" {
+			continue
+		}
+		ownerPrivBytes, err := base64.RawURLEncoding.DecodeString(v.OwnerPriv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(v.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ownerPriv, err := ecdh.X25519().NewPrivateKey(ownerPrivBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		senderPub, err := ecdh.X25519().NewPublicKey(payload[:32])
+		if err != nil {
+			t.Fatal(err)
+		}
+		dek, err := UnwrapDEK(ownerPriv, senderPub, payload[32:44], payload[44:])
+		if err != nil {
+			t.Fatalf("unwrap: %v", err)
+		}
+		if string(dek) != v.ExpectedDEK {
+			t.Fatalf("dek mismatch: %q", dek)
+		}
 	}
 }
 

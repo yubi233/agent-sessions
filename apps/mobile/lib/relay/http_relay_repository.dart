@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
@@ -636,8 +637,54 @@ class HttpRelayRepository implements RelayRepository {
     if (sessionId.trim().isEmpty) {
       throw const RelayFailure(RelayFailureKind.validation, '会话标识无效。');
     }
-    // 真实 Relay 尚未部署端到端内容密钥交付通道；必须 fail-closed，禁止附件选文件入口。
-    return false;
+    // v0.8.5 §3.2：真实可用性 = 该设备可读到会话 DEK（Relay content-dek 端点）。
+    // 404（无 DEK/非本设备 wrap）视为不可用；其余错误上抛让入口保持 fail-closed。
+    try {
+      final wrapped = await fetchSessionContentDEK(sessionId);
+      return wrapped != null;
+    } on RelayFailure catch (failure) {
+      if (failure.kind == RelayFailureKind.validation &&
+          failure.message.contains('不存在')) {
+        return false;
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<WrappedContentDEK?> fetchSessionContentDEK(String sessionId) async {
+    if (sessionId.trim().isEmpty) {
+      throw const RelayFailure(RelayFailureKind.validation, '会话标识无效。');
+    }
+    // GET /v1/sessions/:id/content-dek：只回本设备可解的 wrapped 载荷字节。
+    // 404 = 会话尚无 DEK 或 wrap 不属于本设备（fail-closed 返回 null）。
+    final Response<dynamic> response;
+    try {
+      response = await _authenticatedSend(
+        'GET',
+        '/v1/sessions/$sessionId/content-dek',
+      );
+    } on RelayFailure catch (failure) {
+      // 404 被 _send 折叠为 validation 提示；无 DEK 不是错误路径。
+      if (failure.kind == RelayFailureKind.validation &&
+          failure.message.contains('不存在')) {
+        return null;
+      }
+      rethrow;
+    }
+    final body = _asMap(response.data);
+    final dekId = body['dek_id'] as String? ?? '';
+    final wrappedB64 = body['wrapped_dek'] as String? ?? '';
+    if (dekId.isEmpty || wrappedB64.isEmpty) {
+      return null;
+    }
+    return WrappedContentDEK(
+      dekId: dekId,
+      // Go []byte 序列化为标准 base64（可含 padding），这里统一 normalize 解码。
+      wrappedBytes: Uint8List.fromList(
+        base64Url.decode(base64Url.normalize(wrappedB64)),
+      ),
+    );
   }
 
   @override
