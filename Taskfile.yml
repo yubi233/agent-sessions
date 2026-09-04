@@ -303,6 +303,16 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
       - node e2e-verify/mobile/run-macos.mjs --test test/session_controller_test.dart --test test/session_trajectory_view_test.dart --case V085-23 --visual-scenario VISUAL-MOBILE-37
 
+  test:v085:real:
+    desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度）
+    cmds:
+      - |
+        if [[ "${AGENT_SESSIONS_V085_REAL:-}" != "1" ]]; then
+          echo "test:v085:real blocked: set AGENT_SESSIONS_V085_REAL=1 (V085-15 已获用户授权，见实施记录 24 §4.23) 并注入 AGENT_SESSIONS_V085_REAL_API_KEY" >&2
+          exit 2
+        fi
+      - node e2e-verify/real/v085-real-image-gate.mjs
+
   record:v085:
     desc: v0.8.5 中止与轨迹时间 macOS fixture 录屏（需 VISUAL-MOBILE-37 可见 Flutter gate 报告；录屏内容先定：发送“你好”后点击中止 → 轨迹出现唯一“已中止 · HH:mm:ss”，缺失时间显示“时间未知”，不作为功能回归替代）
     cmds:

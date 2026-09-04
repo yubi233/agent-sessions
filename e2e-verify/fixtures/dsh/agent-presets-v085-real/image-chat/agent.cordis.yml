@@ -1,0 +1,10 @@
+# V085-15 真实模型图片 gate 专用无工具纯聊天预设：persona 即完整系统提示
+# （complete=true），不挂任何模型可见工具——2026-09-04 首轮实测中 grok-4.6 在
+# standard 预设（带 bash 等工具）下会把“图片主色”问题转入长时间 bash 工具循环，
+# 回合无法收口；本预设使模型只能直接回答，图片 admission 断言不受影响。
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: You are a helpful assistant. Answer the user's question directly and concisely.
+    complete: true
+    includeRuntimeContext: false

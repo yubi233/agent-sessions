@@ -1,0 +1,103 @@
+# v0.8.5 图片真实模型 gate（V085-15 / P4，用户已授权）：
+# 在生产 acp-demo 组合挂载 attachment-local（服务 id=attachments）+ image 输入模型
+# 目录，以真实 image-capable 模型（grok-4.6，OpenAI 兼容中转）驱动真实桥的图片
+# admission 正向旅程（real_model=true）——真实图片发送：
+#   promptCapabilities.image=true（attachment 服务 + image 模型目录双条件）；
+#   session/prompt 携带 ACP image block → 桥 admitAcpPrompt 放行 → 真实模型回包
+#   （回合 committed；agent_message_chunk 累积 + usage_update）；
+#   模型侧收包不含 image 的失败/回滚路径不在此组合（对照=生产 cordis.yml text-only）。
+# API key 经环境变量 AGENT_SESSIONS_V085_REAL_API_KEY 注入（不写本文件）。
+# 凭据只经 DSH 根 .env / 环境变量引用，不写入本文件。
+
+- id: llm
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config:
+    providers:
+      real-grok46:
+        apiKeyEnv: AGENT_SESSIONS_V085_REAL_API_KEY
+        api: openai-completions
+        baseURL: !!js "process.env.AGENT_SESSIONS_V085_REAL_BASE_URL ?? 'https://api.aabsv.sbs/v1'"
+        models:
+          # 图片 capable 路由：模型目录必须声明 image 输入，否则桥如实返回
+          # promptCapabilities.image=false（不伪造能力）。
+          - id: grok-4.6
+            name: Grok 4.6 (real)
+            contextWindow: 128000
+            maxTokens: 8000
+            input:
+              - text
+              - image
+
+- id: sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js'
+
+- id: sandbox-policy
+  name: '/Users/yubi/code/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js "process.env.DSH_SESSION_CWD ?? process.cwd()"
+
+- id: subprocess
+  name: '/Users/yubi/code/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+
+- id: bash
+  name: '/Users/yubi/code/deepseek-harness/packages/shell/bash-sandbox/lib/index.js'
+  config:
+    timeoutMs: 60000
+
+- id: approval
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-approval/lib/index.js'
+  config:
+    policy: ask
+
+# attachment 服务：服务 id 固定为 attachments（桥 supportsAcpImagePrompts 读取）。
+# 存储根由测试显式注入，不落在用户 ~/.dsh。
+- id: attachments
+  name: '/Users/yubi/code/deepseek-harness/packages/attachment/attachment-local/lib/index.js'
+  config:
+    dshHome: !!js "process.env.AGENT_SESSIONS_DSH_ATTACHMENT_HOME ?? ((process.env.TMPDIR ?? '/tmp') + '/agent-sessions-dsh-attachments-v085')"
+
+- id: user-questions
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/user-questions/lib/index.js'
+- id: fs-sandbox
+  name: '/Users/yubi/code/deepseek-harness/packages/fs/fs-sandbox/lib/index.js'
+- id: token-meter
+  name: '/Users/yubi/code/deepseek-harness/packages/llm/token-meter/lib/index.js'
+- id: commands
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/commands/lib/index.js'
+- id: compaction
+  name: '/Users/yubi/code/deepseek-harness/packages/compaction/compaction/lib/index.js'
+
+- id: agent-presets
+  name: '/Users/yubi/code/deepseek-harness/packages/preset/agent-presets/lib/index.js'
+  config:
+    # V085-15 gate 专用预设根：image-chat（无工具纯聊天）——真实模型在 standard
+    # 预设（带 bash 工具）下会把图片问题转入工具循环、回合无法收口；本组合只
+    # 挂 gate 预设根，生产/CLI 预设不进本组合。
+    default: image-chat
+    includeUserRoot: false
+    roots:
+      - path: '/Users/yubi/code/agentProject/agent-sessions/e2e-verify/fixtures/dsh/agent-presets-v085-real'
+        trust: system
+
+- id: acp-agent
+  name: '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/index.js'
+  config:
+    provider: real-grok46
+    model: grok-4.6
+    modelProviders:
+      grok-4.6: real-grok46
+    toolUpdates: true
+    ignoreMcpServers: true
+    persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
+    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? 'none'"
+    workspaceContext:
+      maxBytes: 65536
+
+- id: permission
+  name: '/Users/yubi/code/deepseek-harness/packages/interaction/permission-presets/lib/index.js'
+  config:
+    presets:
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: ask
