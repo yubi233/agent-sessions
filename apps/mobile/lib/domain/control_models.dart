@@ -705,6 +705,9 @@ class AttachmentDraft {
     required this.compression,
     required Uint8List metadataCiphertext,
     required List<Uint8List> ciphertextChunks,
+    // v0.8.5 §3.1：附件明文 SHA-256（密封前登记）。Daemon 解密后复算对照；
+    // fixture 或旧草稿缺省为 null（发送时该 ref 不带 sha256，daemon 侧不校验）。
+    this.plaintextSHA256Hex,
   }) : metadataCiphertext = Uint8List.fromList(metadataCiphertext),
        ciphertextChunks = List<Uint8List>.unmodifiable(
          ciphertextChunks.map(Uint8List.fromList),
@@ -717,6 +720,7 @@ class AttachmentDraft {
   final String compression;
   final Uint8List metadataCiphertext;
   final List<Uint8List> ciphertextChunks;
+  final String? plaintextSHA256Hex;
 
   int get totalChunks => ciphertextChunks.length;
 

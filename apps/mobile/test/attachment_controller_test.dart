@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:agent_sessions_mobile/domain/control_models.dart';
 import 'package:agent_sessions_mobile/domain/models.dart';
+import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -166,6 +167,49 @@ void main() {
       );
     });
   });
+
+  group('V085-02 attachments refs wire', () {
+    test('上传完成后的附件以 opaque refs 随 send 密文发送；受理后清空队列', () async {
+      final relay = _SendRefsSpyRelay(clock: () => _now);
+      final controller = await _prepareWritableSession(relay);
+      final draft = _draft(
+        id: 'wire-image',
+        localName: 'wire.png',
+        mimeType: 'image/png',
+        byteSize: 480,
+      );
+      expect(controller.addAttachmentDraft(draft), isTrue);
+      await controller.uploadAttachment(
+        attachmentId: draft.id,
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+      expect(controller.attachments.single.phase, AttachmentTransferPhase.completed);
+
+      await controller.sendMessage(
+        message: '看这张图',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+        awaitTurnCompletion: false,
+      );
+      expect(relay.submittedCiphertexts, isNotEmpty);
+      // spy 记录的是 fixture_payload 本体（sendMessage 的 ciphertext['fixture_payload']），
+      // 直接在其中定位携带 attachments refs 的 send 密文。
+      final sendPayload = relay.submittedCiphertexts
+          .lastWhere((entry) => entry['attachments'] != null, orElse: () => const {});
+      final payload = sendPayload;
+      final refs = (payload['attachments'] as List<dynamic>?) ?? const [];
+      expect(refs, hasLength(1));
+      final ref = refs.single as Map<String, dynamic>;
+      expect(ref['attachment_id'], 'wire-image');
+      expect(ref['mime'], 'image/png');
+      expect(ref['size_bytes'], 480);
+      // 草稿 sha256 缺省（null）时 refs 省略 sha256 键（Daemon 侧不校验）。
+      expect(ref.containsKey('sha256'), isFalse);
+      // 受理成功后附件队列清空（refs 已随密文发送，不重复引用）。
+      expect(controller.attachments, isEmpty);
+    });
+  });
 }
 
 const _ownerDeviceId = 'android-owner-fixture';
@@ -254,6 +298,25 @@ class _FailAfterFirstChunkRelay extends FixtureRelayRepository {
   Future<AttachmentReceipt> completeAttachment(AttachmentCompleteInput input) {
     completeAttemptCount += 1;
     return super.completeAttachment(input);
+  }
+}
+
+/// v0.8.5 §3.1：记录 session.send 的密文 payload，供 refs wire 断言。
+class _SendRefsSpyRelay extends FixtureRelayRepository {
+  _SendRefsSpyRelay({super.clock});
+
+  final List<Map<String, dynamic>> submittedCiphertexts = [];
+
+  @override
+  Future<SessionCommandReceipt> submitSessionCommand(
+    String sessionId,
+    SessionCommandInput input,
+  ) async {
+    final payload = input.ciphertext?['fixture_payload'];
+    if (payload is Map) {
+      submittedCiphertexts.add(Map<String, dynamic>.from(payload));
+    }
+    return super.submitSessionCommand(sessionId, input);
   }
 }
 

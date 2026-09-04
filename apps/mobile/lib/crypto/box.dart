@@ -97,6 +97,12 @@ class CryptoBox {
   static final _hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
   static final _sha256 = Sha256();
 
+  /// v0.8.5 §3.1：明文 SHA-256 十六进制（附件密封前登记，Daemon 解密后复算对照）。
+  static Future<String> sha256Hex(Uint8List data) async {
+    final hash = await _sha256.hash(data);
+    return hash.bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   /// 与 Go `Seal` 对齐：HKDF 派生内容密钥 -> AES-256-GCM 加密 -> ciphertext||tag。
   /// 密文使用无填充 base64（Go RawStdEncoding 兼容），nonce 必须 96-bit 且不重复。
   static Future<CryptoEnvelope> seal({

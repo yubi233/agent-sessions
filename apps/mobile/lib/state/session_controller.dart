@@ -1008,12 +1008,23 @@ class SessionController extends ChangeNotifier {
         'fixture_payload': {
           'message': trimmed,
           if (sessionModel.isNotEmpty) 'model': sessionModel,
+          // v0.8.5 §3.1：已完成上传的附件以 opaque refs 随 send 密文发送
+          // （attachment_id/mime/尺寸/明文 sha256）；生产链路 Daemon 经 §3.3
+          // 拉密文 + 会话 DEK 解密后复算校验。refs 与 inline images 互斥。
+          if (_completedAttachmentRefs(sessionId).isNotEmpty)
+            'attachments': _completedAttachmentRefs(sessionId),
         },
       },
       awaitTurnCompletion: awaitTurnCompletion,
     );
     if (accepted) {
       _turnInFlight = true;
+      // v0.8.5 §3.1：受理成功后清空该会话附件队列（refs 已随密文发送，
+      // 保留会让同一批附件在下次发送时被重复引用）。
+      if (_attachmentsBySession[sessionId]?.isNotEmpty ?? false) {
+        _attachmentsBySession[sessionId] = const [];
+        _attachments = const [];
+      }
       notifyListeners();
     }
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
@@ -1957,6 +1968,28 @@ class SessionController extends ChangeNotifier {
       );
       notifyListeners();
     }
+  }
+
+  /// v0.8.5 §3.1：把当前会话已完成上传的附件投影为 send 密文的 opaque refs。
+  /// 只含白名单元数据（attachment_id/mime/尺寸/明文 sha256），不含文件名与正文；
+  /// sha256 缺省（旧草稿）时省略该键，Daemon 侧解密后按登记值复算校验。
+  List<Map<String, Object>> _completedAttachmentRefs(String sessionId) {
+    // 附件队列以 _attachments 为当前会话事实源（_attachmentsBySession 只作切换缓存），
+    // 因此直接读 _attachments；切换会话时该队列已被重置。
+    final transfers = _attachments;
+    final refs = <Map<String, Object>>[];
+    for (final transfer in transfers) {
+      if (transfer.phase != AttachmentTransferPhase.completed) continue;
+      final draft = transfer.draft;
+      refs.add({
+        'attachment_id': draft.id,
+        'mime': draft.mimeType,
+        'size_bytes': draft.byteSize,
+        if (draft.plaintextSHA256Hex != null)
+          'sha256': draft.plaintextSHA256Hex!,
+      });
+    }
+    return refs;
   }
 
   Future<void> _loadSelectedSession(String sessionId) async {

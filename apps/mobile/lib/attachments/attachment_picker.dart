@@ -132,12 +132,15 @@ class SystemAttachmentPicker implements AttachmentPicker {
         Uint8List.fromList(utf8.encode(envelope.toJsonString())),
       );
     }
+    // v0.8.5 §3.1：明文 SHA-256 在密封前登记（refs 随 send 密文发送，Daemon 解密后复算对照）。
+    final plaintextSHA256Hex = await CryptoBox.sha256Hex(bytes);
     return AttachmentDraft(
       id: 'attachment-${DateTime.now().microsecondsSinceEpoch}',
       localName: name,
       mimeType: mimeType,
       byteSize: bytes.length,
       compression: 'none',
+      plaintextSHA256Hex: plaintextSHA256Hex,
       metadataCiphertext: Uint8List.fromList(
         utf8.encode(metadataEnvelope.toJsonString()),
       ),
@@ -184,12 +187,14 @@ class FixtureAttachmentPicker implements AttachmentPicker {
     required String sessionId,
     required String dekId,
   }) async {
+    // v0.8.5 §3.1：fixture 草稿带确定性明文 sha256（0x2a 重复 480 字节的哈希）。
     return AttachmentDraft(
       id: 'fixture-picked-${DateTime.now().microsecondsSinceEpoch}',
       localName: 'fixture-picked.png',
       mimeType: 'image/png',
       byteSize: 480,
       compression: 'none',
+      plaintextSHA256Hex: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       metadataCiphertext: Uint8List.fromList([71, 72, 73]),
       ciphertextChunks: [Uint8List.fromList([81, 82])],
     );
