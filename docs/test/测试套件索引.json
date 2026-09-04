@@ -926,6 +926,53 @@
    "status": "in_progress",
    "allow_real_upstream": false,
    "uniqueness_rule": "v0.8.4 拥有细粒度回合状态与 ACP 流式输出的新增回归（TurnPhase 状态机、assistant/chunk 增量投影、thoughtVisibility thought 通道、背压/恢复收口、Flutter 打字机与性能、deterministic overlay、真实模型授权 gate）；V08-12 仅消费且历史 failed 证据不可改写。契约唯一事实源为 ADR-015。真实模型用例（V084-15）须用户显式授权后运行。"
+  },
+  {
+   "plan_id": "V085",
+   "suite_path": "docs/test/23-v085图片权限工作区与中止轨迹.json",
+   "owner": "Agent Sessions v0.8.5",
+   "id_prefix": [
+    "V085-"
+   ],
+   "owned_ids": [
+    "V085-01",
+    "V085-02",
+    "V085-03",
+    "V085-04",
+    "V085-05",
+    "V085-06",
+    "V085-07",
+    "V085-08",
+    "V085-09",
+    "V085-10",
+    "V085-11",
+    "V085-12",
+    "V085-13",
+    "V085-14",
+    "V085-15",
+    "V085-16",
+    "V085-17",
+    "V085-18",
+    "V085-19",
+    "V085-20",
+    "V085-21",
+    "V085-22",
+    "V085-23",
+    "V085-24"
+   ],
+   "consumed_ids": [
+    "V08-12"
+   ],
+   "dependencies": [
+    "V084",
+    "V083",
+    "V082",
+    "V081",
+    "V08"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": true,
+   "uniqueness_rule": "v0.8.5 拥有图片 opaque ref、权限目录/mode.set、工作区口径修复、usage timing、Agent 预设只读与中止/轨迹时间修复的新增回归；V08-12 仅消费。真实模型用例（V085-15）须用户显式授权后运行。"
   }
  ]
 }

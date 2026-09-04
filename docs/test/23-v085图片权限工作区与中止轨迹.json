@@ -1,0 +1,511 @@
+{
+  "suite": "v085-dsh-attachments-permission-workspace-usage-preset",
+  "description": "v0.8.5 会话图片发送（Relay opaque attachment ref）、权限模式贯通、工作区口径修复、用量 timing 投影、Agent 预设只读口径与中止/轨迹时间修复。主计划 V085-01..15 登记骨架，V085-16..24 为中止专题已执行回归（见实施记录 23）。",
+  "environment": {
+    "local": "隔离 SQLite、内存假桥/fixture、store/daemon/runner Go 测试",
+    "browser": "系统 Chrome headed（V085-14 gate）",
+    "flutter": "macOS fixture 窗口（V085-14 gate，需没有用户正在使用的 Agent Sessions 窗口）",
+    "dsh_overlay": "本地确定性真实 DSH bridge overlay（cordis image yml，不调用真实模型）",
+    "real": "真实 DSH 模型（V085-15，需用户显式授权，AGENT_SESSIONS_DSH_REAL=1）"
+  },
+  "cases": [
+    {
+      "id": "V085-01",
+      "title": "opaque ref/密钥/controls/sessionView/mode.set/timing _meta 契约冻结与生成物一致",
+      "status": "planned",
+      "phase": "P0",
+      "category": "contract",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-02",
+      "title": "会话内容密钥 wrap 下发、无密钥 fail-closed、撤销后禁选、Relay 不见明文",
+      "status": "planned",
+      "phase": "P0",
+      "category": "crypto/key_distribution",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-03",
+      "title": "附件分块上传、幂等续传、complete 后 outbox 事件、响应不回显密文",
+      "status": "planned",
+      "phase": "P0",
+      "category": "attachment_upload",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-04",
+      "title": "Daemon 鉴权附件读取端点、lease/fencing、哈希不符拒绝、字节不落日志",
+      "status": "planned",
+      "phase": "P0",
+      "category": "daemon_attachment_read",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-05",
+      "title": "refs → SendContent image block → 桥 admission → overlay 回复（cordis image yml）",
+      "status": "planned",
+      "phase": "P1",
+      "category": "image_send",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-06",
+      "title": "拒绝矩阵：text-only/缺服务/MIME/超限/无授权/跨 session，逐分支脱敏原因",
+      "status": "planned",
+      "phase": "P1",
+      "category": "image_rejection_matrix",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-07",
+      "title": "controls 输出 permission_mode/available_permission_modes；目录缺失禁用+原因；fixture 对齐",
+      "status": "planned",
+      "phase": "P1",
+      "category": "permission_catalog",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-08",
+      "title": "mobile→relay→daemon→桥 set_mode→回执+current_mode_update 清账、danger 确认",
+      "status": "planned",
+      "phase": "P1",
+      "category": "mode_set",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-09",
+      "title": "会话页副标题/空状态显示工作区显示名、解析失败降级",
+      "status": "planned",
+      "phase": "P2",
+      "category": "workspace_label",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-10",
+      "title": "dsh 工作区发现：非 Git 根候选、确认流、深度/符号链接边界、5/5 对齐、gitread 标注",
+      "status": "planned",
+      "phase": "P2",
+      "category": "workspace_discovery",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-11",
+      "title": "usage timing：桥折算→mapper→ttft/throughput→chips；缺省/畸形不显示假值",
+      "status": "planned",
+      "phase": "P1",
+      "category": "usage_timing",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-12",
+      "title": "Agent 预设只读投影链路、未协商缺省、写入 unsupported 原因",
+      "status": "planned",
+      "phase": "P2",
+      "category": "agent_preset_readonly",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-13",
+      "title": "回归：OpenCode/Codex、V081–V084 suites、fixture 对齐",
+      "status": "planned",
+      "phase": "P4",
+      "category": "regression",
+      "priority": "P1",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-14",
+      "title": "可见 gate：Flutter（权限/图片/显示四项）+ headed Chrome 只读投影；审计无明文",
+      "status": "planned",
+      "phase": "P4",
+      "category": "visible_gate",
+      "priority": "P1",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-15",
+      "title": "真实模型（需授权）：图片真实发送、timing 真实值、非流式缺省路径；独立报告",
+      "status": "planned",
+      "phase": "P4",
+      "category": "real_model_gate",
+      "priority": "P1",
+      "test_layer": "mixed",
+      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "steps": [
+        "按迭代计划 v0.8.5 对应阶段执行"
+      ],
+      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "cleanup": [
+        "无（登记骨架；执行后回填状态）"
+      ],
+      "evidence": [
+        "docs/zh/迭代计划/迭代计划v0.8.5.md",
+        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+      ]
+    },
+    {
+      "id": "V085-16",
+      "title": "阻塞 Send 期间 Abort 及时调用（绕过 executionMu）",
+      "status": "passed",
+      "phase": "P1",
+      "category": "go_runner_abort",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestSessionRunnerAbortPreemptsBlockingSend' -count=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "internal/daemon/runner_test.go"
+      ]
+    },
+    {
+      "id": "V085-17",
+      "title": "Abort 失败不产生成功事件（只出脱敏错误）",
+      "status": "passed",
+      "phase": "P1",
+      "category": "go_runner_abort",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestSessionRunnerAbortFailureDoesNotEmitSuccessEvent' -count=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "internal/daemon/runner_test.go"
+      ]
+    },
+    {
+      "id": "V085-18",
+      "title": "成功 Abort 只产生一次 session.aborted（canonical 时间非零）",
+      "status": "passed",
+      "phase": "P1",
+      "category": "go_runner_abort",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestSessionRunnerSuccessfulAbortEmitsExactlyOnce' -count=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "internal/daemon/runner_test.go"
+      ]
+    },
+    {
+      "id": "V085-19",
+      "title": "created_at_unix_ms 经 outbox/SQLite/API 保留；旧库漂移守卫幂等且不回填时间",
+      "status": "passed",
+      "phase": "P1",
+      "category": "storage_migration",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestRelayEventOutboxPreservesCanonicalCreatedAt' -count=1; go test ./internal/store -run 'TestOpenEnsuresSessionEventCreatedAtColumn|TestOpenFreshDatabaseHasSessionEventCreatedAtColumn' -count=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "internal/daemon/relay_outbox_retry_test.go",
+        "internal/store/session_event_created_at_column_test.go"
+      ]
+    },
+    {
+      "id": "V085-20",
+      "title": "历史事件无时间显示“时间未知”",
+      "status": "passed",
+      "phase": "P1",
+      "category": "flutter_domain",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_trajectory_view_test.dart --concurrency=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_trajectory_view_test.dart"
+      ]
+    },
+    {
+      "id": "V085-21",
+      "title": "顶层时间解析、payload 优先、占位继承与 HH:mm:ss 本地时区",
+      "status": "passed",
+      "phase": "P1",
+      "category": "flutter_domain",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_timeline_parsing_test.dart test/session_trajectory_view_test.dart --concurrency=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_timeline_parsing_test.dart",
+        "apps/mobile/test/session_trajectory_view_test.dart"
+      ]
+    },
+    {
+      "id": "V085-22",
+      "title": "stopStreaming 等待 Abort 回执；failed 浮出且不伪装中止",
+      "status": "passed",
+      "phase": "P1",
+      "category": "flutter_controller",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_controller_test.dart --concurrency=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "apps/mobile/test/session_controller_test.dart"
+      ]
+    },
+    {
+      "id": "V085-23",
+      "title": "Fixture 产生“已中止 · 时间”真实 session.aborted",
+      "status": "passed",
+      "phase": "P1",
+      "category": "flutter_fixture",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_controller_test.dart test/session_trajectory_view_test.dart --concurrency=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "apps/mobile/lib/relay/fixture_relay_repository.dart",
+        "apps/mobile/test/session_controller_test.dart"
+      ]
+    },
+    {
+      "id": "V085-24",
+      "title": "RelayLoop async send + 立即 abort + outbox 单条 canonical 时间（重开保持）",
+      "status": "passed",
+      "phase": "P1",
+      "category": "relayloop_async",
+      "priority": "P0",
+      "test_layer": "unit/integration",
+      "precondition": "中止与轨迹时间修复专题实现（实施记录 23 §2 P0-P2）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestRelayLoopAsyncSendAbortSingleAbortedEventWithCanonicalTime' -count=1"
+      ],
+      "expected": "见 title：回归断言通过。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "internal/daemon/relay_outbox_retry_test.go"
+      ]
+    }
+  ]
+}
