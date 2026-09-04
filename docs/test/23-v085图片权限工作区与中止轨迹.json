@@ -12,22 +12,27 @@
     {
       "id": "V085-01",
       "title": "opaque ref/密钥/controls/sessionView/mode.set/timing _meta 契约冻结与生成物一致",
-      "status": "planned",
+      "status": "partial",
       "phase": "P0",
       "category": "contract",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "go test ./internal/relay -run TestV085ContentDEK -count=1",
+        "移动端 unwrap + refs 消费与真实桥 overlay（后续阶段）"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "internal/domain/content_dek.go",
+        "internal/httpapi/daemon.go(handleDaemonPutContentDEK)",
+        "internal/httpapi/handlers.go(handleSessionContentDEK)",
+        "internal/relay/content_dek_contract_test.go",
+        "docs/adr/ADR-016-会话内容密钥分发.md",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.14/§4.15"
       ]
     },
     {
