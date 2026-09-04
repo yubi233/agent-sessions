@@ -135,15 +135,26 @@ void main() {
     await controller.initialize();
     await tester.pumpWidget(_home(relay, controller, owner));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('dsh-workspace-sync-button')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('dsh-workspace-sync-sheet')), findsOneWidget);
+    // v0.8.6 C（G9）：终端卡片化——有能力的终端卡显示卡内同步按钮（直发，
+    // 无抽屉），无能力终端卡灰态并给出原因。
     expect(find.text('MacBook Pro'), findsOneWidget);
-    expect(find.text('Linux'), findsNothing);
-    final confirm = tester.widget<FilledButton>(
-      find.byKey(const Key('dsh-workspace-sync-confirm')),
+    expect(find.text('Linux'), findsOneWidget);
+    expect(
+      find.byKey(const Key('dsh-workspace-sync-sheet')),
+      findsNothing,
     );
-    expect(confirm.onPressed, isNotNull);
+    final capableSync = tester.widget<IconButton>(
+      find.byKey(const Key('terminal-sync-term-capable')),
+    );
+    expect(capableSync.onPressed, isNotNull);
+    expect(
+      find.byKey(const Key('terminal-unsyncable-reason-term-unsupported')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('terminal-sync-term-unsupported')),
+      findsNothing,
+    );
   });
 
   testWidgets('V081-P1：同步入口刷新终端并明确提示能力缺失', (tester) async {
@@ -165,18 +176,15 @@ void main() {
     await tester.pumpWidget(_home(relay, controller, owner));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('dsh-workspace-sync-button')));
-    await tester.pumpAndSettle();
-
+    // v0.8.6 C（G9）：能力缺失的终端卡灰态并明确给出原因（无抽屉）。
     expect(
-      find.byKey(const Key('dsh-workspace-sync-no-terminal')),
+      find.byKey(const Key('terminal-unsyncable-reason-term-without-dsh-sync')),
       findsOneWidget,
     );
-    expect(find.text('没有可同步的本机终端。'), findsOneWidget);
-    expect(find.textContaining('重启本机 Daemon 后再试'), findsOneWidget);
+    expect(find.textContaining('终端未声明 DSH 工作区同步能力'), findsOneWidget);
     expect(
-      find.byKey(const Key('dsh-workspace-sync-open-terminals')),
-      findsOneWidget,
+      find.byKey(const Key('terminal-sync-term-without-dsh-sync')),
+      findsNothing,
     );
   });
 
@@ -200,27 +208,23 @@ void main() {
     await tester.pumpWidget(_home(relay, controller, owner));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('dsh-workspace-sync-button')));
+    // 刷新挂起：卡片展示"正在更新终端状态…"加载态。
     await tester.pump();
-
-    expect(find.byKey(const Key('dsh-workspace-sync-sheet')), findsOneWidget);
     expect(
-      find.byKey(const Key('dsh-workspace-sync-terminal-loading')),
+      find.byKey(const Key('terminal-sync-loading')),
       findsOneWidget,
     );
-    final pendingConfirm = tester.widget<FilledButton>(
-      find.byKey(const Key('dsh-workspace-sync-confirm')),
-    );
-    expect(pendingConfirm.onPressed, isNull);
 
     await relay.completeTerminalRead();
     await tester.pumpAndSettle();
 
+    // 终端就绪：加载态消失，卡内同步按钮可用（点击即直发，无抽屉）。
+    expect(find.byKey(const Key('terminal-sync-loading')), findsNothing);
     expect(find.text('Delayed DSH Mac'), findsOneWidget);
-    final confirm = tester.widget<FilledButton>(
-      find.byKey(const Key('dsh-workspace-sync-confirm')),
+    final syncButton = tester.widget<IconButton>(
+      find.byKey(const Key('terminal-sync-term-delayed-dsh')),
     );
-    expect(confirm.onPressed, isNotNull);
+    expect(syncButton.onPressed, isNotNull);
   });
 
   testWidgets('V081-P2：窄屏工作区标题进入详情，创建入口锁定 DSH workspace', (tester) async {
@@ -395,10 +399,11 @@ void main() {
       find.byKey(const Key('dsh-workspace-master-detail-scroll')),
       findsOneWidget,
     );
-    expect(find.byKey(const Key('dsh-workspace-toolbar-wide')), findsOneWidget);
+    // v0.8.6 C：工具栏只保留搜索（全局同步按钮被终端卡片同步取代）。
+    expect(find.byKey(const Key('dsh-workspace-search-input')), findsOneWidget);
     expect(
-      find.byKey(const Key('dsh-workspace-toolbar-compact')),
-      findsNothing,
+      find.byKey(const Key('dsh-workspace-search-input')),
+      findsOneWidget,
     );
     expect(find.byKey(const Key('dsh-workspace-detail-pane')), findsOneWidget);
     expect(find.byKey(const Key('session-new-button')), findsNothing);
@@ -439,10 +444,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const Key('dsh-workspace-toolbar-compact')),
+      find.byKey(const Key('dsh-workspace-search-input')),
       findsOneWidget,
     );
-    expect(find.byKey(const Key('dsh-workspace-toolbar-wide')), findsNothing);
+    expect(
+      find.byKey(const Key('dsh-workspace-search-input')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }

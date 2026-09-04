@@ -129,7 +129,18 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
   final TextEditingController _searchController = TextEditingController();
   String _workspaceSearch = '';
   String? _selectedWorkspaceId;
-  bool _openingSyncSheet = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // v0.8.6 C：主页打开即刷新终端在线态/能力（卡片同步可用性依赖它）。
+    // 同时收口遗留问题 2026-09-02 #3（终端状态只在 App 启动/同步弹窗刷新）。
+    // postFrame：避免在 widget 构建期改动 Riverpod provider（会抛
+    // "modify a provider while the widget tree was building"）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(widget.terminalStatus.refresh());
+    });
+  }
 
   @override
   void dispose() {
@@ -215,10 +226,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
         ],
         _DSHWorkspaceToolbar(
           searchController: _searchController,
-          canSync: app.canManageDevices && !app.isBusy,
-          syncing: sessions.workspaceSyncWaiting,
           onSearchChanged: (value) => setState(() => _workspaceSearch = value),
-          onSync: () => _openSyncSheet(terminalStatus),
         ),
         const SizedBox(height: 12),
         if (sessions.workspaceSyncState != null ||
@@ -232,54 +240,93 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
         if (sessions.workspaceSyncState != null ||
             sessions.workspaceSyncWaiting)
           const SizedBox(height: 12),
-        if (dshWorkspaces.isEmpty)
+        // v0.8.6 C：无工作区但存在可同步终端时也渲染终端空卡（卡内同步直发），
+        // 保证首次使用场景有同步入口；搜索无命中时展示空态。
+        // v0.8.6 C：空态仅在"既无工作区也无已知终端"时展示；终端刷新挂起时
+        // 先给出页面级加载反馈。
+        // 文本型加载态：无限旋转的 spinner 会让 pumpAndSettle 永不收敛。
+        if (terminalStatus.isRefreshing && terminalStatus.terminals.isEmpty)
+          const Padding(
+            key: Key('terminal-sync-loading'),
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: Text('正在读取本机终端状态…')),
+          )
+        else if (dshWorkspaces.isEmpty && terminalStatus.terminals.isEmpty)
           _DSHWorkspaceEmptyState(canSync: app.canManageDevices)
-        else if (filteredWorkspaces.isEmpty)
+        else if (dshWorkspaces.isNotEmpty && filteredWorkspaces.isEmpty)
           const _DSHWorkspaceSearchEmptyState()
         else
-          for (final workspace in filteredWorkspaces) ...[
-            _DSHWorkspaceGroup(
-              workspace: workspace,
-              sessions: _dshSessionsForWorkspace(
-                sessions.sessions,
-                workspace.id,
-              ),
-              expanded: _expandedWorkspaceIds.contains(workspace.id),
-              selected: _selectedWorkspaceId == workspace.id,
-              selectedSessionId: sessions.selectedSessionId,
-              onToggle: () => setState(() {
-                if (!_expandedWorkspaceIds.add(workspace.id)) {
-                  _expandedWorkspaceIds.remove(workspace.id);
-                }
-              }),
-              onSelectWorkspace: () {
-                if (isWide) {
-                  setState(() {
-                    _selectedWorkspaceId = workspace.id;
-                    _expandedWorkspaceIds.add(workspace.id);
-                  });
-                } else if (GoRouter.maybeOf(context) != null) {
-                  context.push('/workspaces/${workspace.id}');
-                } else {
-                  // 纯 widget fixture 没有路由宿主时仍保留选中态，便于测试交互契约。
-                  setState(() {
-                    _selectedWorkspaceId = workspace.id;
-                    _expandedWorkspaceIds.add(workspace.id);
-                  });
-                }
-              },
-              onOpenSession: (session) async {
-                await sessions.selectSession(session.id);
-                if (!context.mounted) return;
-                if (GoRouter.maybeOf(context) != null) {
-                  context.push('/sessions/${session.id}');
-                }
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+          ..._buildTerminalCardItems(
+            context,
+            sessions: sessions,
+            terminalStatus: terminalStatus,
+            filteredWorkspaces: filteredWorkspaces,
+            onSelectWorkspace: (workspace) {
+              if (GoRouter.maybeOf(context) != null) {
+                context.push('/workspaces/${workspace.id}');
+              } else {
+                // 纯 widget fixture 没有路由宿主时仍保留选中态，便于测试交互契约。
+                setState(() {
+                  _selectedWorkspaceId = workspace.id;
+                  _expandedWorkspaceIds.add(workspace.id);
+                });
+              }
+            },
+            onOpenSession: (session) async {
+              await sessions.selectSession(session.id);
+              if (!context.mounted) return;
+              if (GoRouter.maybeOf(context) != null) {
+                context.push('/sessions/${session.id}');
+              }
+            },
+          ),
       ],
     );
+  }
+
+  /// 构造终端卡片列表（每卡一台终端 + 卡内工作区；串行单槽：同一时间只允许
+  /// 一张卡发起同步，其余卡的同步按钮禁用并提示"同步进行中"）。
+  List<Widget> _buildTerminalCardItems(
+    BuildContext context, {
+    required SessionController sessions,
+    required TerminalStatusController terminalStatus,
+    required List<MobileWorkspace> filteredWorkspaces,
+    required void Function(MobileWorkspace workspace) onSelectWorkspace,
+    required ValueChanged<MobileSession> onOpenSession,
+  }) {
+    final groups = _terminalGroups(
+      filteredWorkspaces,
+      terminalStatus,
+      canManageDevices: widget.app.canManageDevices,
+    );
+    return [
+      for (final group in groups)
+        _TerminalWorkspaceCard(
+          key: Key('terminal-card-${group.terminal?.id ?? 'orphan'}'),
+          group: group,
+          sessions: sessions,
+          selectedWorkspaceId: _selectedWorkspaceId,
+          selectedSessionId: sessions.selectedSessionId,
+          expandedWorkspaceIds: _expandedWorkspaceIds,
+          onToggle: (workspaceId) => setState(() {
+            if (!_expandedWorkspaceIds.add(workspaceId)) {
+              _expandedWorkspaceIds.remove(workspaceId);
+            }
+          }),
+          onSelectWorkspace: onSelectWorkspace,
+          onOpenSession: onOpenSession,
+          onSync: group.canSync && group.terminal != null && !_syncBusy
+              ? () => unawaited(
+                  widget.sessions.syncDSHWorkspaces(
+                    terminalId: group.terminal!.id,
+                  ),
+                )
+              : null,
+          syncBusy: _syncBusy,
+          terminalsRefreshing: terminalStatus.isRefreshing,
+        ),
+      const SizedBox(height: 8),
+    ];
   }
 
   Widget _buildWideWorkspaceView(
@@ -340,11 +387,8 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                         ],
                         _DSHWorkspaceToolbar(
                           searchController: _searchController,
-                          canSync: app.canManageDevices && !app.isBusy,
-                          syncing: sessions.workspaceSyncWaiting,
                           onSearchChanged: (value) =>
                               setState(() => _workspaceSearch = value),
-                          onSync: () => _openSyncSheet(terminalStatus),
                         ),
                         const SizedBox(height: 12),
                         if (sessions.workspaceSyncState != null ||
@@ -359,42 +403,37 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                         if (sessions.workspaceSyncState != null ||
                             sessions.workspaceSyncWaiting)
                           const SizedBox(height: 12),
-                        if (dshWorkspaces.isEmpty)
+                        if (terminalStatus.isRefreshing &&
+                            terminalStatus.terminals.isEmpty)
+                          const Padding(
+                            key: Key('terminal-sync-loading'),
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: Center(child: Text('正在读取本机终端状态…')),
+                          )
+                        else if (dshWorkspaces.isEmpty &&
+                            terminalStatus.terminals.isEmpty)
                           _DSHWorkspaceEmptyState(canSync: app.canManageDevices)
-                        else if (filteredWorkspaces.isEmpty)
+                        else if (dshWorkspaces.isNotEmpty &&
+                            filteredWorkspaces.isEmpty)
                           const _DSHWorkspaceSearchEmptyState()
                         else
-                          for (final workspace in filteredWorkspaces) ...[
-                            _DSHWorkspaceGroup(
-                              workspace: workspace,
-                              sessions: _dshSessionsForWorkspace(
-                                sessions.sessions,
-                                workspace.id,
-                              ),
-                              expanded: _expandedWorkspaceIds.contains(
-                                workspace.id,
-                              ),
-                              selected: _selectedWorkspaceId == workspace.id,
-                              selectedSessionId: sessions.selectedSessionId,
-                              onToggle: () => setState(() {
-                                if (!_expandedWorkspaceIds.add(workspace.id)) {
-                                  _expandedWorkspaceIds.remove(workspace.id);
-                                }
-                              }),
-                              onSelectWorkspace: () => setState(() {
-                                _selectedWorkspaceId = workspace.id;
-                                _expandedWorkspaceIds.add(workspace.id);
-                              }),
-                              onOpenSession: (session) async {
-                                await sessions.selectSession(session.id);
-                                if (!context.mounted) return;
-                                if (GoRouter.maybeOf(context) != null) {
-                                  context.push('/sessions/${session.id}');
-                                }
-                              },
-                            ),
-                            const SizedBox(height: 8),
-                          ],
+                          ..._buildTerminalCardItems(
+                            context,
+                            sessions: sessions,
+                            terminalStatus: terminalStatus,
+                            filteredWorkspaces: filteredWorkspaces,
+                            onSelectWorkspace: (workspace) => setState(() {
+                              _selectedWorkspaceId = workspace.id;
+                              _expandedWorkspaceIds.add(workspace.id);
+                            }),
+                            onOpenSession: (session) async {
+                              await sessions.selectSession(session.id);
+                              if (!context.mounted) return;
+                              if (GoRouter.maybeOf(context) != null) {
+                                context.push('/sessions/${session.id}');
+                              }
+                            },
+                          ),
                       ],
                     ),
                   ),
@@ -504,26 +543,71 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
     );
   }
 
-  Future<void> _openSyncSheet(TerminalStatusController terminalStatus) async {
-    if (_openingSyncSheet) return;
-    setState(() => _openingSyncSheet = true);
-    // 终端 capability 会在 Daemon 重启后的 hello/heartbeat 中更新。同步弹窗必须
-    // 立即打开并在其中呈现刷新状态，不能把用户留在无反馈的图标按钮上等待网络。
-    unawaited(terminalStatus.refresh());
-    try {
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        builder: (context) => _DSHWorkspaceSyncSheet(
-          sessions: widget.sessions,
-          terminals: terminalStatus,
-        ),
-      );
-    } finally {
-      if (mounted && _openingSyncSheet) {
-        setState(() => _openingSyncSheet = false);
+  // ---- v0.8.6 C（G9）：主页终端卡片化 ----
+  // 全局同步按钮 + 选择抽屉被"终端卡片 + 卡内同步直发"取代：每张卡对应一台
+  // 终端机器，点卡内同步按钮直接对该终端发起工作区同步（无抽屉）。
+  bool get _syncBusy =>
+      widget.sessions.workspaceSyncWaiting ||
+      (widget.sessions.workspaceSyncState?.isPending == true);
+
+  /// 按终端把工作区分组。组键 = workspace.terminalId；找不到对应终端（或
+  /// terminalId 为空）的工作区归入"未归属"组（排序末尾，同步禁用并给原因）。
+  List<_TerminalGroup> _terminalGroups(
+    List<MobileWorkspace> workspaces,
+    TerminalStatusController terminalStatus, {
+    required bool canManageDevices,
+  }) {
+    final terminals = {
+      for (final terminal in terminalStatus.terminals) terminal.id: terminal,
+    };
+    final buckets = <String, List<MobileWorkspace>>{};
+    final order = <String>[];
+    for (final workspace in workspaces) {
+      final key = workspace.terminalId.isEmpty ? '' : workspace.terminalId;
+      if (!buckets.containsKey(key)) order.add(key);
+      buckets.putIfAbsent(key, () => []).add(workspace);
+    }
+    // 每台已知终端都出一张卡（有工作区的携带工作区；暂无工作区的出空卡，
+    // 保证首次使用也有同步入口；离线/无能力卡灰态带原因）。
+    for (final terminal in terminalStatus.terminals) {
+      if (!buckets.containsKey(terminal.id)) {
+        order.insert(order.length, terminal.id);
+        buckets[terminal.id] = const [];
       }
     }
+    // 未归属组永远排在已识别终端之后。
+    order.sort((left, right) {
+      if (left.isEmpty) return 1;
+      if (right.isEmpty) return -1;
+      return 0;
+    });
+    return [
+      for (final key in order)
+        () {
+          final terminal = key.isEmpty ? null : terminals[key];
+          final online = terminal != null &&
+              terminalStatus.availabilityFor(terminal) ==
+                  TerminalAvailability.online;
+          final capable =
+              terminal?.hasCapability('dsh_workspace_sync') ?? false;
+          String? blockedReason;
+          if (terminal == null) {
+            blockedReason = '工作区未归属已知终端（终端离线或已更换设备）。';
+          } else if (!online) {
+            blockedReason = '终端离线，无法请求同步。';
+          } else if (!capable) {
+            blockedReason = '终端未声明 DSH 工作区同步能力。';
+          } else if (!widget.app.canManageDevices) {
+            blockedReason = '当前设备只读，无法请求同步。';
+          }
+          return _TerminalGroup(
+            terminal: terminal,
+            canSync: blockedReason == null,
+            blockedReason: blockedReason,
+            workspaces: buckets[key] ?? const [],
+          );
+        }(),
+    ];
   }
 }
 
@@ -566,74 +650,30 @@ String _dshSessionLabel(MobileSession session) {
   return candidate;
 }
 
+/// v0.8.6 C（G9）：主页工具栏只保留搜索。原全局"同步本机 DSH 项目"按钮已被
+/// 终端卡片的卡内同步按钮取代（点卡片同步直接对该终端发起，无需选择抽屉）。
 class _DSHWorkspaceToolbar extends StatelessWidget {
   const _DSHWorkspaceToolbar({
     required this.searchController,
-    required this.canSync,
-    required this.syncing,
     required this.onSearchChanged,
-    required this.onSync,
   });
 
   final TextEditingController searchController;
-  final bool canSync;
-  final bool syncing;
   final ValueChanged<String> onSearchChanged;
-  final VoidCallback onSync;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      // The desktop workspace sidebar is deliberately narrow.  Choose the
-      // toolbar arrangement from the viewport, not this local sidebar width.
-      final compact = MediaQuery.sizeOf(context).width < 600;
-      final search = TextField(
-        key: const Key('dsh-workspace-search-input'),
-        controller: searchController,
-        onChanged: onSearchChanged,
-        maxLines: 1,
-        decoration: const InputDecoration(
-          prefixIcon: Icon(Icons.search),
-          hintText: '搜索工作区或会话',
-          isDense: true,
-        ),
-      );
-      final sync = canSync
-          ? IconButton(
-              key: const Key('dsh-workspace-sync-button'),
-              tooltip: syncing ? '正在同步 DSH 工作区' : '同步本机 DSH 项目',
-              onPressed: syncing ? null : onSync,
-              icon: syncing
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.sync),
-            )
-          : null;
-      if (compact) {
-        return Column(
-          key: const Key('dsh-workspace-toolbar-compact'),
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            search,
-            if (sync != null)
-              Align(alignment: Alignment.centerRight, child: sync),
-          ],
-        );
-      }
-      return Row(
-        key: const Key('dsh-workspace-toolbar-wide'),
-        children: [
-          Expanded(child: search),
-          if (sync != null) ...[const SizedBox(width: 8), sync],
-        ],
-      );
-    },
+  Widget build(BuildContext context) => TextField(
+    key: const Key('dsh-workspace-search-input'),
+    controller: searchController,
+    onChanged: onSearchChanged,
+    maxLines: 1,
+    decoration: const InputDecoration(
+      prefixIcon: Icon(Icons.search),
+      hintText: '搜索工作区或会话',
+      isDense: true,
+    ),
   );
 }
-
 class _DSHWorkspaceGroup extends StatelessWidget {
   const _DSHWorkspaceGroup({
     required this.workspace,
@@ -1426,207 +1466,167 @@ class _DSHWorkspaceSyncNotice extends StatelessWidget {
   }
 }
 
-class _DSHWorkspaceSyncSheet extends StatefulWidget {
-  const _DSHWorkspaceSyncSheet({
-    required this.sessions,
-    required this.terminals,
+/// v0.8.6 C（G9）：一个终端分组 = 一台终端（或未归属组）+ 其名下工作区。
+class _TerminalGroup {
+  const _TerminalGroup({
+    required this.terminal,
+    required this.canSync,
+    required this.blockedReason,
+    required this.workspaces,
   });
 
-  final SessionController sessions;
-  final TerminalStatusController terminals;
-
-  @override
-  State<_DSHWorkspaceSyncSheet> createState() => _DSHWorkspaceSyncSheetState();
+  /// null 表示"未归属"组（terminalId 为空或终端不在已知列表）。
+  final TerminalSummary? terminal;
+  final bool canSync;
+  final String? blockedReason;
+  final List<MobileWorkspace> workspaces;
 }
 
-class _DSHWorkspaceSyncSheetState extends State<_DSHWorkspaceSyncSheet> {
-  String? _terminalId;
+/// v0.8.6 C（G9）：主页终端卡片。头部为终端名/平台/在线态与卡内"同步"按钮
+/// （点击直接对该终端发起工作区同步，不再弹出选择抽屉）；卡片体按既有
+/// 工作区分组语义列出该终端名下的工作区。不可同步的卡整体灰态并给出原因，
+/// 保持 fail-closed：绝不渲染可点却必败的同步按钮。
+class _TerminalWorkspaceCard extends StatelessWidget {
+  const _TerminalWorkspaceCard({
+    required this.group,
+    required this.sessions,
+    required this.selectedWorkspaceId,
+    required this.selectedSessionId,
+    required this.expandedWorkspaceIds,
+    required this.onToggle,
+    required this.onSelectWorkspace,
+    required this.onOpenSession,
+    required this.onSync,
+    required this.syncBusy,
+    required this.terminalsRefreshing,
+    super.key,
+  });
 
-  List<TerminalSummary> get _eligibleTerminals => widget.terminals.terminals
-      .where(
-        (terminal) =>
-            widget.terminals.availabilityFor(terminal) ==
-                TerminalAvailability.online &&
-            terminal.hasCapability('dsh_workspace_sync'),
-      )
-      .toList(growable: false);
+  final _TerminalGroup group;
+  final SessionController sessions;
+  final String? selectedWorkspaceId;
+  final String? selectedSessionId;
+  final Set<String> expandedWorkspaceIds;
+  final ValueChanged<String> onToggle;
+  final ValueChanged<MobileWorkspace> onSelectWorkspace;
+  final ValueChanged<MobileSession> onOpenSession;
+  final VoidCallback? onSync;
+  final bool syncBusy;
+  final bool terminalsRefreshing;
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: Listenable.merge([widget.sessions, widget.terminals]),
-      builder: (context, _) {
-        final candidates = _eligibleTerminals;
-        TerminalSummary? selected;
-        for (final terminal in candidates) {
-          if (terminal.id == _terminalId) {
-            selected = terminal;
-            break;
-          }
-        }
-        if (selected == null && candidates.length == 1) {
-          selected = candidates.single;
-        }
-        final terminalsRefreshing = widget.terminals.isRefreshing;
-        final waiting = widget.sessions.workspaceSyncWaiting;
-        final state = widget.sessions.workspaceSyncState;
-        final completed = state?.isTerminal == true && !waiting;
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              20,
-              20,
-              20,
-              20 + MediaQuery.viewInsetsOf(context).bottom,
-            ),
-            child: Column(
-              key: const Key('dsh-workspace-sync-sheet'),
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+    final theme = Theme.of(context);
+    final terminal = group.terminal;
+    return Container(
+      key: Key('terminal-card-${terminal?.id ?? 'orphan'}'),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 6, 8),
+            child: Row(
               children: [
-                Text(
-                  '同步 DSH 工作区',
-                  style: Theme.of(context).textTheme.titleLarge,
+                Icon(
+                  terminal == null
+                      ? Icons.help_outline
+                      : Icons.computer_outlined,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(height: 6),
-                const Text('只会同步终端已授权的工作区名称和状态。'),
-                const SizedBox(height: 16),
-                if (candidates.isEmpty && terminalsRefreshing)
-                  const _DSHWorkspaceSyncTerminalLoading()
-                else if (candidates.isEmpty)
-                  _DSHWorkspaceSyncNoTerminal(
-                    error: widget.terminals.errorMessage,
-                  )
-                else ...[
-                  RadioGroup<String>(
-                    groupValue: selected?.id,
-                    onChanged: (value) {
-                      if (!waiting) setState(() => _terminalId = value);
-                    },
-                    child: Column(
-                      children: [
-                        for (final terminal in candidates)
-                          RadioListTile<String>(
-                            key: Key(
-                              'dsh-workspace-terminal-option-${terminal.id}',
-                            ),
-                            value: terminal.id,
-                            enabled: !waiting,
-                            title: Text(
-                              terminal.hostname,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text('${terminal.platform} · 在线'),
-                          ),
-                      ],
-                    ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    terminal?.hostname ?? '未归属终端',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall,
                   ),
-                  if (selected != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text('将从 ${selected.hostname} 同步。'),
-                    ),
-                  if (terminalsRefreshing)
-                    const Padding(
-                      padding: EdgeInsets.only(bottom: 8),
-                      child: Text('正在更新本机终端状态…'),
-                    ),
-                ],
-                if (waiting) ...[
-                  const SizedBox(height: 8),
-                  const Text('同步请求已提交，正在等待终端响应。'),
-                ] else if (state?.isPending == true) ...[
-                  const SizedBox(height: 8),
-                  const Text('请求仍在等待终端响应，可关闭此窗口后下拉刷新查看结果。'),
-                ] else if (completed) ...[
-                  const SizedBox(height: 8),
-                  Text(state!.isSucceeded ? '同步完成。' : '同步未完成，请检查终端状态。'),
-                ],
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      key: const Key('dsh-workspace-sync-cancel'),
-                      onPressed: waiting
-                          ? widget.sessions.stopWaitingForDSHWorkspaceSync
-                          : () => Navigator.of(context).pop(),
-                      child: Text(waiting ? '停止等待' : '取消'),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      key: const Key('dsh-workspace-sync-confirm'),
-                      onPressed:
-                          selected == null || waiting || terminalsRefreshing
-                          ? null
-                          : () => widget.sessions.syncDSHWorkspaces(
-                              terminalId: selected!.id,
-                            ),
-                      child: const Text('确认同步'),
-                    ),
-                  ],
                 ),
+                Text(
+                  terminal == null
+                      ? '${group.workspaces.length} 个工作区'
+                      : '${terminal.platform} · 在线',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (terminal != null && group.canSync)
+                  _buildSyncButton(context),
               ],
             ),
           ),
-        );
-      },
+          if (group.blockedReason != null)
+            Padding(
+              key: Key('terminal-unsyncable-reason-${terminal?.id ?? 'orphan'}'),
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+              child: Text(
+                group.blockedReason!,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          if (terminal != null && terminalsRefreshing && group.canSync)
+            const Padding(
+              key: Key('terminal-sync-loading'),
+              padding: EdgeInsets.fromLTRB(14, 0, 14, 8),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 8),
+                  Text('正在更新终端状态…'),
+                ],
+              ),
+            ),
+          const Divider(height: 1),
+          // 卡内工作区沿用既有分组语义（展开/会话数/进入详情）。
+          for (final workspace in group.workspaces) ...[
+            _DSHWorkspaceGroup(
+              workspace: workspace,
+              sessions: sessions.sessions
+                  .where((item) => item.workspaceId == workspace.id)
+                  .toList(growable: false),
+              expanded: expandedWorkspaceIds.contains(workspace.id),
+              selected: selectedWorkspaceId == workspace.id,
+              selectedSessionId: selectedSessionId,
+              onToggle: () => onToggle(workspace.id),
+              onSelectWorkspace: () => onSelectWorkspace(workspace),
+              onOpenSession: onOpenSession,
+            ),
+            const SizedBox(height: 4),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSyncButton(BuildContext context) {
+    // 调用点保证 terminal 非空且可同步（group.canSync）。
+    final terminal = group.terminal!;
+    return IconButton(
+      key: Key('terminal-sync-${terminal.id}'),
+      tooltip: syncBusy ? '同步进行中，请稍候' : '同步该终端下的工作区',
+      onPressed: syncBusy ? null : onSync,
+      icon: syncBusy
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.sync),
     );
   }
 }
-
-class _DSHWorkspaceSyncTerminalLoading extends StatelessWidget {
-  const _DSHWorkspaceSyncTerminalLoading();
-
-  @override
-  Widget build(BuildContext context) => const Row(
-    key: Key('dsh-workspace-sync-terminal-loading'),
-    children: [
-      SizedBox(
-        width: 20,
-        height: 20,
-        child: CircularProgressIndicator(strokeWidth: 2),
-      ),
-      SizedBox(width: 12),
-      Expanded(child: Text('正在读取本机终端状态…')),
-    ],
-  );
-}
-
-class _DSHWorkspaceSyncNoTerminal extends StatelessWidget {
-  const _DSHWorkspaceSyncNoTerminal({this.error});
-
-  final String? error;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    key: const Key('dsh-workspace-sync-no-terminal'),
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const Text('没有可同步的本机终端。'),
-      const SizedBox(height: 6),
-      Text(
-        error ??
-            '需要一台在线且声明 DSH 工作区同步能力的 Agent Sessions Daemon。重启本机 Daemon 后再试。',
-      ),
-      const SizedBox(height: 12),
-      OutlinedButton.icon(
-        key: const Key('dsh-workspace-sync-open-terminals'),
-        onPressed: () {
-          Navigator.of(context).pop();
-          if (GoRouter.maybeOf(context) != null) {
-            context.push('/terminals');
-          }
-        },
-        icon: const Icon(Icons.computer_outlined),
-        label: const Text('查看终端状态'),
-      ),
-    ],
-  );
-}
-
 class NewSessionScreen extends ConsumerStatefulWidget {
   const NewSessionScreen({super.key});
 

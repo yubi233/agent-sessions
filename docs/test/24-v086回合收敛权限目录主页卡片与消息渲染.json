@@ -290,7 +290,7 @@
   {
    "id": "V086-14",
    "title": "主页终端卡片化：在线卡直发同步（无抽屉）、卡内工作区与内联同步反馈、离线/无能力灰态带原因、多卡串行",
-   "status": "planned",
+   "status": "passed",
    "phase": "P2/P3",
    "category": "ui",
    "priority": "P1",
@@ -304,7 +304,9 @@
     "无"
    ],
    "evidence": [
-    "阶段5回填"
+    "apps/mobile/lib/ui/session_screens.dart（_TerminalGroup/_TerminalWorkspaceCard/_buildTerminalCardItems）",
+    "apps/mobile/test/dsh_mode_test.dart（卡片同步直发/灰态原因/loading，10 项）",
+    "flutter analyze 0 问题；dsh_mode 10/10、screens 37/37（2026-09-05 本地）"
    ]
   },
   {
