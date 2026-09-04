@@ -34,6 +34,7 @@ import '../state/usage_controller.dart';
 import '../state/workspace_files_controller.dart';
 import '../storage/composer_preference_store.dart';
 import '../storage/encrypted_cache.dart';
+import '../storage/model_effort_preference_store.dart';
 import '../storage/secure_token_store.dart';
 import '../storage/theme_preference_store.dart';
 import 'theme_controller.dart';
@@ -53,6 +54,12 @@ final themePreferenceStoreProvider = Provider<ThemePreferenceStore>(
 );
 final composerPreferenceStoreProvider = Provider<ComposerPreferenceStore>(
   (ref) => InMemoryComposerPreferenceStore(),
+);
+
+/// 「模型 → 上次选中推理等级」本地记忆（v0.8.6）：选模型自动带回上次使用的
+/// 推理等级，模型列表在模型名后展示该值。与认证、Relay 和会话控制分离。
+final modelEffortPreferenceStoreProvider = Provider<ModelEffortPreferenceStore>(
+  (ref) => InMemoryModelEffortPreferenceStore(),
 );
 
 /// Composer 用户级偏好（Enter Queue/Steer）与认证、Relay 和会话控制分离。
@@ -138,6 +145,7 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
       contentKeyProvider: (sessionId) =>
           _sessionContentKeyFromStore(relay, identity, sessionId),
     ),
+    modelEffortMemory: ref.read(modelEffortPreferenceStoreProvider),
   );
   unawaited(controller.initialize());
   return controller;

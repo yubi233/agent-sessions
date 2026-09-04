@@ -481,6 +481,87 @@ void main() {
       isTrue,
     );
   });
+
+  testWidgets('V086：模型行尾展示当前生效/记忆的推理等级徽标', (tester) async {
+    await tester.pumpWidget(
+      _seatApp(
+        catalog: catalog,
+        // fixture-model-b 上次用「高」；记忆里不存在的等级不得展示。
+        effortsByModel: const {'fixture-model-b': '高', 'fixture-model-b2': '无'},
+      ),
+    );
+    await tester.tap(find.byKey(const Key('session-model-seat-trigger')));
+    await tester.pumpAndSettle();
+
+    // 选中模型展示当前生效等级（effort 列表里也有「中」，因此用 key 精确断言）。
+    final activeBadge = tester.widget<Text>(
+      find.byKey(const Key('session-model-option-fixture-model-a-effort')),
+    );
+    expect(activeBadge.data, '中');
+    // 其它模型展示记忆的上次等级。
+    final rememberedBadge = tester.widget<Text>(
+      find.byKey(const Key('session-model-option-fixture-model-b-effort')),
+    );
+    expect(rememberedBadge.data, '高');
+    // 记忆等级不在会话目录中时不展示（目录已变化的模型回退 Host 默认）。
+    expect(
+      find.byKey(const Key('session-model-option-fixture-model-b2-effort')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('V086：分组目录徽标按模型自有 efforts 校验，无档位模型不显示', (
+    tester,
+  ) async {
+    const groupedCatalog = SessionModelCatalog(
+      model: 'gpt-a',
+      effort: null,
+      models: [],
+      efforts: ['low', 'high'],
+      groups: [
+        CapabilityModelGroup(
+          id: 'openai',
+          name: 'openai',
+          models: [
+            CapabilityModelOption(
+              provider: 'openai',
+              value: 'gpt-a',
+              id: 'gpt-a',
+              name: 'GPT A',
+              efforts: ['low', 'high'],
+            ),
+            CapabilityModelOption(
+              provider: 'openai',
+              value: 'gpt-b',
+              id: 'gpt-b',
+              name: 'GPT B',
+              efforts: ['low'],
+            ),
+          ],
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      _seatApp(
+        catalog: groupedCatalog,
+        // gpt-b 自有目录只有 low：记忆里的 high 不展示，避免误导。
+        effortsByModel: const {'gpt-b': 'high'},
+      ),
+    );
+    await tester.tap(find.byKey(const Key('session-model-seat-trigger')));
+    await tester.pumpAndSettle();
+
+    // 选中模型 Host 未下发 effort 且该模型确有可选档位 → 展示「默认」。
+    final defaultBadge = tester.widget<Text>(
+      find.byKey(const Key('session-model-option-gpt-a-effort')),
+    );
+    expect(defaultBadge.data, '默认');
+    // 记忆等级不在该模型自有目录中 → 不展示。
+    expect(
+      find.byKey(const Key('session-model-option-gpt-b-effort')),
+      findsNothing,
+    );
+  });
 }
 
 Widget _seatApp({
@@ -500,6 +581,7 @@ Widget _seatApp({
   String? effortBlockedReason,
   SessionUsageSummary? usage,
   CapabilityModelDetail? modelDetail,
+  Map<String, String> effortsByModel = const {},
   Future<SessionModelCatalogRefresh> Function()? onRefresh,
   Future<String?> Function(String model)? onSelectModel,
   Future<String?> Function(String effort)? onSelectEffort,
@@ -519,6 +601,7 @@ Widget _seatApp({
           effortBlockedReason: effortBlockedReason,
           modelDetail: modelDetail,
           usage: usage,
+          effortsByModel: effortsByModel,
           onRefresh:
               onRefresh ??
               () async => SessionModelCatalogRefresh(catalog: catalog),

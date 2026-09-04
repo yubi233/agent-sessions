@@ -6,8 +6,10 @@ import 'package:flutter/foundation.dart';
 import '../attachments/attachment_picker.dart';
 import '../domain/control_models.dart';
 import '../domain/models.dart';
+import '../domain/model_effort_preferences.dart';
 import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
+import '../storage/model_effort_preference_store.dart';
 import 'session_composer_controller.dart';
 
 enum SessionListPhase { loading, ready, error }
@@ -22,21 +24,32 @@ class SessionController extends ChangeNotifier {
     DateTime Function()? clock,
     Random? random,
     AttachmentPicker? picker,
-  }) =>
-      SessionController._(relay, clock: clock, random: random, picker: picker);
+    ModelEffortPreferenceStore? modelEffortMemory,
+  }) => SessionController._(
+    relay,
+    clock: clock,
+    random: random,
+    picker: picker,
+    modelEffortMemory: modelEffortMemory,
+  );
 
   SessionController._(
     this._relay, {
     DateTime Function()? clock,
     Random? random,
     this._picker,
+    this._modelEffortMemory,
   }) : _clock = clock ?? DateTime.now,
        _random = random ?? Random.secure();
-
   final RelayRepository _relay;
   final DateTime Function() _clock;
   final Random _random;
   final AttachmentPicker? _picker;
+
+  /// 「模型 → 上次选中推理等级」本地记忆（v0.8.6）。store 为 null 时仍在本进程
+  /// 内存内生效（同一 App 生命周期内避免重复选择），只是不持久化。
+  final ModelEffortPreferenceStore? _modelEffortMemory;
+  Map<String, String> _effortsByModel = {};
 
   SessionListPhase _phase = SessionListPhase.loading;
   List<MobileSession> _sessions = const [];
@@ -186,10 +199,44 @@ class SessionController extends ChangeNotifier {
         refreshSessions(),
         refreshWorkspaces(),
         refreshCapabilities(),
+        _loadModelEffortMemory(),
       ]);
     } finally {
       _initializing = false;
     }
+  }
+
+  /// 读取持久化的「模型 → 上次推理等级」记忆。失败按无记忆处理（方法自身吞错，
+  /// 不能拖垮 initialize 的 Future.wait）。
+  Future<void> _loadModelEffortMemory() async {
+    final store = _modelEffortMemory;
+    if (store == null) return;
+    try {
+      final preferences = await store.read();
+      _effortsByModel = Map<String, String>.of(preferences.effortsByModel);
+      notifyListeners();
+    } catch (_) {
+      _effortsByModel = {};
+    }
+  }
+
+  /// 该模型上次使用的推理等级（本地记忆快照）；无记忆返回 null。
+  String? cachedEffortFor(String model) => _effortsByModel[model];
+
+  /// 记忆快照（只读副本），供模型选择列表渲染"该模型将使用的等级"徽标。
+  Map<String, String> get modelEffortsMemory =>
+      Map<String, String>.unmodifiable(_effortsByModel);
+
+  void _rememberModelEffort(String model, String effort) {
+    if (model.isEmpty || _effortsByModel[model] == effort) return;
+    _effortsByModel[model] = effort;
+    unawaited(
+      _modelEffortMemory?.write(
+        ModelEffortPreferences(
+          effortsByModel: Map<String, String>.of(_effortsByModel),
+        ),
+      ),
+    );
   }
 
   /// capability 失败时采取 fail-closed：已有会话仍可读，但所有 P3 写入口保持禁用。
@@ -1764,7 +1811,7 @@ class SessionController extends ChangeNotifier {
       _setError('目标模型不在当前目录中。');
       return;
     }
-    await _submitCommand(
+    final accepted = await _submitCommand(
       sessionId: sessionId,
       operation: 'model:$sessionId:$model',
       kind: SessionCommandKind.modelSelect,
@@ -1773,6 +1820,28 @@ class SessionController extends ChangeNotifier {
         'fixture_payload': {'model': model},
       },
       onAccepted: () => _controls = controls.copyWith(model: model),
+    );
+    if (!accepted) return;
+    // v0.8.6：自动带回该模型上次使用的推理等级，避免用户重复选择。
+    // 校验双目录（新模型声明的 efforts + 会话当前目录）都包含该等级才回带；
+    // 目录已变化时回退到 Host 默认，不发必败命令、不浮出误报错误。
+    final remembered = _effortsByModel[model];
+    if (remembered == null || remembered == _controls.effort) return;
+    if (_controls.efforts.isEmpty || !_controls.efforts.contains(remembered)) {
+      return;
+    }
+    final declaredEfforts =
+        selectedProviderCapabilities
+            .capability('model_select')
+            .modelDetails[model]?.efforts ??
+        const [];
+    if (declaredEfforts.isNotEmpty && !declaredEfforts.contains(remembered)) {
+      return;
+    }
+    await selectEffort(
+      effort: remembered,
+      deviceId: deviceId,
+      canWrite: canWrite,
     );
   }
 
@@ -1793,7 +1862,7 @@ class SessionController extends ChangeNotifier {
       _setError('目标 effort 不在当前目录中。');
       return;
     }
-    await _submitCommand(
+    final accepted = await _submitCommand(
       sessionId: sessionId,
       operation: 'effort:$sessionId:$effort',
       kind: SessionCommandKind.effortSelect,
@@ -1803,6 +1872,15 @@ class SessionController extends ChangeNotifier {
       },
       onAccepted: () => _controls = controls.copyWith(effort: effort),
     );
+    if (!accepted) return;
+    // v0.8.6：把等级记到当前模型名下，下次选回该模型时自动带回。
+    final currentModel =
+        controls.model ??
+        controls.defaultModel ??
+        selectedProviderCapabilities.capability('model_select').defaultOption;
+    if (currentModel != null) {
+      _rememberModelEffort(currentModel, effort);
+    }
   }
 
   /// v0.3/P0：composer 内切换 permission mode（Happy sessionSetAgentModes 对齐）。

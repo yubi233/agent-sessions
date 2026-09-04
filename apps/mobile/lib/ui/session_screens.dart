@@ -5796,6 +5796,7 @@ class _HappyComposerMetaRow extends StatelessWidget {
       busy: sessions.isBusy,
       modelDetail: modelDetail,
       usage: controls.usage,
+      effortsByModel: sessions.modelEffortsMemory,
       taskControls: _SessionTaskControls(
         sessions: sessions,
         canWrite: canWrite,

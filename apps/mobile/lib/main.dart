@@ -17,6 +17,7 @@ import 'domain/control_models.dart';
 import 'relay/fixture_relay_repository.dart';
 import 'state/lifecycle_recovery_controller.dart';
 import 'storage/encrypted_cache.dart';
+import 'storage/model_effort_preference_store.dart';
 import 'storage/runtime_encrypted_cache.dart';
 import 'storage/secure_token_store.dart';
 import 'storage/theme_preference_store.dart';
@@ -102,6 +103,11 @@ Future<void> main() async {
           _useLocalFixtureMode
               ? InMemoryThemePreferenceStore()
               : FlutterThemePreferenceStore(),
+        ),
+        modelEffortPreferenceStoreProvider.overrideWithValue(
+          _useLocalFixtureMode
+              ? InMemoryModelEffortPreferenceStore()
+              : FlutterModelEffortPreferenceStore(),
         ),
         if (localVisualFixture != null)
           relayRepositoryProvider.overrideWithValue(localVisualFixture.relay),

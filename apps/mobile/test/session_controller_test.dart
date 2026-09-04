@@ -1,9 +1,11 @@
 import 'dart:math';
 
 import 'package:agent_sessions_mobile/domain/control_models.dart';
+import 'package:agent_sessions_mobile/domain/model_effort_preferences.dart';
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
+import 'package:agent_sessions_mobile/storage/model_effort_preference_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/fixture_owner.dart';
@@ -357,6 +359,107 @@ void main() {
 
       expect(controller.errorMessage, isNull);
       expect(controller.controls.model, 'fixture-model-b');
+    });
+  });
+
+  group('V086 模型推理等级本地记忆', () {
+    Future<(SessionController, InMemoryModelEffortPreferenceStore)>
+    readyController(
+      _ModelEffortControlsRelay relay, {
+      ModelEffortPreferences preload = ModelEffortPreferences.defaults,
+    }) async {
+      await _prepareOwner(relay);
+      final store = InMemoryModelEffortPreferenceStore();
+      if (preload.effortsByModel.isNotEmpty) {
+        await store.write(preload);
+      }
+      final controller = SessionController(
+        relay: relay,
+        clock: () => _now,
+        random: _DeterministicRandom(),
+        modelEffortMemory: store,
+      );
+      await controller.initialize();
+      await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'codex',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+        autoStart: true,
+      );
+      expect(await controller.refreshSelectedControls(), isNull);
+      return (controller, store);
+    }
+
+    test('selectEffort 成功后把等级记到当前模型名下并持久化', () async {
+      final relay = _ModelEffortControlsRelay(clock: () => _now);
+      final (controller, store) = await readyController(relay);
+
+      await controller.selectEffort(
+        effort: '高',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(controller.errorMessage, isNull);
+      expect(controller.controls.effort, '高');
+      expect(controller.cachedEffortFor('fixture-model-a'), '高');
+      expect((await store.read()).effortFor('fixture-model-a'), '高');
+      expect(controller.modelEffortsMemory['fixture-model-a'], '高');
+    });
+
+    test('selectModel 自动带回该模型上次使用的推理等级', () async {
+      final relay = _ModelEffortControlsRelay(clock: () => _now);
+      final (controller, _) = await readyController(
+        relay,
+        preload: const ModelEffortPreferences(
+          effortsByModel: {'fixture-model-b': '低'},
+        ),
+      );
+
+      await controller.selectModel(
+        model: 'fixture-model-b',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(controller.errorMessage, isNull);
+      expect(controller.controls.model, 'fixture-model-b');
+      final effortCommands = relay.submitted
+          .where((command) => command.kind == SessionCommandKind.effortSelect)
+          .toList();
+      expect(effortCommands, hasLength(1));
+      final payload =
+          effortCommands.single.ciphertext?['fixture_payload']
+              as Map<String, dynamic>;
+      expect(payload['effort'], '低');
+      expect(controller.controls.effort, '低');
+    });
+
+    test('记忆等级不在目录中时跳过自动带回，不发必败命令', () async {
+      final relay = _ModelEffortControlsRelay(clock: () => _now);
+      final (controller, _) = await readyController(
+        relay,
+        preload: const ModelEffortPreferences(
+          effortsByModel: {'fixture-model-b': '极速'},
+        ),
+      );
+
+      await controller.selectModel(
+        model: 'fixture-model-b',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      expect(controller.errorMessage, isNull);
+      expect(controller.controls.model, 'fixture-model-b');
+      expect(
+        relay.submitted
+            .where((command) => command.kind == SessionCommandKind.effortSelect),
+        isEmpty,
+      );
+      // fixture 种子的当前 effort 为「高」，模型切换不改变它。
+      expect(controller.controls.effort, '高');
     });
   });
 
@@ -1167,6 +1270,39 @@ class _FailingCommandRelay extends FixtureRelayRepository {
       models: const ['fixture-model-a', 'fixture-model-b'],
     );
   }
+}
+
+/// 捕获提交的命令并固定 controls 的模型与 effort 目录（V086 记忆测试）：
+/// 模型/effort 命令统一以 succeeded 收口，断言自动回带与记忆写入行为。
+class _ModelEffortControlsRelay extends FixtureRelayRepository {
+  _ModelEffortControlsRelay({required super.clock});
+
+  final List<SessionCommandInput> submitted = [];
+
+  @override
+  Future<SessionCommandReceipt> submitSessionCommand(
+    String sessionId,
+    SessionCommandInput input,
+  ) {
+    submitted.add(input);
+    return super.submitSessionCommand(sessionId, input);
+  }
+
+  @override
+  Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
+    return SessionCommandReceipt(
+      id: commandId,
+      kind: '',
+      status: 'succeeded',
+      idempotencyKey: 'fixture-$commandId',
+    );
+  }
+
+  // 注意：不覆写 getSessionControls——fixture 种子已带
+  // models=[fixture-model-a, fixture-model-b] / efforts=[低,中,高]，
+  // 且 fixture 的 submitSessionCommand 会按同一份内部目录校验 effort 命令，
+  // 测试必须使用种子值（低/中/高），否则命令会被 fixture 以
+  // "目标 effort 不在目录中。" 拒绝。
 }
 
 /// 捕获提交的命令并固定 controls 的生效模型：验证发送密文把模型带给 daemon

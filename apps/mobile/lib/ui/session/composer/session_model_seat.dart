@@ -63,6 +63,7 @@ class SessionModelSeat extends StatefulWidget {
     this.taskControls,
     this.busy = false,
     this.usage,
+    this.effortsByModel = const <String, String>{},
     super.key,
   });
 
@@ -83,6 +84,10 @@ class SessionModelSeat extends StatefulWidget {
   final String? effortBlockedReason;
   final bool busy;
   final SessionUsageSummary? usage;
+
+  /// 「模型 → 上次选中推理等级」本地记忆（v0.8.6）。模型列表在模型名后展示该值，
+  /// 让用户切换前就知道每个模型会用哪个推理等级。
+  final Map<String, String> effortsByModel;
   final Future<SessionModelCatalogRefresh> Function() onRefresh;
   final Future<String?> Function(String model) onSelectModel;
   final Future<String?> Function(String effort) onSelectEffort;
@@ -201,6 +206,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
         effortEnabled: !_effortDisabled,
         modelBlockedReason: widget.modelBlockedReason,
         effortBlockedReason: widget.effortBlockedReason,
+        effortsByModel: widget.effortsByModel,
         onRefresh: widget.onRefresh,
         onSelectModel: widget.onSelectModel,
         onSelectEffort: widget.onSelectEffort,
@@ -442,6 +448,7 @@ class _SessionModelPickerSheet extends StatefulWidget {
     required this.effortEnabled,
     required this.modelBlockedReason,
     required this.effortBlockedReason,
+    required this.effortsByModel,
     required this.onRefresh,
     required this.onSelectModel,
     required this.onSelectEffort,
@@ -452,6 +459,7 @@ class _SessionModelPickerSheet extends StatefulWidget {
   final bool effortEnabled;
   final String? modelBlockedReason;
   final String? effortBlockedReason;
+  final Map<String, String> effortsByModel;
   final Future<SessionModelCatalogRefresh> Function() onRefresh;
   final Future<String?> Function(String model) onSelectModel;
   final Future<String?> Function(String effort) onSelectEffort;
@@ -546,6 +554,24 @@ class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
     });
   }
 
+  /// 模型行的推理等级徽标取值（v0.8.6）：
+  /// - 选中模型展示当前生效等级（Host 未下发且确有可选档位时显示「默认」）；
+  /// - 其它模型展示本地记忆的上次等级（选回该模型时将自动带回），
+  ///   仅当模型目录（自有 efforts，缺省回退会话目录）仍包含该等级时展示，
+  ///   避免目录变化后误导用户。
+  String? _effortBadgeForModel(String modelValue, List<String> optionEfforts) {
+    if (modelValue == _catalog.model) {
+      final effort = _catalog.effort?.trim();
+      if (effort != null && effort.isNotEmpty) return effort;
+      return _catalog.efforts.isEmpty ? null : '默认';
+    }
+    final remembered = widget.effortsByModel[modelValue];
+    if (remembered == null || remembered.isEmpty) return null;
+    final allowed = optionEfforts.isNotEmpty ? optionEfforts : _catalog.efforts;
+    if (allowed.isNotEmpty && !allowed.contains(remembered)) return null;
+    return remembered;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -622,6 +648,7 @@ class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
                     selectionBusy: _selectionBusy,
                     emptyKey: const Key('session-model-empty'),
                     onSelect: _selectModel,
+                    effortForOption: _effortBadgeForModel,
                   ),
                   const Divider(height: 20),
                   _PickerSection(
@@ -658,6 +685,7 @@ class _PickerSection extends StatelessWidget {
     required this.selectionBusy,
     required this.emptyKey,
     required this.onSelect,
+    this.effortForOption,
     super.key,
   });
 
@@ -671,6 +699,10 @@ class _PickerSection extends StatelessWidget {
   final bool selectionBusy;
   final Key emptyKey;
   final Future<void> Function(String value) onSelect;
+
+  /// 模型行的推理等级徽标取值（v0.8.6，含目录校验）；effort section 不传则不渲染。
+  final String? Function(String value, List<String> optionEfforts)?
+  effortForOption;
 
   @override
   Widget build(BuildContext context) {
@@ -730,6 +762,19 @@ class _PickerSection extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                trailing: switch (effortForOption?.call(
+                  option.value,
+                  option.efforts,
+                )) {
+                  null => null,
+                  final effort => Text(
+                    key: Key('$optionPrefix${option.value}-effort'),
+                    effort,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                },
                 onTap: () => unawaited(onSelect(option.value)),
               ),
           ]
@@ -744,6 +789,16 @@ class _PickerSection extends StatelessWidget {
                 size: 18,
               ),
               title: Text(option, maxLines: 1, overflow: TextOverflow.ellipsis),
+              trailing: switch (effortForOption?.call(option, const [])) {
+                null => null,
+                final effort => Text(
+                  key: Key('$optionPrefix$option-effort'),
+                  effort,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              },
               onTap: () => unawaited(onSelect(option)),
             ),
       ],
