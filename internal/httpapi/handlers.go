@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -510,7 +511,7 @@ func (a *API) handleListSessions(c *gin.Context) {
 	}
 	views := make([]sessionView, 0, len(sessions))
 	for _, session := range sessions {
-		views = append(views, newSessionView(session))
+		views = append(views, a.sessionViewFor(c.Request.Context(), session))
 	}
 	writeOK(c, gin.H{"sessions": views})
 }
@@ -762,7 +763,7 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 			Envelope:        json.RawMessage(event.EnvelopeJSON),
 		})
 	}
-	writeOK(c, sessionSnapshotView{Session: newSessionView(session), Events: views})
+	writeOK(c, sessionSnapshotView{Session: a.sessionViewFor(c.Request.Context(), session), Events: views})
 }
 
 // handleSessionDaemonObservation 返回 Android 可消费的 Daemon 安全投影。
@@ -897,7 +898,7 @@ func (a *API) handleCreateSession(c *gin.Context) {
 		return
 	}
 	a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, sess.ID, sess.LastSeq-1)
-	c.JSON(http.StatusCreated, newSessionView(sess))
+	c.JSON(http.StatusCreated, a.sessionViewFor(c.Request.Context(), sess))
 }
 
 type forkSessionRequest struct {
@@ -924,7 +925,7 @@ func (a *API) handleForkSession(c *gin.Context) {
 	}
 	a.publishLatestSessionEvent(c.Request.Context(), subj.AccountID, c.Param("id"))
 	a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, child.ID, 0)
-	c.JSON(http.StatusCreated, newSessionView(child))
+	c.JSON(http.StatusCreated, a.sessionViewFor(c.Request.Context(), child))
 }
 
 func (a *API) handleArchiveSession(c *gin.Context) {
@@ -934,7 +935,7 @@ func (a *API) handleArchiveSession(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	writeOK(c, newSessionView(sess))
+	writeOK(c, a.sessionViewFor(c.Request.Context(), sess))
 }
 
 func (a *API) handleUnarchiveSession(c *gin.Context) {
@@ -944,7 +945,7 @@ func (a *API) handleUnarchiveSession(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	writeOK(c, newSessionView(sess))
+	writeOK(c, a.sessionViewFor(c.Request.Context(), sess))
 }
 
 type submitCommandRequest struct {
@@ -1648,8 +1649,12 @@ func newWorkspaceView(workspace store.WorkspaceRow) workspaceView {
 }
 
 type sessionView struct {
-	ID                  string `json:"id"`
-	WorkspaceID         string `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	// WorkspaceName 是 workspace 的安全显示名（v0.8.5 §3.4）：服务端把 workspace_id
+	// 解析为 display_name 后下发，移动端不再回退到写死的项目名或 opaque id。
+	// workspace 缺失/解析失败时为空，客户端如实降级。
+	WorkspaceName       string `json:"workspace_name,omitempty"`
 	Status              string `json:"status"`
 	Provider            string `json:"provider,omitempty"`
 	Model               string `json:"model,omitempty"`
@@ -1669,6 +1674,19 @@ func newSessionView(session store.SessionRow) sessionView {
 		ParentSessionID: session.ParentSessionID, ForkedFromMessageID: session.ForkedFromMessageID,
 		ArchivedAtUnixMS: session.ArchivedAtUnixMS, LastActivityAtUnixMS: session.LastActivityAtUnixMS,
 	}
+}
+
+// sessionViewFor 是带 workspace 显示名解析的会话视图（v0.8.5 §3.4）。
+// workspace 行来自该 session 行自身的 workspace_id，调用方已按账号查得 session；
+// 解析失败不阻断：workspace_name 缺省为空，客户端如实降级显示，不编造路径/项目名。
+func (a *API) sessionViewFor(ctx context.Context, session store.SessionRow) sessionView {
+	view := newSessionView(session)
+	if session.WorkspaceID != "" {
+		if workspace, err := a.Repo.WorkspaceByID(ctx, session.WorkspaceID); err == nil {
+			view.WorkspaceName = strings.TrimSpace(workspace.DisplayName)
+		}
+	}
+	return view
 }
 
 type sessionUsageView struct {

@@ -452,3 +452,66 @@ func TestV08DSHImportAuthorizationAndResult(t *testing.T) {
 		}
 	}
 }
+
+// V085-09：DSH 会话列表/快照的 workspace_name 必须由 Relay 从工作区表解析为
+// 安全显示名（display_name），而不是下发 workspace_id 或让客户端回退到写死的
+// 项目名。会话创建响应与快照都携带该字段（v0.8.5 §3.4 修复 ③ 副标题错名）。
+func TestV085SessionViewCarriesWorkspaceDisplayName(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v085-ws-name@test.dev")
+	terminal := env.pairTerminal(t, owner, "v085-ws-name-terminal")
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync", "start"})
+
+	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	var syncState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, sync.Body.Bytes(), &syncState)
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncState.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1,
+		"delivery_seq":     1,
+		"candidates":       []map[string]string{{"canonical_root": "/fixture/v085-money", "display_name": "money"}},
+		"status":           "succeeded",
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("sync dsh workspace: %d %s", result.Code, result.Body.String())
+	}
+	var list struct {
+		Workspaces []struct {
+			ID string `json:"id"`
+		} `json:"workspaces"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken).Body.Bytes(), &list)
+	if len(list.Workspaces) != 1 {
+		t.Fatalf("expected 1 workspace: %+v", list)
+	}
+
+	created := env.do(t, http.MethodPost, "/v1/sessions", map[string]any{"workspace_id": list.Workspaces[0].ID, "provider": "dsh"}, owner.AccessToken)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create DSH session: %d %s", created.Code, created.Body.String())
+	}
+	var createdView struct {
+		ID            string `json:"id"`
+		WorkspaceID   string `json:"workspace_id"`
+		WorkspaceName string `json:"workspace_name"`
+	}
+	decodeW1(t, created.Body.Bytes(), &createdView)
+	if createdView.WorkspaceName != "money" {
+		t.Fatalf("create response workspace_name=%q, want money", createdView.WorkspaceName)
+	}
+
+	// 快照（会话详情）同样携带 workspace_name，移动端副标题直接消费。
+	snapshot := env.do(t, http.MethodGet, "/v1/sessions/"+createdView.ID+"/snapshot", nil, owner.AccessToken)
+	if snapshot.Code != http.StatusOK {
+		t.Fatalf("snapshot: %d %s", snapshot.Code, snapshot.Body.String())
+	}
+	var snap struct {
+		Session struct {
+			WorkspaceName string `json:"workspace_name"`
+		} `json:"session"`
+	}
+	decodeW1(t, snapshot.Body.Bytes(), &snap)
+	if snap.Session.WorkspaceName != "money" {
+		t.Fatalf("snapshot workspace_name=%q, want money", snap.Session.WorkspaceName)
+	}
+}

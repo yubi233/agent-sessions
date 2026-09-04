@@ -1547,6 +1547,9 @@ type Session struct {
 	Provider             *string `json:"provider,omitempty"`
 	Status               string  `json:"status"`
 	WorkspaceId          string  `json:"workspace_id"`
+
+	// WorkspaceName 工作区安全显示名（v0.8.5 §3.4）：服务端由 workspace_id 解析为 display_name 后下发；缺失/解析失败时省略，客户端如实降级，不编造路径或写死项目名。
+	WorkspaceName *string `json:"workspace_name,omitempty"`
 }
 
 // SessionList defines model for SessionList.

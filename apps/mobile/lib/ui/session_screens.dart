@@ -2041,10 +2041,7 @@ class _ConversationEmptyHero extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          session?.workspaceLabel == 'fixture-workspace'
-              ? '~/code/agentProject/agent-sessions'
-              : (session?.workspaceLabel ??
-                    '~/code/agentProject/agent-sessions'),
+          '从下方选择工作区开始会话',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodySmall?.copyWith(
@@ -4200,7 +4197,8 @@ class _SessionComposerState extends State<_SessionComposer> {
     final streaming = widget.sessions.isStreaming;
     // 回合在途（send 受理即置位，终态/中断/切会话才清除）+ 乐观回显窗口，
     // 两者共同决定"运行中"；不受 status 尚未翻到 streaming 的受理窗口影响。
-    final running = streaming ||
+    final running =
+        streaming ||
         widget.sessions.isTurnInFlight ||
         widget.sessions.pendingOutgoingMessage != null;
     final input = _inputMachine.snapshot;
@@ -5681,10 +5679,13 @@ class _HappySessionHeaderTitle extends StatelessWidget {
           ),
         ],
       ),
+      // v0.8.5 §1.3 修复：副标题第二行显示真实工作区显示名（Relay 下发的
+      // workspace_name）。workspace 缺失/为空时显示占位文案，绝不回退到写死的
+      // 'agent-sessions' 或伪造本地路径（旧版恒显示错误名字的根因）。
       Text(
-        session?.projectName?.trim().isNotEmpty == true
-            ? session!.projectName!.trim()
-            : 'agent-sessions',
+        session?.workspaceName?.trim().isNotEmpty == true
+            ? session!.workspaceName!.trim()
+            : '未知工作区',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(

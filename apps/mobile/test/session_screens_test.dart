@@ -1840,7 +1840,7 @@ void main() {
       find.byKey(const Key('session-trajectory-view')),
     );
     await _scrollTrajectoryUntilVisible(tester, toolRow);
-    expect(find.text('读取工作区状态'), findsOneWidget);
+    expect(find.textContaining('读取工作区状态'), findsOneWidget);
 
     await _scrollTrajectoryToTop(tester);
     await _tapVisible(

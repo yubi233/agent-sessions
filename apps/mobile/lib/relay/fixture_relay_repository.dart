@@ -530,27 +530,36 @@ class FixtureRelayRepository implements RelayRepository {
     _requireFixtureOwner();
     _sessionSequence += 1;
     final id = 'session-fixture-${_sessionSequence.toString().padLeft(3, '0')}';
+    final workspaceId = input.workspaceId.trim();
+    // v0.8.5 §3.4：workspace_name 与真实 Relay 对齐——由工作区表解析安全显示名
+    //（display_name），而不是把 workspace_id 当名字下发。fixture 没有独立工作区行时
+    // 才回退到 id（displayName 为空），保证既有测试无需预置工作区也能运行。
+    _workspaces.putIfAbsent(
+      workspaceId,
+      () => MobileWorkspace(
+        id: workspaceId,
+        projectId: workspaceId,
+        terminalId: '',
+        status: 'active',
+      ),
+    );
+    final workspaceRow = _workspaces[workspaceId];
+    final workspaceDisplayName = workspaceRow?.displayName?.trim() ?? '';
+    final workspaceName = workspaceDisplayName.isNotEmpty
+        ? workspaceDisplayName
+        : workspaceId;
     final session = MobileSession(
       id: id,
-      workspaceId: input.workspaceId.trim(),
+      workspaceId: workspaceId,
       status: MobileSessionStatus.idle,
       provider: input.provider.trim().isEmpty ? 'codex' : input.provider.trim(),
       lastSequence: 1,
       displayName: '新的会话 $_sessionSequence',
       projectName: 'Fixture Project',
-      workspaceName: input.workspaceId.trim(),
+      workspaceName: workspaceName,
       updatedAt: _clock(),
       lastActivityAt: _clock(),
       agentPresetId: input.agentPresetId?.trim(),
-    );
-    _workspaces.putIfAbsent(
-      session.workspaceId,
-      () => MobileWorkspace(
-        id: session.workspaceId,
-        projectId: session.workspaceId,
-        terminalId: '',
-        status: 'active',
-      ),
     );
     final state = _FixtureSessionState(
       session: session,
