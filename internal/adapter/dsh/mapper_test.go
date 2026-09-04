@@ -291,3 +291,57 @@ func TestMapThoughtChunkToEventThoughtDelta(t *testing.T) {
 		t.Fatal("非法 visibility 的 thought 帧应被丢弃")
 	}
 }
+
+// V085-11：usage timing _meta 透传（v0.8.5 §3.7）。有效 meta → payload 携带
+// ttft_ms/decode_throughput/output_tokens；缺失/畸形 meta → 丢弃计时但 usage
+// 主字段照常产出（不阻塞、不产生半帧）。
+func TestMapUsageUpdateCarriesTimingMeta(t *testing.T) {
+	update := json.RawMessage(`{
+		"sessionUpdate":"usage_update",
+		"usage":{"inputTokens":1000,"outputTokens":120,"cacheReadTokens":0},
+		"contextWindow":65536
+	}`)
+	meta := dshMeta(map[string]string{
+		DshUsageMetaKey: `{"turn":1,"step":2,"ttftMs":734,"decodeThroughput":42.5,"outputTokens":120}`,
+	})
+	event, ok, variant := mapSessionUpdate("sess-1", update, meta)
+	if !ok || variant != "usage_update" || event.Type != adapter.EventUsage {
+		t.Fatalf("map result = %+v ok=%v variant=%q", event, ok, variant)
+	}
+	if event.Payload["ttft_ms"] != int64(734) {
+		t.Fatalf("ttft_ms = %v, want 734", event.Payload["ttft_ms"])
+	}
+	if event.Payload["decode_throughput"] != 42.5 {
+		t.Fatalf("decode_throughput = %v, want 42.5", event.Payload["decode_throughput"])
+	}
+	if event.Payload["output_tokens"] != int64(120) {
+		t.Fatalf("output_tokens = %v, want 120", event.Payload["output_tokens"])
+	}
+	// 主字段仍然完整。
+	if event.Payload["input_tokens"] != int64(1000) {
+		t.Fatalf("input_tokens = %v", event.Payload["input_tokens"])
+	}
+
+	// 缺 meta：usage 主字段照常产出，无 timing 键。
+	plain, ok, _ := mapSessionUpdate("sess-1", update, nil)
+	if !ok {
+		t.Fatal("无 meta 的 usage 帧必须照常产出")
+	}
+	if _, has := plain.Payload["ttft_ms"]; has {
+		t.Fatal("无 meta 时不应出现 ttft_ms")
+	}
+
+	// 畸形 meta（ttftMs 为负 / 非数值）：丢弃计时，usage 主字段不受影响。
+	for _, bad := range []string{
+		`{"turn":1,"step":1,"ttftMs":-5,"decodeThroughput":1}`,
+		`{"turn":1,"step":1,"ttftMs":"oops"}`,
+	} {
+		if event, ok, _ := mapSessionUpdate("sess-1", update, dshMeta(map[string]string{
+			DshUsageMetaKey: bad,
+		})); !ok {
+			t.Fatalf("畸形 timing 不应阻塞 usage 主字段: %s", bad)
+		} else if _, has := event.Payload["ttft_ms"]; has {
+			t.Fatalf("畸形 timing 不应携带 ttft_ms: %s -> %+v", bad, event.Payload)
+		}
+	}
+}

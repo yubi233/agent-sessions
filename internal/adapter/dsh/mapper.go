@@ -32,6 +32,18 @@ type usageUpdate struct {
 	CacheWriteTokens int64 `json:"cacheWriteTokens"`
 }
 
+// dshUsageTimingMeta 是 usage_update 帧的 timing _meta（v0.8.5 §3.7；桥侧
+// com.deepseek.dsh/usage-timing）。ttftMs = firstTokenTime - stepStartTime；
+// decodeThroughput = outputTokens / ((completedTime - firstTokenTime)/1000)。
+// 缺失/畸形的 meta 由调用方丢弃并计数，不阻塞 usage 主字段。
+type dshUsageTimingMeta struct {
+	Turn             int64   `json:"turn"`
+	Step             int64   `json:"step"`
+	TTFTMS           int64   `json:"ttftMs"`
+	DecodeThroughput float64 `json:"decodeThroughput"`
+	OutputTokens     int64   `json:"outputTokens"`
+}
+
 // contentBlock 是 ACP content 块的最小投影（目前只消费 text 块）。
 type contentBlock struct {
 	Type string `json:"type"`
@@ -136,7 +148,7 @@ func mapSessionUpdate(sessionID string, update json.RawMessage, meta map[string]
 	variant := body.SessionUpdate
 	switch variant {
 	case "usage_update":
-		return mapUsageUpdate(sessionID, body)
+		return mapUsageUpdate(sessionID, body, meta)
 	case "tool_call":
 		return mapToolCall(sessionID, body)
 	case "tool_call_update":
@@ -235,7 +247,7 @@ func mapThoughtChunk(sessionID string, body updateBody, rawMeta json.RawMessage)
 
 // mapUsageUpdate 映射 usage_update（纯函数分离便于单测与后续扩展）。
 // 只解析旧 usage/contextWindow 字段；标准 used/size 与 _meta 不进本映射。
-func mapUsageUpdate(sessionID string, body updateBody) (adapter.Event, bool, string) {
+func mapUsageUpdate(sessionID string, body updateBody, meta map[string]json.RawMessage) (adapter.Event, bool, string) {
 	variant := "usage_update"
 	var usage usageUpdate
 	if err := json.Unmarshal(body.Usage, &usage); err != nil {
@@ -257,7 +269,38 @@ func mapUsageUpdate(sessionID string, body updateBody) (adapter.Event, bool, str
 	if body.ContextWindow > 0 {
 		payload["context_window_tokens"] = body.ContextWindow
 	}
+	// v0.8.5 §3.7：usage timing _meta 透传。ttft_ms 要求正数、decode_throughput
+	// 要求 >= 0、output_tokens 与 usage 主字段一致时才带上（供 Relay 复核）；
+	// 缺失/畸形直接丢弃，不阻塞 usage 主字段也不产生半帧。
+	if timing := parseUsageTimingMeta(meta[DshUsageMetaKey]); timing != nil {
+		if timing.TTFTMS > 0 {
+			payload["ttft_ms"] = timing.TTFTMS
+		}
+		if timing.DecodeThroughput >= 0 && timing.DecodeThroughput < 1e12 {
+			payload["decode_throughput"] = timing.DecodeThroughput
+		}
+		if timing.OutputTokens >= 0 {
+			payload["output_tokens"] = timing.OutputTokens
+		}
+	}
 	return adapter.Event{Type: adapter.EventUsage, Payload: payload}, true, variant
+}
+
+// parseUsageTimingMeta 解析 usage timing _meta（v0.8.5 §3.7）。turn/step 必须非负、
+// ttftMs/decodeThroughput 必须为合法数值（零/负 ttftMs 表示无首 token 计时，丢弃）；
+// 形状非法返回 nil，调用方按旧语义处理。
+func parseUsageTimingMeta(raw json.RawMessage) *dshUsageTimingMeta {
+	if len(raw) == 0 {
+		return nil
+	}
+	var meta dshUsageTimingMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	if meta.Turn < 0 || meta.Step < 0 || meta.TTFTMS < 0 || meta.DecodeThroughput < 0 {
+		return nil
+	}
+	return &meta
 }
 
 // mapToolCall 映射 tool_call 打开帧（桥投影恒为 in_progress 状态）。

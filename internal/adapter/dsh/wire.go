@@ -62,6 +62,10 @@ const (
 	// DshThoughtMetaKey 是 thought 帧的 namespaced _meta 键（ADR-015 §5）：
 	// { kind: "thought-delta", turn, step, seq, visibility: "raw" }。
 	DshThoughtMetaKey = "com.deepseek.dsh/thought"
+	// DshUsageMetaKey 是 usage_update 帧的 timing _meta 键（v0.8.5 §3.7）：
+	// { turn, step, ttftMs, decodeThroughput, outputTokens }——折算公式与 dsh 前端/
+	// session-stats fold 完全一致；无流式/replay 轮次桥不发该 meta。
+	DshUsageMetaKey = "com.deepseek.dsh/usage-timing"
 	// NegotiationEntryTurnStatus / NegotiationEntryThought 是 initialize 协商
 	// 目录中的扩展条目名（复用 com.deepseek.dsh/extensions 的 major.minor 规则）。
 	NegotiationEntryTurnStatus = "dsh/turn/status"
