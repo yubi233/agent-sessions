@@ -130,6 +130,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.POST("/events", a.handleDaemonEventUpload)
 		// v0.8.5 §3.4：Daemon 上行会话级 permission mode 目录快照（Terminal 签名 + home 归属）。
 		daemon.PUT("/sessions/:id/modes", a.handleDaemonSessionModes)
+		// v0.8.5 §3.3：Daemon 鉴权附件密文只读端点（归属校验在 domain，GET 幂等只读）。
+		daemon.GET("/attachments/:id", a.handleDaemonReadAttachment)
 
 		// Usage（ADR-010）：Terminal 上传白名单计数，账号只读聚合摘要。
 		daemon.POST("/usage/events", a.handleUsageUpload)

@@ -1251,6 +1251,25 @@ func (r *sqliteRepo) AttachmentChunkByIndex(ctx context.Context, attachmentID st
 		 FROM attachment_chunks WHERE attachment_id=? AND chunk_index=?`, attachmentID, chunkIndex))
 }
 
+// ListAttachmentChunks 按块序返回附件全部密文块（v0.8.5 §3.3）。Relay 不重组
+// 明文、不做解码，只按存储顺序搬运密文；调用方（Daemon 读取端点）负责归属校验。
+func (r *sqliteRepo) ListAttachmentChunks(ctx context.Context, attachmentID string) ([]AttachmentChunkRow, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT attachment_id,chunk_index,idempotency_key,ciphertext,ciphertext_sha256 FROM attachment_chunks WHERE attachment_id=? ORDER BY chunk_index ASC`, attachmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AttachmentChunkRow
+	for rows.Next() {
+		var row AttachmentChunkRow
+		if err := rows.Scan(&row.AttachmentID, &row.ChunkIndex, &row.IdempotencyKey, &row.Ciphertext, &row.CiphertextSHA256); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (r *sqliteRepo) AttachmentChunkByIdempotency(ctx context.Context, attachmentID, idempotencyKey string) (AttachmentChunkRow, error) {
 	return scanAttachmentChunk(r.db.QueryRowContext(ctx,
 		`SELECT attachment_id,chunk_index,idempotency_key,ciphertext,ciphertext_sha256

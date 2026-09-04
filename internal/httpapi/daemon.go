@@ -271,6 +271,36 @@ func (a *API) handleDaemonCommandAck(c *gin.Context) {
 	writeOK(c, newDaemonCommandReceiptView(receipt))
 }
 
+// attachmentReadView 是 Daemon 附件读取的 wire 投影（v0.8.5 §3.3）：
+// 只回传密文与白名单字段；任何文件名/明文正文都不出现在响应或日志。
+type attachmentReadView struct {
+	AttachmentID       string   `json:"attachment_id"`
+	MimeType           string   `json:"mime_type"`
+	ByteSize           int64    `json:"byte_size"`
+	TotalChunks        int      `json:"total_chunks"`
+	MetadataCiphertext []byte   `json:"metadata_ciphertext"`
+	Chunks             [][]byte `json:"chunks"`
+	ChunkSHA256        []string `json:"chunk_sha256"`
+}
+
+// handleDaemonReadAttachment 是 Daemon 鉴权的附件密文只读端点（§3.3）：
+// GET 无 body 不签名（GET 幂等只读，Terminal bearer 即可）；归属由 domain
+// ReadAttachmentForDaemon 校验（附件 session 的 workspace home terminal）。
+func (a *API) handleDaemonReadAttachment(c *gin.Context) {
+	subj := subject(c)
+	projection, err := a.Daemons.ReadAttachmentForDaemon(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, attachmentReadView{
+		AttachmentID: projection.AttachmentID, MimeType: projection.MimeType,
+		ByteSize: projection.ByteSize, TotalChunks: projection.TotalChunks,
+		MetadataCiphertext: projection.MetadataCiphertext,
+		Chunks:             projection.Chunks, ChunkSHA256: projection.ChunkSHA256,
+	})
+}
+
 type daemonSessionModesRequest struct {
 	ProtocolVersion int                     `json:"protocol_version"`
 	ModeID          string                  `json:"mode_id"`

@@ -1121,6 +1121,17 @@ type CreateWorkspaceWithFolderRequest struct {
 	TerminalId *string `json:"terminal_id,omitempty"`
 }
 
+// DaemonAttachmentRead defines model for DaemonAttachmentRead.
+type DaemonAttachmentRead struct {
+	AttachmentId       string   `json:"attachment_id"`
+	ByteSize           int64    `json:"byte_size"`
+	ChunkSha256        []string `json:"chunk_sha256"`
+	Chunks             [][]byte `json:"chunks"`
+	MetadataCiphertext []byte   `json:"metadata_ciphertext"`
+	MimeType           string   `json:"mime_type"`
+	TotalChunks        int      `json:"total_chunks"`
+}
+
 // DaemonChallengeResponse defines model for DaemonChallengeResponse.
 type DaemonChallengeResponse struct {
 	Challenge       string `json:"challenge"`
@@ -2146,6 +2157,9 @@ type ServerInterface interface {
 	// (GET /v1/commands/{id})
 	GetCommand(c *gin.Context, id string)
 
+	// (GET /v1/daemon/attachments/{id})
+	ReadDaemonAttachment(c *gin.Context, id string)
+
 	// (GET /v1/daemon/challenge)
 	DaemonChallenge(c *gin.Context)
 
@@ -2488,6 +2502,31 @@ func (siw *ServerInterfaceWrapper) GetCommand(c *gin.Context) {
 	}
 
 	siw.Handler.GetCommand(c, id)
+}
+
+// ReadDaemonAttachment operation middleware
+func (siw *ServerInterfaceWrapper) ReadDaemonAttachment(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ReadDaemonAttachment(c, id)
 }
 
 // DaemonChallenge operation middleware
@@ -3553,6 +3592,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)
 	router.POST(options.BaseURL+"/v1/daemon/sessions/recover", wrapper.RecoverDaemonSessions)
 	router.PUT(options.BaseURL+"/v1/daemon/sessions/:id/modes", wrapper.SyncDaemonSessionModes)
+	router.GET(options.BaseURL+"/v1/daemon/attachments/:id", wrapper.ReadDaemonAttachment)
 	router.GET(options.BaseURL+"/v1/daemon/commands/stream", wrapper.StreamDaemonCommands)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/ack", wrapper.AcknowledgeDaemonCommand)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/result", wrapper.ResolveDaemonCommand)

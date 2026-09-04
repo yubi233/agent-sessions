@@ -764,6 +764,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/daemon/attachments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 仅拥有该附件会话的 home Terminal 可调用（v0.8.5 §3.3）。按 attachment_id 返回 metadata_ciphertext 与全部密文块（只读搬运，按存储顺序），响应不回显任何可识别元数据（文件名/明文正文不进 wire 或日志）；未完成附件 fail-closed。 */
+        get: operations["readDaemonAttachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/daemon/commands/stream": {
         parameters: {
             query?: never;
@@ -1271,6 +1288,17 @@ export interface components {
         DaemonHeartbeatRequest: {
             protocol_version: number;
             signature?: components["schemas"]["TerminalSignature"];
+        };
+        DaemonAttachmentRead: {
+            attachment_id: string;
+            mime_type: string;
+            /** Format: int64 */
+            byte_size: number;
+            total_chunks: number;
+            /** Format: byte */
+            metadata_ciphertext: string;
+            chunks: string[];
+            chunk_sha256: string[];
         };
         DaemonSessionModesRequest: {
             protocol_version: number;
@@ -2924,6 +2952,37 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             /** @description terminal protocol is below the supported compatibility window */
             426: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    readDaemonAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description attachment ciphertext projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonAttachmentRead"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description attachment not completed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

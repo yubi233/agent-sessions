@@ -1213,6 +1213,32 @@ paths:
         "426":
           description: terminal protocol is below the supported compatibility window
 
+  /v1/daemon/attachments/{id}:
+    get:
+      operationId: readDaemonAttachment
+      description: 仅拥有该附件会话的 home Terminal 可调用（v0.8.5 §3.3）。按 attachment_id 返回 metadata_ciphertext 与全部密文块（只读搬运，按存储顺序），响应不回显任何可识别元数据（文件名/明文正文不进 wire 或日志）；未完成附件 fail-closed。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: attachment ciphertext projection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonAttachmentRead"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: attachment not completed
+
   /v1/daemon/commands/stream:
     get:
       operationId: streamDaemonCommands
@@ -2216,6 +2242,31 @@ components:
           minimum: 1
         signature:
           $ref: "#/components/schemas/TerminalSignature"
+    DaemonAttachmentRead:
+      type: object
+      required: [attachment_id, mime_type, byte_size, total_chunks, metadata_ciphertext, chunks, chunk_sha256]
+      properties:
+        attachment_id:
+          type: string
+        mime_type:
+          type: string
+        byte_size:
+          type: integer
+          format: int64
+        total_chunks:
+          type: integer
+        metadata_ciphertext:
+          type: string
+          format: byte
+        chunks:
+          type: array
+          items:
+            type: string
+            format: byte
+        chunk_sha256:
+          type: array
+          items:
+            type: string
     DaemonSessionModesRequest:
       type: object
       required: [protocol_version, mode_id, available_permission_modes]

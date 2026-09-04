@@ -167,6 +167,8 @@ type Repository interface {
 	CreateAttachmentChunk(ctx context.Context, c AttachmentChunkRow) error
 	AttachmentChunkByIndex(ctx context.Context, attachmentID string, chunkIndex int) (AttachmentChunkRow, error)
 	AttachmentChunkByIdempotency(ctx context.Context, attachmentID, idempotencyKey string) (AttachmentChunkRow, error)
+	// ListAttachmentChunks 按块序返回附件全部密文块（v0.8.5 §3.3 Daemon 读取端点用）。
+	ListAttachmentChunks(ctx context.Context, attachmentID string) ([]AttachmentChunkRow, error)
 	CountAttachmentChunks(ctx context.Context, attachmentID string) (int, error)
 	CompleteAttachment(ctx context.Context, attachmentID, idempotencyKey string) (bool, error)
 

@@ -988,6 +988,74 @@ func (s *DaemonService) SyncSessionPermissionModes(ctx context.Context, accountI
 	}
 	return s.repo.SetSessionAgentPreset(ctx, session.ID, strings.TrimSpace(agentPresetID))
 }
+
+// AttachmentReadProjection 是 Daemon 附件读取的最小密文投影（v0.8.5 §3.3）：
+// Relay 只回传存储中的密文块与元数据密文，不回显任何可识别元数据（文件名/
+// 明文正文/大小之外的白名单字段由 Daemon 端解密 metadata 后自行获得）。
+type AttachmentReadProjection struct {
+	AttachmentID       string
+	SessionID          string
+	MimeType           string
+	ByteSize           int64
+	TotalChunks        int
+	MetadataCiphertext []byte
+	Chunks             [][]byte
+	ChunkSHA256        []string
+	Status             string
+}
+
+// ReadAttachmentForDaemon 让拥有该会话的 home Terminal 读取附件密文（§3.3）。
+// 归属链：attachment.session -> session.workspace -> workspace.home terminal；
+// 其它 Terminal/账号 fail-closed。只读操作不做 lease 检查（附件状态已完成才可读），
+// 未完成附件返回 ErrAttachmentIncomplete。
+func (s *DaemonService) ReadAttachmentForDaemon(ctx context.Context, accountID, deviceID, role, attachmentID string) (AttachmentReadProjection, error) {
+	if strings.TrimSpace(attachmentID) == "" {
+		return AttachmentReadProjection{}, protocol.NewError(protocol.ErrInvalidRequest, "attachment_id required")
+	}
+	terminal, err := s.TerminalForDevice(ctx, accountID, deviceID, role)
+	if err != nil {
+		return AttachmentReadProjection{}, err
+	}
+	attachment, err := s.repo.AttachmentByID(ctx, attachmentID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AttachmentReadProjection{}, ErrAttachmentNotFound
+		}
+		return AttachmentReadProjection{}, err
+	}
+	if attachment.AccountID != accountID {
+		return AttachmentReadProjection{}, ErrScopeDenied
+	}
+	session, err := s.repo.SessionByID(ctx, attachment.SessionID)
+	if err != nil {
+		return AttachmentReadProjection{}, err
+	}
+	workspace, err := s.repo.WorkspaceByID(ctx, session.WorkspaceID)
+	if err != nil {
+		return AttachmentReadProjection{}, err
+	}
+	if workspace.TerminalID != terminal.ID {
+		return AttachmentReadProjection{}, ErrScopeDenied
+	}
+	if attachment.Status != AttachmentCompleted {
+		return AttachmentReadProjection{}, ErrAttachmentIncomplete
+	}
+	chunks, err := s.repo.ListAttachmentChunks(ctx, attachment.ID)
+	if err != nil {
+		return AttachmentReadProjection{}, err
+	}
+	out := AttachmentReadProjection{
+		AttachmentID: attachment.ID, SessionID: attachment.SessionID, MimeType: attachment.MimeType,
+		ByteSize: attachment.ByteSize, TotalChunks: attachment.TotalChunks,
+		MetadataCiphertext: attachment.MetadataCiphertext, Status: attachment.Status,
+	}
+	for _, chunk := range chunks {
+		out.Chunks = append(out.Chunks, chunk.Ciphertext)
+		out.ChunkSHA256 = append(out.ChunkSHA256, chunk.CiphertextSHA256)
+	}
+	return out, nil
+}
+
 func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (DaemonEventResult, error) {
 	if err := validateDaemonProtocol(in.ProtocolVersion); err != nil {
 		return DaemonEventResult{}, err
