@@ -6,7 +6,7 @@
     "browser": "系统 Chrome headed（V085-14 gate）",
     "flutter": "macOS fixture 窗口（V085-14 gate，需没有用户正在使用的 Agent Sessions 窗口）",
     "dsh_overlay": "本地确定性真实 DSH bridge overlay（cordis image yml，不调用真实模型）",
-    "real": "真实 DSH 模型（V085-15，需用户显式授权，AGENT_SESSIONS_DSH_REAL=1）"
+    "real": "真实 DSH 模型（V085-15 已授权执行 passed 2026-09-04：AGENT_SESSIONS_V085_REAL=1 + AGENT_SESSIONS_V085_REAL_API_KEY，task test:v085:real）"
   },
   "cases": [
     {
@@ -352,23 +352,34 @@
     {
       "id": "V085-15",
       "title": "真实模型（需授权）：图片真实发送、timing 真实值、非流式缺省路径；独立报告",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "real_model_gate",
       "priority": "P1",
       "test_layer": "mixed",
-      "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
+      "precondition": "用户显式授权（留档=实施记录 24 §4.23）；环境变量 AGENT_SESSIONS_V085_REAL_API_KEY 注入真实中转凭据（不写入任何文件）。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "AGENT_SESSIONS_V085_REAL=1 task test:v085:real（= node e2e-verify/real/v085-real-image-gate.mjs；凭据缺失即 credential_or_quota_blocker exit 2，不启动桥）。",
+        "桥挂 cordis-v085-real-image.yml（attachment-local + grok-4.6 image 模型目录 + image-chat 无工具预设）直连中转 api.aabsv.sbs；initialize 断言 promptCapabilities.image=true。",
+        "session/prompt 携带文本 + 32x16 纯红 PNG（zlib 内联生成 canonical base64，RGB 220,30,30）→ 真实模型回合 committed（stopReason=end_turn）。",
+        "断言 image_prompt_accepted / image_turn_committed / real_model_saw_image_content（整段回复匹配 /红|red/i），投影 usage_update 与 usage-timing _meta；transcript 脱敏（不落 prompt/回复全文/图片 base64/凭据/完整 session id）。"
       ],
-      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "expected": "6/6 checks PASS、报告 status=passed（real_model=true、real_upstream=true、fixture_data=false、credential_source=env）；2026-09-04 实测：单请求单回合 usage in 238/out 1017 tokens、turn 65.26s（ttft 26.4s）、回复即颜色中文名。",
       "cleanup": [
-        "无（登记骨架；执行后回填状态）"
+        "桥 SIGTERM、临时目录删除；报告/transcript 落 e2e-verify/reports/ADAPTER-DSH/（gitignored，不入库）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
-      ]
+        "e2e-verify/real/v085-real-image-gate.mjs",
+        "e2e-verify/reports/ADAPTER-DSH/v085-real-image-2026-09-04T15-21-50-150Z.json",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.24",
+        "docs/zh/迭代计划/迭代计划v0.8.5.md"
+      ],
+      "real_browser": false,
+      "real_model": true,
+      "real_upstream": true,
+      "fixture_data": false,
+      "local_test": true,
+      "headless": false
     },
     {
       "id": "V085-16",
