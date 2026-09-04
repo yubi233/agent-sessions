@@ -16,3 +16,5 @@ ADR 用来记录一旦改变就会影响协议、数据迁移、安全或多端�
 - [ADR-012：Terminal 认证的 TTL 桥接与设备密钥签名终态](ADR-012-Terminal认证的TTL桥接与设备密钥签名终态.md)
 - [ADR-013：DeepSeek Harness 作为第五类 Provider 的接入契约](ADR-013-DeepSeek-Harness-Provider接入.md)
 - [ADR-014：DSH ACP 扩展契约与 v0.8.2 遗留能力收口](ADR-014-DSH-ACP扩展与能力收口.md)
+- [ADR-015：细粒度回合状态与 ACP 流式输出契约](ADR-015-细粒度回合状态与ACP流式输出.md)
+- [ADR-016：会话内容密钥（DEK）分发契约](ADR-016-会话内容密钥分发.md)
