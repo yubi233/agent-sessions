@@ -99,6 +99,8 @@ type Repository interface {
 	// SetSessionPermissionModes 保存会话级 permission mode 快照（v0.8.5 §3.4）。
 	// modesJSON 必须是合法 JSON 数组（由调用方序列化）；Relay 只存快照不下发明文。
 	SetSessionPermissionModes(ctx context.Context, id, modeID, modesJSON string) error
+	// SetSessionAgentPreset 保存会话 joined 的 DSH agent preset id 快照（v0.8.5 §3.8）。
+	SetSessionAgentPreset(ctx context.Context, id, presetID string) error
 	SessionByParentForkKey(ctx context.Context, parentSessionID, idempotencyKey string) (SessionRow, error)
 	CreateInstance(ctx context.Context, i InstanceRow) error
 	InstanceByID(ctx context.Context, id string) (InstanceRow, error)
@@ -402,6 +404,8 @@ type SessionRow struct {
 	// 由 Daemon 上行同步，只含 mode id/名称等非敏感元数据；空串/[] 表示尚无快照。
 	PermissionMode               string
 	AvailablePermissionModesJSON string
+	// AgentPresetID 是会话实际 joined 的 DSH agent preset（v0.8.5 §3.8，只读投影）。
+	AgentPresetID string
 }
 
 // InstanceRow 是 session_instances 表的行投影。

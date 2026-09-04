@@ -33,6 +33,31 @@ type pendingQuestion struct {
 	resolved   bool
 }
 
+// storeAgentPreset 从会话状态响应 _meta 中解析 agent preset（v0.8.5 §3.8）。
+// 键 com.deepseek.dsh/agent-preset 只在会话 joined 预设时由桥回带；响应不含
+// _meta/键时清空快照（旧值不保留），客户端看到的就是最近一次会话状态事实。
+func (h *handle) storeAgentPreset(raw json.RawMessage) {
+	preset := ""
+	if len(raw) > 0 {
+		var meta struct {
+			AgentPreset string `json:"com.deepseek.dsh/agent-preset"`
+		}
+		if json.Unmarshal(raw, &meta) == nil {
+			preset = strings.TrimSpace(meta.AgentPreset)
+		}
+	}
+	h.agentPresetMu.Lock()
+	defer h.agentPresetMu.Unlock()
+	h.agentPreset = preset
+}
+
+// AgentPreset 返回会话实际 joined 的 DSH agent preset（空 = 未 joined）。
+func (h *handle) AgentPreset() string {
+	h.agentPresetMu.Lock()
+	defer h.agentPresetMu.Unlock()
+	return h.agentPreset
+}
+
 // storeModes 把 new/load/resume 响应中的 modes 字段合并进句柄目录快照。
 // 桥未广告 mode（字段缺失或目录为空）时保持空快照——能力真值不被伪造。
 func (h *handle) storeModes(raw json.RawMessage) {

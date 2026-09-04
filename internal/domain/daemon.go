@@ -948,12 +948,13 @@ func (s *DaemonService) StoreWebReadResponse(ctx context.Context, accountID, dev
 
 // UploadEvent 写入与 command 绑定的 canonical event。Relay 不解密 event envelope，且 event_id
 // 先在同一事务占位，避免失联重试时重复追加 session_events。
-// SyncSessionPermissionModes 保存 Daemon 上行同步的会话级 permission mode 目录快照
-// (v0.8.5 §3.4)。校验：设备必须是已登记 Terminal，会话必须属于该账号，且会话
-// workspace 的 home Terminal 必须就是当前 Terminal——mode 目录是运行期 handle 的
-// 事实，只有拥有该会话的 Daemon 可以写，其它 Terminal/账号一律 fail-closed。
-// modesJSON 只允许合法 JSON 数组文本 (<= 64 条)，Relay 不解释 mode 语义。
-func (s *DaemonService) SyncSessionPermissionModes(ctx context.Context, accountID, deviceID, role, sessionID, modeID, modesJSON string) error {
+// SyncSessionPermissionModes 保存 Daemon 上行同步的会话级运行期元数据快照
+// (v0.8.5 §3.4/§3.8)：permission mode 目录 + agent preset。校验：设备必须是已
+// 登记 Terminal，会话必须属于该账号，且会话 workspace 的 home Terminal 必须就是
+// 当前 Terminal——这些事实来自运行期 handle，只有拥有该会话的 Daemon 可以写，
+// 其它 Terminal/账号一律 fail-closed。modesJSON 只允许合法 JSON 数组文本 (<= 64 条)，
+// Relay 不解释 mode/preset 语义。
+func (s *DaemonService) SyncSessionPermissionModes(ctx context.Context, accountID, deviceID, role, sessionID, modeID, modesJSON, agentPresetID string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return protocol.NewError(protocol.ErrInvalidRequest, "session_id required")
 	}
@@ -981,7 +982,11 @@ func (s *DaemonService) SyncSessionPermissionModes(ctx context.Context, accountI
 			return protocol.NewError(protocol.ErrInvalidRequest, "available_permission_modes must be a JSON array (<=64)")
 		}
 	}
-	return s.repo.SetSessionPermissionModes(ctx, session.ID, modeID, modesJSON)
+	// agent_preset_id 是同一会话元数据上行的可选字段（v0.8.5 §3.8）：空串清空快照。
+	if err := s.repo.SetSessionPermissionModes(ctx, session.ID, modeID, modesJSON); err != nil {
+		return err
+	}
+	return s.repo.SetSessionAgentPreset(ctx, session.ID, strings.TrimSpace(agentPresetID))
 }
 func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (DaemonEventResult, error) {
 	if err := validateDaemonProtocol(in.ProtocolVersion); err != nil {

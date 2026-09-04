@@ -106,7 +106,7 @@ type SessionRunner struct {
 	// modeInfoSink 在会话 handle 的 mode 目录可读后异步上行（v0.8.5 §3.4）；
 	// runner 不直接发 HTTP，连接层（RelayLoop）注册此 sink 并经 RelayClient 上传。
 	modeInfoSinkMu sync.RWMutex
-	modeInfoSink   func(sessionID string, info adapter.SessionModeInfo)
+	modeInfoSink   func(sessionID string, info adapter.SessionModeInfo, agentPreset string)
 
 	// eventSeq 保存每个 session 最近分配的 canonical 序号。Provider handle 的
 	// 序号只覆盖 Provider 事件，runner 自己生成的 user_message/断流终态也必须
@@ -171,7 +171,7 @@ func (r *SessionRunner) SetEventSinkResult(sink func(sessionID string, event ada
 // SetModeInfoSink 设置会话级 permission mode 目录的本机出口（v0.8.5 §3.4）。
 // sink 由连接层注册并在收到 info 后经 RelayClient.SyncSessionModes 上传；
 // 未注册 sink 时静默跳过（本地 fixture 无 Relay 时仍可运行）。
-func (r *SessionRunner) SetModeInfoSink(sink func(sessionID string, info adapter.SessionModeInfo)) {
+func (r *SessionRunner) SetModeInfoSink(sink func(sessionID string, info adapter.SessionModeInfo, agentPreset string)) {
 	r.modeInfoSinkMu.Lock()
 	defer r.modeInfoSinkMu.Unlock()
 	r.modeInfoSink = sink
@@ -188,8 +188,12 @@ func (r *SessionRunner) syncModeInfo(sessionID string, handle adapter.Handle) {
 	r.modeInfoSinkMu.RLock()
 	sink := r.modeInfoSink
 	r.modeInfoSinkMu.RUnlock()
+	preset := ""
+	if presetHandle, ok := handle.(interface{ AgentPreset() string }); ok {
+		preset = presetHandle.AgentPreset()
+	}
 	if sink != nil {
-		sink(sessionID, info)
+		sink(sessionID, info, preset)
 	}
 }
 

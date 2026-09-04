@@ -66,6 +66,12 @@ type handle struct {
 	modesMu sync.Mutex
 	modes   adapter.SessionModeInfo
 
+	// agentPresetMu 保护 agentPreset（v0.8.5 §3.8）：来自 new/load/resume 响应
+	// _meta 的 com.deepseek.dsh/agent-preset 键——会话实际 joined 的 DSH 预设。
+	// 空字符串表示会话未 joined 预设（客户端不得猜测）。
+	agentPresetMu sync.Mutex
+	agentPreset   string
+
 	// questionMu 保护 pendingQuestions（一次性 question 回答 registry，v0.8.3 P3）。
 	// 桥的 dsh/question/request 请求先登记再广播 EventUserQuestion，等待 daemon
 	// 经 ResolveQuestion 注入回答；断线/Dispose 统一 fail-closed 收口为错误应答。
@@ -657,6 +663,7 @@ func (h *handle) newSession(ctx context.Context, cwd string) (string, error) {
 	var res struct {
 		SessionID string          `json:"sessionId"`
 		Modes     json.RawMessage `json:"modes"`
+		Meta      json.RawMessage `json:"_meta"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return "", fmt.Errorf("解析 session/new 响应: %w", err)
@@ -665,6 +672,7 @@ func (h *handle) newSession(ctx context.Context, cwd string) (string, error) {
 		return "", errors.New("session/new 响应缺少 sessionId")
 	}
 	h.storeModes(res.Modes)
+	h.storeAgentPreset(res.Meta)
 	return res.SessionID, nil
 }
 
@@ -680,9 +688,11 @@ func (h *handle) loadSession(ctx context.Context, cwd string) error {
 	if err == nil {
 		var res struct {
 			Modes json.RawMessage `json:"modes"`
+			Meta  json.RawMessage `json:"_meta"`
 		}
 		if json.Unmarshal(raw, &res) == nil {
 			h.storeModes(res.Modes)
+			h.storeAgentPreset(res.Meta)
 		}
 		h.markReplayComplete()
 	}
@@ -700,9 +710,11 @@ func (h *handle) resumeSession(ctx context.Context, cwd string) error {
 	if err == nil {
 		var res struct {
 			Modes json.RawMessage `json:"modes"`
+			Meta  json.RawMessage `json:"_meta"`
 		}
 		if json.Unmarshal(raw, &res) == nil {
 			h.storeModes(res.Modes)
+			h.storeAgentPreset(res.Meta)
 		}
 	}
 	return err

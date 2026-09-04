@@ -385,6 +385,8 @@ var migrations = []string{
 	// 由 Daemon 上行同步（Relay 不解析/不校验 mode 语义，只存快照供 controls 下发）。
 	`ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT '';`,
 	`ALTER TABLE sessions ADD COLUMN available_permission_modes TEXT NOT NULL DEFAULT '[]';`,
+	// v0.8.5：会话实际 joined 的 DSH agent preset id（由 Daemon 上行同步，只读投影）。
+	`ALTER TABLE sessions ADD COLUMN agent_preset_id TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。
@@ -454,7 +456,10 @@ func ensureSessionPermissionModeColumns(db *sql.DB) error {
 	if err := ensureTableColumn(db, "sessions", "permission_mode", `ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
-	return ensureTableColumn(db, "sessions", "available_permission_modes", `ALTER TABLE sessions ADD COLUMN available_permission_modes TEXT NOT NULL DEFAULT '[]'`)
+	if err := ensureTableColumn(db, "sessions", "available_permission_modes", `ALTER TABLE sessions ADD COLUMN available_permission_modes TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	return ensureTableColumn(db, "sessions", "agent_preset_id", `ALTER TABLE sessions ADD COLUMN agent_preset_id TEXT NOT NULL DEFAULT ''`)
 }
 
 // ensureArchivedAtColumn 用存在性检查补齐 sessions.archived_at_unix_ms。

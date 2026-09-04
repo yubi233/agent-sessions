@@ -352,11 +352,14 @@ type SessionModeItem struct {
 // SyncSessionModes 把会话级 permission mode 目录快照上行到 Relay（PUT 端点）。
 // 这是会话运行期 handle 的事实；签名由 postJSON 在 Signer 非 nil 时自动附加
 // （兼容窗口内旧 bearer 放行由 Relay 端处理）。失败只记录不阻断主流程。
-func (c *RelayClient) SyncSessionModes(ctx context.Context, sessionID, modeID string, modes []SessionModeItem) error {
+func (c *RelayClient) SyncSessionModes(ctx context.Context, sessionID, modeID, agentPresetID string, modes []SessionModeItem) error {
 	body := map[string]any{
 		"protocol_version":           daemonProtocolVersion,
 		"mode_id":                    modeID,
 		"available_permission_modes": modes,
+	}
+	if agentPresetID != "" {
+		body["agent_preset_id"] = agentPresetID
 	}
 	return c.postJSON(ctx, "/v1/daemon/sessions/"+sessionID+"/modes", body, &struct{}{})
 }
@@ -635,7 +638,7 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 // enqueueModeInfo 是 runner mode 目录的本机出口（v0.8.5 §3.4）：把会话级
 // mode 快照异步上行到 Relay。上行失败只记录日志，不阻断 start/setMode 命令
 // 兑现（目录下次同步会再覆盖）；commandCtx 失效时用短超时上下文兜底。
-func (l *RelayLoop) enqueueModeInfo(sessionID string, info adapter.SessionModeInfo) {
+func (l *RelayLoop) enqueueModeInfo(sessionID string, info adapter.SessionModeInfo, agentPreset string) {
 	if l.Client == nil || strings.TrimSpace(sessionID) == "" {
 		return
 	}
@@ -650,7 +653,7 @@ func (l *RelayLoop) enqueueModeInfo(sessionID string, info adapter.SessionModeIn
 		if l.commandCtx != nil {
 			ctx = l.commandCtx
 		}
-		if err := l.Client.SyncSessionModes(ctx, sessionID, info.CurrentModeID, modes); err != nil {
+		if err := l.Client.SyncSessionModes(ctx, sessionID, info.CurrentModeID, agentPreset, modes); err != nil {
 			if l.Logger != nil {
 				l.Logger.Warn("sync session modes failed", "session", sessionID, "error", err)
 			}

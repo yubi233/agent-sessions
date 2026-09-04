@@ -274,6 +274,7 @@ func (a *API) handleDaemonCommandAck(c *gin.Context) {
 type daemonSessionModesRequest struct {
 	ProtocolVersion int                     `json:"protocol_version"`
 	ModeID          string                  `json:"mode_id"`
+	AgentPresetID   string                  `json:"agent_preset_id"`
 	AvailableModes  []daemonModeItem        `json:"available_permission_modes"`
 	Signature       authz.TerminalSignature `json:"signature"`
 }
@@ -312,7 +313,7 @@ func (a *API) handleDaemonSessionModes(c *gin.Context) {
 	}
 	modesJSON, _ := json.Marshal(modes)
 	if err := a.Daemons.SyncSessionPermissionModes(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
-		c.Param("id"), strings.TrimSpace(req.ModeID), string(modesJSON)); err != nil {
+		c.Param("id"), strings.TrimSpace(req.ModeID), string(modesJSON), strings.TrimSpace(req.AgentPresetID)); err != nil {
 		writeError(c, err)
 		return
 	}

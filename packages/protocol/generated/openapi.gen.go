@@ -1312,6 +1312,8 @@ type DaemonSessionModeItem struct {
 
 // DaemonSessionModesRequest defines model for DaemonSessionModesRequest.
 type DaemonSessionModesRequest struct {
+	// AgentPresetId 会话实际 joined 的 DSH agent preset（v0.8.5 §3.8）；空串表示未 joined（清空快照）。
+	AgentPresetId            *string                 `json:"agent_preset_id,omitempty"`
 	AvailablePermissionModes []DaemonSessionModeItem `json:"available_permission_modes"`
 
 	// ModeId 当前选中的 permission mode id。
@@ -1556,7 +1558,9 @@ type RegisterRequest struct {
 
 // Session defines model for Session.
 type Session struct {
-	Id string `json:"id"`
+	// AgentPresetId 会话实际 joined 的 DSH agent preset（v0.8.5 §3.8 只读投影）；缺失表示未 joined，客户端如实降级。
+	AgentPresetId *string `json:"agent_preset_id,omitempty"`
+	Id            string  `json:"id"`
 
 	// LastActivityAtUnixMs 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端仅用于最后消息时间展示与列表排序，不参与会话状态推断。
 	LastActivityAtUnixMs *int64  `json:"last_activity_at_unix_ms,omitempty"`

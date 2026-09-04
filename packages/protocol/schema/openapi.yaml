@@ -1814,6 +1814,9 @@ components:
         workspace_name:
           type: string
           description: 工作区安全显示名（v0.8.5 §3.4）：服务端由 workspace_id 解析为 display_name 后下发；缺失/解析失败时省略，客户端如实降级，不编造路径或写死项目名。
+        agent_preset_id:
+          type: string
+          description: 会话实际 joined 的 DSH agent preset（v0.8.5 §3.8 只读投影）；缺失表示未 joined，客户端如实降级。
         status:
           type: string
         last_seq:
@@ -2222,6 +2225,9 @@ components:
         mode_id:
           type: string
           description: 当前选中的 permission mode id。
+        agent_preset_id:
+          type: string
+          description: 会话实际 joined 的 DSH agent preset（v0.8.5 §3.8）；空串表示未 joined（清空快照）。
         available_permission_modes:
           type: array
           items:

@@ -1689,7 +1689,10 @@ type sessionView struct {
 	// WorkspaceName 是 workspace 的安全显示名（v0.8.5 §3.4）：服务端把 workspace_id
 	// 解析为 display_name 后下发，移动端不再回退到写死的项目名或 opaque id。
 	// workspace 缺失/解析失败时为空，客户端如实降级。
-	WorkspaceName       string `json:"workspace_name,omitempty"`
+	WorkspaceName string `json:"workspace_name,omitempty"`
+	// AgentPresetID 是会话实际 joined 的 DSH agent preset（v0.8.5 §3.8 只读投影）；
+	// 空表示未 joined，客户端如实降级显示。
+	AgentPresetID       string `json:"agent_preset_id,omitempty"`
 	Status              string `json:"status"`
 	Provider            string `json:"provider,omitempty"`
 	Model               string `json:"model,omitempty"`
@@ -1708,6 +1711,7 @@ func newSessionView(session store.SessionRow) sessionView {
 		Provider: session.Provider, Model: session.Model, LastSeq: session.LastSeq,
 		ParentSessionID: session.ParentSessionID, ForkedFromMessageID: session.ForkedFromMessageID,
 		ArchivedAtUnixMS: session.ArchivedAtUnixMS, LastActivityAtUnixMS: session.LastActivityAtUnixMS,
+		AgentPresetID: session.AgentPresetID,
 	}
 }
 

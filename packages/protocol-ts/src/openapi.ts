@@ -1063,6 +1063,8 @@ export interface components {
             workspace_id: string;
             /** @description 工作区安全显示名（v0.8.5 §3.4）：服务端由 workspace_id 解析为 display_name 后下发；缺失/解析失败时省略，客户端如实降级，不编造路径或写死项目名。 */
             workspace_name?: string;
+            /** @description 会话实际 joined 的 DSH agent preset（v0.8.5 §3.8 只读投影）；缺失表示未 joined，客户端如实降级。 */
+            agent_preset_id?: string;
             status: string;
             /** Format: int64 */
             last_seq?: number;
@@ -1274,6 +1276,8 @@ export interface components {
             protocol_version: number;
             /** @description 当前选中的 permission mode id。 */
             mode_id: string;
+            /** @description 会话实际 joined 的 DSH agent preset（v0.8.5 §3.8）；空串表示未 joined（清空快照）。 */
+            agent_preset_id?: string;
             available_permission_modes: components["schemas"]["DaemonSessionModeItem"][];
             signature?: Record<string, never>;
         };
