@@ -1,5 +1,5 @@
 {
- "registry_version": 8,
+ "registry_version": 9,
  "status": "in_progress",
  "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
  "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
@@ -974,6 +974,45 @@
    "status": "in_progress",
    "allow_real_upstream": true,
    "uniqueness_rule": "v0.8.5 拥有图片 opaque ref、权限目录/mode.set、工作区口径修复、usage timing、Agent 预设只读与中止/轨迹时间修复的新增回归；V08-12 仅消费。真实模型用例（V085-15）须用户显式授权后运行。"
+  },
+  {
+   "plan_id": "V086",
+   "suite_path": "docs/test/24-v086回合收敛权限目录主页卡片与消息渲染.json",
+   "owner": "Agent Sessions v0.8.6",
+   "id_prefix": [
+    "V086-"
+   ],
+   "owned_ids": [
+    "V086-01",
+    "V086-02",
+    "V086-03",
+    "V086-04",
+    "V086-05",
+    "V086-06",
+    "V086-07",
+    "V086-08",
+    "V086-09",
+    "V086-10",
+    "V086-11",
+    "V086-12",
+    "V086-13",
+    "V086-14",
+    "V086-15",
+    "V086-16",
+    "V086-17"
+   ],
+   "consumed_ids": [],
+   "dependencies": [
+    "V085",
+    "V084",
+    "V083",
+    "V082",
+    "V081",
+    "V08"
+   ],
+   "status": "in_progress",
+   "allow_real_upstream": false,
+   "uniqueness_rule": "v0.8.6 拥有回合看门狗/桥侧重试可见性、消息清账防重、状态行 turn.phase 投影、权限目录可达（mode 回传/controls 刷新/禁用原因/停止预检）、主页终端卡片化、会话 Markdown 渲染与复制全覆盖的新增回归；V086-10/17 为已实施交付（passed）。本轮无真实模型用例，allow_real_upstream=false。"
   }
  ]
 }

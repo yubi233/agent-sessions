@@ -297,6 +297,34 @@ tasks:
       - pnpm --filter @agent-sessions/web build
       - git diff --check
 
+  test:v086:local:
+    desc: v0.8.6 回合收敛看门狗/消息清账/权限目录/主页卡片化/Markdown/复制全覆盖 本地统一回归入口（V086-01..17；契约与 overlay 用例随阶段2-6落地后追加 Go/node 行；不调用真实模型）
+    cmds:
+      - task: docs:verify
+      - task: check
+      # 阶段2/4（A/B 组 daemon 契约）：看门狗、mode 目录回传与三时机、controls 扩展——测试落地后启用：
+      # - go test ./internal/daemon ./internal/adapter/dsh -run 'TestV086' -count=1
+      # 阶段3-6（A/E 组 controller、B/C/D 组 UI）：
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_trajectory_view_test.dart test/session_model_seat_test.dart test/model_effort_preferences_test.dart test/session_screens_test.dart --concurrency=1
+      - pnpm --filter @agent-sessions/web test
+      - git diff --check
+
+  test:v086:flutter:
+    desc: v0.8.6 macOS 可见窗口 targeted gate（本地 Flutter 口径，本轮不做 Android 实机；需先关闭用户正在使用的 Agent Sessions 窗口；场景清单随阶段5定稿：权限目录空壳→可用、主页终端卡片同步）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+
+  record:v086:
+    desc: v0.8.6 macOS fixture 录屏（录屏内容先定（2026-09-05，须在阶段7执行前确认终稿）：① 权限下拉空壳→启动会话→目录到达→可选可切换；② 主页终端卡片点同步→内联反馈→工作区出现；③ Markdown 回复渲染（###/表格）与每条消息复制按钮；不作为功能回归替代）
+    cmds:
+      - |
+        if [[ -z "${V086_FLUTTER_GATE_REPORT:-}" || ! -f "$V086_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v086 blocked: set V086_FLUTTER_GATE_REPORT to a passed v0.8.6 macOS gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v086 --gate-report "$V086_FLUTTER_GATE_REPORT"
+
   test:v085:flutter:
     desc: v0.8.5 中止与轨迹时间 macOS 可见窗口 targeted gate（需先关闭用户正在使用的 Agent Sessions 窗口；不运行 Android）
     cmds:

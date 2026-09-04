@@ -1,0 +1,303 @@
+{
+  "suite": "v086-turn-watchdog-permission-homecard-markdown-copy",
+  "description": "v0.8.6 回合收敛看门狗与状态投影（A）、消息重复清账（A）、权限目录全会话可达（B）、主页终端卡片化（C）、会话 Markdown 渲染（D）与复制全覆盖（E）。主计划 V086-01..17；V086-10/17 为已实施交付，其余随阶段推进回填状态。",
+  "environment": {
+    "local": "隔离 SQLite、内存假桥/fixture、store/daemon/runner Go 测试",
+    "browser": "系统 Chrome headed（V086-08/实机 gate）",
+    "flutter": "macOS fixture 窗口（本地可见 gate；本轮不做 Android 实机）",
+    "dsh_overlay": "本地确定性真实 DSH bridge overlay（不调用真实模型）",
+    "real": "本轮无真实模型用例；回合收敛用 deterministic overlay 注入无事件/慢回合"
+  },
+  "cases": [
+    {
+      "id": "V086-01",
+      "title": "current_mode_update → syncModeInfo 重上行：触发、去抖、失败容忍、目录不变不重发",
+      "status": "planned",
+      "phase": "P1",
+      "category": "contract",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "dsh handle 收到桥 current_mode_update 通知；modeInfoSink 已注册。",
+      "steps": [
+        "go test ./internal/adapter/dsh -run 'TestV086' -count=1",
+        "daemon 契约测试断言通知触发 mode 目录上行、同回合去抖合并、上行失败仅记日志"
+      ],
+      "expected": "通知后 Relay 收到最新目录/当前 mode；500ms 窗口内多次通知合并为一次上行；上行失败不阻断回合。",
+      "cleanup": ["无"],
+      "evidence": ["internal/adapter/dsh 契约测试（阶段2新增）", "internal/daemon runner 契约测试（阶段2新增）"]
+    },
+    {
+      "id": "V086-02",
+      "title": "start/resume/set_mode 三时机目录上行不回归；空目录不上行伪造",
+      "status": "planned",
+      "phase": "P1",
+      "category": "contract",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "runner.go 既有 syncModeInfo 三时机（start/resume/set_mode）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestV086|TestSessionRunner' -count=1"
+      ],
+      "expected": "三时机上行行为不变；无 live handle / 桥未广告 mode 时不伪造目录。",
+      "cleanup": ["无"],
+      "evidence": ["internal/daemon 既有契约测试"]
+    },
+    {
+      "id": "V086-03",
+      "title": "start/resume 回执后 controls 刷新：目录秒级到达，跨会话竞态防护，刷新失败不阻塞",
+      "status": "planned",
+      "phase": "P2",
+      "category": "controller",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "移动端 fixture 会话；controls 目录含权限 mode。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_controller_test.dart --concurrency=1"
+      ],
+      "expected": "start/resume 命令终态 succeeded 后自动拉取 controls 并 notify；目录到达无需等回合结束或重进页面；selectionGeneration 丢弃迟到响应；刷新失败静默。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/test/session_controller_test.dart（阶段4新增用例）"]
+    },
+    {
+      "id": "V086-04",
+      "title": "权限下拉禁用三类原因可见：目录空提示启动、unsupported 信息页如实、只读/未选既有口径",
+      "status": "planned",
+      "phase": "P2",
+      "category": "ui",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "dsh 会话目录空 / 非 dsh 会话 / 只读设备三种前置。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_model_seat_test.dart test/session_screens_test.dart --concurrency=1"
+      ],
+      "expected": "目录空时禁用且展示 permissionDirectoryHint（如「权限目录未同步——启动会话后自动获取」）；目录到达文案消失且可点；unsupported 会话入口隐藏、会话信息页展示 capability reason。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/test/v086_permission_test.dart（阶段4新增）"]
+    },
+    {
+      "id": "V086-05",
+      "title": "停止会话 mode.set 客户端预检：拦截并提示「会话未运行」，streaming 放行",
+      "status": "planned",
+      "phase": "P2",
+      "category": "controller",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "选中会话 status=stopped 且目录非空。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_controller_test.dart --concurrency=1"
+      ],
+      "expected": "stopped 会话选 mode 时不发命令，提示「会话未运行，启动后可切换权限模式」；streaming 会话正常提交 mode.set。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/test/session_controller_test.dart（阶段4新增用例）"]
+    },
+    {
+      "id": "V086-06",
+      "title": "deterministic overlay：历史会话（空目录）→ start → 目录到达 → 可选可切换 → current_mode_update 回流一致",
+      "status": "planned",
+      "phase": "P3",
+      "category": "e2e_overlay",
+      "priority": "P0",
+      "test_layer": "e2e",
+      "precondition": "本地真实 dsh 桥 + overlay 注入（不调用真实模型）。",
+      "steps": [
+        "node e2e-verify/real/dsh-v086-overlay.mjs（阶段5新增）"
+      ],
+      "expected": "全链路：controls 下发目录 → 下拉可点 → set_mode → 回执 + current_mode_update 回流一致。",
+      "cleanup": ["结束清理本轮桥子进程与端口"],
+      "evidence": ["e2e-verify/reports/（阶段5回填）"]
+    },
+    {
+      "id": "V086-07",
+      "title": "实机 visible gate：目录空壳 → 可用全程帧证据；双端（移动端/dsh 终端）mode 互见一致",
+      "status": "planned",
+      "phase": "P3",
+      "category": "visible_gate",
+      "priority": "P1",
+      "test_layer": "e2e",
+      "precondition": "本地栈（restart.sh）+ Android 实机暂缓，本轮以 macOS 可见 Flutter 窗口口径。",
+      "steps": [
+        "task test:v086:flutter（阶段7定义）",
+        "dsh 终端侧切 mode 后移动端回读一致各一次"
+      ],
+      "expected": "可见帧证明禁用→可用转换；双端 mode 互见一致；报告含 real_browser=true/headless=false。",
+      "cleanup": ["关闭本轮启动的应用窗口"],
+      "evidence": ["e2e-verify/reports/（阶段7回填）"]
+    },
+    {
+      "id": "V086-08",
+      "title": "回归聚合：test:v086:local 全绿 + v081–v085 聚合链式 + fixture/真实契约 schema 门",
+      "status": "planned",
+      "phase": "P4",
+      "category": "regression",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "各阶段用例已落地。",
+      "steps": [
+        "task test:v086:local",
+        "task test:v083:local && task test:v084:local && task test:v085:local"
+      ],
+      "expected": "聚合入口全绿；非 dsh 能力矩阵与既有契约不回归。",
+      "cleanup": ["无"],
+      "evidence": ["Taskfile.yml test:v086:local", "阶段7运行记录"]
+    },
+    {
+      "id": "V086-09",
+      "title": "承接：历史漂移套件修复或退役；refs schema 裁决落地；在飞改动独立提交回归",
+      "status": "partial",
+      "phase": "P4",
+      "category": "carryover",
+      "priority": "P2",
+      "test_layer": "mixed",
+      "precondition": "v0.8.5 实施记录 24 §5 残余清单。",
+      "steps": [
+        "p4-web-readonly / p4-web-read-transport / v08-dsh-readonly 修复或退役（删除入口+遗留留档）",
+        "refs schema `$defs` 裁决落地或书面维持",
+        "在飞 lease/requeue 改动已由 14e57b3/8e2e7a1 独立提交收口"
+      ],
+      "expected": "每项收口或如实 blocked 留档。",
+      "cleanup": ["无"],
+      "evidence": ["commit 14e57b3/8e2e7a1（在飞收口已由用户完成）", "阶段8回填"]
+    },
+    {
+      "id": "V086-10",
+      "title": "记录检查器弹窗化：行/时间线点按开弹窗、关闭/barrier 收口清选中、拖拽选区不弹窗、视图回收无残留",
+      "status": "passed",
+      "phase": "P2",
+      "category": "ui",
+      "priority": "P1",
+      "test_layer": "component",
+      "precondition": "轨迹视图有 ≥1 条记录。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_trajectory_view_test.dart --concurrency=1",
+        "cd apps/mobile && flutter test test/session_screens_test.dart --concurrency=1"
+      ],
+      "expected": "点按记录行/时间线打开模态检查器（key session-trajectory-inspector 不变）；关闭按钮/barrier 关闭并清选中态；Overview 拖拽选区不弹窗；4/4 与 37/37 通过。",
+      "cleanup": ["无"],
+      "evidence": [
+        "apps/mobile/lib/ui/session/trajectory/session_trajectory_view.dart",
+        "commit 5748baf",
+        "flutter test：trajectory 4/4、session_screens 37/37（2026-09-05 本地）"
+      ]
+    },
+    {
+      "id": "V086-11",
+      "title": "回合看门狗：启动后无事件超时产出 turn.failed/session_error，客户端收敛超时文案；桥侧重试可见（重试事件续命不误报、上限耗尽必收敛）",
+      "status": "planned",
+      "phase": "P1/P2",
+      "category": "contract/overlay",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "daemon 回合生命周期挂接看门狗（AGENT_SESSIONS_TURN_WATCHDOG_MS，默认 120000，0=关闭）；dsh 桥瞬时失败有界重试（用户裁决 2026-09-05：重试责任在桥）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestV086' -count=1（看门狗触发/事件到达撤防/abort 不重复报）",
+        "deepseek-harness vitest（重试触发/上限耗尽/重试事件可见/非瞬时失败不重试）",
+        "overlay：无事件回合 + 慢回合（90s 产出）对照"
+      ],
+      "expected": "无事件超时必产出失败事实并收敛；重试事件续命不误报；客户端「处理中」与「空闲」不再并存。",
+      "cleanup": ["无"],
+      "evidence": ["阶段2/3 回填"]
+    },
+    {
+      "id": "V086-12",
+      "title": "消息清账与防重：重发同文本不产生第二气泡；清账覆盖增量 merge、轮询放弃、命令拒绝三路径",
+      "status": "planned",
+      "phase": "P2",
+      "category": "controller/widget",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "移动端 fixture 会话；canonical 轨迹单条 user_message。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_controller_test.dart --concurrency=1"
+      ],
+      "expected": "上一回合未终态时同文本重发被防抖/排队提示；三条清账路径全部收敛；UI 单气泡。",
+      "cleanup": ["无"],
+      "evidence": ["阶段3回填"]
+    },
+    {
+      "id": "V086-13",
+      "title": "状态行消费 turn.phase：在途显示真实相位（含上游重试中）、失败后收敛；phase 解析缺口修复",
+      "status": "planned",
+      "phase": "P2",
+      "category": "ui",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "会话含 turnPhase 事件（ADR-015 链路）。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_screens_test.dart --concurrency=1"
+      ],
+      "expected": "在途相位与「处理中」状态条同源不再矛盾；失败收敛为「回合失败」；seq224 类启动相位可解析。",
+      "cleanup": ["无"],
+      "evidence": ["阶段3回填"]
+    },
+    {
+      "id": "V086-14",
+      "title": "主页终端卡片化：在线卡直发同步（无抽屉）、卡内工作区与内联同步反馈、离线/无能力灰态带原因、多卡串行",
+      "status": "planned",
+      "phase": "P2/P3",
+      "category": "ui",
+      "priority": "P1",
+      "test_layer": "component",
+      "precondition": "≥1 在线终端（dsh_workspace_sync 能力）与其下工作区。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_screens_test.dart --concurrency=1"
+      ],
+      "expected": "卡片按 MobileWorkspace.terminalId 分组；卡内同步直调 syncDSHWorkspaces(terminalId:)，无同步抽屉；离线/无能力卡灰态带原因；串行单槽。",
+      "cleanup": ["无"],
+      "evidence": ["阶段5回填"]
+    },
+    {
+      "id": "V086-15",
+      "title": "消息 Markdown：GFM 语法面渲染契约（###/表格/列表/行内/代码块）、流式 partial 不抛错、HTML/图片不渲染不加载",
+      "status": "planned",
+      "phase": "P2",
+      "category": "ui",
+      "priority": "P1",
+      "test_layer": "component",
+      "precondition": "assistant 消息含 GFM 样本（截图同型 ###+表格）。",
+      "steps": [
+        "cd apps/mobile && flutter test test/v086_markdown_test.dart（阶段6新增）"
+      ],
+      "expected": "语法面正确渲染；流式 partial 不抛错；HTML 注入与图片 URL 不渲染不加载。",
+      "cleanup": ["无"],
+      "evidence": ["阶段6回填"]
+    },
+    {
+      "id": "V086-16",
+      "title": "复制按钮全覆盖：流式中/未终态 assistant、tool/思考/notice 节点按钮出现且内容正确，大文本截断按裁决",
+      "status": "planned",
+      "phase": "P2",
+      "category": "ui",
+      "priority": "P1",
+      "test_layer": "component",
+      "precondition": "会话含各类型节点。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_screens_test.dart --concurrency=1"
+      ],
+      "expected": "_canCopy 改为「有可复制文本即出」后各节点按钮出现且复制内容正确；截断口径按裁决断言。",
+      "cleanup": ["无"],
+      "evidence": ["阶段6回填"]
+    },
+    {
+      "id": "V086-17",
+      "title": "推理等级本地记忆与模型行徽标：selectEffort 记忆持久化、selectModel 自动回带（双目录校验）、行尾徽标按目录过滤",
+      "status": "passed",
+      "phase": "P0",
+      "category": "controller/ui",
+      "priority": "P1",
+      "test_layer": "mixed",
+      "precondition": "fixture 会话（目录 efforts=[低,中,高]）；secure storage（fixture 走内存实现）。",
+      "steps": [
+        "cd apps/mobile && flutter test test/session_controller_test.dart --concurrency=1",
+        "cd apps/mobile && flutter test test/session_model_seat_test.dart test/model_effort_preferences_test.dart --concurrency=1"
+      ],
+      "expected": "selectEffort 成功后记忆写入并持久化；selectModel 自动回带上次等级（不在目录跳过不发命令）；徽标：选中模型显当前生效、其它显记忆值、目录不含不展示；30/30+15/19 相关用例通过。",
+      "cleanup": ["无"],
+      "evidence": [
+        "apps/mobile/lib/domain/model_effort_preferences.dart",
+        "apps/mobile/lib/storage/model_effort_preference_store.dart",
+        "commit 007b4c3",
+        "flutter test：controller 30/30、model_seat+preferences 19 项（2026-09-05 本地）"
+      ]
+    }
+  ]
+}
