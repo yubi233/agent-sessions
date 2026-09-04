@@ -733,8 +733,8 @@ func (r *sqliteRepo) AppendEvent(ctx context.Context, e SessionEventRow) (int64,
 		}
 	}
 	if _, err := r.db.ExecContext(ctx,
-		`INSERT INTO session_events(session_id,event_seq,event_type,terminal_status,envelope_json) VALUES(?,?,?,?,?)`,
-		e.SessionID, e.EventSeq, e.EventType, e.TerminalStatus, e.EnvelopeJSON); err != nil {
+		`INSERT INTO session_events(session_id,event_seq,event_type,terminal_status,envelope_json,created_at_unix_ms) VALUES(?,?,?,?,?,?)`,
+		e.SessionID, e.EventSeq, e.EventType, e.TerminalStatus, e.EnvelopeJSON, e.CreatedAtUnixMS); err != nil {
 		return 0, err
 	}
 	if _, err := r.db.ExecContext(ctx,
@@ -746,7 +746,7 @@ func (r *sqliteRepo) AppendEvent(ctx context.Context, e SessionEventRow) (int64,
 
 func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afterSeq int64) ([]SessionEventRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json,events.created_at_unix_ms
 		 FROM session_events AS events
 		 JOIN account_event_log AS event_log
 		   ON event_log.session_id=events.session_id AND event_log.event_seq=events.event_seq
@@ -758,7 +758,7 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 	var out []SessionEventRow
 	for rows.Next() {
 		var e SessionEventRow
-		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON, &e.CreatedAtUnixMS); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -770,7 +770,7 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 // 不能相信调用方提供的 session_id 或把其他账号的 event log 暴露到流中。
 func (r *sqliteRepo) ListAccountEventsAfter(ctx context.Context, accountID string, afterCursor int64) ([]SessionEventRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json,events.created_at_unix_ms
 		 FROM account_event_log AS event_log
 		 JOIN session_events AS events
 		   ON events.session_id=event_log.session_id AND events.event_seq=event_log.event_seq
@@ -784,7 +784,7 @@ func (r *sqliteRepo) ListAccountEventsAfter(ctx context.Context, accountID strin
 	var out []SessionEventRow
 	for rows.Next() {
 		var e SessionEventRow
-		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON, &e.CreatedAtUnixMS); err != nil {
 			return nil, err
 		}
 		out = append(out, e)

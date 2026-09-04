@@ -104,6 +104,8 @@ const (
 	EventFileChange         EventType = "file_change"
 	EventDelegationChanged  EventType = "delegation_changed"
 	EventSessionError       EventType = "session_error" // Provider 会话级错误（脱敏文案）
+	// EventSessionAborted 是 Daemon 在 Abort 调用成功后生成的用户可见审计事件。
+	EventSessionAborted EventType = "session_aborted"
 	// v0.8.4（ADR-015）：细粒度回合状态与独立 thought 通道。
 	// EventTurnPhase 投影回合阶段机（payload 白名单见 ADR-015 §6）；
 	// EventSessionActivity 是 session 级聚合镜像（最新 active turn 的 phase）；
@@ -119,6 +121,9 @@ type Event struct {
 	Type    EventType      `json:"type"`
 	Seq     int64          `json:"seq"`
 	Payload map[string]any `json:"payload"`
+	// CreatedAtUnixMS is assigned once when the Daemon accepts the event into
+	// the canonical stream. Zero is retained for legacy/history events.
+	CreatedAtUnixMS int64 `json:"created_at_unix_ms,omitempty"`
 	// ReplayOrdinal 是 Daemon 用于去重 ACP load 历史的内部字段，故意从公共 JSON 事件中省略。
 	ReplayOrdinal int64 `json:"-"`
 }

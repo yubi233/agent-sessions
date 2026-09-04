@@ -758,7 +758,8 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 		}
 		views = append(views, cipherEventView{
 			EventSeq: event.EventSeq, EventType: event.EventType, TerminalStatus: event.TerminalStatus,
-			Envelope: json.RawMessage(event.EnvelopeJSON),
+			CreatedAtUnixMS: event.CreatedAtUnixMS,
+			Envelope:        json.RawMessage(event.EnvelopeJSON),
 		})
 	}
 	writeOK(c, sessionSnapshotView{Session: newSessionView(session), Events: views})
@@ -1776,10 +1777,11 @@ func newCommandView(command store.CommandRow) commandView {
 }
 
 type cipherEventView struct {
-	EventSeq       int64           `json:"event_seq"`
-	EventType      string          `json:"event_type"`
-	TerminalStatus string          `json:"terminal_status,omitempty"`
-	Envelope       json.RawMessage `json:"envelope"`
+	EventSeq        int64           `json:"event_seq"`
+	EventType       string          `json:"event_type"`
+	TerminalStatus  string          `json:"terminal_status,omitempty"`
+	CreatedAtUnixMS int64           `json:"created_at_unix_ms,omitempty"`
+	Envelope        json.RawMessage `json:"envelope"`
 }
 
 type sessionSnapshotView struct {
@@ -1816,10 +1818,11 @@ func newDaemonCommandObservationView(command domain.DaemonCommandObservation) da
 }
 
 type daemonCipherEventObservationView struct {
-	EventSeq       int64                      `json:"event_seq"`
-	EventType      string                     `json:"event_type"`
-	TerminalStatus string                     `json:"terminal_status,omitempty"`
-	Envelope       cipherEnvelopeMetadataView `json:"envelope"`
+	EventSeq        int64                      `json:"event_seq"`
+	EventType       string                     `json:"event_type"`
+	TerminalStatus  string                     `json:"terminal_status,omitempty"`
+	CreatedAtUnixMS int64                      `json:"created_at_unix_ms,omitempty"`
+	Envelope        cipherEnvelopeMetadataView `json:"envelope"`
 }
 
 type cipherEnvelopeMetadataView struct {
@@ -1832,8 +1835,9 @@ type cipherEnvelopeMetadataView struct {
 func newDaemonCipherEventObservationView(event store.SessionEventRow) daemonCipherEventObservationView {
 	return daemonCipherEventObservationView{
 		EventSeq: event.EventSeq, EventType: daemonObservationEventType(event.EventType),
-		TerminalStatus: daemonObservationTerminalStatus(event.EventType, event.TerminalStatus),
-		Envelope:       daemonCipherEnvelopeMetadata(event.EnvelopeJSON),
+		TerminalStatus:  daemonObservationTerminalStatus(event.EventType, event.TerminalStatus),
+		CreatedAtUnixMS: event.CreatedAtUnixMS,
+		Envelope:        daemonCipherEnvelopeMetadata(event.EnvelopeJSON),
 	}
 }
 
@@ -1853,7 +1857,7 @@ func daemonObservationTerminalStatus(eventType, status string) string {
 
 func daemonObservationEventType(value string) string {
 	switch value {
-	case "session.lifecycle", "turn.started", "user.message", "message.delta", "message.thought_delta", "message.completed", "turn.completed", "turn.phase", "session.activity", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
+	case "session.lifecycle", "session.aborted", "turn.started", "user.message", "message.delta", "message.thought_delta", "message.completed", "turn.completed", "turn.phase", "session.activity", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
 		return value
 	default:
 		return "unknown"

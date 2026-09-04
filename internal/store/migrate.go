@@ -113,6 +113,7 @@ var migrations = []string{
 		event_seq INTEGER NOT NULL,
 		event_type TEXT NOT NULL,
 		envelope_json TEXT NOT NULL,
+		created_at_unix_ms INTEGER NOT NULL DEFAULT 0,
 		PRIMARY KEY(session_id, event_seq)
 	);`,
 	`CREATE TABLE IF NOT EXISTS commands (
@@ -427,7 +428,15 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureSessionEventCreatedAtColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+func ensureSessionEventCreatedAtColumn(db *sql.DB) error {
+	return ensureTableColumn(db, "session_events", "created_at_unix_ms", `ALTER TABLE session_events ADD COLUMN created_at_unix_ms INTEGER NOT NULL DEFAULT 0`)
 }
 
 // ensureArchivedAtColumn 用存在性检查补齐 sessions.archived_at_unix_ms。

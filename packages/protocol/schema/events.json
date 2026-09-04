@@ -10,6 +10,7 @@
       "type": "string",
       "enum": [
         "session.lifecycle",
+        "session.aborted",
         "turn.started",
         "user.message",
         "message.delta",
@@ -40,6 +41,11 @@
       "type": "string",
       "enum": ["idle", "stopped"],
       "description": "仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。"
+    },
+    "created_at_unix_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "事件由 Daemon 生成时的 Unix 毫秒时间；历史事件可缺省。"
     },
     "ciphertext": { "type": "object" }
   }

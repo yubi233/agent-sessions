@@ -143,6 +143,7 @@ const (
 	CipherEventEventTypePermissionDecision  CipherEventEventType = "permission.decision"
 	CipherEventEventTypePermissionRequest   CipherEventEventType = "permission.request"
 	CipherEventEventTypePlanChanged         CipherEventEventType = "plan.changed"
+	CipherEventEventTypeSessionAborted      CipherEventEventType = "session.aborted"
 	CipherEventEventTypeSessionActivity     CipherEventEventType = "session.activity"
 	CipherEventEventTypeSessionLifecycle    CipherEventEventType = "session.lifecycle"
 	CipherEventEventTypeSkillCatalogChanged CipherEventEventType = "skill.catalog_changed"
@@ -180,6 +181,8 @@ func (e CipherEventEventType) Valid() bool {
 	case CipherEventEventTypePermissionRequest:
 		return true
 	case CipherEventEventTypePlanChanged:
+		return true
+	case CipherEventEventTypeSessionAborted:
 		return true
 	case CipherEventEventTypeSessionActivity:
 		return true
@@ -234,6 +237,7 @@ const (
 	DaemonCipherEventObservationEventTypeMessageCompleted    DaemonCipherEventObservationEventType = "message.completed"
 	DaemonCipherEventObservationEventTypeMessageDelta        DaemonCipherEventObservationEventType = "message.delta"
 	DaemonCipherEventObservationEventTypeMessageThoughtDelta DaemonCipherEventObservationEventType = "message.thought_delta"
+	DaemonCipherEventObservationEventTypeSessionAborted      DaemonCipherEventObservationEventType = "session.aborted"
 	DaemonCipherEventObservationEventTypeSessionActivity     DaemonCipherEventObservationEventType = "session.activity"
 	DaemonCipherEventObservationEventTypeSessionLifecycle    DaemonCipherEventObservationEventType = "session.lifecycle"
 	DaemonCipherEventObservationEventTypeToolCall            DaemonCipherEventObservationEventType = "tool.call"
@@ -260,6 +264,8 @@ func (e DaemonCipherEventObservationEventType) Valid() bool {
 	case DaemonCipherEventObservationEventTypeMessageDelta:
 		return true
 	case DaemonCipherEventObservationEventTypeMessageThoughtDelta:
+		return true
+	case DaemonCipherEventObservationEventTypeSessionAborted:
 		return true
 	case DaemonCipherEventObservationEventTypeSessionActivity:
 		return true
@@ -414,6 +420,7 @@ const (
 	DaemonEventUploadRequestEventTypeMessageCompleted    DaemonEventUploadRequestEventType = "message.completed"
 	DaemonEventUploadRequestEventTypeMessageDelta        DaemonEventUploadRequestEventType = "message.delta"
 	DaemonEventUploadRequestEventTypeMessageThoughtDelta DaemonEventUploadRequestEventType = "message.thought_delta"
+	DaemonEventUploadRequestEventTypeSessionAborted      DaemonEventUploadRequestEventType = "session.aborted"
 	DaemonEventUploadRequestEventTypeSessionActivity     DaemonEventUploadRequestEventType = "session.activity"
 	DaemonEventUploadRequestEventTypeSessionLifecycle    DaemonEventUploadRequestEventType = "session.lifecycle"
 	DaemonEventUploadRequestEventTypeToolCall            DaemonEventUploadRequestEventType = "tool.call"
@@ -439,6 +446,8 @@ func (e DaemonEventUploadRequestEventType) Valid() bool {
 	case DaemonEventUploadRequestEventTypeMessageDelta:
 		return true
 	case DaemonEventUploadRequestEventTypeMessageThoughtDelta:
+		return true
+	case DaemonEventUploadRequestEventTypeSessionAborted:
 		return true
 	case DaemonEventUploadRequestEventTypeSessionActivity:
 		return true
@@ -1050,9 +1059,10 @@ type CipherEnvelopeMetadataState string
 
 // CipherEvent defines model for CipherEvent.
 type CipherEvent struct {
-	Envelope  map[string]interface{} `json:"envelope"`
-	EventSeq  int64                  `json:"event_seq"`
-	EventType CipherEventEventType   `json:"event_type"`
+	CreatedAtUnixMs *int64                 `json:"created_at_unix_ms,omitempty"`
+	Envelope        map[string]interface{} `json:"envelope"`
+	EventSeq        int64                  `json:"event_seq"`
+	EventType       CipherEventEventType   `json:"event_type"`
 
 	// TerminalStatus 仅 turn.completed 使用的非敏感终态投影；Provider stop_reason 保留在密文 payload 内。
 	TerminalStatus *CipherEventTerminalStatus `json:"terminal_status,omitempty"`
@@ -1119,6 +1129,8 @@ type DaemonChallengeResponse struct {
 
 // DaemonCipherEventObservation defines model for DaemonCipherEventObservation.
 type DaemonCipherEventObservation struct {
+	CreatedAtUnixMs *int64 `json:"created_at_unix_ms,omitempty"`
+
 	// Envelope 仅证明 Relay 已验证版本化密文封装，不包含 key_id、nonce、ciphertext、aad_hash 或任何明文。
 	Envelope  CipherEnvelopeMetadata                `json:"envelope"`
 	EventSeq  int64                                 `json:"event_seq"`
@@ -1213,7 +1225,8 @@ type DaemonDeliveredCommand struct {
 
 // DaemonEventUploadRequest defines model for DaemonEventUploadRequest.
 type DaemonEventUploadRequest struct {
-	CommandId string `json:"command_id"`
+	CommandId       string `json:"command_id"`
+	CreatedAtUnixMs *int64 `json:"created_at_unix_ms,omitempty"`
 
 	// Envelope Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。
 	Envelope        OpaqueCipherEnvelope              `json:"envelope"`

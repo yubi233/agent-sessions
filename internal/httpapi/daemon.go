@@ -434,6 +434,7 @@ type daemonEventUploadRequest struct {
 	EventType       string                  `json:"event_type"`
 	TerminalStatus  string                  `json:"terminal_status,omitempty"`
 	Envelope        json.RawMessage         `json:"envelope"`
+	CreatedAtUnixMS int64                   `json:"created_at_unix_ms,omitempty"`
 	Signature       authz.TerminalSignature `json:"signature"`
 }
 
@@ -453,7 +454,7 @@ func (a *API) handleDaemonEventUpload(c *gin.Context) {
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
 		ProtocolVersion: req.ProtocolVersion, EventID: req.EventID, CommandID: req.CommandID,
 		SessionID: req.SessionID, EventType: req.EventType, TerminalStatus: req.TerminalStatus,
-		EnvelopeJSON: string(req.Envelope),
+		EnvelopeJSON: string(req.Envelope), CreatedAtUnixMS: req.CreatedAtUnixMS,
 	})
 	if err != nil {
 		writeError(c, err)

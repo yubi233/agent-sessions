@@ -417,6 +417,8 @@ type SessionEventRow struct {
 	// Provider stop_reason 仍只存在 EnvelopeJSON 密文中。
 	TerminalStatus string
 	EnvelopeJSON   string
+	// CreatedAtUnixMS 是事件生成时间；旧事件缺失时为 0。
+	CreatedAtUnixMS int64
 }
 
 // CommandRow 是 commands 表的行投影。

@@ -129,6 +129,8 @@ type DaemonEventInput struct {
 	// v0.5 旧客户端兼容语义（turn.completed 默认 idle）。
 	TerminalStatus string
 	EnvelopeJSON   string
+	// CreatedAtUnixMS 由 Daemon 生成；0 表示旧客户端或历史事件，Relay 不补伪造时间。
+	CreatedAtUnixMS int64
 }
 
 type DaemonEventResult struct {
@@ -997,6 +999,7 @@ func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (D
 		}
 		seq, appendErr := tx.AppendEvent(ctx, store.SessionEventRow{
 			SessionID: in.SessionID, EventType: in.EventType, TerminalStatus: in.TerminalStatus, EnvelopeJSON: envelope,
+			CreatedAtUnixMS: in.CreatedAtUnixMS,
 		})
 		if appendErr != nil {
 			return appendErr
@@ -1147,7 +1150,7 @@ func validWebReadResponseEnvelope(raw string) bool {
 
 func validDaemonEventType(value string) bool {
 	switch value {
-	case "session.lifecycle", "turn.started", "user.message", "message.delta", "message.completed", "turn.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
+	case "session.lifecycle", "session.aborted", "turn.started", "user.message", "message.delta", "message.completed", "turn.completed", "tool.call", "tool.result", "usage.updated", "file.changed", "git.snapshot", "command.updated":
 		return true
 	}
 	return false
@@ -1172,6 +1175,8 @@ func validateDaemonTerminalStatus(eventType, terminalStatus string) error {
 // 用量和 command.updated 等旁路事件必须返回空值，保留先前的生命周期终态。
 func sessionStatusForDaemonEvent(eventType, terminalStatus string) string {
 	switch eventType {
+	case "session.aborted":
+		return SessionStopped
 	case "user.message", "turn.started":
 		return SessionRunning
 	case "turn.completed":
