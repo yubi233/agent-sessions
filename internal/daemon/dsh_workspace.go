@@ -1,8 +1,10 @@
 package daemon
 
-// 本文件实现 v0.8 P2 的 DSH 本地工作区扫描与确认边界。
-// 扫描只读、不创建目录、不初始化 Git、不跟随符号链接；只有“授权根内 + DSH 持久化证据 + Git 根”
-// 的项目才会被确认为 Workspace。canonical root 只进入本机确认表与 Relay 专用 result，不进入普通日志。
+// 本文件实现 v0.8 P2 的 DSH 本地工作区扫描与确认边界（v0.8.5 §3.6 重裁决：
+// Git 根不再是 dsh 候选的必要条件——有 DSH 持久化证据即登记，Git 只读功能按
+// GitReady 标记如实标注；ADR-005 的 Git 门槛继续约束 Agent Sessions 自管项目
+// 与 gitread 功能面）。扫描只读、不创建目录、不初始化 Git、不跟随符号链接；
+// canonical root 只进入本机确认表与 Relay 专用 result，不进入普通日志。
 
 import (
 	"context"
@@ -28,20 +30,26 @@ const (
 
 // DSHScanSummary 是脱敏的扫描统计，只含计数和稳定分类，不包含路径。
 type DSHScanSummary struct {
-	Scanned        int            `json:"scanned"`
-	Candidates     int            `json:"candidates"`
-	Skipped        int            `json:"skipped"`
-	Ignored        int            `json:"ignored"`
-	Symlinks       int            `json:"symlinks"`
-	DepthLimited   int            `json:"depth_limited"`
-	LimitReached   bool           `json:"limit_reached"`
-	SkippedReasons map[string]int `json:"skipped_reasons"`
+	Scanned    int `json:"scanned"`
+	Candidates int `json:"candidates"`
+	// NonGitCandidates 是“有 DSH 证据但非 Git 根”的候选数（v0.8.5 §3.6）：
+	// 这些工作区登记但 gitread 不可用。
+	NonGitCandidates int            `json:"non_git_candidates"`
+	Skipped          int            `json:"skipped"`
+	Ignored          int            `json:"ignored"`
+	Symlinks         int            `json:"symlinks"`
+	DepthLimited     int            `json:"depth_limited"`
+	LimitReached     bool           `json:"limit_reached"`
+	SkippedReasons   map[string]int `json:"skipped_reasons"`
 }
 
 // DSHWorkspaceCandidate 是扫描器返回的本机候选；Root 只在本机使用，不能进入 Relay 普通响应。
 type DSHWorkspaceCandidate struct {
 	Root        string `json:"canonical_root"`
 	DisplayName string `json:"display_name"`
+	// GitReady 标注候选是否为 Git 根（v0.8.5 §3.6）：非 Git 根的 DSH 工作区照常
+	// 登记与会话，但 Git 只读功能（gitread）不可用，消费方如实标注。
+	GitReady bool `json:"git_ready"`
 }
 
 // DSHWorkspaceScanner 在授权根内发现已有 DSH 工作区。它不修改文件系统。
@@ -117,7 +125,13 @@ func (s *DSHWorkspaceScanner) Scan(ctx context.Context) ([]DSHWorkspaceCandidate
 			summary.Skipped++
 			continue
 		}
-		if s.hasDSHEvidence(cur.path) && workspacesafe.IsGitRoot(cur.path) {
+		if s.hasDSHEvidence(cur.path) {
+			// v0.8.5 §3.6：有 DSH 证据即候选（Git 根不再是必要条件）；GitReady 供
+			// gitread 功能标注，非 Git 根不影响登记与会话。
+			gitReady := workspacesafe.IsGitRoot(cur.path)
+			if !gitReady {
+				summary.NonGitCandidates++
+			}
 			if len(candidates) >= s.maxCandidates {
 				summary.LimitReached = true
 				return candidates, summary, nil
@@ -132,7 +146,7 @@ func (s *DSHWorkspaceScanner) Scan(ctx context.Context) ([]DSHWorkspaceCandidate
 					continue
 				}
 				// 名称在 Daemon 的扫描边界派生；Relay 只校验并投影，不能从根路径再推导用户文案。
-				candidates = append(candidates, DSHWorkspaceCandidate{Root: key, DisplayName: displayName})
+				candidates = append(candidates, DSHWorkspaceCandidate{Root: key, DisplayName: displayName, GitReady: gitReady})
 				summary.Candidates++
 			}
 			// 已确认的项目不再深入其子目录，避免把项目内的嵌套 DSH 仓库重复登记。
@@ -215,6 +229,8 @@ func pathWithin(root, path string) bool {
 
 // ConfirmExistingDSHWorkspace 把已存在的 DSH 项目目录确认到本机 Workspace 映射。
 // 与 WorkspaceManager.Create 不同，它不创建目录、不 git init，并允许授权根内任意深度（扫描器已限深）。
+// v0.8.5 §3.6：不再要求 Git 根（DSH 证据即登记）；非 Git 根工作区的 gitread 由
+// GitReady 标注为不可用，会话功能不受影响。
 func (m *WorkspaceManager) ConfirmExistingDSHWorkspace(ctx context.Context, workspaceID, root string) (ConfirmedWorkspace, error) {
 	if m == nil || m.store == nil || strings.TrimSpace(m.root) == "" {
 		return ConfirmedWorkspace{}, ErrWorkspaceRootInvalid
@@ -233,14 +249,16 @@ func (m *WorkspaceManager) ConfirmExistingDSHWorkspace(ctx context.Context, work
 	if !pathWithin(m.root, resolved) {
 		return ConfirmedWorkspace{}, workspacesafe.ErrEscapeRoot
 	}
-	if !workspacesafe.IsGitRoot(resolved) {
-		return ConfirmedWorkspace{}, workspacesafe.ErrNotAGitRoot
-	}
 	scanner := NewDSHWorkspaceScanner(m.root)
 	if !scanner.hasDSHEvidence(resolved) {
 		return ConfirmedWorkspace{}, errors.New("directory 缺少 DSH 持久化证据")
 	}
-	return m.store.ConfirmWorkspace(workspaceID, resolved)
+	// v0.8.5 §3.6：有 DSH 证据即确认。候选本身是 Git 根时走 Git 语义条目
+	//（gitread 可用、DSH=false）；非 Git 根走 DSH 条目（gitread 标注不可用）。
+	if workspacesafe.IsGitRoot(resolved) {
+		return m.store.ConfirmWorkspace(workspaceID, resolved)
+	}
+	return m.store.ConfirmDSHWorkspace(workspaceID, resolved)
 }
 
 // DSHImportedSession 是一次按需导入的本机映射结果。Relay 只接收 opaque relay session id。
@@ -322,7 +340,8 @@ func sameCanonicalPath(left, right string) bool {
 // 落账。扫描出的 DSH 工作区若不写本机确认表，后续 session.start 解析不到 workspace root，
 // 会以 local_state_missing 语义 fail-closed。Relay 按去重后的候选顺序回传 workspace_ids，
 // 这里的去重规则（按 canonical root 保序）必须与其一致。候选根来自本机扫描器，
-// ConfirmExistingDSHWorkspace 仍会重验授权根边界、Git 根与 DSH 证据；单个候选确认失败只
+// ConfirmExistingDSHWorkspace 仍会重验授权根边界与 DSH 证据（v0.8.5 §3.6：Git 根不再是
+// 确认必要条件，非 Git 候选按 DSH 条目登记、gitread 标注不可用）；单个候选确认失败只
 // 降级为告警，不能让已成功的同步整体失败。
 func (l *RelayLoop) confirmDSHWorkspaceCandidates(ctx context.Context, commandID string, candidates []DSHWorkspaceCandidate, receipt DSHSyncCommandReceipt) {
 	if receipt.Status != "succeeded" || l == nil || l.WorkspaceManager == nil || len(receipt.WorkspaceIDs) == 0 {

@@ -2,14 +2,11 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 )
 
 // mustWriteDSHArtifact 构造符合 DSH 布局的 session.jsonl，作为工作区证据。
@@ -26,8 +23,10 @@ func mustWriteDSHArtifact(t *testing.T, project, id string) {
 	writeDSHSessionArtifactForTest(t, filepath.Join(project, ".dsh-sessions"), filepath.Clean(canonical), id, "{}")
 }
 
-// V08-01/03/18：Scanner 只发现授权根内“有 DSH 证据且为 Git 根”的项目。
-func TestDSHWorkspaceScannerFindsOnlyDSHGitRoots(t *testing.T) {
+// V08-01/03/18 + V085-10：Scanner 只发现授权根内“有 DSH 证据”的项目（v0.8.5 §3.6：
+// Git 根不再是必要条件）；GitReady 标注候选是否支持 gitread，隐藏/node_modules/
+// 符号链接与深度边界不放宽。
+func TestDSHWorkspaceScannerFindsDSHEvidenceWithGitReadyFlag(t *testing.T) {
 	root := t.TempDir()
 	// 有效 DSH 项目：Git 根 + .dsh-sessions/session.jsonl
 	valid := filepath.Join(root, "valid")
@@ -40,7 +39,7 @@ func TestDSHWorkspaceScannerFindsOnlyDSHGitRoots(t *testing.T) {
 	mustMkdirAll(t, plainGit)
 	mustGitInit(t, plainGit)
 
-	// 有 DSH 标记但不是 Git 根
+	// 有 DSH 标记但不是 Git 根：v0.8.5 §3.6 起照常候选（GitReady=false）
 	nonGit := filepath.Join(root, "non-git")
 	mustMkdirAll(t, filepath.Join(nonGit, ".dsh-sessions"))
 	mustWriteFile(t, filepath.Join(nonGit, ".dsh-sessions", "session-query.db"), "x")
@@ -58,10 +57,24 @@ func TestDSHWorkspaceScannerFindsOnlyDSHGitRoots(t *testing.T) {
 	}
 	canonicalValid, _ := filepath.EvalSymlinks(valid)
 	canonicalValid, _ = filepath.Abs(canonicalValid)
-	if len(candidates) != 1 || candidates[0].Root != filepath.Clean(canonicalValid) || candidates[0].DisplayName != "valid" {
-		t.Fatalf("candidates=%+v want only %s", candidates, canonicalValid)
+	canonicalNonGit, _ := filepath.EvalSymlinks(nonGit)
+	canonicalNonGit, _ = filepath.Abs(canonicalNonGit)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates=%+v want valid + non-git", candidates)
 	}
-	if summary.Candidates != 1 || summary.Ignored < 2 {
+	byRoot := map[string]DSHWorkspaceCandidate{}
+	for _, cand := range candidates {
+		byRoot[filepath.Clean(cand.Root)] = cand
+	}
+	validCand, hasValid := byRoot[filepath.Clean(canonicalValid)]
+	if !hasValid || validCand.DisplayName != "valid" || !validCand.GitReady {
+		t.Fatalf("valid candidate missing/git_ready false: %+v", candidates)
+	}
+	nonGitCand, hasNonGit := byRoot[filepath.Clean(canonicalNonGit)]
+	if !hasNonGit || nonGitCand.DisplayName != "non-git" || nonGitCand.GitReady {
+		t.Fatalf("non-git candidate missing/git_ready true: %+v", candidates)
+	}
+	if summary.Candidates != 2 || summary.NonGitCandidates != 1 || summary.Ignored < 2 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 }
@@ -134,7 +147,8 @@ func TestDSHWorkspaceScannerLimits(t *testing.T) {
 	}
 }
 
-// V08-03：ConfirmExistingDSHWorkspace 拒绝越权/非 Git/无 DSH 证据。
+// V08-03 + V085-10：ConfirmExistingDSHWorkspace 拒绝越权/无 DSH 证据；
+// 非 Git 但有 DSH 证据的工作区 v0.8.5 §3.6 起确认成功。
 func TestConfirmExistingDSHWorkspaceRejectsInvalid(t *testing.T) {
 	root := t.TempDir()
 	state, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
@@ -173,13 +187,35 @@ func TestConfirmExistingDSHWorkspaceRejectsInvalid(t *testing.T) {
 	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-out", outside); err == nil {
 		t.Fatal("expected outside rejection")
 	}
-	// 非 Git
+	// 非 Git 但有 DSH 证据：v0.8.5 §3.6 起确认成功（gitread 由 GitReady 标注不可用）
 	plain := filepath.Join(root, "plain")
 	mustMkdirAll(t, filepath.Join(plain, ".dsh-sessions"))
 	mustWriteDSHArtifact(t, plain, "plain-s1")
-	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-plain", plain); !errors.Is(err, workspacesafe.ErrNotAGitRoot) {
-		t.Fatalf("expected not git rejection, got %v", err)
+	plainConfirmed, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-plain", plain)
+	if err != nil {
+		t.Fatalf("non-git dsh confirm failed: %v", err)
 	}
+	canonicalPlain, _ := filepath.EvalSymlinks(plain)
+	canonicalPlain, _ = filepath.Abs(canonicalPlain)
+	if plainConfirmed.Root != filepath.Clean(canonicalPlain) {
+		t.Fatalf("unexpected non-git confirm root: %+v", plainConfirmed)
+	}
+
+	// v0.8.5 §3.6：DSH 非 Git 条目在读取路径（ConfirmedWorkspaceByID）同样放行，
+	// realpath 身份校验保留（目录移动仍 fail-closed）。
+	plainRead, err := state.ConfirmedWorkspaceByID("ws-plain")
+	if err != nil {
+		t.Fatalf("read non-git dsh workspace: %v", err)
+	}
+	if !plainRead.DSH || plainRead.Root != plainConfirmed.Root {
+		t.Fatalf("unexpected read-back: %+v", plainRead)
+	}
+	// Git 条目读取语义不变（DSH=false）。
+	gitRead, err := state.ConfirmedWorkspaceByID("ws-dsh")
+	if err != nil || gitRead.DSH || gitRead.Root != confirmed.Root {
+		t.Fatalf("git read-back: %+v, %v", gitRead, err)
+	}
+
 	// 无 DSH 证据
 	noDsh := filepath.Join(root, "no-dsh")
 	mustMkdirAll(t, noDsh)

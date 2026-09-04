@@ -109,6 +109,7 @@ var ErrRelayCommandConflict = errors.New("relay command conflicts with durable r
 type ConfirmedWorkspace struct {
 	ID   string `json:"id"`
 	Root string `json:"root"`
+	DSH  bool   `json:"dsh,omitempty"`
 }
 
 // OpenStore 打开或创建本地状态库。
@@ -291,9 +292,20 @@ func (s *Store) Delete(key string) error {
 	return err
 }
 
-// ConfirmWorkspace 把用户明确确认的 Git 根绑定到 Relay Workspace ID。确认时和每次读取时都做
-// realpath/Git 根校验，避免目录移动、符号链接替换或 Relay payload 伪造扩大本机读取范围。
+// ConfirmWorkspace 把用户明确确认的 Git 根绑定到 Relay Workspace ID（workspace.create
+// 与既有自管项目语义不变：确认时和每次读取时都做 realpath/Git 根校验）。
 func (s *Store) ConfirmWorkspace(workspaceID, root string) (ConfirmedWorkspace, error) {
+	return s.confirmWorkspace(workspaceID, root, true)
+}
+
+// ConfirmDSHWorkspace 把 DSH 证据确认的工作区绑定到 Relay Workspace ID（v0.8.5 §3.6）：
+// 不要求 Git 根（有 DSH 持久化证据即登记），但保留同样的 canonical/realpath 安全校验；
+// 非 Git 根工作区的 gitread 功能不可用，由调用方按 ConfirmedWorkspace.DSH 标注。
+func (s *Store) ConfirmDSHWorkspace(workspaceID, root string) (ConfirmedWorkspace, error) {
+	return s.confirmWorkspace(workspaceID, root, false)
+}
+
+func (s *Store) confirmWorkspace(workspaceID, root string, requireGit bool) (ConfirmedWorkspace, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	root = strings.TrimSpace(root)
 	if workspaceID == "" || len(workspaceID) > 128 || strings.ContainsAny(workspaceID, "\x00\r\n") {
@@ -302,17 +314,17 @@ func (s *Store) ConfirmWorkspace(workspaceID, root string) (ConfirmedWorkspace, 
 	if !filepath.IsAbs(root) {
 		return ConfirmedWorkspace{}, workspacesafe.ErrNotAbsolute
 	}
-	if !workspacesafe.IsGitRoot(root) {
+	if requireGit && !workspacesafe.IsGitRoot(root) {
 		return ConfirmedWorkspace{}, workspacesafe.ErrNotAGitRoot
 	}
 	canonicalRoot, err := workspacesafe.ResolveRepoRelative(root, ".")
 	if err != nil {
 		return ConfirmedWorkspace{}, err
 	}
-	if !workspacesafe.IsGitRoot(canonicalRoot) {
+	if requireGit && !workspacesafe.IsGitRoot(canonicalRoot) {
 		return ConfirmedWorkspace{}, workspacesafe.ErrNotAGitRoot
 	}
-	confirmed := ConfirmedWorkspace{ID: workspaceID, Root: canonicalRoot}
+	confirmed := ConfirmedWorkspace{ID: workspaceID, Root: canonicalRoot, DSH: !requireGit}
 	raw, err := json.Marshal(confirmed)
 	if err != nil {
 		return ConfirmedWorkspace{}, err
@@ -342,7 +354,9 @@ func (s *Store) ConfirmedWorkspaceByID(workspaceID string) (ConfirmedWorkspace, 
 	if err != nil {
 		return ConfirmedWorkspace{}, err
 	}
-	if !workspacesafe.IsGitRoot(canonicalRoot) {
+	// v0.8.5 §3.6：DSH 证据确认的工作区不要求 Git 根（realpath 身份校验保留）；
+	// Git 语义条目保持既有 Git 根校验不变，防止目录替换扩大本机读取范围。
+	if !confirmed.DSH && !workspacesafe.IsGitRoot(canonicalRoot) {
 		return ConfirmedWorkspace{}, workspacesafe.ErrNotAGitRoot
 	}
 	confirmed.Root = canonicalRoot
