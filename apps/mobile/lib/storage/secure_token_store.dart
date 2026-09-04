@@ -94,6 +94,11 @@ abstract interface class DeviceIdentityStore {
 
   Future<void> markOwnerBootstrapComplete(bool complete);
 
+  /// v0.8.5 §3.2：读取本机 X25519 加密私钥（base64url）用于解开会话 DEK。
+  /// 私钥只在本进程内存中参与 unwrap，绝不写日志或上行；未初始化返回 null。
+  /// 真实 Android 实现可改为 Keystore 内运算不透出私钥（接口不变）。
+  Future<String?> readEncryptionPrivateKeyB64();
+
   Future<void> clear();
 }
 
@@ -304,6 +309,10 @@ class SecureDeviceIdentityStore implements DeviceIdentityStore {
       Future.wait(keys.map((key) => _storage.delete(key: key)));
 
   @override
+  Future<String?> readEncryptionPrivateKeyB64() =>
+      _storage.read(key: _encryptionPrivateKey);
+
+  @override
   Future<void> clear() => Future.wait([
     _deleteKeys(_activeKeyNames),
     _deleteKeys(_pendingKeyNames),
@@ -372,6 +381,9 @@ class InMemoryDeviceIdentityStore implements DeviceIdentityStore {
   Future<void> markOwnerBootstrapComplete(bool complete) async {
     _ownerBootstrapComplete = complete;
   }
+
+  @override
+  Future<String?> readEncryptionPrivateKeyB64() async => null; // mock 无私钥；fixture 密封是预密封草稿
 
   @override
   Future<void> clear() async {

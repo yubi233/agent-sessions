@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -7,9 +8,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../attachments/attachment_picker.dart';
+import '../crypto/box.dart';
+import '../domain/models.dart';
 import '../relay/fixture_relay_repository.dart';
-import '../relay/http_relay_repository.dart';
 import '../relay/relay_repository.dart';
+import '../relay/http_relay_repository.dart';
 import '../git/git_diff_repository.dart';
 import '../files/workspace_files_repository.dart';
 import '../state/app_controller.dart';
@@ -124,22 +127,53 @@ final appControllerProvider = ChangeNotifierProvider<AppController>((ref) {
 final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
   ref,
 ) {
+  final relay = ref.read(relayRepositoryProvider);
+  final identity = ref.read(deviceIdentityStoreProvider);
   final controller = SessionController(
-    relay: ref.read(relayRepositoryProvider),
-    // 真实运行使用系统文件选择器；会话 DEK 通道未部署时内部 fail-closed。
-    picker: const SystemAttachmentPicker(
-      contentKeyProvider: _sessionContentKeyFromStore,
+    relay: relay,
+    // 真实运行使用系统文件选择器；content key 提供方在此闭包接线：
+    // Relay content-dek 读取 + 本机 X25519 私钥 unwrap（无 DEK/非本设备 wrap
+    // 时返回 null，选文件入口 fail-closed 提示等待密钥）。
+    picker: SystemAttachmentPicker(
+      contentKeyProvider: (sessionId) =>
+          _sessionContentKeyFromStore(relay, identity, sessionId),
     ),
   );
   unawaited(controller.initialize());
   return controller;
 });
 
-/// 会话内容密钥提供方：当前无 Keystore 内容密钥通道，固定返回 null（fail-closed）。
-/// fixture 模式由 FixtureRelayRepository.sessionContentKeyAvailable 放行入口，
-/// 但真实密封只会发生在真实 DEK 通道部署之后。
-Future<Uint8List?> _sessionContentKeyFromStore(String sessionId) async {
-  return null;
+/// 会话内容密钥提供方（v0.8.5 §3.2 / ADR-016）：真实链路从 Relay 读取本设备
+/// 可解的 wrapped DEK，用本机 X25519 加密私钥 unwrap 后返回会话 DEK（只在本进程
+/// 内存使用，不写日志/上行）。fetch 返回 null（无 DEK/非本设备 wrap/私钥缺失）
+/// 时同样返回 null——选文件入口保持 fail-closed 的"等待密钥"提示。
+/// fixture 模式（FixtureRelayRepository.fetch 恒 null）不经此路径密封预密封草稿。
+Future<Uint8List?> _sessionContentKeyFromStore(
+  RelayRepository relay,
+  DeviceIdentityStore identity,
+  String sessionId,
+) async {
+  try {
+    final wrapped = await relay.fetchSessionContentDEK(sessionId);
+    if (wrapped == null) {
+      return null;
+    }
+    final privateB64 = await identity.readEncryptionPrivateKeyB64();
+    if (privateB64 == null || privateB64.isEmpty) {
+      return null;
+    }
+    final privateBytes = base64Url.decode(base64Url.normalize(privateB64));
+    return await CryptoBox.unwrapSessionDEK(
+      wrappedPayload: wrapped.wrappedBytes,
+      encryptionPrivateKeyBytes: Uint8List.fromList(privateBytes),
+    );
+  } on RelayFailure {
+    // Relay 不可达/无权限：fail-closed，选文件入口继续提示等待密钥。
+    return null;
+  } on Object {
+    // unwrap 失败（载荷损坏/密钥不符）同样 fail-closed；不向 picker 暴露异常细节。
+    return null;
+  }
 }
 
 /// 生命周期适配层只消费该 controller；它通过 SessionController 的只读 cursor 恢复接口补齐事件，
