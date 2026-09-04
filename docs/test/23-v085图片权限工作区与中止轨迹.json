@@ -233,43 +233,52 @@
     {
       "id": "V085-11",
       "title": "usage timing：桥折算→mapper→ttft/throughput→chips；缺省/畸形不显示假值",
-      "status": "planned",
+      "status": "partial",
       "phase": "P1",
       "category": "usage_timing",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "go test ./internal/adapter/dsh -run TestMapUsageUpdate",
+        "deepseek-harness: npx vitest run packages/acp/acp/tests/usage-timing.spec.ts",
+        "overlay 端到端 + headed gate（P4）"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "internal/adapter/dsh/mapper.go(parseUsageTimingMeta)",
+        "internal/adapter/dsh/mapper_test.go(TestMapUsageUpdateCarriesTimingMeta)",
+        "deepseek-harness packages/acp/acp/src/usage-timing.ts + tests/usage-timing.spec.ts",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.6/§4.7"
       ]
     },
     {
       "id": "V085-12",
       "title": "Agent 预设只读投影链路、未协商缺省、写入 unsupported 原因",
-      "status": "planned",
+      "status": "partial",
       "phase": "P2",
       "category": "agent_preset_readonly",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "go test ./internal/relay -run TestV085SessionAgentPreset",
+        "go test ./internal/adapter/dsh -run TestAgentPreset",
+        "可见 Flutter gate（V085-14，P4）"
       ],
       "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "internal/relay/agent_preset_contract_test.go",
+        "internal/adapter/dsh/handle.go(storeAgentPreset/AgentPreset)",
+        "internal/adapter/dsh/extension_handle_test.go(TestAgentPresetFromSessionStateMeta)",
+        "deepseek-harness packages/acp/acp/src/index.ts(AGENT_PRESET_META_KEY) + tests/agent-preset.spec.ts",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md §4.7"
       ]
     },
     {
