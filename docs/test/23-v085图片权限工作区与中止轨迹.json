@@ -568,6 +568,36 @@
       "evidence": [
         "internal/daemon/relay_outbox_retry_test.go"
       ]
+    },
+    {
+      "id": "V085-25",
+      "title": "lease 续期/接管不伤害在飞回合：事件上传解除 epoch fence + 同设备续期幂等 + 死信可恢复",
+      "status": "passed",
+      "phase": "P4",
+      "category": "lease_fencing_regression",
+      "priority": "P0",
+      "test_layer": "mixed",
+      "precondition": "事故复盘（实施记录 24 §4.26）：同设备重取 lease 使 epoch+1 并作废在飞 session.send，回合尾部事件被 UploadEvent epoch fence 永久死信，客户端滞留 streaming。",
+      "steps": [
+        "go test ./internal/domain -run 'TestV085' -count=1（同设备续期 epoch 不变且不作废在飞命令；接管作废旧命令但 turn.completed 事件仍投递且幂等）",
+        "go test ./internal/relay -run 'TestCTRL02StaleEpochFenced|TestP2DaemonRejectsStaleLeaseBeforeStart|TestP2RelayDaemonRestartAndMultiTerminalRecovery|TestLeaseCompetitionLoad|TestP3ATTACH01RejectsUnsafeUploadPaths' -count=1（接管语义契约）",
+        "flutter test test/runtime_recovery_binding_test.dart（桌面 inactive/hidden 不作废 lease；Android 保持旧语义）",
+        "go test ./internal/domain -run 'TestDaemonUploadEvent' -count=1（事件类型白名单与 events.json 枚举对齐：message.thought_delta/turn.phase 不再 400 死信）",
+        "daemon run --requeue-failed-events（存量死信全量复位，Relay 按 event_id 幂等去重）"
+      ],
+      "expected": "回合是会话所有的后台任务：lease/fence 只仲裁新写命令准入——同设备续期 epoch 原位保留；跨设备接管 epoch+1 且只作废旧 epoch 命令（事件投递不受影响）；桌面窗口失焦不作废 lease；死信有显式恢复入口。",
+      "cleanup": [
+        "无（本地测试，隔离 SQLite/temp 目录）"
+      ],
+      "evidence": [
+        "internal/domain/v085_lease_event_delivery_test.go",
+        "internal/domain/realtime.go（AcquireLease 续期/接管）",
+        "internal/domain/daemon.go（UploadEvent 解除 fence）",
+        "apps/daemon/main.go（--requeue-failed-events）",
+        "internal/domain/daemon.go（validDaemonEventType 对齐 events.json 枚举）",
+        "apps/mobile/lib/app/runtime_recovery_binding.dart（桌面 lifecycle 映射）",
+        "docs/adr/ADR-009-Daemon-Relay命令流与版本协商.md（语义修订）"
+      ]
     }
   ]
 }

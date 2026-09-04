@@ -15,8 +15,10 @@ P2 采用 **REST + 专用 SSE**，不新增 WebSocket：
 2. Daemon 通过只面向自身终端的 SSE 命令流接收投递，使用 `Last-Event-ID` 或 `after_delivery_seq` 恢复。现有 `/v1/events` 保持账号级客户端事件流，不能混用为 Daemon 命令流。
 3. Daemon 使用 REST 发送 heartbeat、`ack(received|started|rejected)`、终态 result 和 canonical event bundle。Relay 先校验 Android 写权限、目标终端、当前 lease epoch 和幂等键，再让命令进入投递队列。
 4. 所有命令有不可变 `command_id`、目标 `terminal_id`、`delivery_seq`、租约 `lease_epoch` 与请求幂等键。Daemon 以 `(terminal_id, command_id, ack_kind)` 幂等确认；事件上传有独立 `event_id` 并按唯一约束去重。传输按至少一次投递设计，执行按命令 ID 去重。
-5. Daemon 只执行已确认 Workspace 内、当前 capability 允许的动作。即使 Relay 已接受命令，Daemon 仍必须拒绝失效授权、旧 epoch、路径逃逸、目标不匹配和不支持的 command kind；拒绝只返回白名单错误元数据。
+5. Daemon 只执行已确认 Workspace 内、当前 capability 允许的动作。即使 Relay 已接受命令，Daemon 仍必须拒绝失效授权、旧 epoch、路径逃逸、目标不匹配和不支持的 command kind；拒绝只返回白名单错误元数据。**Fence 的范围限于命令 ack/执行——canonical event 上传（`/v1/daemon/events`）只校验命令存在性与终端归属，不做 epoch fence**：回合是会话所有的后台任务，已发生的事实性事件（含 `turn.completed`）必须在任何 lease 变更后仍能送达客户端，否则客户端将永久滞留于 streaming 态（2026-09-05 V085-25 事故回归）。
 6. 协议采用 N/N-1 兼容窗口。请求在 hello 与每个写请求中携带版本；Relay 仅接受当前 N 或 N-1。低于最小版本返回稳定的 `UPGRADE_REQUIRED`，高于当前版本返回 `PROTOCOL_UNSUPPORTED`，不得静默降级新 command kind。
+
+**Lease 续期与接管语义（2026-09-05 修订，V085-25）**：同设备重复获取 lease 是幂等续期——epoch 原位保留、不作废任何命令；不同设备获取是接管——epoch 递增并在同一事务内把旧 epoch 仍未终态（accepted/running）的命令收敛为 expired，且只影响之后的命令准入。lease 无 TTL、无释放端点，接管是唯一的控制权转移方式；不提供冲突拒绝路径。
 
 P2 已将以下接口写入 OpenAPI 和 Gin handler：`/v1/daemon/hello`、`/v1/daemon/heartbeat`、`/v1/daemon/commands/stream`、`/v1/daemon/commands/{id}/ack`、`/v1/daemon/commands/{id}/result`、`/v1/daemon/events`。生成物和契约测试仍是字段的唯一事实来源；本文不能替代 schema。
 
