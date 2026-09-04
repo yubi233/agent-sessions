@@ -1188,6 +1188,136 @@ func TestSessionRunnerSendRejectsBadImagePayload(t *testing.T) {
 	}
 }
 
+// (V085-02) session.send attachments refs：注入拉取 sink 后路由到 SendContent
+// （text 在前、image blocks 在后；sha256 复算与尺寸校验通过才发送）。
+func TestSessionRunnerSendRoutesAttachmentRefs(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "dsh")
+	start := Command{
+		Kind: "session.start",
+		PayloadJSON: `{"session_id":"a1","workspace_root":"/tmp/ws","provider":"dsh",` +
+			`"ciphertext":{"fixture_payload":{"prompt":"开始"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), start); err != nil {
+		t.Fatalf("consume session.start: %v", err)
+	}
+	imageBytes := []byte("fixture-decrypted-image-bytes")
+	runner.SetAttachmentFetchSink(func(ctx context.Context, sessionID, attachmentID string) ([]byte, error) {
+		if attachmentID == "att_ref_1" {
+			return imageBytes, nil
+		}
+		return nil, errors.New("attachment not found")
+	})
+	send := Command{
+		Kind: "session.send",
+		PayloadJSON: `{"session_id":"a1","ciphertext":{"fixture_payload":{"message":"看图",` +
+			`"attachments":[{"attachment_id":"att_ref_1","mime":"image/png",` +
+			`"size_bytes":29,"sha256":"8360d0228f286b50b905f9ca03273c6651a21c8f809734937bb0a672a97f014b"}]}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), send); err != nil {
+		t.Fatalf("consume session.send(refs): %v", err)
+	}
+	h := fake.handles[0]
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.contentSends) != 1 {
+		t.Fatalf("应路由到 SendContent，得到 %d 次", len(h.contentSends))
+	}
+	blocks := h.contentSends[0]
+	if len(blocks) != 2 || blocks[0].Type != "text" || blocks[0].Text != "看图" {
+		t.Fatalf("内容块形状不正确: %+v", blocks)
+	}
+	if blocks[1].Type != "image" || blocks[1].ImageMIME != "image/png" ||
+		string(blocks[1].ImageData) != string(imageBytes) {
+		t.Fatalf("图像块不正确: %+v", blocks[1])
+	}
+}
+
+// (V085-02b) attachments 与 inline images 同批拒绝（互斥），不产生任何发送。
+func TestSessionRunnerSendRejectsRefsAndImagesTogether(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "dsh")
+	start := Command{
+		Kind: "session.start",
+		PayloadJSON: `{"session_id":"a2","workspace_root":"/tmp/ws","provider":"dsh",` +
+			`"ciphertext":{"fixture_payload":{"prompt":"开始"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), start); err != nil {
+		t.Fatalf("consume session.start: %v", err)
+	}
+	send := Command{
+		Kind: "session.send",
+		PayloadJSON: `{"session_id":"a2","ciphertext":{"fixture_payload":{"message":"m",` +
+			`"images":[{"data_b64":"aGk=","mime":"image/png"}],` +
+			`"attachments":[{"attachment_id":"att_x","mime":"image/png"}]}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), send); err == nil {
+		t.Fatalf("refs+images 同批应拒绝")
+	}
+	h := fake.handles[0]
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.contentSends) != 0 || len(h.sends) != 0 {
+		t.Fatalf("互斥拒绝不得产生任何发送: content=%d send=%d", len(h.contentSends), len(h.sends))
+	}
+}
+
+// (V085-02c) 未配置拉取 sink 时 refs 命令 fail-closed（attachments unsupported）。
+func TestSessionRunnerSendRefsWithoutSinkFailsClosed(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "dsh")
+	start := Command{
+		Kind: "session.start",
+		PayloadJSON: `{"session_id":"a3","workspace_root":"/tmp/ws","provider":"dsh",` +
+			`"ciphertext":{"fixture_payload":{"prompt":"开始"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), start); err != nil {
+		t.Fatalf("consume session.start: %v", err)
+	}
+	send := Command{
+		Kind: "session.send",
+		PayloadJSON: `{"session_id":"a3","ciphertext":{"fixture_payload":{"message":"m",` +
+			`"attachments":[{"attachment_id":"att_y","mime":"image/png"}]}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), send); !errors.Is(err, ErrUnsupportedCommand) {
+		t.Fatalf("无 sink 应返回 ErrUnsupportedCommand，得到 %v", err)
+	}
+	h := fake.handles[0]
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.contentSends) != 0 || len(h.sends) != 0 {
+		t.Fatalf("无 sink 不得产生任何发送")
+	}
+}
+
+// (V085-02d) 哈希不符 fail-closed：拒绝命令，不发送。
+func TestSessionRunnerSendRejectsRefHashMismatch(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "dsh")
+	start := Command{
+		Kind: "session.start",
+		PayloadJSON: `{"session_id":"a4","workspace_root":"/tmp/ws","provider":"dsh",` +
+			`"ciphertext":{"fixture_payload":{"prompt":"开始"}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), start); err != nil {
+		t.Fatalf("consume session.start: %v", err)
+	}
+	runner.SetAttachmentFetchSink(func(ctx context.Context, sessionID, attachmentID string) ([]byte, error) {
+		return []byte("decrypted-bytes"), nil
+	})
+	send := Command{
+		Kind: "session.send",
+		PayloadJSON: `{"session_id":"a4","ciphertext":{"fixture_payload":{"message":"m",` +
+			`"attachments":[{"attachment_id":"att_z","mime":"image/png",` +
+			`"sha256":"deadbeef"}]}}}`,
+	}
+	if err := runner.ConsumeCommand(context.Background(), send); err == nil {
+		t.Fatalf("哈希不符应拒绝命令")
+	}
+	h := fake.handles[0]
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.contentSends) != 0 || len(h.sends) != 0 {
+		t.Fatalf("哈希不符不得产生任何发送")
+	}
+}
+
 // e) 未实现 kind（C 类）返回 ErrUnsupportedCommand，且不产生成功状态。
 // v0.8.2 起 permission.approve/reject、v0.8.3 起 question.answer/plan.action/
 // goal.action/skill.invoke/session.stop|delete|fork 均为受支持 kind，因此这里

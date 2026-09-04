@@ -364,6 +364,44 @@ func (c *RelayClient) SyncSessionModes(ctx context.Context, sessionID, modeID, a
 	return c.postJSON(ctx, "/v1/daemon/sessions/"+sessionID+"/modes", body, &struct{}{})
 }
 
+// AttachmentFetchProjection 是 Relay §3.3 读取端点的最小密文投影（Daemon 侧）：
+// 全部分块密文按存储顺序拼接后由本机会话 DEK 解密；sha256 供校验。
+type AttachmentFetchProjection struct {
+	AttachmentID       string   `json:"attachment_id"`
+	MimeType           string   `json:"mime_type"`
+	ByteSize           int64    `json:"byte_size"`
+	TotalChunks        int      `json:"total_chunks"`
+	MetadataCiphertext []byte   `json:"metadata_ciphertext"`
+	Chunks             [][]byte `json:"chunks"`
+	ChunkSHA256        []string `json:"chunk_sha256"`
+}
+
+// FetchAttachment 经 §3.3 端点拉取附件密文投影（v0.8.5 §3.1）。GET 幂等只读不签名；
+// 只做密文搬运（不解析 metadata、不解密），解密由调用方按会话 DEK 完成。
+func (c *RelayClient) FetchAttachment(ctx context.Context, attachmentID string) (AttachmentFetchProjection, error) {
+	var out AttachmentFetchProjection
+	if strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.AccessToken) == "" {
+		return out, errors.New("relay base URL or daemon credential missing")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/daemon/attachments/"+attachmentID, nil)
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	response, err := c.restClient().Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return out, readRelayHTTPError(response)
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 12<<20)).Decode(&out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 func (c *RelayClient) UploadUsage(ctx context.Context, usage RelayUsage) error {
 	body := map[string]any{
 		"usage_key": usage.UsageKey, "provider": usage.Provider, "utc_day": usage.UTCDay,

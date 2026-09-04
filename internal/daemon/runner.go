@@ -107,6 +107,11 @@ type SessionRunner struct {
 	// runner 不直接发 HTTP，连接层（RelayLoop）注册此 sink 并经 RelayClient 上传。
 	modeInfoSinkMu sync.RWMutex
 	modeInfoSink   func(sessionID string, info adapter.SessionModeInfo, agentPreset string)
+	// attachmentFetchSink 按附件 opaque ref 拉取并解密出明文图像字节（v0.8.5 §3.1）。
+	// runner 不直接发 HTTP：连接层注册此 sink（RelayClient.FetchAttachment + 本机
+	// 会话 DEK Open），明文只经内存；未注册 sink 时 refs 命令 fail-closed。
+	attachmentFetchSinkMu sync.RWMutex
+	attachmentFetchSink   func(ctx context.Context, sessionID, attachmentID string) ([]byte, error)
 
 	// eventSeq 保存每个 session 最近分配的 canonical 序号。Provider handle 的
 	// 序号只覆盖 Provider 事件，runner 自己生成的 user_message/断流终态也必须
@@ -175,6 +180,15 @@ func (r *SessionRunner) SetModeInfoSink(sink func(sessionID string, info adapter
 	r.modeInfoSinkMu.Lock()
 	defer r.modeInfoSinkMu.Unlock()
 	r.modeInfoSink = sink
+}
+
+// SetAttachmentFetchSink 设置附件 ref 拉取+解密出口（v0.8.5 §3.1）。连接层注册后
+// runner 才能兑现 session.send 的 attachments refs；未注册时 refs 命令 fail-closed
+// （与本地 fixture 无 Relay 语义一致）。
+func (r *SessionRunner) SetAttachmentFetchSink(sink func(ctx context.Context, sessionID, attachmentID string) ([]byte, error)) {
+	r.attachmentFetchSinkMu.Lock()
+	defer r.attachmentFetchSinkMu.Unlock()
+	r.attachmentFetchSink = sink
 }
 
 // syncModeInfo 读取 handle 的会话级 mode 目录并交给连接层上行。只有实现了
@@ -487,6 +501,64 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 	// 无图像保持既有纯文本 Send 路径不变。图像解码失败与桥 admission 拒绝
 	// （text-only overlay / 缺 attachment 服务 / 模型不支持）都走同一条
 	// session_error + turn_completed 失败收口，客户端不悬挂在生成中。
+	// v0.8.5 §3.1：send 携带 attachments opaque refs 时走附件拉取链路（refs 与 inline
+	// images 互斥——同批携带拒绝，防双通道歧义）。连接层经 attachmentFetchSink 从
+	// Relay §3.3 端点拉密文并用会话 DEK 解密；sha256 复算与明文尺寸校验在这里完成，
+	// 任一失败整批 session_error + turn_completed 收口（同 images 失败语义）。
+	fixture := env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil
+	if fixture && len(env.Ciphertext.FixturePayload.Attachments) > 0 {
+		if len(env.Ciphertext.FixturePayload.Images) > 0 {
+			return fmt.Errorf("session.send 不能同时携带 attachments refs 与 inline images")
+		}
+		r.attachmentFetchSinkMu.RLock()
+		fetch := r.attachmentFetchSink
+		r.attachmentFetchSinkMu.RUnlock()
+		if fetch == nil {
+			return fmt.Errorf("%w: 附件拉取出口未配置（attachments unsupported）", ErrUnsupportedCommand)
+		}
+		blocks := make([]adapter.ContentBlock, 0, len(env.Ciphertext.FixturePayload.Attachments)+1)
+		if text != "" {
+			blocks = append(blocks, adapter.ContentBlock{Type: "text", Text: text})
+		}
+		for i, ref := range env.Ciphertext.FixturePayload.Attachments {
+			if ref.AttachmentID == "" {
+				return fmt.Errorf("session.send 附件块 %d 缺少 attachment_id", i)
+			}
+			data, fetchErr := fetch(ctx, sessionID, ref.AttachmentID)
+			if fetchErr != nil {
+				return fmt.Errorf("session.send 附件块 %d 拉取失败: %w", i, fetchErr)
+			}
+			if ref.SizeBytes > 0 && int64(len(data)) != ref.SizeBytes {
+				return fmt.Errorf("session.send 附件块 %d 尺寸不符（声明 %d 实得 %d）", i, ref.SizeBytes, len(data))
+			}
+			if ref.SHA256 != "" {
+				sum := sha256.Sum256(data)
+				if !strings.EqualFold(ref.SHA256, hex.EncodeToString(sum[:])) {
+					return fmt.Errorf("session.send 附件块 %d 哈希不符", i)
+				}
+			}
+			blocks = append(blocks, adapter.ContentBlock{Type: "image", ImageData: data, ImageMIME: ref.MIME})
+		}
+		contentHandle, ok := rs.handle.(adapter.ContentHandle)
+		if !ok {
+			return fmt.Errorf("%w: 会话 %s 的 handle 不支持附件内容发送", ErrUnsupportedCommand, sessionID)
+		}
+		if err := contentHandle.SendContent(ctx, blocks); err != nil {
+			r.emitEvent(sessionID, adapter.Event{
+				Type: adapter.EventSessionError,
+				Payload: map[string]any{
+					"instance_id": sessionID,
+					"message":     "附件消息发送失败，详情仅限本机诊断。",
+				},
+			})
+			r.emitEvent(sessionID, adapter.Event{
+				Type:    adapter.EventTurnCompleted,
+				Payload: map[string]any{"instance_id": sessionID, "stop_reason": "send_failed"},
+			})
+			return err
+		}
+		return nil
+	}
 	if env.Ciphertext != nil && env.Ciphertext.FixturePayload != nil && len(env.Ciphertext.FixturePayload.Images) > 0 {
 		blocks := make([]adapter.ContentBlock, 0, len(env.Ciphertext.FixturePayload.Images)+1)
 		if text != "" {
@@ -1322,6 +1394,19 @@ type fixtureImage struct {
 	MIME    string `json:"mime"`
 }
 
+// fixtureAttachmentRef 是 session.send 携带的 opaque 附件引用（v0.8.5 §3.1）。
+// 生产客户端只发 refs（密文在 Relay，经 §3.3 端点 + 会话 DEK 由连接层拉取解密）；
+// refs 与 inline images 互斥——同批携带时拒绝，防止双通道歧义。
+// SizeBytes/SHA256 是明文元数据（客户端密封前登记），Daemon 解密后复算校验。
+type fixtureAttachmentRef struct {
+	AttachmentID string `json:"attachment_id"`
+	MIME         string `json:"mime"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	SizeBytes    int64  `json:"size_bytes"`
+	SHA256       string `json:"sha256"`
+}
+
 type fixturePayload struct {
 	Message       string `json:"message"`
 	Provider      string `json:"provider"`
@@ -1360,6 +1445,10 @@ type fixturePayload struct {
 	// Images 是 session.send 携带的图像块（fixture 形状：base64 数据 + MIME）。
 	// Daemon 在本机把图像字节转成 ACP image 块；明文只经内存，不写日志/事件。
 	Images []fixtureImage `json:"images"`
+	// Attachments 是 session.send 的 opaque 附件 refs（v0.8.5 §3.1）：生产链路用 refs
+	// 取代 inline images；Daemon 校验（refs 与 images 互斥/上限/逐块拉取/哈希复算）
+	// 后经 SendContent 同批发送，明文只经内存。
+	Attachments []fixtureAttachmentRef `json:"attachments"`
 }
 
 // parseEnvelope 解析 payload_json；JSON 不合法或 payload 为空时返回错误。
