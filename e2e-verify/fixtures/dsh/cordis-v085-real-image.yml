@@ -1,18 +1,23 @@
 # v0.8.5 图片真实模型 gate（V085-15 / P4，用户已授权）：
 # 在生产 acp-demo 组合挂载 attachment-local（服务 id=attachments）+ image 输入模型
-# 目录，以真实 image-capable 模型（grok-4.6，OpenAI 兼容中转）驱动真实桥的图片
-# admission 正向旅程（real_model=true）——真实图片发送：
+# 目录，以真实 image-capable 模型驱动真实桥的图片 admission 正向旅程
+# （real_model=true）——真实图片发送：
 #   promptCapabilities.image=true（attachment 服务 + image 模型目录双条件）；
 #   session/prompt 携带 ACP image block → 桥 admitAcpPrompt 放行 → 真实模型回包
 #   （回合 committed；agent_message_chunk 累积 + usage_update）；
 #   模型侧收包不含 image 的失败/回滚路径不在此组合（对照=生产 cordis.yml text-only）。
-# API key 经环境变量 AGENT_SESSIONS_V085_REAL_API_KEY 注入（不写本文件）。
+# 模型路由（acp-agent 段经 !!js 环境变量切换，默认 grok-4.6）：
+#   real-grok46 = grok-4.6 @ api.aabsv.sbs（V085-15 首次 passed 2026-09-04）；
+#   real-terra  = gpt-5.6-terra @ api.paktf.sbs（镜像生产 openai provider 数值）。
+# API key 经环境变量 AGENT_SESSIONS_V085_REAL_API_KEY 注入（不写本文件；terra 轮
+# 注入生产 OPENAI_API_KEY 的值）。
 # 凭据只经 DSH 根 .env / 环境变量引用，不写入本文件。
 
 - id: llm
   name: '/Users/yubi/code/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
   config:
     providers:
+      # 默认路由：grok-4.6 @ OpenAI 兼容中转 aabsv（V085-15 首次 passed，2026-09-04）。
       real-grok46:
         apiKeyEnv: AGENT_SESSIONS_V085_REAL_API_KEY
         api: openai-completions
@@ -24,6 +29,20 @@
             name: Grok 4.6 (real)
             contextWindow: 128000
             maxTokens: 8000
+            input:
+              - text
+              - image
+      # 追加路由：gpt-5.6-terra @ api.paktf.sbs（镜像生产 openai provider 的
+      # baseURL/凭据与目录数值；2026-09-04 smoke：completions 通道收图并答"红色"）。
+      real-terra:
+        apiKeyEnv: AGENT_SESSIONS_V085_REAL_API_KEY
+        api: openai-completions
+        baseURL: https://api.paktf.sbs/v1
+        models:
+          - id: gpt-5.6-terra
+            name: GPT-5.6 Terra (real)
+            contextWindow: 251000
+            maxTokens: 128000
             input:
               - text
               - image
@@ -83,10 +102,11 @@
 - id: acp-agent
   name: '/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/index.js'
   config:
-    provider: real-grok46
-    model: grok-4.6
-    modelProviders:
-      grok-4.6: real-grok46
+    # 路由经环境变量切换（默认 grok-4.6）：
+    #   terra 轮 = AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra
+    #              AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra
+    provider: !!js "process.env.AGENT_SESSIONS_V085_REAL_PROVIDER ?? 'real-grok46'"
+    model: !!js "process.env.AGENT_SESSIONS_V085_REAL_MODEL ?? 'grok-4.6'"
     toolUpdates: true
     ignoreMcpServers: true
     persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"

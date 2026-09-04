@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // v0.8.5 图片真实模型 gate（V085-15 / P4，用户已授权，留档=实施记录 24 §4.23）。
 // 以真实 dsh-acp-demo 进程（cordis-v085-real-image.yml：attachment-local + image
-// 模型目录）直连真实 image-capable 模型（grok-4.6，OpenAI 兼容中转
-// api.aabsv.sbs）驱动图片 admission 正向旅程——不启动 mock LLM：
+// 模型目录）直连真实 image-capable 模型驱动图片 admission 正向旅程——不启动 mock
+// LLM。模型经 fixture 双路由 + 环境变量切换（默认 grok-4.6 @ api.aabsv.sbs；
+// gpt-5.6-terra：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra +
+// AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra，凭据=生产 OPENAI_API_KEY 值）：
 //   1. initialize：promptCapabilities.image 如实为 true（attachment 服务 + image 输入双条件）；
 //   2. session/prompt 携带 ACP image block（32x16 纯红 PNG canonical base64，zlib 内联
 //      生成）→ 桥 admitAcpPrompt 放行 → 真实模型回包回合 committed；
@@ -27,7 +29,9 @@ const outDir = resolve(argOf("--out") ?? "e2e-verify/reports/ADAPTER-DSH");
 const keepWorkdir = argOf("--keep-workdir") === "1";
 
 const REAL_BASE_URL = process.env.AGENT_SESSIONS_V085_REAL_BASE_URL ?? "https://api.aabsv.sbs/v1";
+const REAL_MODEL = process.env.AGENT_SESSIONS_V085_REAL_MODEL ?? "grok-4.6";
 const REAL_API_KEY = process.env.AGENT_SESSIONS_V085_REAL_API_KEY ?? "";
+const realHost = (() => { try { return new URL(REAL_BASE_URL).host; } catch { return REAL_BASE_URL; } })();
 const TURN_TIMEOUT_MS = 240_000;
 
 const startedAt = new Date().toISOString();
@@ -43,7 +47,7 @@ const report = {
   local_test: true,
   headless: false,
   browser: "n/a",
-  model: "grok-4.6 (real, api.aabsv.sbs)",
+  model: `${REAL_MODEL} (real, ${realHost})`,
   provider: "deepseek-harness-acp",
   credential_source: "env",
   command: "node e2e-verify/real/v085-real-image-gate.mjs",
@@ -162,7 +166,7 @@ const finalizeWithCleanup = async (code) => {
 };
 
 // ---- 桥进程 -----------------------------------------------------------------
-console.log(`[v085-real-image] starting bridge against ${REAL_BASE_URL}`);
+console.log(`[v085-real-image] starting bridge (model=${REAL_MODEL}, provider=${process.env.AGENT_SESSIONS_V085_REAL_PROVIDER ?? "real-grok46"}, base=${realHost})`);
 const bridge = spawn(process.execPath, [
   "--import", "tsx", join(dshRoot, "packages/examples/acp-demo/src/bin.ts"),
   "-c", configPath,
@@ -176,6 +180,9 @@ const bridge = spawn(process.execPath, [
     AGENT_SESSIONS_DSH_ATTACHMENT_HOME: join(workdir, "attachments"),
     AGENT_SESSIONS_V085_REAL_BASE_URL: REAL_BASE_URL,
     AGENT_SESSIONS_V085_REAL_API_KEY: REAL_API_KEY,
+    // fixture acp-agent 段 !!js 路由切换（!!js 在桥进程内求值，必须显式透传）。
+    AGENT_SESSIONS_V085_REAL_PROVIDER: process.env.AGENT_SESSIONS_V085_REAL_PROVIDER ?? "real-grok46",
+    AGENT_SESSIONS_V085_REAL_MODEL: REAL_MODEL,
   },
   stdio: ["pipe", "pipe", "pipe"],
 });

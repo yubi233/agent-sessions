@@ -304,7 +304,7 @@ tasks:
       - node e2e-verify/mobile/run-macos.mjs --test test/session_controller_test.dart --test test/session_trajectory_view_test.dart --case V085-23 --visual-scenario VISUAL-MOBILE-37
 
   test:v085:real:
-    desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度）
+    desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度。默认 grok-4.6 @ api.aabsv.sbs；可切 gpt-5.6-terra @ api.paktf.sbs：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra）
     cmds:
       - |
         if [[ "${AGENT_SESSIONS_V085_REAL:-}" != "1" ]]; then
