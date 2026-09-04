@@ -19,4 +19,5 @@
 - [v0.2 Android 会话能力对齐 Happy](08-v0.2-Android会话能力对齐Happy.md)：会话快捷操作、文件浏览、composer 控制面与 OpenCode 真实 transport。
 - [v0.8 DSH 持久化与 Resume 前置](16-v0.8-DSH持久化与Resume前置.md)：工作区持久化根、非破坏性迁移、Resume 句柄交接、回放契约与 Zen 测试池。
 - [v0.8.1 后续 DSH 模型选择接入](19-v0.8.1后续-DSH模型选择接入.md)：`session/set_config_option` 契约、能力矩阵模型目录与 `cordis.yml` 池同步。
-- [v0.8.5 中止与轨迹时间修复](23-v0.8.5-中止与轨迹时间修复.md)：异步 `session.send`、Abort 可见轨迹、canonical 事件时间和 Flutter 轨迹展示；与 v0.8.5 主计划的图片/权限/工作区等能力分开记录。
+- [v0.8.5 中止与轨迹时间修复](23-v0.8.5-中止与轨迹时间修复.md)
+- [v0.8.5 工作区显示名与权限契约](24-v0.8.5-工作区显示名与权限契约.md)：Relay `workspace_name` 贯通（副标题/空状态真实显示名）与权限 mode `mode.set`+`mode_id` wire 契约统一；会话级 mode 目录上行通道与图片/工作区发现/timing/预设待后续阶段。：异步 `session.send`、Abort 可见轨迹、canonical 事件时间和 Flutter 轨迹展示；与 v0.8.5 主计划的图片/权限/工作区等能力分开记录。

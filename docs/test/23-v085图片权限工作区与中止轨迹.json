@@ -138,22 +138,25 @@
     {
       "id": "V085-07",
       "title": "controls 输出 permission_mode/available_permission_modes；目录缺失禁用+原因；fixture 对齐",
-      "status": "planned",
+      "status": "partial",
       "phase": "P1",
       "category": "permission_catalog",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "cd apps/mobile && flutter test test/session_controller_test.dart --plain-name V085-07 --concurrency=1",
+        "会话级 mode 目录上行通道打通后 overlay/headed 复验"
       ],
-      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "expected": "wire 契约（mode.set+mode_id）已对齐并有契约测试；controls 目录输出与真实链路可点待通道打通",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "apps/mobile/lib/domain/session_models.dart",
+        "apps/mobile/lib/state/session_controller.dart",
+        "apps/mobile/test/session_controller_test.dart",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md"
       ]
     },
     {
@@ -180,22 +183,26 @@
     {
       "id": "V085-09",
       "title": "会话页副标题/空状态显示工作区显示名、解析失败降级",
-      "status": "planned",
+      "status": "partial",
       "phase": "P2",
       "category": "workspace_label",
       "priority": "P0",
       "test_layer": "mixed",
       "precondition": "见迭代计划 v0.8.5 §5 测试覆盖矩阵与 §5.1 回归沉淀映射。",
       "steps": [
-        "按迭代计划 v0.8.5 对应阶段执行"
+        "go test ./internal/relay -run TestV085SessionViewCarriesWorkspaceDisplayName -count=1",
+        "cd apps/mobile && flutter test test/session_screens_test.dart test/session_controller_test.dart --concurrency=1",
+        "可见 Flutter/headed gate（P4 阶段回填）"
       ],
-      "expected": "对应完成标准满足并有证据回填（状态与 evidence 由实施记录 23 及后续记录更新）",
+      "expected": "副标题与空状态显示工作区显示名；workspace 解析失败降级不伪造路径（代码与集成测试已过，可见 gate 待回填）",
       "cleanup": [
         "无（登记骨架；执行后回填状态）"
       ],
       "evidence": [
-        "docs/zh/迭代计划/迭代计划v0.8.5.md",
-        "docs/zh/实施记录/23-v0.8.5-中止与轨迹时间修复.md"
+        "internal/httpapi/handlers.go(sessionViewFor)",
+        "internal/relay/dsh_workspace_contract_test.go",
+        "apps/mobile/lib/ui/session_screens.dart",
+        "docs/zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md"
       ]
     },
     {
