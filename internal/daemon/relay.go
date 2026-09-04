@@ -334,6 +334,9 @@ func (c *RelayClient) UploadEvent(ctx context.Context, event RelayEvent) error {
 	if event.TerminalStatus != "" {
 		body["terminal_status"] = event.TerminalStatus
 	}
+	if event.CreatedAtUnixMS > 0 {
+		body["created_at_unix_ms"] = event.CreatedAtUnixMS
+	}
 	return c.postJSON(ctx, "/v1/daemon/events", body, &struct{}{})
 }
 
@@ -574,6 +577,21 @@ type RelayLoop struct {
 	commandBySession      map[string]string
 	usageContextBySession map[string]usageContext
 	eventWake             chan struct{}
+	// processMu keeps durable command state transitions serialized. A send may run
+	// asynchronously, but only one caller may advance received/starting/started
+	// rows at a time.
+	processMu sync.Mutex
+	// commandCtx is the current RunWithRetry context. It deliberately outlives
+	// an individual SSE stream so an accepted async send can finish and resolve
+	// its command when the stream reconnects.
+	commandCtxMu sync.RWMutex
+	commandCtx   context.Context
+	// inFlightSend prevents a second processPending pass from executing an already
+	// accepted send while its Provider call is still running. It is intentionally
+	// process-local: a restart leaves a durable started row for the existing
+	// DAEMON_RESTART_RECOVERY fail-closed path.
+	inFlightMu    sync.Mutex
+	inFlightSends map[string]struct{}
 	// sessionRecoveryDone 门限每进程一次的启动清扫声明；runOnce 串行执行，无需加锁。
 	sessionRecoveryDone bool
 }
@@ -586,6 +604,7 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 		Store: store, Client: client, Runner: runner, Encoder: encoder, Logger: logger,
 		ReadOnly: NewReadOnlyDispatcher(store, ""), commandBySession: make(map[string]string),
 		usageContextBySession: make(map[string]usageContext), eventWake: make(chan struct{}, 1),
+		inFlightSends: make(map[string]struct{}),
 	}
 	if runner != nil {
 		runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
@@ -690,6 +709,16 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if err := l.flushOutboxes(ctx); err != nil {
 		return err
 	}
+	l.commandCtxMu.Lock()
+	l.commandCtx = ctx
+	l.commandCtxMu.Unlock()
+	defer func() {
+		l.commandCtxMu.Lock()
+		if l.commandCtx == ctx {
+			l.commandCtx = nil
+		}
+		l.commandCtxMu.Unlock()
+	}()
 	cursor, err := l.Store.RelayDeliveryCursor()
 	if err != nil {
 		return err
@@ -742,7 +771,7 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 		if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "received", ""); err != nil {
 			return err
 		}
-		return l.processPending(ctx)
+		return l.processPending(l.commandExecutionContext(ctx))
 	}
 	// 专用 SSE 已由 Relay 按 Terminal 隔离，但 Daemon 仍要把 payload 当作不可信输入：
 	// 只有本机 hello 绑定的 Terminal、非空 Workspace 和已声明 capability 才能进入执行器。
@@ -755,7 +784,17 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 	if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "received", ""); err != nil {
 		return err
 	}
-	return l.processPending(ctx)
+	return l.processPending(l.commandExecutionContext(ctx))
+}
+
+func (l *RelayLoop) commandExecutionContext(fallback context.Context) context.Context {
+	l.commandCtxMu.RLock()
+	ctx := l.commandCtx
+	l.commandCtxMu.RUnlock()
+	if ctx != nil {
+		return ctx
+	}
+	return fallback
 }
 
 func (l *RelayLoop) validateLocalDelivery(command RelayCommand) error {
@@ -834,6 +873,8 @@ func capabilityForCommand(kind string) string {
 }
 
 func (l *RelayLoop) processPending(ctx context.Context) error {
+	l.processMu.Lock()
+	defer l.processMu.Unlock()
 	commands, err := l.Store.PendingRelayCommands()
 	if err != nil {
 		return err
@@ -980,6 +1021,18 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			}
 			continue
 		}
+		if command.Kind == "session.send" && startedThisPass {
+			// Send is the only command that can hold the Provider for an entire
+			// generation. Register it before returning to the SSE reader so a
+			// following session.abort can be consumed immediately.
+			if l.claimInFlightSend(command.CommandID) {
+				go l.executeSendAsync(ctx, command)
+			}
+			continue
+		}
+		if command.Kind == "session.send" && l.isInFlightSend(command.CommandID) {
+			continue
+		}
 		if command.Status == "started" && !startedThisPass {
 			// Daemon 在已确认 started 后崩溃时，不知道本地 Provider 是否仍活着或是否已部分执行。
 			// 为避免 at-least-once delivery 把同一 command 再次交给 Provider，这里 fail-closed，
@@ -989,46 +1042,84 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			}
 			continue
 		}
-		var err error
-		if isReadOnlyCommandKind(command.Kind) {
-			var event adapter.Event
-			if l.ReadOnly == nil {
-				// 手工构造 RelayLoop 的旧调用方可能尚未注入 dispatcher。缺失本机安全边界时
-				// 必须 fail-closed，而不能 panic 或退回到未受限的文件/Git 执行路径。
-				err = newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("read-only dispatcher unavailable"))
-			} else if isWebReadTransportRequest(command.PayloadJSON) {
-				var envelope WebReadResponseEnvelope
-				envelope, err = l.ReadOnly.ExecuteWeb(ctx, command, l.WebRead)
-				if err == nil {
-					err = l.Client.UploadWebReadResponse(ctx, command.CommandID, command.DeliverySeq, envelope)
-				}
-			} else {
-				event, err = l.ReadOnly.Execute(ctx, command)
-				if err == nil {
-					err = l.enqueueCommandEvent(command, event)
-				}
-			}
-		} else {
-			l.bindCommand(command.SessionID, command.CommandID)
-			l.bindUsageContext(command)
-			err = l.Runner.ConsumeCommand(ctx, Command{
-				RequestID: command.CommandID, Kind: command.Kind, PayloadJSON: command.PayloadJSON,
-				WorkspaceID: command.WorkspaceID,
-			})
-		}
-		status, errorCode := "succeeded", ""
-		if err != nil {
-			status, errorCode = "failed", CommandErrorCode(err)
-			l.Logger.Warn("daemon command execution failed", "command", command.CommandID, "kind", command.Kind, "error", err)
-		}
-		if err := l.flushOutboxes(ctx); err != nil {
-			return err
-		}
-		if err := l.resolveAndPersist(ctx, command, status, errorCode); err != nil {
+		if err := l.executeAndResolve(ctx, command); err != nil {
 			return err
 		}
 	}
 	return l.flushOutboxes(ctx)
+}
+
+func (l *RelayLoop) claimInFlightSend(commandID string) bool {
+	l.inFlightMu.Lock()
+	defer l.inFlightMu.Unlock()
+	if _, exists := l.inFlightSends[commandID]; exists {
+		return false
+	}
+	l.inFlightSends[commandID] = struct{}{}
+	return true
+}
+
+func (l *RelayLoop) isInFlightSend(commandID string) bool {
+	l.inFlightMu.Lock()
+	defer l.inFlightMu.Unlock()
+	_, exists := l.inFlightSends[commandID]
+	return exists
+}
+
+func (l *RelayLoop) releaseInFlightSend(commandID string) {
+	l.inFlightMu.Lock()
+	delete(l.inFlightSends, commandID)
+	l.inFlightMu.Unlock()
+}
+
+// executeSendAsync is deliberately bound to the active RelayLoop context. On a
+// disconnect the context is cancelled, so a stale Provider send cannot outlive
+// the stream that accepted it. A restart sees the durable started command and
+// follows the existing fail-closed recovery rule instead of retrying a send.
+func (l *RelayLoop) executeSendAsync(ctx context.Context, command RelayCommand) {
+	defer l.releaseInFlightSend(command.CommandID)
+	if err := l.executeAndResolve(l.commandExecutionContext(ctx), command); err != nil {
+		l.Logger.Warn("daemon async send execution failed", "command", command.CommandID, "error", err)
+	}
+}
+
+func (l *RelayLoop) executeAndResolve(ctx context.Context, command RelayCommand) error {
+	var err error
+	if isReadOnlyCommandKind(command.Kind) {
+		var event adapter.Event
+		if l.ReadOnly == nil {
+			// 手工构造 RelayLoop 的旧调用方可能尚未注入 dispatcher。缺失本机安全边界时
+			// 必须 fail-closed，而不能 panic 或退回到未受限的文件/Git 执行路径。
+			err = newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("read-only dispatcher unavailable"))
+		} else if isWebReadTransportRequest(command.PayloadJSON) {
+			var envelope WebReadResponseEnvelope
+			envelope, err = l.ReadOnly.ExecuteWeb(ctx, command, l.WebRead)
+			if err == nil {
+				err = l.Client.UploadWebReadResponse(ctx, command.CommandID, command.DeliverySeq, envelope)
+			}
+		} else {
+			event, err = l.ReadOnly.Execute(ctx, command)
+			if err == nil {
+				err = l.enqueueCommandEvent(command, event)
+			}
+		}
+	} else {
+		l.bindCommand(command.SessionID, command.CommandID)
+		l.bindUsageContext(command)
+		err = l.Runner.ConsumeCommand(ctx, Command{
+			RequestID: command.CommandID, Kind: command.Kind, PayloadJSON: command.PayloadJSON,
+			WorkspaceID: command.WorkspaceID,
+		})
+	}
+	status, errorCode := "succeeded", ""
+	if err != nil {
+		status, errorCode = "failed", CommandErrorCode(err)
+		l.Logger.Warn("daemon command execution failed", "command", command.CommandID, "kind", command.Kind, "error", err)
+	}
+	if err := l.flushOutboxes(ctx); err != nil {
+		return err
+	}
+	return l.resolveAndPersist(ctx, command, status, errorCode)
 }
 
 // resolveAndPersist 以 Relay receipt 为本机最终状态。若 Relay 已提交 result、但 HTTP 响应在
@@ -1069,6 +1160,9 @@ func (l *RelayLoop) enqueueCommandEvent(command RelayCommand, event adapter.Even
 	if l.Encoder == nil {
 		return newCommandExecutionError(protocol.ErrCapabilityUnsupported, errors.New("event encoder unavailable"))
 	}
+	if event.CreatedAtUnixMS <= 0 {
+		event.CreatedAtUnixMS = time.Now().UnixMilli()
+	}
 	envelope, err := l.Encoder.Encode(command.SessionID, event)
 	if err != nil {
 		return newCommandExecutionError(protocol.ErrCapabilityUnsupported, err)
@@ -1076,6 +1170,7 @@ func (l *RelayLoop) enqueueCommandEvent(command RelayCommand, event adapter.Even
 	if err := l.Store.EnqueueRelayEvent(RelayEvent{
 		EventID: relayEventID(command.SessionID, event), CommandID: command.CommandID, SessionID: command.SessionID,
 		EventType: relayEventType(event.Type), TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
+		CreatedAtUnixMS: event.CreatedAtUnixMS,
 	}); err != nil {
 		return err
 	}
@@ -1148,6 +1243,12 @@ func (l *RelayLoop) enqueueCanonicalEventResult(sessionID string, event adapter.
 			}
 		}
 	}
+	createdAt := event.CreatedAtUnixMS
+	if createdAt <= 0 {
+		// Events emitted by older adapters may not carry a timestamp. Keep the
+		// value unknown instead of using Relay receipt time as a fake send time.
+		createdAt = 0
+	}
 	if l.Encoder == nil {
 		return errors.New("event encoder unavailable")
 	}
@@ -1166,6 +1267,7 @@ func (l *RelayLoop) enqueueCanonicalEventResult(sessionID string, event adapter.
 	if err := l.Store.EnqueueRelayEvent(RelayEvent{
 		EventID: relayEventID(sessionID, event), CommandID: commandID, SessionID: sessionID,
 		EventType: relayEventType(event.Type), TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
+		CreatedAtUnixMS: createdAt,
 	}); err != nil {
 		return err
 	}
@@ -1417,6 +1519,8 @@ func relayEventType(value adapter.EventType) string {
 		return "message.completed"
 	case adapter.EventTurnCompleted:
 		return "turn.completed"
+	case adapter.EventSessionAborted:
+		return "session.aborted"
 	case adapter.EventToolCall:
 		return "tool.call"
 	case adapter.EventToolResult:
@@ -1440,6 +1544,11 @@ func relayEventType(value adapter.EventType) string {
 // terminalStatusForEvent 只投影 Relay 所需的生命周期结果。Provider 的 stop_reason
 // 保留在加密 envelope 内；未知原因按 stopped 关闭，避免中断回合一直显示为运行中。
 func terminalStatusForEvent(event adapter.Event) string {
+	if event.Type == adapter.EventSessionAborted {
+		// Abort 成功本身就是非敏感的停止事实，Relay 可在不解密 payload 的
+		// 前提下立即把会话投影为 stopped；后续 cancelled 终态只负责幂等收口。
+		return "stopped"
+	}
 	if event.Type != adapter.EventTurnCompleted {
 		return ""
 	}

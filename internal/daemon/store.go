@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS relay_event_outbox (
 	event_type TEXT NOT NULL,
 	terminal_status TEXT NOT NULL DEFAULT '',
 	envelope_json TEXT NOT NULL,
+	created_at_unix_ms INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL DEFAULT 'pending',
 	created_at INTEGER NOT NULL
 );
@@ -174,6 +175,9 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if err := s.ensureColumnIfExists("relay_event_outbox", "terminal_status", "terminal_status TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnIfExists("relay_event_outbox", "created_at_unix_ms", "created_at_unix_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	return s.ensureColumnIfExists("relay_usage_outbox", "context_window_tokens", "context_window_tokens INTEGER NOT NULL DEFAULT 0")
@@ -427,8 +431,9 @@ type RelayEvent struct {
 	// TerminalStatus is a stable, non-sensitive lifecycle projection for turn.completed.
 	// It is deliberately separate from the opaque event envelope so Relay can update the
 	// session status without decrypting provider payloads.
-	TerminalStatus string
-	EnvelopeJSON   string
+	TerminalStatus  string
+	EnvelopeJSON    string
+	CreatedAtUnixMS int64
 }
 
 // RelayUsage 是等待上传的白名单 usage 计数（ADR-010）。UsageKey 由 Daemon 对
@@ -654,9 +659,9 @@ func (s *Store) EnqueueRelayEvent(event RelayEvent) error {
 		return errors.New("invalid relay event")
 	}
 	_, err := s.db.Exec(
-		`INSERT OR IGNORE INTO relay_event_outbox(event_id,command_id,session_id,event_type,terminal_status,envelope_json,status,created_at)
-		 VALUES(?,?,?,?,?,?,'pending',?)`,
-		event.EventID, event.CommandID, event.SessionID, event.EventType, event.TerminalStatus, event.EnvelopeJSON, time.Now().UnixMilli())
+		`INSERT OR IGNORE INTO relay_event_outbox(event_id,command_id,session_id,event_type,terminal_status,envelope_json,created_at_unix_ms,status,created_at)
+		 VALUES(?,?,?,?,?,?,?,'pending',?)`,
+		event.EventID, event.CommandID, event.SessionID, event.EventType, event.TerminalStatus, event.EnvelopeJSON, event.CreatedAtUnixMS, time.Now().UnixMilli())
 	return err
 }
 
@@ -687,7 +692,7 @@ func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
-		`SELECT event_id,command_id,session_id,event_type,terminal_status,envelope_json
+		`SELECT event_id,command_id,session_id,event_type,terminal_status,envelope_json,created_at_unix_ms
 		 FROM relay_event_outbox
 		 WHERE status='pending' AND next_attempt_at <= ?
 		 ORDER BY created_at,event_id`, time.Now().UnixMilli())
@@ -698,7 +703,7 @@ func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
 	var events []RelayEvent
 	for rows.Next() {
 		var event RelayEvent
-		if err := rows.Scan(&event.EventID, &event.CommandID, &event.SessionID, &event.EventType, &event.TerminalStatus, &event.EnvelopeJSON); err != nil {
+		if err := rows.Scan(&event.EventID, &event.CommandID, &event.SessionID, &event.EventType, &event.TerminalStatus, &event.EnvelopeJSON, &event.CreatedAtUnixMS); err != nil {
 			return nil, err
 		}
 		events = append(events, event)

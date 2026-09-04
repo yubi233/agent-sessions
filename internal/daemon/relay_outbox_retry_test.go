@@ -2,12 +2,16 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/yubi233/agent-sessions/internal/id"
 )
@@ -17,7 +21,8 @@ func seedRetryEvent(t *testing.T, store *Store, suffix string) string {
 	t.Helper()
 	event := RelayEvent{
 		EventID: id.New("evt") + "-" + suffix, CommandID: "cmd-1", SessionID: "sess-1",
-		EventType: "message.completed",
+		EventType:       "message.completed",
+		CreatedAtUnixMS: 1724242200123,
 		// envelope 只能是密文外形；这里使用协议形态合法的 fixture 值。
 		EnvelopeJSON: `{"alg":"fixture-aead","key_id":"k","nonce":"n","ciphertext":"c","aad_hash":"h","payload_version":1}`,
 	}
@@ -25,6 +30,43 @@ func seedRetryEvent(t *testing.T, store *Store, suffix string) string {
 		t.Fatalf("enqueue: %v", err)
 	}
 	return event.EventID
+}
+
+// V085-19：事件生成时间在本地 outbox 重读后保持原值，不能被 outbox 接收时间覆盖。
+func TestRelayEventOutboxPreservesCanonicalCreatedAt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "daemon.db")
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	const createdAt = int64(1724242200123)
+	if err := store.EnqueueRelayEvent(RelayEvent{
+		EventID: "evt-created-at", CommandID: "cmd-created-at", SessionID: "sess-created-at",
+		EventType: "session.aborted", EnvelopeJSON: `{"fixture_payload":{"label":"已中止"}}`,
+		CreatedAtUnixMS: createdAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingRelayEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].CreatedAtUnixMS != createdAt {
+		t.Fatalf("pending event timestamp=%+v, want %d", pending, createdAt)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	pending, err = reopened.PendingRelayEvents()
+	if err != nil || len(pending) != 1 || pending[0].CreatedAtUnixMS != createdAt {
+		t.Fatalf("reopened event timestamp=%+v err=%v, want %d", pending, err, createdAt)
+	}
 }
 
 // snapshotByID 从诊断投影中查找指定事件行。
@@ -175,5 +217,159 @@ func TestRelayEventOutboxSurvivesRestart(t *testing.T) {
 		if row != wantRow {
 			t.Fatalf("event %s drifted across restart: %+v want %+v", eventID, row, wantRow)
 		}
+	}
+}
+
+// V085-24：RelayLoop 对 session.send 采用异步执行后，紧随其后的 session.abort 必须
+// 及时到达 Provider（不能被 Send 的执行锁挡在身后）。成功 Abort 只产生一次上传到
+// Relay 的 session.aborted（带 canonical 生成时间，经 outbox 单行持久化，重开后
+// 时间保持原值，不能被接收时间覆盖）。此用例覆盖 processPending 异步分支 + abort 抢占。
+func TestRelayLoopAsyncSendAbortSingleAbortedEventWithCanonicalTime(t *testing.T) {
+	dbFile := filepath.Join(t.TempDir(), "daemon.db")
+	store, err := OpenStore(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Set("terminal_id", "term-async"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 记录上传到 Relay 的 session.aborted 事件体（脱敏断言：类型 + canonical 时间）。
+	var abortedUploads []map[string]any
+	var uploadMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/ack"):
+			_, _ = io.WriteString(w, `{}`)
+		case strings.HasSuffix(r.URL.Path, "/result"):
+			_, _ = io.WriteString(w, `{"command_id":"ignored","delivery_seq":1,"status":"succeeded"}`)
+		case strings.HasSuffix(r.URL.Path, "/events"):
+			var body map[string]any
+			if decodeErr := json.NewDecoder(r.Body).Decode(&body); decodeErr == nil && body["event_type"] == "session.aborted" {
+				uploadMu.Lock()
+				abortedUploads = append(abortedUploads, body)
+				uploadMu.Unlock()
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// 复用 runner 测试夹具：opencode adapter + blockingSendHandle 复现长 Send。
+	_, runner, fake := newRunnerFixture(t, "opencode")
+	defer runner.Close(context.Background())
+	blocking := newBlockingSendHandle("instance-async")
+	fake.mu.Lock()
+	fake.startOverride = blocking
+	fake.mu.Unlock()
+
+	loop := NewRelayLoop(store, &RelayClient{BaseURL: server.URL, AccessToken: "fixture"}, runner, FixtureEventEncoder{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	loop.Capabilities = []string{"start", "send", "abort"}
+	runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
+
+	deliver := func(delivery RelayDelivery) {
+		t.Helper()
+		if err := loop.handleDelivery(context.Background(), delivery); err != nil {
+			t.Fatalf("handle %s: %v", delivery.Command.Kind, err)
+		}
+	}
+
+	// 1) session.start 建立实例。
+	deliver(RelayDelivery{DeliverySeq: 1, Command: RelayCommand{
+		CommandID: "cmd-start", SessionID: "s-async", WorkspaceID: "ws-async",
+		Kind: "session.start", LeaseEpoch: 1, TargetTerminalID: "term-async",
+		PayloadJSON: `{"session_id":"s-async","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}})
+
+	// 2) session.send 进入 Provider 长阻塞窗口（handleDelivery 异步放行）。
+	deliver(RelayDelivery{DeliverySeq: 2, Command: RelayCommand{
+		CommandID: "cmd-send", SessionID: "s-async", WorkspaceID: "ws-async",
+		Kind: "session.send", LeaseEpoch: 1, TargetTerminalID: "term-async",
+		PayloadJSON: `{"session_id":"s-async","ciphertext":{"fixture_payload":{"message":"你好"}}}`,
+	}})
+
+	// 等待 Send 真正进入阻塞窗口。
+	select {
+	case <-blocking.sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("send did not enter blocking window")
+	}
+
+	// 3) 立即 abort：必须绕过 Send 执行锁并及时到达 Provider。
+	abortStart := time.Now()
+	deliver(RelayDelivery{DeliverySeq: 3, Command: RelayCommand{
+		CommandID: "cmd-abort", SessionID: "s-async", WorkspaceID: "ws-async",
+		Kind: "session.abort", LeaseEpoch: 1, TargetTerminalID: "term-async",
+		PayloadJSON: `{"session_id":"s-async"}`,
+	}})
+	if elapsed := time.Since(abortStart); elapsed > 1500*time.Millisecond {
+		t.Fatalf("abort latency=%s while send blocked, want <1.5s", elapsed)
+	}
+	blocking.mu.Lock()
+	aborts := blocking.aborts
+	blocking.mu.Unlock()
+	if aborts != 1 {
+		t.Fatalf("handle.Abort calls=%d, want 1", aborts)
+	}
+
+	// 4) 释放 Send，等待异步执行收口。handleDelivery 尾部已 flush outboxes，
+	// 事件应恰好上传一次。
+	close(blocking.releaseSend)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		uploadMu.Lock()
+		n := len(abortedUploads)
+		uploadMu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	uploadMu.Lock()
+	gotUploads := append([]map[string]any(nil), abortedUploads...)
+	uploadMu.Unlock()
+	if len(gotUploads) != 1 {
+		t.Fatalf("session.aborted uploads=%d, want exactly 1", len(gotUploads))
+	}
+	createdAt, _ := gotUploads[0]["created_at_unix_ms"].(float64)
+	if createdAt <= 0 {
+		t.Fatalf("uploaded session.aborted must carry canonical time: %v", gotUploads[0])
+	}
+
+	// 5) 事件行必须已持久化到本机 outbox；重开后 canonical 时间保持原值。
+	rows, err := store.RelayEventOutboxSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("outbox must retain delivered event row for audit")
+	}
+	var storedTime int64
+	if err := store.db.QueryRow(`SELECT created_at_unix_ms FROM relay_event_outbox WHERE event_type=? LIMIT 1`, "session.aborted").Scan(&storedTime); err != nil {
+		t.Fatalf("query stored created_at: %v", err)
+	}
+	if storedTime != int64(createdAt) {
+		t.Fatalf("outbox stored time=%d upload=%d", storedTime, int64(createdAt))
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenStore(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	var replayedTime int64
+	if err := reopened.db.QueryRow(`SELECT created_at_unix_ms FROM relay_event_outbox WHERE event_type=? LIMIT 1`, "session.aborted").Scan(&replayedTime); err != nil {
+		t.Fatalf("reopen query created_at: %v", err)
+	}
+	if replayedTime != int64(createdAt) {
+		t.Fatalf("reopened outbox time=%d want %d", replayedTime, int64(createdAt))
 	}
 }

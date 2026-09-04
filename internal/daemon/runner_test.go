@@ -191,6 +191,36 @@ type fakeHandle struct {
 	forkedID     string
 }
 
+// blockingSendHandle 用于复现 Provider Send 长时间阻塞的窗口。Abort 不应等待
+// Runner 的 Send 执行锁释放，否则用户点击中止只能等模型请求超时后才生效。
+type blockingSendHandle struct {
+	*fakeHandle
+	sendStarted chan struct{}
+	releaseSend chan struct{}
+	startOnce   sync.Once
+}
+
+func newBlockingSendHandle(id string) *blockingSendHandle {
+	return &blockingSendHandle{
+		fakeHandle:  newFakeHandle(id),
+		sendStarted: make(chan struct{}),
+		releaseSend: make(chan struct{}),
+	}
+}
+
+func (h *blockingSendHandle) Send(ctx context.Context, text string) error {
+	h.mu.Lock()
+	h.sends = append(h.sends, text)
+	h.mu.Unlock()
+	h.startOnce.Do(func() { close(h.sendStarted) })
+	select {
+	case <-h.releaseSend:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // contentCall 之外的 P3 调用记录形状。
 type questionAnswerCall struct {
 	requestKey string
@@ -778,6 +808,165 @@ func TestSessionRunnerAbortCallsHandle(t *testing.T) {
 	h.mu.Unlock()
 	if aborts != 1 {
 		t.Fatalf("handle.Abort calls = %d, want 1", aborts)
+	}
+}
+
+// V085-16：Send 阻塞时 Abort 必须绕过 executionMu，在一个短窗口内调用 Provider。
+func TestSessionRunnerAbortPreemptsBlockingSend(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "opencode")
+	blocking := newBlockingSendHandle("instance-blocking")
+	fake.mu.Lock()
+	fake.startOverride = blocking
+	fake.mu.Unlock()
+	events := make(chan adapter.Event, 32)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s1" {
+			events <- event
+		}
+	})
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- runner.ConsumeCommand(context.Background(), Command{
+			Kind: "session.send", PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"你好"}}}`,
+		})
+	}()
+	select {
+	case <-blocking.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Send did not enter blocking fixture")
+	}
+	abortDone := make(chan error, 1)
+	started := time.Now()
+	go func() {
+		abortDone <- runner.ConsumeCommand(context.Background(), Command{
+			Kind: "session.abort", PayloadJSON: `{"session_id":"s1"}`,
+		})
+	}()
+	select {
+	case err := <-abortDone:
+		if err != nil {
+			t.Fatalf("abort: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Abort waited for blocking Send")
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("Abort latency=%s, want <250ms", elapsed)
+	}
+	close(blocking.releaseSend)
+	select {
+	case <-sendDone:
+	case <-time.After(time.Second):
+		t.Fatal("Send did not finish after release")
+	}
+	blocking.mu.Lock()
+	aborts := blocking.aborts
+	blocking.mu.Unlock()
+	if aborts != 1 {
+		t.Fatalf("handle.Abort calls=%d, want 1", aborts)
+	}
+	var aborted int
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case event := <-events:
+			if event.Type == adapter.EventSessionAborted {
+				aborted++
+				if event.CreatedAtUnixMS <= 0 {
+					t.Fatal("session.aborted must carry canonical generation time")
+				}
+			}
+		case <-time.After(10 * time.Millisecond):
+		}
+		if aborted == 1 {
+			break
+		}
+	}
+	if aborted != 1 {
+		t.Fatalf("session.aborted events=%d, want 1", aborted)
+	}
+}
+
+// V085-17：Abort 失败只能产生脱敏错误，不能伪造 session.aborted 成功事件。
+func TestSessionRunnerAbortFailureDoesNotEmitSuccessEvent(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "opencode")
+	events := make(chan adapter.Event, 32)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s1" {
+			events <- event
+		}
+	})
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	h.abortErr = errors.New("provider abort failed")
+	h.mu.Unlock()
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.abort", PayloadJSON: `{"session_id":"s1"}`,
+	}); err == nil {
+		t.Fatal("abort failure must return an error")
+	}
+	seenError := false
+	seenAborted := false
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !seenError {
+		select {
+		case event := <-events:
+			switch event.Type {
+			case adapter.EventSessionError:
+				seenError = true
+			case adapter.EventSessionAborted:
+				seenAborted = true
+			}
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if !seenError || seenAborted {
+		t.Fatalf("abort failure events: error=%v aborted=%v", seenError, seenAborted)
+	}
+}
+
+// V085-18：一次成功 Abort 只产生一条可见 session.aborted。
+func TestSessionRunnerSuccessfulAbortEmitsExactlyOnce(t *testing.T) {
+	_, runner, _ := newRunnerFixture(t, "opencode")
+	events := make(chan adapter.Event, 32)
+	runner.SetEventSink(func(sessionID string, event adapter.Event) {
+		if sessionID == "s1" {
+			events <- event
+		}
+	})
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.abort", PayloadJSON: `{"session_id":"s1"}`,
+	}); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	aborted := 0
+	for {
+		select {
+		case event := <-events:
+			if event.Type == adapter.EventSessionAborted {
+				aborted++
+			}
+		case <-time.After(100 * time.Millisecond):
+			if aborted != 1 {
+				t.Fatalf("one successful command should have one event, got %d", aborted)
+			}
+			return
+		}
 	}
 }
 

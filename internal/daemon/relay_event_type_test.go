@@ -12,6 +12,7 @@ import (
 
 func TestRelayEventTypeMapping(t *testing.T) {
 	cases := map[adapter.EventType]string{
+		adapter.EventSessionAborted:     "session.aborted",
 		adapter.EventTurnStarted:        "turn.started",
 		adapter.EventUserMessage:        "user.message",
 		adapter.EventMessageDelta:       "message.delta",

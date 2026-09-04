@@ -167,9 +167,14 @@ func (r *SessionRunner) SetEventSinkResult(sink func(sessionID string, event ada
 // ConsumeCommand 消费 outbox 中的一条 Relay 命令。
 // kind 以 cmd.Kind 为准；payload_json 也可能携带 kind（Relay 命令体），作为兜底来源。
 func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
+	// Abort 必须能在一个长时间 Send 回合期间抢占执行；其 handle 自身负责
+	// serializing provider cancel，而 runner 的生命周期映射仍由 mu 保护。
+	if commandKind(cmd) == "session.abort" {
+		return r.abortSession(ctx, cmd)
+	}
 	r.executionMu.Lock()
 	defer r.executionMu.Unlock()
-	kind := cmd.Kind
+	kind := commandKind(cmd)
 	if kind == "" {
 		if env, err := parseEnvelope(cmd.PayloadJSON); err == nil && env.kind() != "" {
 			kind = env.kind()
@@ -218,6 +223,16 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 		// 未实现 kind 保持 fail-closed：不写任何成功状态（项目文档「统一能力模型」）。
 		return fmt.Errorf("%w: kind=%s", ErrUnsupportedCommand, kind)
 	}
+}
+
+func commandKind(cmd Command) string {
+	if cmd.Kind != "" {
+		return cmd.Kind
+	}
+	if env, err := parseEnvelope(cmd.PayloadJSON); err == nil {
+		return env.kind()
+	}
+	return ""
 }
 
 // Close 停止全部事件转发 goroutine 并回收所有存活 handle（幂等）。
@@ -522,6 +537,14 @@ func (r *SessionRunner) abortSession(ctx context.Context, cmd Command) error {
 		})
 		return err
 	}
+	// Abort 成功只表示 Provider 已接受取消请求；Provider 后续的 cancelled
+	// turn_completed 仍负责最终状态收口，不能在这里伪造第二条终态。
+	r.emitEvent(sessionID, adapter.Event{
+		Type: adapter.EventSessionAborted,
+		Payload: map[string]any{
+			"instance_id": sessionID,
+		},
+	})
 	return nil
 }
 
@@ -1087,6 +1110,9 @@ func (r *SessionRunner) recordEvent(sessionID string, ev adapter.Event) {
 
 // recordEventResult 与 recordEvent 相同，但把事件出口的提交错误返回给回放调用方。
 func (r *SessionRunner) recordEventResult(sessionID string, ev adapter.Event) error {
+	if ev.CreatedAtUnixMS <= 0 {
+		ev.CreatedAtUnixMS = time.Now().UnixMilli()
+	}
 	if strings.TrimSpace(sessionID) == "" {
 		if ev.Seq <= 0 {
 			ev.Seq = 1

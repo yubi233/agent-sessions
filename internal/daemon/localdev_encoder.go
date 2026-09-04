@@ -180,6 +180,12 @@ func (e *LocalDevEventEncoder) localDevFixturePayload(sessionID string, event ad
 			"label":          "Assistant",
 			"completed_turn": true,
 		}, true
+	case adapter.EventSessionAborted:
+		return map[string]any{
+			"kind":  "system_notice",
+			"label": "已中止",
+			"text":  "Android 控制端已中止当前回合。",
+		}, true
 	case adapter.EventUserMessage:
 		text, _ := event.Payload["text"].(string)
 		if strings.TrimSpace(text) == "" {
