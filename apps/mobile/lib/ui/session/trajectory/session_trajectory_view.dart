@@ -41,6 +41,10 @@ class _SessionTrajectoryViewState extends State<SessionTrajectoryView> {
   late double _rangeEnd;
   late bool _rangeActive;
   late String? _selectedKey;
+  // 检查器弹窗的打开状态与导航器引用：视图被回收（切会话/切视图）时先关掉弹窗，
+  // 避免模态残留到下一个页面。
+  NavigatorState? _inspectorNavigator;
+  bool _inspectorOpen = false;
 
   @override
   void initState() {
@@ -99,6 +103,7 @@ class _SessionTrajectoryViewState extends State<SessionTrajectoryView> {
 
   @override
   void dispose() {
+    if (_inspectorOpen) _inspectorNavigator?.pop();
     _saveScrollOffset();
     _searchDebounce?.cancel();
     _ledgerController.removeListener(_saveScrollOffset);
@@ -264,10 +269,36 @@ class _SessionTrajectoryViewState extends State<SessionTrajectoryView> {
     _rangeEnd = 1;
   }
 
-  void _selectRecord(String key) {
+  /// 选中记录：行高亮由 [_selectedKey] 驱动；检查器以模态弹窗呈现，不再内嵌
+  /// ledger 头部，选中动作也不再重置滚动位置。openInspector=false 用于 Overview
+  /// 拖拽选区起点——拖拽过程中弹模态会挡住后续手势，只做高亮。
+  void _selectRecord(String key, {bool openInspector = true}) {
     setState(() => _selectedKey = key);
     _emitState();
-    _resetLedgerOffset();
+    if (openInspector) _showInspectorDialog(key);
+  }
+
+  /// v0.8.6：检查器改为弹窗显示。内容是打开瞬间的记录快照（后续 streaming 更新
+  /// 不追改）；barrier 点击、关闭按钮或视图回收都会收口到清空选中态。
+  Future<void> _showInspectorDialog(String key) async {
+    if (_inspectorOpen) return;
+    final record = widget.records
+        .where((record) => record.key == key)
+        .firstOrNull;
+    if (record == null) return;
+    final navigator = Navigator.of(context);
+    _inspectorNavigator = navigator;
+    _inspectorOpen = true;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _TrajectoryInspectorDialog(
+        record: record,
+        onClose: () => Navigator.of(dialogContext).pop(),
+      ),
+    );
+    _inspectorOpen = false;
+    _inspectorNavigator = null;
+    if (mounted) _closeInspector();
   }
 
   void _closeInspector() {
@@ -289,9 +320,6 @@ class _SessionTrajectoryViewState extends State<SessionTrajectoryView> {
       });
     }
     final visibleItems = _ledgerItems;
-    final selected = widget.records
-        .where((record) => record.key == _selectedKey)
-        .firstOrNull;
     final headers = <Widget>[
       if (target != null) _TrajectoryInspectBanner(target: target),
       _TrajectoryToolbar(
@@ -315,10 +343,10 @@ class _SessionTrajectoryViewState extends State<SessionTrajectoryView> {
           setState(_clearRangeSelection);
           _resetLedgerOffset();
         },
+        // 点击 timeline 只选中最近记录；拖拽选区起点只做行高亮，不弹检查器。
         onRecordTap: _selectRecord,
+        onDragSelect: (key) => _selectRecord(key, openInspector: false),
       ),
-      if (selected != null)
-        _TrajectoryInspector(record: selected, onClose: _closeInspector),
     ];
     final itemCount =
         headers.length + (_hasOlder ? 1 : 0) + visibleItems.length;
@@ -596,6 +624,7 @@ class _TrajectoryTimeline extends StatefulWidget {
     required this.onRangeChanged,
     required this.onClearRange,
     required this.onRecordTap,
+    required this.onDragSelect,
   });
 
   final List<TrajectoryRecord> records;
@@ -606,6 +635,7 @@ class _TrajectoryTimeline extends StatefulWidget {
   final void Function(double start, double end) onRangeChanged;
   final VoidCallback onClearRange;
   final ValueChanged<String> onRecordTap;
+  final ValueChanged<String> onDragSelect;
 
   @override
   State<_TrajectoryTimeline> createState() => _TrajectoryTimelineState();
@@ -698,7 +728,7 @@ class _TrajectoryTimelineState extends State<_TrajectoryTimeline> {
                   );
                   setState(() => _dragStart = position);
                   widget.onRangeChanged(position, position);
-                  widget.onRecordTap(_nearest(position).key);
+                  widget.onDragSelect(_nearest(position).key);
                 },
                 onHorizontalDragUpdate: (details) {
                   final startPosition = _dragStart;
@@ -777,9 +807,10 @@ class _TrajectoryTimelineState extends State<_TrajectoryTimeline> {
   }
 }
 
-/// Trajectory record inspector：展示当前选中记录的 display-safe 字段。
-class _TrajectoryInspector extends StatelessWidget {
-  const _TrajectoryInspector({required this.record, required this.onClose});
+/// Trajectory record inspector 弹窗内容（v0.8.6）：选中记录的 display-safe 字段
+/// 以模态弹窗呈现，替代原先内嵌在 ledger 头部的卡片；字段与关闭 key 保持不变。
+class _TrajectoryInspectorDialog extends StatelessWidget {
+  const _TrajectoryInspectorDialog({required this.record, required this.onClose});
 
   final TrajectoryRecord record;
   final VoidCallback onClose;
@@ -787,51 +818,55 @@ class _TrajectoryInspector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Container(
-      key: const Key('session-trajectory-inspector'),
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHigh,
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Dialog(
+      backgroundColor: theme.colorScheme.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+          child: Column(
+            key: const Key('session-trajectory-inspector'),
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(child: Text('记录检查器', style: theme.textTheme.labelLarge)),
-              IconButton(
-                key: const Key('session-trajectory-inspector-close'),
-                tooltip: '关闭记录检查器',
-                onPressed: onClose,
-                icon: const Icon(Icons.close, size: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('记录检查器', style: theme.textTheme.titleMedium),
+                  ),
+                  IconButton(
+                    key: const Key('session-trajectory-inspector-close'),
+                    tooltip: '关闭记录检查器',
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
               ),
+              Text('序列 ${record.sequence} · ${record.label}'),
+              if (record.status?.isNotEmpty == true) ...[
+                const SizedBox(height: 2),
+                Text('状态：${record.status}'),
+              ],
+              if (record.summary?.trim().isNotEmpty == true) ...[
+                const SizedBox(height: 2),
+                Text('摘要：${record.summary}'),
+              ],
+              if (record.turnId != null) ...[
+                const SizedBox(height: 2),
+                Text('轮次：${record.turnId}'),
+              ],
+              if (record.createdAt != null) ...[
+                const SizedBox(height: 2),
+                Text('时间：${record.createdAt!.toIso8601String()}'),
+              ],
+              if (record.inspectTarget != null) ...[
+                const SizedBox(height: 2),
+                Text('Inspect：${record.inspectTarget}'),
+              ],
             ],
           ),
-          Text('序列 ${record.sequence} · ${record.label}'),
-          if (record.status?.isNotEmpty == true) ...[
-            const SizedBox(height: 2),
-            Text('状态：${record.status}'),
-          ],
-          if (record.summary?.trim().isNotEmpty == true) ...[
-            const SizedBox(height: 2),
-            Text('摘要：${record.summary}'),
-          ],
-          if (record.turnId != null) ...[
-            const SizedBox(height: 2),
-            Text('轮次：${record.turnId}'),
-          ],
-          if (record.createdAt != null) ...[
-            const SizedBox(height: 2),
-            Text('时间：${record.createdAt!.toIso8601String()}'),
-          ],
-          if (record.inspectTarget != null) ...[
-            const SizedBox(height: 2),
-            Text('Inspect：${record.inspectTarget}'),
-          ],
-        ],
+        ),
       ),
     );
   }
