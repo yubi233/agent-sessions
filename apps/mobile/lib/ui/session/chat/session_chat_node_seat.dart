@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../../domain/session_projection_models.dart';
 import 'session_markdown_text.dart';
+import 'typewriter_reveal_text.dart';
 import '../../../state/session_message_feedback_controller.dart';
 
 typedef SessionForkHandler = Future<void> Function(String messageId);
@@ -169,9 +170,17 @@ class _ChatBubble extends StatelessWidget {
                     const SizedBox(height: 6),
                     user
                         ? Text(node.text!, style: TextStyle(color: foreground))
-                        : _DisplaySafeMarkdown(
+                        // v0.8.7 打字机平滑释放：只释放已到达文本的前缀
+                        // （fail-closed 不超前于数据），completed 全文到达立即
+                        // 对账收敛；回滚开关置关时整段渲染（现状形态）。
+                        : TypewriterRevealText(
                             text: node.text!,
-                            color: foreground,
+                            streaming: node.isStreaming,
+                            builder: (context, revealedText) =>
+                                _DisplaySafeMarkdown(
+                                  text: revealedText,
+                                  color: foreground,
+                                ),
                           ),
                   ],
                   if (node.references.isNotEmpty) ...[

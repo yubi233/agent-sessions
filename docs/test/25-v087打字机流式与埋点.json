@@ -82,7 +82,7 @@
     {
       "id": "V087-04",
       "title": "fixture 逐 delta 时间释放：注入时钟推进下 snapshot 逐步可见新 delta，计划表（帧数/间隔/增量）生效",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "fixture",
       "priority": "P0",
@@ -97,14 +97,15 @@
         "无"
       ],
       "evidence": [
-        "apps/mobile/lib/relay/fixture_relay_repository.dart",
+        "apps/mobile/lib/relay/fixture_relay_repository.dart（TimedStreamSchedule + v087 timed 分支 + snapshot 可见性过滤/lastSequence 修正）",
         "apps/mobile/test/v087_typewriter_streaming_test.dart"
-      ]
+      ],
+      "notes": "2026-09-05 P2 交付：flutter test v087_typewriter_streaming_test 6/6 passed（含受影响回归 session_projection/session_screens 全绿）"
     },
     {
       "id": "V087-05",
       "title": "在途轮询收紧档：参数化收紧值生效，v0.8.6 超时收敛/防抖/清账语义不回归",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "controller",
       "priority": "P0",
@@ -119,14 +120,15 @@
         "无"
       ],
       "evidence": [
-        "apps/mobile/lib/state/session_controller.dart",
-        "apps/mobile/test/v087_typewriter_streaming_test.dart"
-      ]
+        "apps/mobile/lib/state/session_controller.dart（activePollInterval=250ms 收紧档）",
+        "apps/mobile/test/v087_typewriter_streaming_test.dart（收紧节奏 7 拍 + <800ms 上限判负误用）"
+      ],
+      "notes": "2026-09-05 P2 交付：flutter test v087_typewriter_streaming_test 6/6 passed（含受影响回归 session_projection/session_screens 全绿）"
     },
     {
       "id": "V087-06",
       "title": "打字机渲染：多批 pump 文本渐进增长、动画不超前 buffer、completed 全文收敛、partial Markdown 中间态不崩不闪",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "widget",
       "priority": "P0",
@@ -141,14 +143,17 @@
         "无"
       ],
       "evidence": [
-        "apps/mobile/lib/ui/session/chat/session_chat_node_seat.dart",
-        "apps/mobile/test/v087_typewriter_streaming_test.dart"
-      ]
+        "apps/mobile/lib/ui/session/chat/typewriter_reveal_text.dart",
+        "apps/mobile/lib/ui/session/chat/session_chat_node_seat.dart（assistant 气泡接入）",
+        "apps/mobile/lib/state/session_projection_controller.dart（messageId 稳定 key）",
+        "apps/mobile/test/v087_typewriter_streaming_test.dart（渐进生长/不超前/partial Markdown 三用例）"
+      ],
+      "notes": "2026-09-05 P2 交付：flutter test v087_typewriter_streaming_test 6/6 passed（含受影响回归 session_projection/session_screens 全绿）"
     },
     {
       "id": "V087-07",
       "title": "回滚形态：动画开关置关时回到整段渲染现状形态，既有断言保持绿",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "widget",
       "priority": "P1",
@@ -163,8 +168,10 @@
         "无"
       ],
       "evidence": [
-        "apps/mobile/test/v087_typewriter_streaming_test.dart"
-      ]
+        "apps/mobile/lib/ui/session/chat/typewriter_reveal_text.dart（typewriterRevealEnabled 回滚开关）",
+        "apps/mobile/test/v087_typewriter_streaming_test.dart（置关整段渲染断言）"
+      ],
+      "notes": "2026-09-05 P2 交付：flutter test v087_typewriter_streaming_test 6/6 passed（含受影响回归 session_projection/session_screens 全绿）"
     },
     {
       "id": "V087-08",

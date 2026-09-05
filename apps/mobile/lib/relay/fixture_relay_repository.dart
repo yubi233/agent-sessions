@@ -38,6 +38,13 @@ class FixtureRelayRepository implements RelayRepository {
   bool _repeatCursorEventOnNextSnapshot = false;
   final Map<String, List<int>> _snapshotAfterSequences = {};
 
+  /// v0.8.7（V087-04）：时间释放流式回合。`timedStreamSchedule` 允许测试/可见
+  /// gate 覆盖脚本；为 null 时发送 'v087 timed' 使用内置 gate 默认脚本。
+  /// 已触发时间释放的会话进入 `_timedReleaseSessions`，快照按当前时钟过滤
+  /// 未到期帧（对历史事件透明——它们的 createdAt 都在过去）。
+  TimedStreamSchedule? timedStreamSchedule;
+  final Set<String> _timedReleaseSessions = <String>{};
+
   /// v0.2/P3：fixture 默认模拟「本机已持有会话内容密钥」（真实 Keystore 通道未部署）。
   /// 置为 false 可复现「无 DEK」时附件入口 fail-closed 的行为。
   bool contentKeysReady = true;
@@ -674,9 +681,31 @@ class FixtureRelayRepository implements RelayRepository {
     _snapshotAfterSequences
         .putIfAbsent(sessionId, () => <int>[])
         .add(afterSequence);
+    // v0.8.7（V087-04）：时间释放会话按当前时钟隐藏未到期帧。会话行的
+    // lastSequence 同步修正为可见最大 seq——客户端把 lastSequence 当作下一轮
+    // after_seq，若包含未来帧序号，未到期 delta 将永远不可见。
+    final timedRelease = _timedReleaseSessions.contains(sessionId);
+    final visibleBefore = _clock();
     final events = state.events
         .where((event) => event.sequence > afterSequence)
+        .where(
+          (event) =>
+              !timedRelease ||
+              // 无 createdAt 的历史事件视为已到期（只增不删）。
+              !(event.createdAt?.isAfter(visibleBefore) ?? false),
+        )
         .toList(growable: true);
+    var snapshotSession = state.session;
+    if (timedRelease) {
+      final visibleMaxSequence = events.fold<int>(
+        afterSequence,
+        (highest, event) =>
+            event.sequence > highest ? event.sequence : highest,
+      );
+      snapshotSession = snapshotSession.copyWith(
+        lastSequence: visibleMaxSequence,
+      );
+    }
     if (_repeatCursorEventOnNextSnapshot && afterSequence > 0) {
       _repeatCursorEventOnNextSnapshot = false;
       final boundary = state.events.where(
@@ -685,7 +714,7 @@ class FixtureRelayRepository implements RelayRepository {
       if (boundary.isNotEmpty) events.insert(0, boundary.single);
     }
     return SessionSnapshot(
-      session: state.session,
+      session: snapshotSession,
       events: List<RelaySessionEvent>.unmodifiable(events),
     );
   }
@@ -1344,6 +1373,69 @@ class FixtureRelayRepository implements RelayRepository {
         now: now,
       );
       state.updateSession(status: MobileSessionStatus.streaming, now: now);
+      return;
+    }
+    // v0.8.7（V087-04，迭代计划 §3.4）：时间释放流式回合。全部增量帧在发送
+    // 时刻入库，但 createdAt 打上「回合开始后偏移」的未来时间戳；快照按当前
+    // 时钟只暴露已到期帧（见 getSessionSnapshot 的可见性过滤），completed
+    // 全文与 completed_turn 在 completedAfter 到期后释放。「逐步到达」在
+    // 注入时钟（controller/widget 测试）与真实时钟（macOS 可见 gate）下同语义。
+    if (message.contains('v087 timed')) {
+      final schedule = timedStreamSchedule ?? TimedStreamSchedule.gateDefault();
+      final start = _clock();
+      state.append(
+        eventType: 'message.user',
+        payload: {
+          'kind': 'user_message',
+          'label': '你',
+          'text': message,
+          'copy_text': message,
+          'created_at': start.toIso8601String(),
+          'message_id': 'fixture-message-${state.nextSequence}',
+        },
+        now: start,
+      );
+      for (var i = 0; i < schedule.offsets.length; i++) {
+        final arriveAt = start.add(schedule.offsets[i]);
+        state.append(
+          eventType: 'message.assistant.delta',
+          payload: {
+            'kind': 'assistant_message',
+            'label': 'Assistant',
+            // localdev 语义：每帧回发「全量已收文本」，客户端整体替换。
+            'text': schedule.fullTexts[i],
+            'streaming': true,
+            'message_id': 'fixture-v087-timed',
+            'created_at': arriveAt.toIso8601String(),
+          },
+          now: arriveAt,
+        );
+      }
+      final completedAt = start.add(schedule.completedAfter);
+      state.append(
+        eventType: 'message.assistant.delta',
+        payload: {
+          'kind': 'assistant_message',
+          'label': 'Assistant',
+          'text': schedule.finalText,
+          'streaming': false,
+          'copy_text': schedule.finalText,
+          'message_id': 'fixture-v087-timed',
+          'created_at': completedAt.toIso8601String(),
+        },
+        now: completedAt,
+      );
+      state.append(
+        eventType: 'turn.completed',
+        payload: {
+          'kind': 'assistant_message',
+          'completed_turn': true,
+          'created_at': completedAt.toIso8601String(),
+        },
+        now: completedAt,
+      );
+      state.updateSession(status: MobileSessionStatus.streaming, now: start);
+      _timedReleaseSessions.add(state.session.id);
       return;
     }
     final now = _clock();
@@ -2071,6 +2163,58 @@ class _FixtureSessionState {
       status: status,
       updatedAt: now,
       lastActivityAt: now,
+    );
+  }
+}
+
+/// v0.8.7 时间释放流式回合脚本（V087-04，迭代计划 §3.4）。
+///
+/// 「打字机」的可观察性前提：原 fixture 在发送时刻一次性追加全部增量帧，
+/// 快照全量返回，演不出「逐步到达」。时间释放脚本把每条增量帧的 createdAt
+/// 打上回合开始后的偏移，快照按当前时钟只暴露已到期帧（localdev「全量已收
+/// 文本」语义不变）；completed 全文与 completed_turn 终态在 [completedAfter]
+/// 到期后释放。注入时钟（controller/widget 测试）与真实时钟（macOS 可见
+/// gate 的 flutter-smoke-recording 口径）共用同一脚本形状。
+class TimedStreamSchedule {
+  TimedStreamSchedule({
+    required List<Duration> offsets,
+    required List<String> fullTexts,
+    required this.finalText,
+    this.completedAfter = const Duration(milliseconds: 400),
+  }) : assert(offsets.length == fullTexts.length, '每条偏移必须对应一条全量文本'),
+       offsets = List.unmodifiable(offsets),
+       fullTexts = List.unmodifiable(fullTexts);
+
+  /// 每条增量相对回合开始的到达偏移（须单调不减）。
+  final List<Duration> offsets;
+
+  /// 每条增量的「全量已收文本」（localdev 语义：整体替换生长节点）。
+  final List<String> fullTexts;
+
+  /// completed 权威全文（终态对账基准，须等于末条全量文本）。
+  final String finalText;
+
+  /// completed 全文与 completed_turn 终态的到达偏移（不早于末条增量）。
+  final Duration completedAfter;
+
+  /// 可见 gate 默认脚本（P0 裁决 §3.5）：40 帧 × 400ms ≈ 16s，落在
+  /// §6.1 的回合预算（12-20s）内，满足帧数下限 ≥30 与严格递增 ≥3 的判定预算。
+  factory TimedStreamSchedule.gateDefault() {
+    final offsets = <Duration>[];
+    final texts = <String>[];
+    final buffer = StringBuffer();
+    for (var i = 1; i <= 40; i++) {
+      offsets.add(Duration(milliseconds: 400 * i));
+      buffer
+        ..write('第 $i 帧增量到达：气泡文本随上游产出逐步生长，')
+        ..write('这就是打字机式的流式传输过程。\n');
+      texts.add(buffer.toString());
+    }
+    return TimedStreamSchedule(
+      offsets: offsets,
+      fullTexts: texts,
+      finalText: texts.last,
+      completedAfter: const Duration(milliseconds: 400 * 40 + 400),
     );
   }
 }

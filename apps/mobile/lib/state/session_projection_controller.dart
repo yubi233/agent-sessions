@@ -77,7 +77,12 @@ class SessionProjectionController {
       }
       nodes.add(
         ConversationNode(
-          key: 'node:${event.sequence}:${nodeKind.name}',
+          // v0.8.7（V087-06）：assistant/reasoning 节点优先用上游 messageId 作
+          // 稳定 key——流式期间同身份帧每批整体替换节点（sequence 随帧变化），
+          // 稳定 key 让打字机释放动画的元素状态跨帧存活（completed 帧同身份
+          // 替换时也平滑收敛）；无 messageId 回退 sequence（现状形态）。
+          // tool/command 等 key 消费方（轨迹/检查器）不受影响，维持 sequence。
+          key: 'node:${_stableNodeKey(event, nodeKind)}:${nodeKind.name}',
           kind: nodeKind,
           sequence: event.sequence,
           label: event.label,
@@ -385,4 +390,18 @@ class SessionProjectionController {
     }
     return null;
   }
+}
+
+/// v0.8.7（V087-06）：assistant/reasoning 节点在携带上游 messageId 时用它作
+/// 稳定 key 基座——流式期间同身份帧每批整体替换节点（sequence 随帧变化），
+/// 稳定 key 让打字机释放动画的元素状态跨帧存活；其余节点维持 sequence 基
+/// key（轨迹/检查器等消费方契约不变）。
+String _stableNodeKey(SessionTimelineEvent event, ConversationNodeKind kind) {
+  final messageId = event.messageId?.trim() ?? '';
+  if (messageId.isNotEmpty &&
+      (kind == ConversationNodeKind.assistant ||
+          kind == ConversationNodeKind.reasoning)) {
+    return messageId;
+  }
+  return '${event.sequence}';
 }

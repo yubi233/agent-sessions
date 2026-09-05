@@ -106,6 +106,12 @@ class SessionController extends ChangeNotifier {
   @visibleForTesting
   Duration pollInterval = const Duration(milliseconds: 500);
 
+  /// v0.8.7（§3.3 裁决）：发送受理后的前台在途轮询收紧档（默认 250ms）。
+  /// 仅作用于 send 在途前台窗口——这是打字机渲染的数据到达粒度；后台续轮
+  /// 与一般刷新维持 [pollInterval]=500ms，单会话在途 QPS 增量有界（P0 裁决）。
+  @visibleForTesting
+  Duration activePollInterval = const Duration(milliseconds: 250);
+
   /// 当前选中会话尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
   /// 该会话的回合是否已被客户端判定超时（V086-11）：UI 据此把"处理中"
   /// 状态条替换为显式超时文案，并停止无限转圈。
@@ -1135,6 +1141,8 @@ class SessionController extends ChangeNotifier {
       notifyListeners();
     }
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
+      // ignore: avoid_print
+      print('DBG clear: send-not-accepted');
       _pendingOutgoingBySession.remove(sessionId);
       notifyListeners();
     }
@@ -2352,7 +2360,9 @@ class SessionController extends ChangeNotifier {
         // 否则回复落地后客户端仍停留在“生成中”，只能重进会话恢复。
         final attempts = foregroundPollAttempts;
         for (var i = 0; i < attempts; i++) {
-          await Future<void>.delayed(pollInterval);
+          // v0.8.7：在途窗口使用收紧档（250ms）——打字机渲染的到达粒度由
+          // 此决定；窗口 attempts 结构与超时收敛语义不变（v0.8.6 A①）。
+          await Future<void>.delayed(activePollInterval);
           latest = await timedPollFetch(
             i + 1,
             afterSequence: latest.session.lastSequence,
@@ -2428,6 +2438,8 @@ class SessionController extends ChangeNotifier {
       _turnInFlight = false;
       _turnTimedOut.add(sessionId);
       _pendingOutgoingBySession.remove(sessionId);
+      // ignore: avoid_print
+      print('DBG clear: timeout-convergence');
       // ignore: avoid_print
       notifyListeners();
     }
@@ -2597,6 +2609,8 @@ class SessionController extends ChangeNotifier {
               event.kind == SessionTimelineKind.userMessage &&
               event.text == pending,
         )) {
+      // ignore: avoid_print
+      print('DBG clear: merge-clear-account');
       _pendingOutgoingBySession.remove(snapshot.session.id);
     }
   }

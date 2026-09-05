@@ -337,9 +337,9 @@ tasks:
       - task: docs:verify
       - task: check
       # P1（V087-02/03/10）：移动端流式埋点序列/审计红线 + daemon 回合流式摘要。
+      # P2（V087-04..07）：fixture 时间释放 + 在途收紧档 + 打字机释放动画/回滚。
       - go test ./internal/daemon -run 'TestV087' -count=1
-      # P2/P3（V087-04..09）落地后追加 flutter v087 流式渲染与可见 gate 行。
-      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/v086_turn_convergence_test.dart test/v084_streaming_projection_test.dart test/v084_turn_status_row_test.dart test/v087_streaming_telemetry_test.dart --concurrency=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/v086_turn_convergence_test.dart test/v084_streaming_projection_test.dart test/v084_turn_status_row_test.dart test/v087_streaming_telemetry_test.dart test/v087_typewriter_streaming_test.dart --concurrency=1
       - pnpm --filter @agent-sessions/web test
       - git diff --check
 

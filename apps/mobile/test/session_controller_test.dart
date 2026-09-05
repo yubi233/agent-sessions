@@ -1085,11 +1085,14 @@ class _DelayedEchoRelay extends FixtureRelayRepository {
         )
         .toList();
     if (snapshotCalls <= echoAfterCalls) {
+      // v0.8.7：流式阶段不暴露任何 canonical 事件（含 fixture 默认回合的
+      // 用户消息与终态）——canonical 到达时机只由 echoAfterCalls 控制，与
+      // 在途轮询节奏（250ms 收紧档）解耦；否则节奏变化会提前触发清账。
       return SessionSnapshot(
         session: snapshot.session.copyWith(
           status: MobileSessionStatus.streaming,
         ),
-        events: events,
+        events: const [],
       );
     }
     // canonical 阶段：用户事件回传 + completed_turn 标记，控制器应清账乐观回显
