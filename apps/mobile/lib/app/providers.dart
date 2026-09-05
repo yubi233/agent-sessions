@@ -15,6 +15,7 @@ import '../relay/relay_repository.dart';
 import '../relay/http_relay_repository.dart';
 import '../git/git_diff_repository.dart';
 import '../git/readonly_command_gateway.dart';
+import '../files/relay_workspace_files_repository.dart';
 import '../git/relay_git_diff_repository.dart';
 import '../files/workspace_files_repository.dart';
 import '../state/app_controller.dart';
@@ -138,7 +139,9 @@ ReadonlySessionContext? _readonlySessionContext(Ref ref) {
   );
 }
 
-/// 只读文件浏览与 Git 一样独立于会话传输：fixture 验收 UI；真实 Relay 未部署加密 Daemon RPC 时不可用。
+/// 只读文件浏览与 Git 一样独立于会话传输：fixture 验收 UI；已配置 Relay 时走
+/// v0.8.8 P3 真实传输——file.tree/file.read 经同一 lease/幂等/鉴权链路提交，
+/// 结果从 tool_result 事件回读（生产 E2EE 下为密文占位，视图保持不可用）。
 final workspaceFilesRepositoryProvider = Provider<WorkspaceFilesRepository>((
   ref,
 ) {
@@ -146,7 +149,12 @@ final workspaceFilesRepositoryProvider = Provider<WorkspaceFilesRepository>((
   if (relayBaseUrl.isEmpty) {
     return FixtureWorkspaceFilesRepository();
   }
-  return const UnavailableWorkspaceFilesRepository();
+  return RelayWorkspaceFilesRepository(
+    filesGateway: ReadonlyCommandGateway(
+      transport: ref.read(relayRepositoryProvider),
+      contextSource: () => _readonlySessionContext(ref),
+    ),
+  );
 });
 
 final appControllerProvider = ChangeNotifierProvider<AppController>((ref) {

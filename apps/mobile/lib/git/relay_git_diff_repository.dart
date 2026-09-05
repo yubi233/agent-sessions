@@ -38,7 +38,7 @@ class RelayGitDiffRepository implements GitDiffRepository {
     if (offset < 0 || limit <= 0) {
       throw const GitDiffFailure(GitDiffFailureKind.validation, 'Diff 分页参数无效。');
     }
-    final page = await gateway.execute(
+    final result = await gateway.execute(
       wireKind: 'git.diff',
       fixturePayload: <String, dynamic>{
         'path': path,
@@ -48,7 +48,7 @@ class RelayGitDiffRepository implements GitDiffRepository {
       },
       failureMapper: gitDiffFailureMapper,
     );
-    return _pageFromDaemon(page);
+    return _pageFromDaemon(Map<String, dynamic>.from(result as Map));
   }
 
   /// git.status 结果 → GitDiffSnapshot（白名单元数据映射，见 gitread.Status）。

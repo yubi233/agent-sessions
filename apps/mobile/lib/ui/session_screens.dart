@@ -2388,6 +2388,9 @@ class _SessionQuickMenu extends StatelessWidget {
     final gitReadSupported = sessions.selectedProviderCapabilities
         .capability('git_read')
         .isSupported;
+    final filesReadSupported = sessions.selectedProviderCapabilities
+        .capability('file_read')
+        .isSupported;
     return PopupMenuButton<String>(
       key: const Key('session-quick-menu-button'),
       tooltip: '会话操作',
@@ -2426,7 +2429,9 @@ class _SessionQuickMenu extends StatelessWidget {
               deviceId: deviceId,
             );
           case 'files':
-            // 文件浏览是只读页面，与 Git 入口一样不依赖 lease。
+            // 文件浏览是只读页面，与 Git 入口一样不依赖 lease；
+            // v0.8.8 P3：按矩阵 file_read 门控（未声明时入口禁用）。
+            if (!filesReadSupported) return;
             context.push('/sessions/${sessions.selectedSessionId}/files');
         }
       },
@@ -2554,9 +2559,11 @@ class _SessionQuickMenu extends StatelessWidget {
         PopupMenuItem(
           key: const Key('session-quick-files'),
           value: 'files',
-          child: const ListTile(
-            leading: Icon(Icons.folder_open_outlined),
-            title: Text('浏览工作区文件'),
+          // v0.8.8 P3：文件入口按矩阵 file_read 门控（与 Git 入口同面）。
+          enabled: filesReadSupported,
+          child: ListTile(
+            leading: const Icon(Icons.folder_open_outlined),
+            title: Text(filesReadSupported ? '浏览工作区文件' : '浏览工作区文件（当前 Provider 未启用）'),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),

@@ -65,10 +65,11 @@ class ReadonlyCommandGateway {
 
   String? _activeSessionId;
 
-  /// 执行一条只读命令并返回 daemon 结构化 `result` 对象。
+  /// 执行一条只读命令并返回 daemon 结构化 `result`（git/file 为对象，
+  /// file.tree 为 JSON 数组——由调用方按 kind 收敛形状）。
   /// [failureMapper] 把稳定错误码翻译为调用方视图的失败类型
   /// （Git/Files 各自保留文案）；任何失败都不携带明文细节。
-  Future<Map<String, dynamic>> execute({
+  Future<dynamic> execute({
     required String wireKind,
     required Map<String, dynamic> fixturePayload,
     required ReadonlyFailureMapper failureMapper,
@@ -126,7 +127,7 @@ class ReadonlyCommandGateway {
   }
 
   /// 在快照原始事件里查找本命令的 tool_result（kind 匹配 + 游标单调）。
-  Future<Map<String, dynamic>> _scanToolResult(
+  Future<dynamic> _scanToolResult(
     String wireKind,
     ReadonlyFailureMapper failureMapper,
   ) async {
@@ -143,9 +144,7 @@ class ReadonlyCommandGateway {
         final payload = Map<String, dynamic>.from(fixture);
         if (payload['kind'] != 'tool_result') continue;
         if (payload['command_kind'] != wireKind) continue;
-        final result = Map<String, dynamic>.from(
-          (payload['result'] as Map?) ?? const {},
-        );
+        final result = payload['result'];
         _consumedThrough = event.sequence;
         return result;
       }

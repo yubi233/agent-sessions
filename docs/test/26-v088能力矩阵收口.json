@@ -159,7 +159,7 @@
     {
       "id": "V088-08",
       "title": "file_read 消费者契约：tree→read→渲染、大小上限、目录外路径脱敏失败态",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3",
       "category": "controller",
       "priority": "P0",
@@ -173,7 +173,10 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "flutter test test/v088_file_read_transport_test.dart（6 用例）— file.tree 数组 result→条目列表（basename）/file.read 文本预览/CONTENT_UNAVAILABLE→binary limitedKind/PAYLOAD_TOO_LARGE→tooLarge+截断/WORKSPACE_PATH_DENIED→pathEscape/无 lease fail-closed 不提交命令",
+        "RelayWorkspaceFilesRepository（lib/files/）+ workspaceFilesRepositoryProvider 真实传输接线；会话快捷菜单文件入口按 file_read 门控（session_screens.dart）"
+      ]
     },
     {
       "id": "V088-09",

@@ -386,7 +386,7 @@ tasks:
       # P2（V088-05/07）：daemonCapabilities 条件声明 + GitDiff 真实传输。
       # P3（V088-08）：file_read 消费者。P3b（V088-13）：深链优先修复回归。
       - go test ./internal/daemon ./internal/adapter/dsh -run 'TestV088|TestBridgeFactMatrixGuard' -count=1
-      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_screens_test.dart test/v088_capability_closeout_test.dart test/v088_git_read_transport_test.dart test/git_diff_controller_test.dart --concurrency=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_screens_test.dart test/v088_capability_closeout_test.dart test/v088_git_read_transport_test.dart test/v088_file_read_transport_test.dart test/git_diff_controller_test.dart --concurrency=1
       - pnpm --filter @agent-sessions/web test
       - git diff --check
 
