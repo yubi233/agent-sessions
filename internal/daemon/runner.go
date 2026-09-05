@@ -93,6 +93,12 @@ type SessionRunner struct {
 	watchdogs          map[string]*time.Timer
 	turnWatchdogWindow time.Duration
 
+	// 回合流式摘要（v0.8.7 V087-10，详见 turn_stream_summary.go）：当前回合的
+	// delta 规模累计，事件泵单点维护；只存计数不存正文。并发口径与 eventSeq
+	// 相同（eventSeqMu 保护）。streamSummaryEnabled 是回滚开关（env "0" 关闭）。
+	turnStreams          map[string]*turnStreamSummary
+	streamSummaryEnabled bool
+
 	mu      sync.Mutex
 	handles map[string]*runningSession // key: sessionID
 	// resumeGeneration 用来使旧恢复协程的完成回调失效，避免旧句柄在新一轮恢复后
@@ -152,8 +158,11 @@ func NewSessionRunner(store *Store, adapters map[string]adapter.Adapter, logger 
 		// 看门狗窗口从环境读取（AGENT_SESSIONS_TURN_WATCHDOG_MS，0=关闭）。
 		turnWatchdogWindow: turnWatchdogWindowFromEnv(),
 		watchdogs:          map[string]*time.Timer{},
-		rootCtx:            ctx,
-		rootCancel:         cancel,
+		// 流式摘要开关从环境读取（AGENT_SESSIONS_TURN_STREAM_SUMMARY，"0"=关闭）。
+		turnStreams:          map[string]*turnStreamSummary{},
+		streamSummaryEnabled: turnStreamSummaryEnabled(),
+		rootCtx:              ctx,
+		rootCancel:           cancel,
 	}
 }
 
@@ -1100,6 +1109,8 @@ func (r *SessionRunner) forwardEventsWithReplay(sessionID string, h adapter.Hand
 			}
 		case <-fwdCtx.Done():
 			r.disarmTurnWatchdog(sessionID)
+			// 无终态回收：半途回合的流式累计不构成完整证据，静默丢弃。
+			r.resetTurnStreamSummary(sessionID)
 			return
 		case <-replaySignal:
 			// 下一轮会先消费回放完成信号并排空事件队列。
@@ -1300,6 +1311,8 @@ func (r *SessionRunner) recordEventResult(sessionID string, ev adapter.Event) er
 	r.eventSeq[sessionID] = ev.Seq
 	r.eventCount[sessionID]++
 	count := r.eventCount[sessionID]
+	// 回合流式摘要累计/收敛（v0.8.7 V087-10；此处已持有 eventSeqMu）。
+	r.noteTurnStreamEventLocked(sessionID, ev)
 	r.persistEventSummary(sessionID, lastEvent{Count: count, Type: ev.Type, Seq: ev.Seq})
 	return r.notifyEventSinkResult(sessionID, ev)
 }

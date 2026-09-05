@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../attachments/attachment_picker.dart';
+import '../diagnostics/streaming_telemetry.dart';
 import '../domain/control_models.dart';
 import '../domain/models.dart';
 import '../domain/model_effort_preferences.dart';
@@ -25,12 +26,15 @@ class SessionController extends ChangeNotifier {
     Random? random,
     AttachmentPicker? picker,
     ModelEffortPreferenceStore? modelEffortMemory,
+    StreamingTelemetry? streamingTelemetry,
   }) => SessionController._(
     relay,
     clock: clock,
     random: random,
     picker: picker,
     modelEffortMemory: modelEffortMemory,
+    streamingTelemetry:
+        streamingTelemetry ?? StreamingTelemetry(now: clock),
   );
 
   SessionController._(
@@ -39,12 +43,19 @@ class SessionController extends ChangeNotifier {
     Random? random,
     this._picker,
     this._modelEffortMemory,
+    StreamingTelemetry? streamingTelemetry,
   }) : _clock = clock ?? DateTime.now,
-       _random = random ?? Random.secure();
+       _random = random ?? Random.secure(),
+       streamingTelemetry = streamingTelemetry ?? StreamingTelemetry();
   final RelayRepository _relay;
   final DateTime Function() _clock;
   final Random _random;
   final AttachmentPicker? _picker;
+
+  /// v0.8.7 门禁 2：流式埋点 sink（打字机流式的唯一证据源）。只记录元数据
+  /// （seq/kind/message_id/长度/时间差），正文永不入 sink（审计红线 V087-03）。
+  /// 默认随控制器创建；测试注入步进时钟的实例以断言时间单调性。
+  final StreamingTelemetry streamingTelemetry;
 
   /// 「模型 → 上次选中推理等级」本地记忆（v0.8.6）。store 为 null 时仍在本进程
   /// 内存内生效（同一 App 生命周期内避免重复选择），只是不持久化。
@@ -2269,6 +2280,11 @@ class SessionController extends ChangeNotifier {
         ciphertext: ciphertext,
       );
       final receipt = await _relay.submitSessionCommand(sessionId, command);
+      if (kind == SessionCommandKind.send) {
+        // v0.8.7 门禁 2：send 受理即新回合埋点基线——首字延迟起点，同时清掉
+        // 上一回合未对账的帧状态，避免跨回合长度串账。
+        streamingTelemetry.observeSendAccepted();
+      }
       if (onAccepted != null) {
         // 执行端异步收口命令：受理（202）不代表成功。带乐观更新面的命令必须等
         // 终态确认，failed 视为失败浮出错误；确认链路不可用时退回受理即确认的
@@ -2307,10 +2323,28 @@ class SessionController extends ChangeNotifier {
           );
         }
       }
+      // v0.8.7 门禁 2：send 回合内的轮询批次采样——记录每次快照拉取的耗时与
+      // 本批新事件量，作为 delta 到达节奏（since_last_ms 之外的佐证面）。
+      Future<SessionSnapshot> timedPollFetch(int attempt, {int afterSequence = 0}) async {
+        final watch = Stopwatch()..start();
+        final snapshot = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: afterSequence,
+        );
+        watch.stop();
+        streamingTelemetry.observePoll(
+          sessionId: sessionId,
+          attempt: attempt,
+          newEvents: snapshot.events.length,
+          fetchMs: watch.elapsedMilliseconds,
+        );
+        return snapshot;
+      }
+
       // 提交后模型需要数秒才产出事件；首次拉取时 message.completed 多半尚未落库。
       // 每一批都合并，直到明确的 completed_turn 或非 streaming 状态到达，
       // 否则只合并第一批会把回复显示出来却遗留“生成中”状态。
-      var latest = await _relay.getSessionSnapshot(sessionId);
+      var latest = await timedPollFetch(0);
       if (_selectedSessionId == sessionId) _mergeSnapshot(latest);
       var completed = _snapshotCompletesTurn(latest);
       if (kind == SessionCommandKind.send && !completed && awaitTurnCompletion) {
@@ -2319,8 +2353,8 @@ class SessionController extends ChangeNotifier {
         final attempts = foregroundPollAttempts;
         for (var i = 0; i < attempts; i++) {
           await Future<void>.delayed(pollInterval);
-          latest = await _relay.getSessionSnapshot(
-            sessionId,
+          latest = await timedPollFetch(
+            i + 1,
             afterSequence: latest.session.lastSequence,
           );
           // 即使本批没有新事件，也要合并 session.status。事件可能已在前一批
@@ -2357,12 +2391,22 @@ class SessionController extends ChangeNotifier {
     final attempts = backgroundPollAttempts;
     // ignore: avoid_print
     var completed = _snapshotCompletesTurn(latest);
+    // v0.8.7 门禁 2：后台轮询批次同样采样；attempt 从前台窗口之后续号。
+    const foregroundAttemptBaseline = 121;
     for (var i = 0; i < attempts && !completed; i++) {
       await Future<void>.delayed(pollInterval);
       try {
+        final watch = Stopwatch()..start();
         latest = await _relay.getSessionSnapshot(
           sessionId,
           afterSequence: latest.session.lastSequence,
+        );
+        watch.stop();
+        streamingTelemetry.observePoll(
+          sessionId: sessionId,
+          attempt: foregroundAttemptBaseline + i,
+          newEvents: latest.events.length,
+          fetchMs: watch.elapsedMilliseconds,
         );
       } catch (_) {
         // 单次快照失败不终止轮询；下一拍继续。
@@ -2479,6 +2523,22 @@ class SessionController extends ChangeNotifier {
               event.sequence: SessionTimelineEvent.fromRelayEvent(event),
           }.values.toList()
           ..sort((left, right) => left.sequence.compareTo(right.sequence));
+    // v0.8.7 门禁 2：逐帧流式埋点。只喂 assistant/thought 通道（工具、相位、
+    // 权限等与流式无关）；sink 内部以会话级 seq 高水位去重，快照全量重解析
+    // 或重复投递不会产生重复埋点；正文不入 sink（审计红线）。
+    for (final event in incoming) {
+      final isAssistant = event.kind == SessionTimelineKind.assistantMessage;
+      final isThought = event.kind == SessionTimelineKind.assistantThought;
+      if (!isAssistant && !isThought) continue;
+      streamingTelemetry.observeStreamingFrame(
+        sessionId: snapshot.session.id,
+        seq: event.sequence,
+        kind: isAssistant ? 'assistant' : 'thought',
+        messageId: event.messageId,
+        text: event.text,
+        streaming: event.isStreaming,
+      );
+    }
     final session =
         incoming.any((event) => event.completedTurn) &&
             snapshot.session.status == MobileSessionStatus.streaming

@@ -23,13 +23,19 @@
         "断言事件白名单、wire 名映射与 encoder 投影字段不回归"
       ],
       "expected": "本轮零协议改动成立：events.json 不变、不新增 wire 事件类型；encoder 全量投影语义与 v0.8.4 一致。",
-      "cleanup": ["无"],
-      "evidence": ["internal/domain/daemon.go（validDaemonEventType）", "internal/daemon/relay.go（relayEventType）", "internal/daemon/localdev_encoder.go"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/domain/daemon.go（validDaemonEventType）",
+        "internal/daemon/relay.go（relayEventType）",
+        "internal/daemon/localdev_encoder.go"
+      ]
     },
     {
       "id": "V087-02",
       "title": "埋点序列：逐 delta 注入下 stream_first_delta/stream_delta/stream_completed_reconcile 字段齐全且时间戳、累计长度单调",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "telemetry",
       "priority": "P0",
@@ -40,13 +46,20 @@
         "controller 测试以逐 delta relay 驱动一个完整流式回合，导出埋点序列并断言"
       ],
       "expected": "stream_first_delta 含 latency_ms；每条 stream_delta 的 ts 严格递增、cumulative_chars 单调不减、delta_chars 与帧差一致；stream_completed_reconcile.consistent=true；ring buffer 容量上限行为符合冻结值。",
-      "cleanup": ["无"],
-      "evidence": ["apps/mobile/lib/diagnostics/streaming_telemetry.dart", "apps/mobile/test/v087_streaming_telemetry_test.dart"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "apps/mobile/lib/diagnostics/streaming_telemetry.dart",
+        "apps/mobile/test/v087_streaming_telemetry_test.dart",
+        "apps/mobile/lib/state/session_controller.dart（三处挂点：send 受理基线 / _mergeSnapshot 逐帧 / timedPollFetch 轮询采样）"
+      ],
+      "notes": "2026-09-05 P1 交付：flutter test v087_streaming_telemetry_test 3/3 passed；go test ./internal/daemon -run TestV087 4/4 passed（含 turn_started 边界重置语义）"
     },
     {
       "id": "V087-03",
       "title": "埋点审计：导出 JSON 可解析、schema_version 在位、全程不含消息正文/工具原文",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "telemetry",
       "priority": "P0",
@@ -57,8 +70,14 @@
         "断言导出内容仅含元数据字段（seq/kind/message_id/长度/时间差），正文字符串不出现在导出负载"
       ],
       "expected": "导出 JSON 解析成功且 schema_version=1；对注入正文的任何子串零命中；无内部路径/错误码原文。",
-      "cleanup": ["删除临时导出文件"],
-      "evidence": ["apps/mobile/lib/diagnostics/streaming_telemetry.dart", "apps/mobile/test/v087_streaming_telemetry_test.dart"]
+      "cleanup": [
+        "删除临时导出文件"
+      ],
+      "evidence": [
+        "apps/mobile/lib/diagnostics/streaming_telemetry.dart",
+        "apps/mobile/test/v087_streaming_telemetry_test.dart"
+      ],
+      "notes": "2026-09-05 P1 交付：flutter test v087_streaming_telemetry_test 3/3 passed；go test ./internal/daemon -run TestV087 4/4 passed（含 turn_started 边界重置语义）"
     },
     {
       "id": "V087-04",
@@ -74,8 +93,13 @@
         "controller/widget 测试推进注入时钟，逐批拉取 snapshot 断言新 delta 可见性与计划表一致性"
       ],
       "expected": "每个时间步只暴露计划表对应的新 delta；完成后 completed 全文到达；既有 'v084 stream' 一次性场景不回归。",
-      "cleanup": ["无"],
-      "evidence": ["apps/mobile/lib/relay/fixture_relay_repository.dart", "apps/mobile/test/v087_typewriter_streaming_test.dart"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "apps/mobile/lib/relay/fixture_relay_repository.dart",
+        "apps/mobile/test/v087_typewriter_streaming_test.dart"
+      ]
     },
     {
       "id": "V087-05",
@@ -91,8 +115,13 @@
         "controller 测试断言发送后在途窗口使用收紧档间隔、窗口耗尽仍走 v0.8.6 显式超时收敛"
       ],
       "expected": "收紧档间隔生效且仅限在途前台窗口；超时收敛、重发防抖、乐观回显清账行为与 v0.8.6 交付一致（v086_turn_convergence_test 全绿）。",
-      "cleanup": ["无"],
-      "evidence": ["apps/mobile/lib/state/session_controller.dart", "apps/mobile/test/v087_typewriter_streaming_test.dart"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "apps/mobile/lib/state/session_controller.dart",
+        "apps/mobile/test/v087_typewriter_streaming_test.dart"
+      ]
     },
     {
       "id": "V087-06",
@@ -108,8 +137,13 @@
         "widget 测试以时间释放 fixture 多批 pump，断言每批渲染文本长度严格递增、无未到达字符、completed 后全文一致；注入含代码块/表格正文验证半开中间态"
       ],
       "expected": "渲染文本长度随批次单调递增且任意时刻 ≤ 已到达长度；completed 后与全文一致；半开 Markdown 中间态无异常/无闪烁崩溃；'运行中'尾标、状态行与超时横幅语义不回归。",
-      "cleanup": ["无"],
-      "evidence": ["apps/mobile/lib/ui/session/chat/session_chat_node_seat.dart", "apps/mobile/test/v087_typewriter_streaming_test.dart"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "apps/mobile/lib/ui/session/chat/session_chat_node_seat.dart",
+        "apps/mobile/test/v087_typewriter_streaming_test.dart"
+      ]
     },
     {
       "id": "V087-07",
@@ -125,8 +159,12 @@
         "以动画关闭配置运行同一时间释放回合，断言文本一次性整段渲染（现状形态）且无动画态残留"
       ],
       "expected": "关闭开关后行为与 v0.8.6 交付形态一致；回滚路径可用。",
-      "cleanup": ["无"],
-      "evidence": ["apps/mobile/test/v087_typewriter_streaming_test.dart"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "apps/mobile/test/v087_typewriter_streaming_test.dart"
+      ]
     },
     {
       "id": "V087-08",
@@ -143,8 +181,14 @@
         "校验器断言：≥30 帧子序列长度单调不减且严格递增次数 ≥3；首帧即全文/平台化判失败"
       ],
       "expected": "real_browser=true、headless=false 的连续帧证据 + 机读 manifest 判定通过；帧 PNG 供人审辨认文本逐步变长；报告与截图落 e2e-verify/。",
-      "cleanup": ["结束清理本轮启动的 App 进程与临时目录"],
-      "evidence": ["e2e-verify/mobile/run-macos.mjs（VISUAL-MOBILE-39）", "e2e-verify/reports/", "e2e-verify/screenshots/"]
+      "cleanup": [
+        "结束清理本轮启动的 App 进程与临时目录"
+      ],
+      "evidence": [
+        "e2e-verify/mobile/run-macos.mjs（VISUAL-MOBILE-39）",
+        "e2e-verify/reports/",
+        "e2e-verify/screenshots/"
+      ]
     },
     {
       "id": "V087-09",
@@ -161,13 +205,18 @@
         "与 V087-08 manifest 的 seq 序列互证后一并登记 evidence"
       ],
       "expected": "双门禁同回合互证通过；日志文件原样入 evidence 不改写；无正文（审计红线）。",
-      "cleanup": ["无"],
-      "evidence": ["e2e-verify/reports/", "apps/mobile/lib/diagnostics/streaming_telemetry.dart"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "e2e-verify/reports/",
+        "apps/mobile/lib/diagnostics/streaming_telemetry.dart"
+      ]
     },
     {
       "id": "V087-10",
       "title": "daemon 回合流式摘要日志：终态一条 info（delta 条数/字符数/时长），逐 delta 不打日志，outbox/白名单不回归",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "contract",
       "priority": "P1",
@@ -178,8 +227,15 @@
         "契约测试断言：含 delta 回合终态输出一条摘要（条数/字符/时长）、无 delta 回合不输出、开关关闭不输出"
       ],
       "expected": "摘要日志每回合至多一条；事件白名单与 outbox 逐条上行语义不回归；作为门禁 2 的服务端佐证。",
-      "cleanup": ["无"],
-      "evidence": ["internal/daemon/runner.go", "internal/daemon/turn_stream_summary_test.go"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/daemon/turn_stream_summary.go",
+        "internal/daemon/turn_stream_summary_test.go",
+        "internal/daemon/runner.go（recordEventResult 单点钩子 + fwdCtx 回收清理）"
+      ],
+      "notes": "2026-09-05 P1 交付：flutter test v087_streaming_telemetry_test 3/3 passed；go test ./internal/daemon -run TestV087 4/4 passed（含 turn_started 边界重置语义）"
     },
     {
       "id": "V087-11",
@@ -196,8 +252,13 @@
         "apps/mobile 全量 flutter test 分诊"
       ],
       "expected": "本轮入口与 v081–v086 链式全部通过；全量分诊中本轮新增/受影响文件零失败，历史失败按遗留流程留档。",
-      "cleanup": ["无"],
-      "evidence": ["Taskfile.yml（test:v087:local）", "e2e-verify/reports/"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "Taskfile.yml（test:v087:local）",
+        "e2e-verify/reports/"
+      ]
     },
     {
       "id": "V087-12",
@@ -213,8 +274,12 @@
         "按 V087-08/09 同口径判定"
       ],
       "expected": "真实链路下双证据通过或如实标 blocked（failure_class=credential_or_quota_blocker）；不阻塞主线收口。",
-      "cleanup": ["结束清理桥子进程与采集产物中的敏感内容"],
-      "evidence": ["e2e-verify/reports/"]
+      "cleanup": [
+        "结束清理桥子进程与采集产物中的敏感内容"
+      ],
+      "evidence": [
+        "e2e-verify/reports/"
+      ]
     }
   ]
 }
