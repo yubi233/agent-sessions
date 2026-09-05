@@ -12,7 +12,7 @@
     {
       "id": "V087-01",
       "title": "契约门：message.delta/message.thought_delta/turn.phase 白名单与 payload 字段冻结，fixture 与真实同 schema",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "contract",
       "priority": "P0",
@@ -27,10 +27,11 @@
         "无"
       ],
       "evidence": [
-        "internal/domain/daemon.go（validDaemonEventType）",
-        "internal/daemon/relay.go（relayEventType）",
-        "internal/daemon/localdev_encoder.go"
-      ]
+        "packages/protocol/schema/events.json 在 v0.8.7 全部提交（86d3983..ea8f429）中零改动（git diff 为空）",
+        "test:v083:local / test:v084:local 链式 exit=0（含 TestV083/V084、RelayEventType、LocalDevEventEncoder、ValidDaemonEventType 契约测试）",
+        "internal/domain/daemon.go（validDaemonEventType）与 internal/daemon/relay.go（relayEventType）本轮未改动"
+      ],
+      "notes": "2026-09-05 回填：本轮零协议改动经 git diff 与链式契约测试双重证实。"
     },
     {
       "id": "V087-02",
