@@ -1033,7 +1033,8 @@
         "V087-09",
         "V087-10",
         "V087-11",
-        "V087-12"
+        "V087-12",
+        "V087-13"
       ],
       "consumed_ids": [],
       "dependencies": [
@@ -1047,7 +1048,7 @@
       ],
       "status": "in_progress",
       "allow_real_upstream": false,
-      "uniqueness_rule": "v0.8.7 拥有移动端流式埋点（ring buffer/导出/审计红线）、fixture 逐 delta 时间释放、在途轮询收紧档、打字机平滑释放动画（含回滚形态）、macOS 可见窗口连续帧截图门禁（manifest 长度采样与单调增长校验）、同回合埋点日志门禁、daemon 回合流式摘要日志、v081–v086 链式回归登记的新增回归。V087-12 为授权口径可选真实模型用例，本轮默认不执行（allow_real_upstream=false，与 24 号套件口径一致）。"
+      "uniqueness_rule": "v0.8.7 拥有移动端流式埋点（ring buffer/导出/审计红线）、fixture 逐 delta 时间释放、在途轮询收紧档、打字机平滑释放动画（含回滚形态）、macOS 可见窗口连续帧截图门禁（manifest 长度采样与单调增长校验）、同回合埋点日志门禁、daemon 回合流式摘要日志、v081–v086 链式回归登记的新增回归。V087-12 为授权口径可选真实模型用例，本轮默认不执行（allow_real_upstream=false，与 24 号套件口径一致）。 V087-13（追加缺陷回归）：mode 目录上行客户端方法与服务端 PUT 契约往返 + 权限空目录提示按会话状态区分事实（V087-12 真实栈首曝的 v0.8.5 历史 defect）。"
     }
   ]
 }

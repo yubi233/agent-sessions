@@ -296,6 +296,33 @@
         "Taskfile test:v087:real（AGENT_SESSIONS_DSH_REAL=1 授权门）"
       ],
       "notes": "2026-09-05 用户授权后执行 passed：真实 DSH 桥 + nemotron-3-ultra-free 免费池，App（localdev 可见窗口）自己发送演示问句，真实模型增量 214 条经完整真实栈到达，打字机组件逐帧构建（revealed 35 次严格递增）至终态追平。调试期间修复三处真实栈事实：① 多块流（thought/assistant 按 step 分块）→ sink 以累计回退检测新块 + schema v2 block 字段；② 追平判定以当前时间线为基准；③ localdev 冷启动导航确认（pageBuilds 信号重发 go）。残余：人审帧里可见页面被最近会话恢复导航覆盖（localdev quirk，流式机制机读证据不受影响），留遗留问题。"
+    },
+    {
+      "id": "V087-13",
+      "title": "追加缺陷回归：mode 目录上行客户端方法与服务端 PUT 契约一致（POST/PUT 漂移防再发）+ 权限空目录提示按会话状态区分事实",
+      "status": "passed",
+      "phase": "P3+",
+      "category": "contract",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "v0.8.7 V087-12 真实栈首曝的历史缺陷：SyncSessionModes 误用 POST 打 handlers.go:134 的 daemon.PUT 只读路由 → gin 404 → 目录永不同步（daemon.log 每轮 restart 复现，SQLite 会话列全 '[]'）。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestRelayClientSyncSessionModesUsesPut' — httptest 断言 method==PUT + path + body（修复前必红，git stash 复现闭环）",
+        "go test ./internal/relay -run 'TestV087SessionModeUplinkThroughRelayClient' — 真实 RelayClient → 真 gin 路由（签名/归属校验）→ 落库 → controls 下发目录全栈往返",
+        "flutter test test/v086_permission_test.dart — 已启动会话目录空 → 事实性文案（终端桥未上报）；未启动（stopped）→ 维持'启动后自动获取'",
+        "真实栈：修复后 daemon 重启建新 dsh 会话，无 sync failed 日志；生产 cordis.yml 无 permissionPresets（桥无目录可报），列空为 fail-closed 正确投影"
+      ],
+      "expected": "客户端方法与 v0.8.5 PUT 契约一致（桥有目录时上行成功落库）；提示文案与事实一致不再误导。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "internal/daemon/relay_modes_client_test.go",
+        "internal/relay/session_modes_client_method_test.go",
+        "internal/daemon/relay.go（SyncSessionModes postJSON→putJSON + 缺陷注释）",
+        "apps/mobile/lib/state/session_controller.dart（permissionDirectoryHint 按状态区分）",
+        "apps/mobile/test/v086_permission_test.dart（双分支断言）"
+      ]
     }
   ]
 }
