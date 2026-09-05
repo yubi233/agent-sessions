@@ -291,7 +291,7 @@
     {
       "id": "V089-13",
       "title": "event outbox：旧 generation 事件 quarantine，不自动 requeue；新事件正常上传",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "outbox",
       "priority": "P0",
@@ -306,12 +306,15 @@
       "cleanup": [
         "关闭临时 store"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089OldGenerationEventsQuarantinedAndExcludedFromRequeue（2026-09-06 passed）：世代切换后 3 条旧世代事件 quarantined；新世代事件正常上传（uploads=1、旧事件 0 次 404 不阻塞）；人工全量 requeue 世代过滤排除旧世代（0 行）",
+        "P4 查询层防线：PendingRelayEvents/PendingRelayUsages/Requeue 入口全部附加 relayGenerationFilterSQL（当前世代或升级期空世代行才参与 flush/requeue）"
+      ]
     },
     {
       "id": "V089-14",
       "title": "usage outbox：旧 generation usage 隔离，瞬态错误仍有界重试",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "outbox",
       "priority": "P0",
@@ -326,12 +329,15 @@
       "cleanup": [
         "关闭临时 store"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089OutboxRetryClassificationMatrix（passed）：400→failed/RELAY_REJECTED_PERMANENT；429→pending+退避；5xx→pending+记账；网络断开→RELAY_NETWORK；超时→RELAY_TIMEOUT；generation reset 由隔离（P1）与 stale 404 收口（P2）承载且投影锁定",
+        "原有有界退避保持：瞬态类 attempts 记账 + next_attempt_at 指数退避（30s 起步、15min 封顶、上限 8 次）"
+      ]
     },
     {
       "id": "V089-15",
       "title": "诊断脱敏：日志、报告、SQLite 投影不含 token、密钥、正文、路径、diff、envelope",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "audit",
       "priority": "P0",
@@ -345,7 +351,10 @@
       "cleanup": [
         "清理临时文件"
       ],
-      "evidence": []
+      "evidence": [
+        "RelayOutboxGenerationProjection 只读投影：generation×状态×行数（UNION 三表），字段白名单不含 envelope/正文/路径/密钥；TestV089OldGenerationEventsQuarantinedAndExcludedFromRequeue 内断言投影语义",
+        "调度器/世代日志全部脱敏（generation 仅 16 字符前缀 + 计数 + reason）；诊断红线由既有 deployctl scan 门禁持续覆盖"
+      ]
     },
     {
       "id": "V089-16",

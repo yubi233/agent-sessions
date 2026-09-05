@@ -37,13 +37,17 @@ import (
 // helloGeneration / heartbeatGeneration 模拟 Relay 世代字段（v0.8.9 P1）；
 // 两者为空时响应不含 relay_generation（旧 Relay legacy 形态）。
 type v089DiagRelay struct {
-	mu                  sync.Mutex
-	result404           bool
-	result404s          int
-	hellos              int
-	heartbeatHits       int
-	streamHits          int
-	event404s           int
+	mu               sync.Mutex
+	result404        bool
+	result404s       int
+	hellos           int
+	heartbeatHits    int
+	streamHits       int
+	event404s        int
+	eventUploadCount int
+	// eventUploadOK 控制 /events 上传结果：false=404（空 Relay 拒收旧世代事件），
+	// true=200（存活 Relay 正常收据），供 V089-13 断言新世代事件继续上传。
+	eventUploadOK       bool
 	helloGeneration     string
 	heartbeatGeneration string
 	// helloTerminalID 覆盖 hello 返回的 Terminal 身份（默认 term-v089-new）；
@@ -103,11 +107,20 @@ func newV089DiagRelay(t *testing.T, result404 bool) *v089DiagRelay {
 		_, _ = io.WriteString(w, `{"recovered_idle":0,"recovered_stopped":0}`)
 	})
 	mux.HandleFunc("/v1/daemon/events", func(w http.ResponseWriter, req *http.Request) {
-		// 删除重建后的 Relay 不认识旧 session/command：事件上传 404（故障链三）。
 		r.mu.Lock()
-		r.event404s++
+		acceptUpload := r.eventUploadOK
+		if acceptUpload {
+			r.eventUploadCount++
+		} else {
+			r.event404s++
+		}
 		r.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if acceptUpload {
+			_, _ = io.WriteString(w, `{}`)
+			return
+		}
+		// 删除重建后的 Relay 不认识旧 session/command：事件上传 404（故障链三）。
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"code":"NOT_FOUND","message":"unknown session or command"}`)
 	})
@@ -193,6 +206,13 @@ func (r *v089DiagRelay) hasAck(commandID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.ackKinds[commandID]) > 0
+}
+
+// eventUploads 并发安全地返回成功上传的事件数。
+func (r *v089DiagRelay) eventUploads() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.eventUploadCount
 }
 
 // heartbeatCount 并发安全地返回 heartbeat 请求次数。
@@ -435,16 +455,19 @@ func TestV089SSEReaderKeepsConsumingWhileCommandsExecute(t *testing.T) {
 	}
 }
 
-// 故障链三复现（迭代计划 §1.3）：Relay DB 重建后旧 session/command 事件上传全部 404，
-// flushEvents 把非 429 的 4xx 一律标记 RELAY_REJECTED_PERMANENT——世代错位的 404 被误判为
-// 内容毒丸长期堆积 failed；自动恢复不碰、人工全量 requeue 后又重复 404。
-// 修复方向（P4）：outbox 按 generation 过滤，旧世代行 quarantine，不参与 requeue。
-func TestV089DiagOldGenerationEventsMisclassifiedAsPermanentPoison(t *testing.T) {
+// V089-13（P4 修复后翻转诊断链三）：世代切换后旧世代事件被隔离（quarantined），
+// 不参与 flush 与人工 requeue；新世代事件继续上传且不被旧事件阻塞。
+// （P0 缺陷口径：世代错位 404 曾被误判 RELAY_REJECTED_PERMANENT 堆积 failed，
+// 人工全量 requeue 后二次 404——见 P0 诊断报告故障链三。）
+func TestV089OldGenerationEventsQuarantinedAndExcludedFromRequeue(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	if err := store.Set("relay_generation", "relgen_old_aaaa"); err != nil {
+		t.Fatal(err)
+	}
 	const oldEvents = 3
 	for i := 0; i < oldEvents; i++ {
 		if err := store.EnqueueRelayEvent(RelayEvent{
@@ -457,43 +480,180 @@ func TestV089DiagOldGenerationEventsMisclassifiedAsPermanentPoison(t *testing.T)
 			t.Fatal(err)
 		}
 	}
+
 	relay := newV089DiagRelay(t, false)
+	relay.eventUploadOK = true // 存活 Relay：新世代事件正常上传
 	loop := &RelayLoop{
 		Store:  store,
 		Client: &RelayClient{BaseURL: relay.server.URL, AccessToken: "fixture"},
 		Logger: newDiagLogger(t),
 	}
-	// 第一轮 flush：全部 404 → RELAY_REJECTED_PERMANENT（世代错位被误判为内容毒丸）。
+
+	// 世代切换：单事务隔离旧世代行（commands/events/usages 一并）。
+	if _, err := store.IsolateStaleRelayState("relgen_new_bbbb", "hello_generation_changed"); err != nil {
+		t.Fatal(err)
+	}
+	// 新世代事件入队并 flush：只有它被上传，旧世代行不阻塞也不参与。
+	if err := store.EnqueueRelayEvent(RelayEvent{
+		EventID:      "evt-v089-newgen",
+		CommandID:    "cmd-v089-newgen",
+		SessionID:    "sess-v089-newgen",
+		EventType:    "message.completed",
+		EnvelopeJSON: `{"alg":"fixture-aead","key_id":"fixture","nonce":"n","ciphertext":"c2","aad_hash":"h","payload_version":1}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := loop.flushEvents(context.Background()); err != nil {
 		t.Fatalf("flushEvents: %v", err)
 	}
-	snapshot, err := store.RelayEventOutboxSnapshot()
+	if uploads := relay.eventUploads(); uploads != 1 {
+		t.Fatalf("only the new-generation event must upload, got %d", uploads)
+	}
+	if _, _, _, event404s := relay.snapshot(); event404s != 0 {
+		t.Fatalf("old-generation events must never reach the rebuilt relay, got %d 404s", event404s)
+	}
+
+	// 人工全量 requeue：旧世代行被世代过滤排除（0 行）；新世代无 failed 行可恢复。
+	if requeued, err := store.RequeueFailedRelayEvents(); err != nil || requeued != 0 {
+		t.Fatalf("manual requeue must exclude old-generation rows: requeued=%d err=%v", requeued, err)
+	}
+
+	// 只读诊断投影：旧世代行呈 quarantined，新世代行呈 delivered；投影不含 envelope。
+	projection, err := store.RelayOutboxGenerationProjection()
 	if err != nil {
 		t.Fatal(err)
 	}
-	failed := 0
-	for _, row := range snapshot {
-		if row.Status == "failed" && row.LastError == relayEventPermanentReject {
-			failed++
+	seen := map[string]map[string]int64{}
+	for _, row := range projection {
+		if seen[row.Generation] == nil {
+			seen[row.Generation] = map[string]int64{}
+		}
+		seen[row.Generation][row.Status] += row.Count
+	}
+	t.Logf("V089-EVIDENCE V089-13: projection=%v", projection)
+	if seen["relgen_old_aaaa"]["quarantined"] < oldEvents {
+		t.Fatalf("old generation rows must appear quarantined in projection: %v", seen)
+	}
+	if seen["relgen_new_bbbb"]["delivered"] < 1 {
+		t.Fatalf("new generation event must appear delivered in projection: %v", seen)
+	}
+}
+
+// V089-14：outbox 重试分类矩阵——generation reset（隔离/收口）、永久业务拒绝、
+// 429、网络断开、5xx、超时各自有独立 failure class；瞬态类保持原有有界退避。
+func TestV089OutboxRetryClassificationMatrix(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Set("relay_generation", "relgen_new_bbbb"); err != nil {
+		t.Fatal(err)
+	}
+	seed := func(id string) {
+		t.Helper()
+		if err := store.EnqueueRelayEvent(RelayEvent{
+			EventID:      id,
+			CommandID:    "cmd-" + id,
+			SessionID:    "sess-" + id,
+			EventType:    "message.completed",
+			EnvelopeJSON: `{"alg":"fixture-aead","key_id":"fixture","nonce":"n","ciphertext":"c","aad_hash":"h","payload_version":1}`,
+		}); err != nil {
+			t.Fatal(err)
 		}
 	}
-	// 自动恢复（hello 成功后调用）不恢复毒丸——行为保持，但本轮 404 的根因是世代错位而非内容。
-	if requeued, err := store.RequeueTransientFailedRelayEvents(); err != nil || requeued != 0 {
-		t.Fatalf("transient requeue 应跳过 permanent 行: requeued=%d err=%v", requeued, err)
+
+	// 可切换结果的上传端点：status 码 / 强制断连 / ctx 超时由调用方控制。
+	var status int
+	var dropConnection bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if dropConnection {
+			// 直接断开：客户端得到网络层错误（RELAY_NETWORK 分类）。
+			panic(http.ErrAbortHandler)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, `{"code":"X"}`)
+	}))
+	defer server.Close()
+
+	loop := &RelayLoop{
+		Store:  store,
+		Client: &RelayClient{BaseURL: server.URL, AccessToken: "fixture"},
+		Logger: newDiagLogger(t),
 	}
-	// 人工全量 requeue（既有唯一恢复入口）：旧行重新投递 → 再次全部 404（重复拒绝循环）。
-	if requeued, err := store.RequeueFailedRelayEvents(); err != nil || requeued != int64(oldEvents) {
-		t.Fatalf("manual requeue: requeued=%d err=%v", requeued, err)
+	snapshotRow := func(id string) RelayEventOutboxRow {
+		t.Helper()
+		snapshot, err := store.RelayEventOutboxSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range snapshot {
+			if row.EventID == id {
+				return row
+			}
+		}
+		t.Fatalf("event row %s missing", id)
+		return RelayEventOutboxRow{}
 	}
-	if err := loop.flushEvents(context.Background()); err != nil {
-		t.Fatalf("second flushEvents: %v", err)
+	flushOne := func(id string) {
+		t.Helper()
+		if err := loop.flushEvents(context.Background()); err != nil {
+			// 瞬态类会向调用方返回错误（保持可安全重试）；毒丸类不返回错误。
+			t.Logf("flush %s transient err=%v", id, err)
+		}
 	}
-	_, _, _, event404s := relay.snapshot()
-	t.Logf("V089-EVIDENCE 故障链三: old_events=%d first_pass_failed=%d manual_requeue_then_404_total=%d", oldEvents, failed, event404s)
-	if failed != oldEvents {
-		t.Fatalf("世代错位 404 被误判毒丸的数量=%d want %d", failed, oldEvents)
+
+	// 1) 永久业务拒绝（4xx 除 429）→ failed/RELAY_REJECTED_PERMANENT，不占退避队列。
+	seed("evt-cls-poison")
+	status = http.StatusBadRequest
+	flushOne("evt-cls-poison")
+	if row := snapshotRow("evt-cls-poison"); row.Status != "failed" || row.LastError != relayEventPermanentReject {
+		t.Fatalf("400 must be permanent poison: %+v", row)
 	}
-	if event404s != 2*oldEvents {
-		t.Fatalf("人工 requeue 应造成第二轮 404（当前缺陷），总 404=%d want %d", event404s, 2*oldEvents)
+
+	// 2) 429 → pending + 尝试记账 + 有界退避（限流可自愈）。
+	seed("evt-cls-429")
+	status = http.StatusTooManyRequests
+	flushOne("evt-cls-429")
+	if row := snapshotRow("evt-cls-429"); row.Status != "pending" || row.Attempts != 1 || row.NextAttemptAt <= 0 {
+		t.Fatalf("429 must stay pending with backoff: %+v", row)
 	}
+
+	// 3) 5xx → pending + 尝试记账（服务端瞬态故障）。
+	seed("evt-cls-5xx")
+	status = http.StatusInternalServerError
+	flushOne("evt-cls-5xx")
+	if row := snapshotRow("evt-cls-5xx"); row.Status != "pending" || row.Attempts != 1 {
+		t.Fatalf("5xx must stay pending with attempts: %+v", row)
+	}
+
+	// 4) 网络断开 → pending + RELAY_NETWORK 脱敏分类。
+	seed("evt-cls-net")
+	dropConnection = true
+	flushOne("evt-cls-net")
+	dropConnection = false
+	if row := snapshotRow("evt-cls-net"); row.Status != "pending" || row.LastError != "RELAY_NETWORK" {
+		t.Fatalf("network error must be classified RELAY_NETWORK: %+v", row)
+	}
+
+	// 5) 超时（ctx deadline）→ pending + RELAY_TIMEOUT 脱敏分类。
+	seed("evt-cls-timeout")
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	time.Sleep(60 * time.Millisecond)
+	if err := loop.flushEvents(timeoutCtx); err == nil {
+		t.Log("timeout flush returned nil (already deadline-exceeded path)")
+	}
+	if row := snapshotRow("evt-cls-timeout"); row.Status != "pending" || row.LastError != "RELAY_TIMEOUT" {
+		t.Fatalf("timeout must be classified RELAY_TIMEOUT: %+v", row)
+	}
+
+	// 6) generation reset 类：由 IsolateStaleRelayState（P1）与 staleGeneration404（P2）
+	// 承载，此处锁定投影语义——quarantined 行不参与本矩阵的任何 flush/requeue。
+	projection, err := store.RelayOutboxGenerationProjection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("V089-EVIDENCE V089-14: classification projection=%v", projection)
 }

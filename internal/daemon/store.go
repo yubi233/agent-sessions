@@ -872,15 +872,22 @@ func relayEventBackoffMS(attempts int) int64 {
 	return backoff
 }
 
-// PendingRelayEvents 返回到达重试时间的 pending 事件。
-// 未到 next_attempt_at 的事件保持 pending 但跳过本轮，避免断网期间忙循环重试。
+// relayGenerationFilterSQL 是 outbox 查询的世代防线（v0.8.9 P4 / V089-13）：
+// 只返回当前 generation 的行；generation=” 的升级期历史行保持活动（P1 契约：
+// 它们属于当前 Relay，隔离会错误丢弃在途工作）。旧世代行由 P1 隔离置为
+// quarantined，此过滤是第二道防线：任何漏网的旧世代行都不得参与 flush/requeue。
+const relayGenerationFilterSQL = " AND (relay_generation = '' OR relay_generation = (SELECT value FROM local_state WHERE key='relay_generation'))"
+
+// PendingRelayEvents 返回到达重试时间的 pending 事件（仅当前世代，见
+// relayGenerationFilterSQL）。未到 next_attempt_at 的事件保持 pending 但跳过本轮，
+// 避免断网期间忙循环重试。
 func (s *Store) PendingRelayEvents() ([]RelayEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT event_id,command_id,session_id,event_type,terminal_status,envelope_json,created_at_unix_ms
 		 FROM relay_event_outbox
-		 WHERE status='pending' AND next_attempt_at <= ?
+		 WHERE status='pending' AND next_attempt_at <= ?`+relayGenerationFilterSQL+`
 		 ORDER BY created_at,event_id`, time.Now().UnixMilli())
 	if err != nil {
 		return nil, err
@@ -962,18 +969,21 @@ func (s *Store) MarkRelayEventFailedNow(eventID, sanitizedReason string) error {
 
 // RequeueFailedRelayEvents 全量恢复 failed 事件（人工恢复入口）。
 // 恢复不删除任何历史行，重复 event_id 仍由 Relay 幂等去重兜底。
+// v0.8.9 P4（V089-13）：世代过滤优先于恢复——旧 generation 的 failed 行不会
+// 被重新投到新 Relay（人工恢复入口必须显式选择世代，默认不恢复旧世代）。
 func (s *Store) RequeueFailedRelayEvents() (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.requeueFailedRelayEventsWhere(`status='failed'`)
+	return s.requeueFailedRelayEventsWhere(`status='failed'` + relayGenerationFilterSQL)
 }
 
 // RequeueTransientFailedRelayEvents 只恢复瞬态失败的 failed 事件（hello 成功后的自动恢复）。
 // 确定性被 Relay 拒绝的毒丸事件保持 failed，避免每次重连都空转烧尽退避窗口。
+// 世代过滤同上：旧世代行不参与自动恢复。
 func (s *Store) RequeueTransientFailedRelayEvents() (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.requeueFailedRelayEventsWhere(`status='failed' AND last_error <> '` + relayEventPermanentReject + `'`)
+	return s.requeueFailedRelayEventsWhere(`status='failed' AND last_error <> '` + relayEventPermanentReject + `'` + relayGenerationFilterSQL)
 }
 
 // requeueFailedRelayEventsLocked 把 failed 事件批量恢复为 pending 的内部实现。
@@ -1050,7 +1060,7 @@ func (s *Store) PendingRelayUsages() ([]RelayUsage, error) {
 	rows, err := s.db.Query(
 		`SELECT usage_key,session_id,provider,model,utc_day,input_tokens,output_tokens,
 		        cache_read_tokens,cache_write_tokens,context_window_tokens,ttft_ms,decode_throughput
-		   FROM relay_usage_outbox WHERE status='pending' ORDER BY created_at,usage_key`)
+		   FROM relay_usage_outbox WHERE status='pending'` + relayGenerationFilterSQL + ` ORDER BY created_at,usage_key`)
 	if err != nil {
 		return nil, err
 	}
@@ -1085,6 +1095,44 @@ func (s *Store) MarkRelayUsageDelivered(usageKey string) error {
 	defer s.mu.Unlock()
 	_, err := s.db.Exec(`UPDATE relay_usage_outbox SET status='delivered' WHERE usage_key=?`, usageKey)
 	return err
+}
+
+// RelayOutboxGenerationRow 是 outbox 世代投影的一行：generation × 状态 × 行数。
+// 只含计数元数据，不含 envelope、命令正文、路径或密钥（V089-15 明文红线）。
+type RelayOutboxGenerationRow struct {
+	Generation string
+	Status     string
+	Count      int64
+}
+
+// RelayOutboxGenerationProjection 汇总三类 relay-scoped outbox/命令在各个
+// generation 下的行数与状态分布（v0.8.9 P4 只读诊断投影）。供运维在世代
+// 切换后审计 quarantine 规模、确认无旧世代行参与活动队列；输出可安全进日志。
+func (s *Store) RelayOutboxGenerationProjection() ([]RelayOutboxGenerationRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`
+		SELECT relay_generation, status, COUNT(1) FROM (
+			SELECT relay_generation, status FROM relay_commands
+			UNION ALL
+			SELECT relay_generation, status FROM relay_event_outbox
+			UNION ALL
+			SELECT relay_generation, status FROM relay_usage_outbox
+		) GROUP BY relay_generation, status
+		ORDER BY relay_generation, status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RelayOutboxGenerationRow
+	for rows.Next() {
+		var row RelayOutboxGenerationRow
+		if err := rows.Scan(&row.Generation, &row.Status, &row.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // DefaultStatePath 返回默认本地状态库路径。
