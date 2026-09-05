@@ -120,3 +120,54 @@ test "$(ps -p "$occupied_pid" -o pid= 2>/dev/null | tr -d ' ')" = ""
 dry_run_flutter_restart="$(FLUTTER_BIN="$fake_flutter" ./restart.sh restart-flutter --no-relay --no-daemon --state-dir "$state_dir" --log-dir "$log_dir" --dry-run)"
 grep -F 'flutter: reconnect' <<< "$dry_run_flutter_restart" >/dev/null
 printf 'restart.sh regression passed (ports %s/%s)\n' "$web_port" "$admin_port"
+
+# ---------------------------------------------------------------------------
+# v0.8.9 P2（V089-07/08）：Relay DB reset 生命周期锁与 restart-flutter 防护。
+# 以 LIB_ONLY 模式加载 restart.sh（不执行 main），把外部依赖 stub 成顺序记录器，
+# 行为级断言 reset 的严格串行顺序与禁用口径。
+v089_lib_state="$(mktemp -d /tmp/agent-sessions-v089-reset.XXXXXX)"
+AGENT_SESSIONS_RESTART_LIB_ONLY=1 bash -c '
+  set -euo pipefail
+  export AGENT_SESSIONS_SQLITE_PATH=
+  source "$1/restart.sh"
+
+  # ---- 场景 1：允许 reset（start/restart 默认口径）——生命周期锁顺序断言。
+  STATE_DIR="'"$v089_lib_state"'/state"
+  RELAY_DB_PATH="'"$v089_lib_state"'/relay.db"
+  mkdir -p "$STATE_DIR"
+  printf "seed-db" > "$RELAY_DB_PATH"
+
+  ORDER=()
+  stop_process() { ORDER+=("stop:$1"); return 0; }
+  stop_orphan_daemons() { ORDER+=("orphan-cleanup"); return 0; }
+  stop_relay() { ORDER+=("relay-stop"); return 0; }
+  start_relay() { ORDER+=("relay-start"); printf "fresh-db" > "$RELAY_DB_PATH"; return 0; }
+
+  RELAY_DB_RESET_ALLOWED=true
+  reset_default_local_relay_db
+  expected=("stop:daemon" "orphan-cleanup" "relay-stop" "relay-start")
+  [[ "${ORDER[*]}" == "${expected[*]}" ]] || {
+    echo "v089: reset lifecycle order mismatch: ${ORDER[*]}" >&2
+    exit 1
+  }
+  grep -q "fresh-db" "$RELAY_DB_PATH" || { echo "v089: relay db not rebuilt" >&2; exit 1; }
+  # 生命周期锁的语义顺序：受管 Daemon → 孤儿 Daemon → Relay → 重建 → 启动。
+  [[ "${ORDER[0]}" == "stop:daemon" && "${ORDER[1]}" == "orphan-cleanup" && "${ORDER[2]}" == "relay-stop" && "${ORDER[3]}" == "relay-start" ]] || {
+    echo "v089: daemon must stop before relay db removal" >&2
+    exit 1
+  }
+
+  # ---- 场景 2：restart-flutter 口径（RELAY_DB_RESET_ALLOWED=false）——拒绝且不触碰 DB。
+  RELAY_DB_RESET_ALLOWED=false
+  printf "must-survive" > "$RELAY_DB_PATH"
+  guard_output="$(reset_default_local_relay_db 2>&1 >/dev/null || true)"
+  grep -F "不允许静默 reset" <<< "$guard_output" >/dev/null
+  grep -F "./restart.sh restart" <<< "$guard_output" >/dev/null
+  grep -q "must-survive" "$RELAY_DB_PATH" || { echo "v089: guarded reset touched the db" >&2; exit 1; }
+  [[ "${#ORDER[@]}" == "4" ]] || { echo "v089: guarded reset must not invoke lifecycle steps" >&2; exit 1; }
+' _ "$ROOT_DIR"
+rm -rf "$v089_lib_state"
+# 结构断言：restart-flutter 动作必须显式关闭 reset（防止回归到静默重建）。
+grep -F "RELAY_DB_RESET_ALLOWED=false" restart.sh >/dev/null
+grep -F "AGENT_SESSIONS_RESTART_LIB_ONLY" restart.sh >/dev/null
+printf 'restart.sh v0.8.9 reset lifecycle regression passed\n'

@@ -15,6 +15,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -204,12 +205,11 @@ func (w evidenceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// 故障链一复现（迭代计划 §1.1）：Relay DB 重建后，Daemon 本地残留 started 命令对空 Relay
-// 反复 resolve 404；RunWithRetry 未把确定性 404 视为终态，按退避无限重试，
-// SSE 长连接永远没有建立（processPending 在 SSE 之前执行并持续失败）。
-// 修复方向（P1/P2）：generation 变化时事务性收口 + stale 404 落为
-// completed/result_status=failed/RELAY_GENERATION_RESET 不再重试。
-func TestV089DiagStaleCommand404RetriesWithoutEverEnteringSSE(t *testing.T) {
+// V089-05（P2 修复后翻转断言）：故障链一的修复回归。Relay DB 重建后，本地残留 started
+// 命令对空 Relay resolve 404——按 §3.3 legacy 口径（Relay 不报告 generation）本地收口为
+// completed/result_status=failed/RELAY_GENERATION_RESET，processPending 取得进展，
+// RunWithRetry 正常进入 SSE（stream_hits≥1），不再无限退避重试。
+func TestV089StaleCommand404ConvergesLocallyAndEntersSSE(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -231,34 +231,85 @@ func TestV089DiagStaleCommand404RetriesWithoutEverEnteringSSE(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// legacy Relay：hello 不返回 generation（本机世代为空），404 走 legacy 收口口径。
 	relay := newV089DiagRelay(t, true)
 	guard := &startGuardAdapter{}
 	runner := NewSessionRunner(store, map[string]adapter.Adapter{"test": guard}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	defer runner.Close(context.Background())
 	loop := NewRelayLoop(store, &RelayClient{BaseURL: relay.server.URL, AccessToken: "fixture"}, runner, nil, newDiagLogger(t))
 
-	// 观察窗口 650ms：退避 100ms 起步，应观察到 ≥3 次 resolve 404 重试。
-	ctx, cancel := context.WithTimeout(context.Background(), 650*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
 	defer cancel()
-	if err := loop.RunWithRetry(ctx); err == nil {
-		t.Fatalf("RunWithRetry 在 404 循环下意外正常返回")
+	if err := loop.RunWithRetry(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunWithRetry 应存活至观察窗结束（进入 SSE 后等待），got %v", err)
 	}
-	result404s, hellos, streamHits, _ := relay.snapshot()
-	t.Logf("V089-EVIDENCE 故障链一: observe_window_ms=650 resolve_404_hits=%d hello_rounds=%d stream_hits=%d local_cmd=started(未收口)", result404s, hellos, streamHits)
+	result404s, _, streamHits, _ := relay.snapshot()
+	t.Logf("V089-EVIDENCE V089-05: resolve_404_hits=%d stream_hits=%d local_cmd=failed/RELAY_GENERATION_RESET", result404s, streamHits)
 
-	if result404s < 3 {
-		t.Fatalf("预期观察到 ≥3 次 stale 404 无限重试，实际 %d", result404s)
-	}
-	if streamHits != 0 {
-		t.Fatalf("404 循环期间 SSE 不应建立，实际 stream_hits=%d", streamHits)
-	}
-	// 本地命令停留在 started（无终态）：与 v0.8.8 手工修复前的现象一致。
+	// 本地命令已收口为固定错误码终态（不新增 wire 终态）。
 	stored, err := store.RelayCommandByID(stale.CommandID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != "started" || stored.ResultStatus != "" {
-		t.Fatalf("stale 命令应停留在 started 无终态（当前缺陷），实际 status=%q result=%q", stored.Status, stored.ResultStatus)
+	if stored.Status != "completed" || stored.ResultStatus != "failed" || stored.ErrorCode != RelayGenerationResetErrorCode {
+		t.Fatalf("stale command must converge to failed/RELAY_GENERATION_RESET, got %q/%q/%q", stored.Status, stored.ResultStatus, stored.ErrorCode)
+	}
+	// 404 只发生一次（无重试循环），且 SSE 已进入。
+	if result404s != 1 {
+		t.Fatalf("stale 404 must converge in one attempt, got %d", result404s)
+	}
+	if streamHits == 0 {
+		t.Fatal("RunWithRetry must proceed to SSE after stale convergence")
+	}
+}
+
+// V089-06 回滚口径：enforcement 关闭（AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT=0）
+// 时，404 不被静默清理——保留 v0.8.9 前的退避重试行为（文档化的回滚语义，
+// 同时固化"未修复前 404 无限重试"的 P0 历史证据口径）。
+func TestV089RollbackSwitchPreservesLegacyRetryLoopOn404(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Set("terminal_id", "term-v089-old"); err != nil {
+		t.Fatal(err)
+	}
+	stale := RelayCommand{
+		CommandID: "cmd-v089-rollback", DeliverySeq: 7, SessionID: "sess-v089-old", WorkspaceID: "ws-v089-old",
+		Kind: "session.send", LeaseEpoch: 1, TargetTerminalID: "term-v089-old",
+		PayloadJSON: `{"session_id":"sess-v089-old"}`,
+	}
+	if inserted, err := store.RecordRelayCommand(stale); err != nil || !inserted {
+		t.Fatalf("seed stale command: inserted=%v err=%v", inserted, err)
+	}
+	if err := store.MarkRelayCommandStarted(stale.CommandID); err != nil {
+		t.Fatal(err)
+	}
+
+	relay := newV089DiagRelay(t, true)
+	guard := &startGuardAdapter{}
+	runner := NewSessionRunner(store, map[string]adapter.Adapter{"test": guard}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer runner.Close(context.Background())
+	loop := NewRelayLoop(store, &RelayClient{BaseURL: relay.server.URL, AccessToken: "fixture"}, runner, nil, newDiagLogger(t))
+	loop.GenerationEnforcementDisabled = true
+
+	ctx, cancel := context.WithTimeout(context.Background(), 650*time.Millisecond)
+	defer cancel()
+	if err := loop.RunWithRetry(ctx); err == nil {
+		t.Fatal("enforcement-off rollback must keep retrying (original error propagates)")
+	}
+	result404s, _, streamHits, _ := relay.snapshot()
+	t.Logf("V089-EVIDENCE V089-06 rollback: observe_window_ms=650 resolve_404_hits=%d stream_hits=%d", result404s, streamHits)
+	if result404s < 3 {
+		t.Fatalf("rollback switch must preserve retry loop, got %d attempts", result404s)
+	}
+	if streamHits != 0 {
+		t.Fatal("rollback switch must not enter SSE while stale 404 loops")
+	}
+	stored, err := store.RelayCommandByID(stale.CommandID)
+	if err != nil || stored.Status != "started" || stored.ResultStatus != "" {
+		t.Fatalf("rollback switch must not close stale command locally: %+v err=%v", stored, err)
 	}
 }
 

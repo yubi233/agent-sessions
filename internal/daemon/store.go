@@ -438,7 +438,8 @@ type Command struct {
 }
 
 // RelayCommand 是专用 SSE 下行命令在 Daemon 本机的持久化投影。命令 ID 是执行去重键，
-// delivery_seq 仅作为重连游标，二者不能互相替代。
+// delivery_seq 仅作为重连游标，二者不能互相替代。RelayGeneration 是行写入时的
+// 本机世代标（v0.8.9 P1）：stale 404 分类（§3.3）依赖它区分"旧世代行"与"当前世代行"。
 type RelayCommand struct {
 	CommandID        string
 	DeliverySeq      int64
@@ -452,6 +453,7 @@ type RelayCommand struct {
 	Status           string
 	ResultStatus     string
 	ErrorCode        string
+	RelayGeneration  string
 }
 
 // RelayEvent 是等待上传的 canonical event。envelope_json 已在调用方加密，Store 不解析它。
@@ -528,11 +530,11 @@ func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {
 		var durable RelayCommand
 		err = tx.QueryRow(
 			`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
-				payload_json,status,result_status,error_code
+				payload_json,status,result_status,error_code,relay_generation
 			 FROM relay_commands WHERE command_id=?`, command.CommandID).Scan(
 			&durable.CommandID, &durable.DeliverySeq, &durable.SessionID, &durable.WorkspaceID, &durable.Kind,
 			&durable.LeaseEpoch, &durable.TargetInstanceID, &durable.TargetTerminalID, &durable.PayloadJSON,
-			&durable.Status, &durable.ResultStatus, &durable.ErrorCode,
+			&durable.Status, &durable.ResultStatus, &durable.ErrorCode, &durable.RelayGeneration,
 		)
 		if err != nil {
 			return false, err
@@ -747,7 +749,7 @@ func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
-			payload_json,status,result_status,error_code
+			payload_json,status,result_status,error_code,relay_generation
 			 FROM relay_commands WHERE status IN ('received','rejecting','starting','started') ORDER BY delivery_seq`)
 	if err != nil {
 		return nil, err
@@ -759,7 +761,7 @@ func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
 		if err := rows.Scan(
 			&command.CommandID, &command.DeliverySeq, &command.SessionID, &command.WorkspaceID, &command.Kind, &command.LeaseEpoch,
 			&command.TargetInstanceID, &command.TargetTerminalID, &command.PayloadJSON, &command.Status,
-			&command.ResultStatus, &command.ErrorCode,
+			&command.ResultStatus, &command.ErrorCode, &command.RelayGeneration,
 		); err != nil {
 			return nil, err
 		}
@@ -776,11 +778,11 @@ func (s *Store) RelayCommandByID(commandID string) (RelayCommand, error) {
 	var command RelayCommand
 	err := s.db.QueryRow(
 		`SELECT command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
-			payload_json,status,result_status,error_code
+			payload_json,status,result_status,error_code,relay_generation
 		 FROM relay_commands WHERE command_id=?`, commandID).Scan(
 		&command.CommandID, &command.DeliverySeq, &command.SessionID, &command.WorkspaceID, &command.Kind, &command.LeaseEpoch,
 		&command.TargetInstanceID, &command.TargetTerminalID, &command.PayloadJSON, &command.Status,
-		&command.ResultStatus, &command.ErrorCode,
+		&command.ResultStatus, &command.ErrorCode, &command.RelayGeneration,
 	)
 	return command, err
 }

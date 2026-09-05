@@ -15,6 +15,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -310,5 +312,43 @@ func TestV089GenerationEnforcementDisabledRecordsWithoutIsolation(t *testing.T) 
 	stored, err := store.RelayCommandByID("cmd-v089-gen-stale")
 	if err != nil || stored.Status != "started" {
 		t.Fatalf("enforcement-off must not isolate: %+v err=%v", stored, err)
+	}
+}
+
+// V089-06 retry 分类矩阵补充：认证失效（401）立即退出，不进入退避重试——
+// 与 ErrRelayGenerationChanged 终态、stale 404 单次收口、网络错误有界退避
+// 共同构成分离的 failure class（§3.3：不能合并为 transient retry）。
+func TestV089RunWithRetryAuthFailureExitsImmediately(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	helloHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/v1/daemon/hello" {
+			helloHits++
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"code":"UNAUTHENTICATED"}`)
+	}))
+	defer server.Close()
+
+	// runOnce 的依赖检查在 hello 之前，必须注入完整 Runner 才能走到 401 分支。
+	guard := &startGuardAdapter{}
+	runner := NewSessionRunner(store, map[string]adapter.Adapter{"test": guard}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer runner.Close(context.Background())
+	loop := NewRelayLoop(store, &RelayClient{BaseURL: server.URL, AccessToken: "stale-token"}, runner, nil, newDiagLogger(t))
+	started := time.Now()
+	err = loop.RunWithRetry(context.Background())
+	if err == nil {
+		t.Fatal("401 must surface as error")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("401 must exit immediately without backoff, took %v", elapsed)
+	}
+	if helloHits != 1 {
+		t.Fatalf("401 must exit after first hello, got %d rounds", helloHits)
 	}
 }

@@ -75,6 +75,12 @@ STARTED_DAEMON=false
 STARTED_OPENCODE=false
 STARTED_FLUTTER=false
 
+# v0.8.9 P2（V089-07/08，G3 生命周期边界）：是否允许重建 Relay DB。
+# start/restart 默认允许（配合 reset 内的生命周期锁）；restart-flutter 强制关闭——
+# 它不重建 Daemon 进程，静默 reset 会让运行中的 Daemon 以旧 token/旧世代继续
+# SSE/heartbeat，制造 v0.8.8 实证的 generation 错位窗口。
+RELAY_DB_RESET_ALLOWED=true
+
 usage() {
   cat <<'EOF'
 Usage: ./restart.sh [start|stop|restart|restart-flutter|status] [options]
@@ -847,7 +853,22 @@ reset_default_local_relay_db() {
   if [[ -n "${AGENT_SESSIONS_SQLITE_PATH:-}" ]]; then
     return 1
   fi
+  # v0.8.9 P2（V089-08）：restart-flutter 等动作禁止静默重建 Relay DB。
+  # 拒绝时给出可操作指引，让用户显式执行完整 restart（停止全部组件→重建→重新配对）。
+  if [[ "$RELAY_DB_RESET_ALLOWED" != true ]]; then
+    echo "restart.sh: 本次动作需要重建 Relay DB（owner 缓存失效/密钥轮换自愈），但当前动作不允许静默 reset" >&2
+    echo "restart.sh: 请执行完整 './restart.sh restart'（会先停止 Daemon 再重建并重新配对）" >&2
+    return 1
+  fi
   echo "owner: resetting default local dev Relay DB"
+  # V089-07 生命周期锁：任何重建 Relay DB 的路径都必须先停止受管与孤儿 Daemon，
+  # 再执行 reset→重建→（由调用方完成 owner/daemon pairing）→启动，严格串行。
+  # 顺序失败必须 fail-closed，不能带着仍在运行的旧 Daemon 继续删除库文件。
+  stop_process daemon || true
+  if ! stop_orphan_daemons; then
+    echo "restart.sh: 孤儿 Daemon 清理失败；拒绝在 Daemon 存活时重建 Relay DB" >&2
+    return 1
+  fi
   stop_relay || return 1
   rm -f "$RELAY_DB_PATH" "$RELAY_DB_PATH-shm" "$RELAY_DB_PATH-wal"
   rm -f     "$(local_token_file local-owner-token)"     "$(local_token_file local-owner-bootstrap.json)"     "$(local_token_file local-daemon-token)"     "$(local_token_file local-daemon-approval.json)"
@@ -1340,6 +1361,10 @@ restart_flutter_action() {
     echo "restart.sh: restart-flutter requires Flutter; remove --no-flutter" >&2
     return 2
   fi
+  # v0.8.9 P2（V089-08）：restart-flutter 不得静默重建 Relay DB。需要 reset 时
+  # ensure_local_owner_bootstrap 会以可操作错误失败（此时尚未触碰 Flutter 进程），
+  # 用户按提示执行完整 restart 即可；这消灭了"Daemon 运行中换库"的 generation 窗口。
+  RELAY_DB_RESET_ALLOWED=false
   mkdir -p "$STATE_DIR"
   if ! preflight_start; then
     return 1
@@ -1565,4 +1590,9 @@ main() {
   esac
 }
 
+# v0.8.9 P2：tools/restart_test.sh 以 LIB_ONLY 模式加载本脚本做函数级回归
+#（V089-07/08 生命周期锁行为测试）；显式运行时不进入该分支。
+if [[ "${AGENT_SESSIONS_RESTART_LIB_ONLY:-}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 main "$@"

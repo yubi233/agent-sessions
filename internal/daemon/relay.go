@@ -1118,7 +1118,7 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 	// 已持久化的重复 delivery 只重放协议回执和本机 pending 状态。不能用当前 capability
 	// 重新解释一个已经收敛的历史命令，更不能覆盖其终态。
 	if !inserted {
-		if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "received", ""); err != nil {
+		if err := l.ackReceived(ctx, command); err != nil {
 			return err
 		}
 		return l.processPending(l.commandExecutionContext(ctx))
@@ -1131,10 +1131,23 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 		return l.rejectDelivery(ctx, command, CommandErrorCode(err))
 	}
 	// 即使是重复 delivery，received ack 也可安全重放，帮助 Relay 收敛至少一次投递状态。
-	if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "received", ""); err != nil {
+	if err := l.ackReceived(ctx, command); err != nil {
 		return err
 	}
 	return l.processPending(l.commandExecutionContext(ctx))
+}
+
+// ackReceived 发送 received 回执并处理 stale 404（§3.3）：重复投递的行可能属于旧世代，
+// Relay 对其返回 404 时按世代证据本地收口，不再重试；fresh delivery 的行已打当前世代标，
+// 分类自然落入"世代一致→原样传播"分支。
+func (l *RelayLoop) ackReceived(ctx context.Context, command RelayCommand) error {
+	if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "received", ""); err != nil {
+		if reason, stale := l.staleGeneration404(command, err); stale {
+			return l.closeStaleGenerationCommand(command, reason)
+		}
+		return err
+	}
+	return nil
 }
 
 func (l *RelayLoop) commandExecutionContext(fallback context.Context) context.Context {
@@ -1173,6 +1186,13 @@ func (l *RelayLoop) rejectDelivery(ctx context.Context, command RelayCommand, er
 
 func (l *RelayLoop) replayRejected(ctx context.Context, commandID string, deliverySeq int64, errorCode string) error {
 	if err := l.Client.Ack(ctx, commandID, deliverySeq, "rejected", errorCode); err != nil {
+		// rejected 重放 404 且带世代证据：Relay 侧行已不存在，本机 rejecting 决策
+		// 被"世代重置"事实取代，按 §3.3 收口为固定错误码终态。
+		if command, cmdErr := l.Store.RelayCommandByID(commandID); cmdErr == nil {
+			if reason, stale := l.staleGeneration404(command, err); stale {
+				return l.closeStaleGenerationCommand(command, reason)
+			}
+		}
 		return err
 	}
 	return l.Store.MarkRelayCommandResult(commandID, "rejected", errorCode)
@@ -1286,6 +1306,14 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 					}
 					continue
 				}
+				// started ack 404 且带世代证据：Relay 侧无此命令（世代错位），本地收口
+				// 终态并跳过 Provider 执行，避免"started 回执失败→无限重试"。
+				if reason, stale := l.staleGeneration404(command, err); stale {
+					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+						return closeErr
+					}
+					continue
+				}
 				return err
 			}
 			if err := l.Store.MarkRelayCommandStarted(command.CommandID); err != nil {
@@ -1324,6 +1352,13 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			}
 			receipt, resolveErr := l.Client.ResolveDSHImport(ctx, command.CommandID, command.DeliverySeq, sessionIDs, status, errorCode)
 			if resolveErr != nil {
+				// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
+				if reason, stale := l.staleGeneration404(command, resolveErr); stale {
+					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+						return closeErr
+					}
+					continue
+				}
 				return resolveErr
 			}
 			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
@@ -1354,6 +1389,13 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			}
 			receipt, resolveErr := l.Client.ResolveDSHWorkspace(ctx, command.CommandID, command.DeliverySeq, candidates, status, errorCode)
 			if resolveErr != nil {
+				// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
+				if reason, stale := l.staleGeneration404(command, resolveErr); stale {
+					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+						return closeErr
+					}
+					continue
+				}
 				return resolveErr
 			}
 			l.confirmDSHWorkspaceCandidates(ctx, command.CommandID, candidates, receipt)
@@ -1384,6 +1426,13 @@ func (l *RelayLoop) processPending(ctx context.Context) error {
 			receipt, resolveErr := l.Client.ResolveWorkspace(ctx, command.CommandID, command.DeliverySeq,
 				command.WorkspaceID, confirmed.Root, status, errorCode)
 			if resolveErr != nil {
+				// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
+				if reason, stale := l.staleGeneration404(command, resolveErr); stale {
+					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+						return closeErr
+					}
+					continue
+				}
 				return resolveErr
 			}
 			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
@@ -1494,12 +1543,59 @@ func (l *RelayLoop) executeAndResolve(ctx context.Context, command RelayCommand)
 
 // resolveAndPersist 以 Relay receipt 为本机最终状态。若 Relay 已提交 result、但 HTTP 响应在
 // 网络中丢失，重启重放会返回已有终态；使用原始请求会错误地把成功覆盖为恢复失败。
+// Resolve 404 按 §3.3 分类：带世代证据的 stale 命令本地收口为 failed/RELAY_GENERATION_RESET
+// 不再重试；普通 404（世代一致的命令）保持原错误传播，不吞掉真实 API 漂移。
 func (l *RelayLoop) resolveAndPersist(ctx context.Context, command RelayCommand, requestedStatus, requestedErrorCode string) error {
 	receipt, err := l.Client.Resolve(ctx, command.CommandID, command.DeliverySeq, requestedStatus, requestedErrorCode)
 	if err != nil {
+		if reason, stale := l.staleGeneration404(command, err); stale {
+			return l.closeStaleGenerationCommand(command, reason)
+		}
 		return err
 	}
 	return l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode)
+}
+
+// staleGeneration404 判定一条 404 是否构成「当前世代证据下的 stale command」（§3.3）。
+// 返回 (收口原因, 是否 stale)。判定矩阵：
+//   - 非 404 错误 → 不是；
+//   - enforcement 关闭（回滚开关）→ 不是（保留 v0.8.9 前行为，不静默清理）；
+//   - 本机从未记录世代（legacy Relay）→ 是（reason=legacy_no_generation）：无世代信号时，
+//     started 命令 resolve 404 是唯一可用证据，本地收口避免静默死循环；
+//   - 命令行世代 != 本机当前世代 → 是（reason=generation_mismatch）；
+//   - 命令行世代 == 当前世代 → 不是（Relay 在同一世代内丢命令属异常，必须原样传播）。
+func (l *RelayLoop) staleGeneration404(command RelayCommand, err error) (string, bool) {
+	var httpErr *RelayHTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusNotFound {
+		return "", false
+	}
+	if l.GenerationEnforcementDisabled {
+		return "", false
+	}
+	current, genErr := l.Store.RelayGeneration()
+	if genErr != nil {
+		return "", false
+	}
+	if current == "" {
+		return "legacy_no_generation", true
+	}
+	if command.RelayGeneration != current {
+		return "generation_mismatch", true
+	}
+	return "", false
+}
+
+// closeStaleGenerationCommand 把 stale 命令收口为本地终态（§3.3 固定错误码）。
+// 不新增 wire 终态：Relay 侧该行已不存在，本地 completed/result_status=failed 即终局，
+// 后续 processPending 不再将其出队，404 重试循环随之终止。
+func (l *RelayLoop) closeStaleGenerationCommand(command RelayCommand, reason string) error {
+	if err := l.Store.MarkRelayCommandResult(command.CommandID, "failed", RelayGenerationResetErrorCode); err != nil {
+		return err
+	}
+	l.Logger.Warn("stale relay command closed locally after 404; no further retries",
+		"command", command.CommandID, "kind", command.Kind,
+		"reason", reason, "error_code", RelayGenerationResetErrorCode)
+	return nil
 }
 
 // validRelayResultStatus 判定 Relay 回显的收据终态是否合法。Relay 对已收敛命令的

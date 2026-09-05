@@ -107,7 +107,7 @@
     {
       "id": "V089-05",
       "title": "stale 404 收口：Resolve/Ack/result 404 变为 failed/RELAY_GENERATION_RESET，无无限 retry",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "404 classification",
       "priority": "P0",
@@ -122,12 +122,16 @@
       "cleanup": [
         "关闭 httptest server 与临时 store"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089StaleCommand404ConvergesLocallyAndEntersSSE（2026-09-06 passed）：legacy Relay 404 一次收口 failed/RELAY_GENERATION_RESET，resolve_404_hits=1、stream_hits≥1（不再无限退避）",
+        "世代证据矩阵（staleGeneration404）：行世代≠当前世代→收口；世代一致→原错误传播（不吞 API 漂移）；enforcement 关闭→保留旧行为",
+        "覆盖位点：resolveAndPersist / Ack started / Ack received（重复投递）/ replayRejected / workspace·dsh 三个专用 result 端点"
+      ]
     },
     {
       "id": "V089-06",
       "title": "retry 分类：reset、认证、协议、网络和普通 404 的重试/退出策略分离",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "retry policy",
       "priority": "P0",
@@ -142,12 +146,16 @@
       "cleanup": [
         "关闭 httptest server"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089RollbackSwitchPreservesLegacyRetryLoopOn404（passed）：enforcement 关闭时 404 不清理、保留退避重试（≥3 hits、无 SSE），固化回滚语义",
+        "TestV089RunWithRetryAuthFailureExitsImmediately（passed）：401 首轮立即退出（hello 恰 1 次，<500ms）",
+        "ErrRelayGenerationChanged 终态退出已由 V089-02 运行期测试锁定；网络错误有界退避由既有 RunWithRetry 保持"
+      ]
     },
     {
       "id": "V089-07",
       "title": "restart 生命周期：owner key rotation、owner refresh、daemon pairing reset 严格停止 Daemon 后执行",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "restart lifecycle",
       "priority": "P0",
@@ -162,12 +170,15 @@
       "cleanup": [
         "restart.sh stop 清理临时 state 与进程"
       ],
-      "evidence": []
+      "evidence": [
+        "tools/restart_test.sh V089 段（2026-09-06 passed）：LIB_ONLY 函数级回归断言 reset 严格顺序 stop:daemon → orphan-cleanup → relay-stop → relay-start，顺序失败 fail-closed",
+        "restart.sh reset_default_local_relay_db 接入生命周期锁：受管/孤儿 Daemon 先于 rm 停止；孤儿清理失败拒绝重建"
+      ]
     },
     {
       "id": "V089-08",
       "title": "restart-flutter 防护：Daemon 运行时 reset 被阻止或转交完整 restart",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "restart lifecycle",
       "priority": "P0",
@@ -182,7 +193,10 @@
       "cleanup": [
         "restart.sh stop 清理"
       ],
-      "evidence": []
+      "evidence": [
+        "restart_flutter_action 置 RELAY_DB_RESET_ALLOWED=false；需要 reset 时以可操作错误失败（提示执行完整 ./restart.sh restart），不触碰 Flutter 进程与 DB 文件",
+        "行为断言：guarded reset 输出『不允许静默 reset』+『./restart.sh restart』且 DB 文件保持 must-survive、生命周期步骤零调用；结构断言 restart.sh 含 RELAY_DB_RESET_ALLOWED=false"
+      ]
     },
     {
       "id": "V089-09",
