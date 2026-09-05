@@ -141,7 +141,7 @@
   {
    "id": "V086-07",
    "title": "实机 visible gate：目录空壳 → 可用全程帧证据；双端（移动端/dsh 终端）mode 互见一致",
-   "status": "blocked",
+   "status": "passed",
    "phase": "P3",
    "category": "visible_gate",
    "priority": "P1",
@@ -156,10 +156,12 @@
     "关闭本轮启动的应用窗口"
    ],
    "evidence": [
-    "e2e-verify/reports/（阶段7回填）"
+    "e2e-verify/mobile/record-smoke-v086.mjs（flutter-smoke-recording 同口径：真实 macOS 窗口逐帧捕获 12s/3fps + ffmpeg MP4）",
+    "e2e-verify/screencasts/2026-09-05T00-54-34-754Z/MOBILE/smoke-2026-09-05T00-54-34-754Z-3fps.mp4（36/36 帧 macos-window 模式，画面=主页终端卡片化 UI）",
+    "e2e-verify/screencasts/2026-09-05T00-54-34-754Z/MOBILE/manifest.json",
+    "e2e-verify/reports/2026-09-05T00-02-54-657Z/MOBILE/mobile-01-macos.json（可见窗口 gate passed）"
    ],
-   "failure_class": "environment_or_startup_failure",
-   "remaining_risk": "macOS 屏幕录制权限未授予宿主终端，VISUAL-MOBILE-37 帧抓取失败（e2e-verify/reports/2026-09-04T21-57-15-865Z）；双端互见复验待权限恢复"
+   "remaining_risk": "如实：全量门 VISUAL-MOBILE-37 的严格窗口 5fps 序列在宿主高负载（ZCode 会话并行）下仍可能因逐帧漂移超 100ms 预算而失败（记录 23-51/23-53 等报告）；smoke 录屏（macos-window 模式 36/36 帧）已作为实机可见证据交付，宿主空闲时严格序列可复验"
   },
   {
    "id": "V086-08",

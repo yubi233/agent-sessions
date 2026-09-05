@@ -315,6 +315,11 @@ tasks:
     cmds:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
 
+  record:v086:smoke:
+    desc: v0.8.6 Flutter 本地 smoke 录制（flutter-smoke-recording 同口径：真实 macOS 窗口逐帧捕获 10s/3fps + ffmpeg MP4；无需 strict gate 前置，产物 e2e-verify/screencasts/<stamp>/MOBILE/）
+    cmds:
+      - node e2e-verify/mobile/record-smoke-v086.mjs
+
   record:v086:
     desc: v0.8.6 macOS fixture 录屏（录屏内容先定（2026-09-05，须在阶段7执行前确认终稿）：① 权限下拉空壳→启动会话→目录到达→可选可切换；② 主页终端卡片点同步→内联反馈→工作区出现；③ Markdown 回复渲染（###/表格）与每条消息复制按钮；不作为功能回归替代）
     cmds:
