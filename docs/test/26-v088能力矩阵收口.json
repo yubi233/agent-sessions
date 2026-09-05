@@ -1,0 +1,287 @@
+{
+  "suite": "v088-capability-matrix-closeout",
+  "description": "v0.8.8 能力矩阵收口：attachments 生产接线（daemon 拉取出口 + 本机 DEK Open）、git_read/file_read 应用层只读通道（真实传输 + 条件声明 + 消费者）、权限模式三档启用（cordis.yml permissionPresets 挂载 + 深链优先前置修复），以及能力矩阵按证据如实升格（attachments/file_read/git_read）与守护测试同步。",
+  "environment": {
+    "local": "隔离 SQLite、内存假桥/fixture、store/daemon/runner Go 测试；localdev 真实桥经 restart.sh 本地栈（Relay→Daemon→dsh 桥→Flutter macOS）",
+    "browser": "macOS 可见 Flutter 窗口（端到端可见证据；本轮不做 Android 实机、无 headless 验收）",
+    "flutter": "macOS localdev/fixture 窗口（本地可见 gate；record-smoke-v086 同口径录屏）",
+    "dsh_overlay": "本地确定性真实 DSH bridge overlay（不调用真实模型）",
+    "real": "本轮主线路径无真实模型用例；V088-12 为授权口径可选实机路径（allow_real_upstream=false）；V088-14..16 的模型回合走 localdev 免费池（与 V087-12 授权口径一致，默认不触发）"
+  },
+  "cases": [
+    {
+      "id": "V088-01",
+      "title": "契约门：events.json/命令 kind 清单零改动 + refs schema 冻结复核",
+      "status": "pending",
+      "phase": "P1",
+      "category": "contract",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "只读结果复用既有 tool_result 事件；session.send 附件 refs 形状（attachment_id/mime/size_bytes/sha256）为 v0.8.5 §3.1 已实现形状，本轮冻结不改。",
+      "steps": [
+        "git diff 判定 packages/protocol/schema/events.json 在 v0.8.8 全部提交零改动",
+        "go test ./internal/domain/... ./internal/daemon/... -run 'RelayEventType|ValidDaemonEventType' -count=1",
+        "复核 fixtureAttachmentRef（runner.go）字段与 mobile _completedAttachmentRefs 发送形状一致"
+      ],
+      "expected": "零协议改动成立：events.json 不变、不新增 wire 事件类型与命令 kind；refs schema 冻结为现状。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-02",
+      "title": "附件生产接线：真实 FetchAttachment → 真实 DEK Open → runner refs 路径全链（无测试替身）",
+      "status": "pending",
+      "phase": "P1",
+      "category": "daemon",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "NewRelayLoop 注册 attachmentFetchSink；mobile Seal（attachment_picker._sealDraft：逐块 envelope，AAD=sessionId/attachment:chunk/seq/dekId）与 daemon Open 组合契约按 P0 冻结实现。",
+      "steps": [
+        "go test：mobile 同构 Seal（Go 侧按契约逐块 Seal）→ 上传投影 → 生产 sink（FetchAttachment + Open）→ runner session.send refs → SendContent 收到 image block",
+        "断言明文 SHA-256 复算一致、块序拼接一致、明文只经内存（不落日志/事件 payload）"
+      ],
+      "expected": "生产接线全链字节级往返通过；不再出现「附件拉取出口未配置（attachments unsupported）」。",
+      "cleanup": ["临时 SQLite/状态目录清理"],
+      "evidence": []
+    },
+    {
+      "id": "V088-03",
+      "title": "附件 fail-closed：DEK 缺失/解密失败/chunk sha256 不符/ref 哈希尺寸不符逐分支脱敏收口",
+      "status": "pending",
+      "phase": "P1",
+      "category": "daemon",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "V085-04 既有语义（哈希不符拒绝、字节不落日志、lease/fencing）保持。",
+      "steps": [
+        "go test：本机 DEK 缺失 → sink 返回错误 → runner session_error + turn_completed 收口",
+        "go test：chunk sha256 不符 / envelope AAD 不符 / ref 哈希尺寸不符逐分支断言稳定脱敏错误码"
+      ],
+      "expected": "每条失败路径有稳定脱敏错误码、失败终态收敛、无明文或内部路径泄漏。",
+      "cleanup": ["临时 SQLite/状态目录清理"],
+      "evidence": []
+    },
+    {
+      "id": "V088-04",
+      "title": "能力矩阵升格与守护测试同步：attachments/git_read/file_read 新状态 + 证据 reason；未动能力零漂移",
+      "status": "pending",
+      "phase": "P1-P3",
+      "category": "matrix",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "V088-02/03（attachments）、V088-07（git_read）、V088-08（file_read）回归全绿且端到端证据（V088-09/10）入档——§6.1 三要素齐备后才允许改 successMatrix。",
+      "steps": [
+        "go test ./internal/adapter/dsh -run 'TestBridgeFactMatrixGuard'：守护测试按升格后状态+证据 reason 锚点修订后全绿",
+        "负向断言：已升格能力 reason 不再含旧口径（未接通/按 -32601 拒绝/未实现）；delegate/effort_select 等未动能力状态零改动"
+      ],
+      "expected": "矩阵与实现/证据互为锚点；升格 reason 引用套件 ID 与报告路径。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-05",
+      "title": "daemonCapabilities 声明条件：真实适配器声明 file_read/git_read；hello 契约单测",
+      "status": "pending",
+      "phase": "P2",
+      "category": "daemon",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "ReadOnlyDispatcher 在 NewRelayLoop 恒建；声明条件从 useFixtureAdapter 改为 dispatcher 就绪即声明（P0 冻结形态）。",
+      "steps": [
+        "go test ./apps/daemon 或 ./internal/daemon：daemonCapabilities 含 file_read/git_read（fixture 与真实适配器一致）",
+        "验证 relay capability gate 路由：hello 未声明时只读命令被拒（既有语义不回归）"
+      ],
+      "expected": "真实适配器（含 localdev 真实桥）hello 声明 file_read/git_read；fixture 行为不回归。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-06",
+      "title": "attachments 入口解锁回归：矩阵门控解除、refs 发送路径不回归、无密钥禁选语义保持",
+      "status": "pending",
+      "phase": "P1",
+      "category": "controller",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "矩阵 attachments 升格后 controlBlockedReason('attachments') 解除；sessionContentKeyAvailable=false 会话维持禁选。",
+      "steps": [
+        "flutter test：注入升格后矩阵 → 附件入口可用、refs 进 session.send（:1138 路径回归）",
+        "flutter test：无 DEK 会话（fetch null）→ 入口禁选「等待会话附件密钥」文案不变"
+      ],
+      "expected": "入口解锁且 fail-closed 语义双向保持。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-07",
+      "title": "GitDiff 真实传输契约：快照/stale/分页/失败态对齐既有 UI 契约；fixture 场景不回归",
+      "status": "pending",
+      "phase": "P2",
+      "category": "controller",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "真实 GitDiffRepository 经只读命令（git.status/git.changes/git.diff）→ relay → daemon ReadOnlyDispatcher → tool_result 消费。",
+      "steps": [
+        "flutter test：真实仓库快照加载/文件 diff 分页/snapshot stale 重试/命令失败态映射",
+        "flutter test：FixtureGitDiffRepository main/restricted 场景既有断言保持绿"
+      ],
+      "expected": "真实传输与 fixture 同一 UI 契约；stale/分页/失败态行为一致。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-08",
+      "title": "file_read 消费者契约：tree→read→渲染、大小上限、目录外路径脱敏失败态",
+      "status": "pending",
+      "phase": "P3",
+      "category": "controller",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "P0 裁决做（冻结最小范围：树 + 只读查看，无编辑/搜索/收藏）；消费 file.tree/file.read/code.read 只读命令。",
+      "steps": [
+        "flutter test：文件树加载 → 节点展开/选择 → 内容查看渲染",
+        "flutter test：超限文件/目录外路径 → 稳定脱敏错误态呈现"
+      ],
+      "expected": "消费者 UI 契约与 daemon 沙箱边界一致。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-09",
+      "title": "端到端：attachments localdev 真实桥回合（选图→上传→refs→桥 admission→图片回复渲染）",
+      "status": "pending",
+      "phase": "P4",
+      "category": "e2e",
+      "priority": "P0",
+      "test_layer": "e2e",
+      "precondition": "localdev 栈（restart.sh）+ 真实 X25519 owner 密钥（P0 冻结的 localdev 前置修复）+ 矩阵升格 + 深链优先修复（V088-13）；免费池模型回合（V087-12 授权口径）。",
+      "steps": [
+        " headed 启动 macOS Flutter 窗口进入 localdev 会话：附件入口可用 → 选图 → 上传 complete → 发送带 refs",
+        "机读证据：① 上传 complete 回执 ② daemon 无「附件拉取出口未配置」③ 桥 admission 通过 ④ turn_completed 非失败 ⑤ 时间线图片消息渲染节点",
+        "可见证据：VISUAL-MOBILE-40 帧序列（选图入口 → 发送 → 图片回复）"
+      ],
+      "expected": "机读五要素 + 可见帧证据齐备，入 e2e-verify/reports/。",
+      "cleanup": ["栈与窗口按 record 脚本既有清理"],
+      "evidence": []
+    },
+    {
+      "id": "V088-10",
+      "title": "端到端：git_read/file_read localdev 往返（UI → daemon 沙箱 → 结果渲染）+ 越权负向",
+      "status": "pending",
+      "phase": "P4",
+      "category": "e2e",
+      "priority": "P0",
+      "test_layer": "e2e",
+      "precondition": "V088-05/07/08 合入；localdev 栈在位；VISUAL-MOBILE-41。",
+      "steps": [
+        "headed：GitDiff 屏发起快照/文件 diff → daemon 沙箱执行 → 渲染（快照文件数 > 0、diff 内容非空）",
+        "headed：文件树/查看屏发起 tree/read → 内容渲染非空",
+        "负向：目录外路径 → 稳定脱敏错误码并 UI 呈现"
+      ],
+      "expected": "往返机读证据（receipt succeeded + tool_result 到达 + UI 渲染断言）与负向脱敏齐备。",
+      "cleanup": ["栈与窗口按 record 脚本既有清理"],
+      "evidence": []
+    },
+    {
+      "id": "V088-11",
+      "title": "回归：v081–v087 聚合链式 + V085-04/05 既有附件语义 + schema 门 + 全量 flutter test 分诊",
+      "status": "pending",
+      "phase": "P4",
+      "category": "regression",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "P1-P3b 全部合入。",
+      "steps": [
+        "task test:v083:local → test:v084:local → test:v085:local → test:v086:local → test:v087:local 链式 exit=0",
+        "task test:v088:local 全绿；全量 flutter test 新增/受影响文件零失败"
+      ],
+      "expected": "聚合回归零失败；历史失败按遗留流程留档。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-12",
+      "title": "实机（可选）：Android 实机附件回合与 Keystore unwrap（授权口径）",
+      "status": "blocked",
+      "phase": "P4+",
+      "category": "device",
+      "priority": "P2",
+      "test_layer": "device",
+      "precondition": "用户授权实机 gate；本轮用户指示先不做 Android 实机（2026-09-05），维持 blocked。",
+      "steps": [
+        "（授权后）task test:android:device 附件回合 + Keystore unwrap 实测"
+      ],
+      "expected": "不可达则如实标 blocked + failure_class=credential_or_quota_blocker（承接 V085 实机项）。",
+      "cleanup": ["无"],
+      "evidence": ["用户指示 2026-09-05：先不做 Android 实机测试，flutter 开发用本地环境"]
+    },
+    {
+      "id": "V088-13",
+      "title": "App：localdev 深链优先于恢复导航——目标会话页不再被「新对话」空态页覆盖",
+      "status": "pending",
+      "phase": "P3b",
+      "category": "app",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "V087-12 帧实证：localdev 冷启动下最近会话恢复导航晚于 LOCAL_DEV_TARGET_SESSION_ID 深链落地并覆盖目标会话页。",
+      "steps": [
+        "flutter test：注入深链目标 + 恢复导航就绪 → 断言最终路由为目标会话页（深链在位时恢复导航让位）",
+        "flutter test：无深链时恢复导航行为不回归"
+      ],
+      "expected": "深链优先语义成立且双分支回归锚定。",
+      "cleanup": ["无"],
+      "evidence": []
+    },
+    {
+      "id": "V088-14",
+      "title": "配置/真实栈：cordis.yml 挂载 permission 插件块（三档预设）→ 目录落库 + controls 下发",
+      "status": "pending",
+      "phase": "P3b",
+      "category": "integration",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "依赖链（bash-sandbox shell/approval/sandbox/fs-sandbox）已在位（cordis.yml:182）；defaultPreset: danger-full-access 与生产现状一致、启用即零变化。",
+      "steps": [
+        "栈重启后新建 dsh 会话 + start：session/new modes 含 read-only/workspace-write/danger-full-access",
+        "SQLite available_permission_modes 列含三档、permission_mode = danger-full-access；controls 下发三档；daemon 日志无 sync session modes failed"
+      ],
+      "expected": "三档目录全链路（桥 advertise → daemon PUT 落库 → controls 下发）证据齐备。",
+      "cleanup": ["栈按 restart.sh 既有清理"],
+      "evidence": []
+    },
+    {
+      "id": "V088-15",
+      "title": "集成/真实栈：mode.set 切档原子往返（controls + dsh 终端双回读）+ ask 档审批卡放行/拒绝",
+      "status": "pending",
+      "phase": "P3b",
+      "category": "integration",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "V088-14 通过；App 权限下拉三档可选（可见帧，前置 V088-13）。",
+      "steps": [
+        "切 workspace-write → controls 回读 + dsh 终端侧回读一致 → 切回 danger-full-access（V087 契约：mode.set 原子 bundle）",
+        "ask 档触发写工具回合 → 审批卡到达 App → 放行与拒绝两路径回执（v0.8.2 通道）"
+      ],
+      "expected": "切档双回读一致；审批卡两路径回执与时间线终态收敛。",
+      "cleanup": ["会话/回合按套件既有清理"],
+      "evidence": []
+    },
+    {
+      "id": "V088-16",
+      "title": "真实栈：read-only 档写拒绝、错误面可见、无越权",
+      "status": "pending",
+      "phase": "P3b",
+      "category": "integration",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "V088-14 通过；read-only=ask 预设生效。",
+      "steps": [
+        "read-only 档触发写工具回合 → 沙箱拒绝 → App 错误面可见（脱敏）",
+        "断言无越权写入发生（工作区文件未变）"
+      ],
+      "expected": "拒绝路径证据齐备、错误面脱敏、无越权。",
+      "cleanup": ["无"],
+      "evidence": []
+    }
+  ]
+}

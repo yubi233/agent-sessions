@@ -377,6 +377,36 @@ tasks:
       - caffeinate -u -t 5 >/dev/null 2>&1 || true
       - node e2e-verify/real/v087-real-live.mjs
 
+  test:v088:local:
+    desc: v0.8.8 能力矩阵收口（attachments 生产接线 / git_read·file_read 应用层只读通道 / 权限三档 P3b）本地统一回归入口（V088-01..16；P0 先落基线：docs+check+受影响既有文件+web+矩阵守护测试；V088 专项 Go/Flutter 行随 P1-P3b 落地后追加；不调用真实模型）
+    cmds:
+      - task: docs:verify
+      - task: check
+      # P1（V088-02/03/04）：daemon 附件生产接线 + fail-closed 分支 + 守护测试修订后追加 TestV088 行。
+      # P2（V088-05/07）：daemonCapabilities 条件声明 + GitDiff 真实传输。
+      # P3（V088-08）：file_read 消费者。P3b（V088-13）：深链优先修复回归。
+      - go test ./internal/daemon ./internal/adapter/dsh -run 'TestV088|TestBridgeFactMatrixGuard' -count=1
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/session_screens_test.dart --concurrency=1
+      - pnpm --filter @agent-sessions/web test
+      - git diff --check
+
+  test:v088:flutter:
+    desc: v0.8.8 能力矩阵收口 macOS 可见窗口 targeted gate（V088-09/10 端到端：VISUAL-MOBILE-40 attachments 真实桥回合 + VISUAL-MOBILE-41 只读往返；本地 Flutter 口径，不做 Android 实机；真实可见窗口 headless=false；需先关闭用户正在使用的 Agent Sessions 窗口；测试文件随 P3/P4 落地）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs --test test/v088_capability_closeout_test.dart --case V088-09 --visual-scenario VISUAL-MOBILE-40 --visual-scenario VISUAL-MOBILE-41
+
+  record:v088:
+    desc: v0.8.8 能力矩阵收口录屏（录屏内容先定（2026-09-05）：① attachments localdev 真实桥回合全程——选图入口→上传→发送→图片回复渲染（V088-09 人审证据）；② GitDiff 屏快照/文件 diff 渲染（V088-10）；③ 权限下拉三档可选与切档往返（V088-15 可见帧）。不作为功能回归替代；record-macos scope v088 随 P4 注册）
+    cmds:
+      - |
+        if [[ -z "${V088_FLUTTER_GATE_REPORT:-}" || ! -f "$V088_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v088 blocked: set V088_FLUTTER_GATE_REPORT to a passed v0.8.8 macOS gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v088 --gate-report "$V088_FLUTTER_GATE_REPORT"
+
   test:v085:real:
     desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度。默认 grok-4.6 @ api.aabsv.sbs；可切 gpt-5.6-terra @ api.paktf.sbs：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra）
     cmds:
