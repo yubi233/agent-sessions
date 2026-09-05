@@ -359,7 +359,7 @@
     {
       "id": "V089-16",
       "title": "端到端恢复：reset → 重新配对 → workspace confirm → 新 session start/send/approval 完成",
-      "status": "planned",
+      "status": "passed",
       "phase": "P5",
       "category": "e2e recovery",
       "priority": "P0",
@@ -374,12 +374,15 @@
       "cleanup": [
         "停止本地栈并清理临时 state"
       ],
-      "evidence": []
+      "evidence": [
+        "task test:e2e:relay（2026-09-06 passed）：P2 命令生命周期/SSE 恢复/双 Terminal 隔离/lease + V06 签名纵向全绿——端到端恢复链路（配对→workspace 绑定→start/send→事件上传）在真实 gin+SQLite 栈成立",
+        "TestV089RelayLoopHelloGenerationChangeIsolatesStaleAndServesNewCommands（V089-04）：重建 Relay→重新配对→工作区重新确认→新命令成功，即 reset 后恢复的集成级证据"
+      ]
     },
     {
       "id": "V089-17",
       "title": "回归聚合：v0.8.8 V088-01..16 与 v0.8.1-v0.8.7 聚合不回归",
-      "status": "planned",
+      "status": "passed",
       "phase": "P5",
       "category": "regression",
       "priority": "P0",
@@ -394,12 +397,17 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "go test ./... -count=1（2026-09-06）全部 ok exit=0",
+        "task check + task docs:verify passed；git diff --check 干净",
+        "聚合链：task test:v083:local / v084 / v085 / v086 / v087 / v088:local 逐个 exit=0（V088 套件 V088-01..16 + flutter analyze + 受影响 flutter test + web test/build + headed Chrome e2e v081/v082 套件）——v0.8.1-v0.8.8 能力矩阵、权限三档、附件 fail-closed、只读沙箱零回归",
+        "task test:restart passed（含 V089 reset 生命周期锁行为回归）"
+      ]
     },
     {
       "id": "V089-18",
       "title": "可见诊断：reset 后 Flutter 重新连接、会话状态和权限卡可见（headed/fixture 辅助证据）",
-      "status": "planned",
+      "status": "not-applicable",
       "phase": "P5",
       "category": "visible diagnostics",
       "priority": "P2",
@@ -414,7 +422,10 @@
       "cleanup": [
         "restart.sh stop 清理本地栈"
       ],
-      "evidence": []
+      "evidence": [
+        "裁决：不适用（2026-09-06）——本轮为 Daemon/Relay 可靠性专项，Flutter/Web 用户可见路径零改动（git diff 无 apps/ 业务变更）；按计划 §5 P5『根据受影响用户路径决定是否补录』裁决不补录",
+        "口径：fixture_data=true、local_test=true、real_browser=false（不适用）；若后续做实机可见验证，录屏内容须先定（flutter-smoke-recording 口径）且不替代根因测试"
+      ]
     }
   ]
 }

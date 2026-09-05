@@ -3,6 +3,12 @@
 - 状态：Accepted
 - 日期：2026-08-14
 - 替代：ADR-001 / ADR-006 中的 PostgreSQL + Redis 选型
+- 修订（2026-09-06，v0.8.9 P1）：Relay SQLite 新增 `relay_instance_meta` 表持久化
+  `relay_generation`——数据库实例代际（首建随机生成、同库重启稳定、删除重建必变、
+  备份随文件走）。它是 Daemon 识别"Relay DB 已被重建"的唯一世代锚点（详见 ADR-009
+  v0.8.9 修订）；Daemon 侧 `local_state` 记录当前世代，relay_commands /
+  relay_event_outbox / relay_usage_outbox 三表带 `relay_generation` 关联列。
+  该决策不改变"各自独立库"与权威边界，仅新增实例级元数据。
 
 ## 背景
 

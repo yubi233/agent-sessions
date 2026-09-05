@@ -2,6 +2,23 @@
 
 - 状态：Accepted，P2 已完成受限本地实现；完整会话/Provider/Android 仍未完成
 - 日期：2026-08-16
+- 修订（2026-09-06，v0.8.9 P1-P4，迭代计划 §3 契约冻结）：
+  1. **Relay DB generation 契约**：`relay_generation`（additive，hello/heartbeat 返回）
+     是数据库实例代际——同库重启稳定、删除重建必变、备份随文件走。Daemon 以 hello 为
+     启动权威、heartbeat 为运行期发现；变化时在单事务内完成本地收口（未终态命令 →
+     `completed/result_status=failed/RELAY_GENERATION_RESET`、事件/usage outbox →
+     quarantined、delivery cursor 清零、Terminal 绑定清除）。不新增 wire 终态；该字段
+     不进入 event envelope、不替代 lease epoch。旧 Relay 无此字段时进入受控 legacy
+     模式（告警一次、legacy 404 一次收口）；回滚开关
+     `AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT=0` 只关闭强制不回退迁移。
+  2. **SSE 调度解耦**：scanner（Stream consume=handleDelivery）只做"解码→落盘→推进
+     cursor→received ack→入队"；普通命令与控制命令（approve/reject/abort/question
+     answer + rejecting 重放）分队列由独立 worker 消费——审批/中止/问答不再被
+     Provider 执行队头阻塞（v0.8.8 实证故障链）。processMu 只保护扫描与去重。
+  3. **reset 生命周期边界**：任何重建 Relay DB 的 owner bootstrap 路径必须先停止
+     受管与孤儿 Daemon（restart.sh 生命周期锁）；restart-flutter 禁止静默 reset。
+     stale 命令 404 按世代证据分类：世代错位 → 本地收口不再重试；世代一致 →
+     原样传播；outbox 查询与 requeue 入口按世代过滤（升级期空世代行保持活动）。
 
 ## 背景
 
