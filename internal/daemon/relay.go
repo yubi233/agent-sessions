@@ -1083,6 +1083,26 @@ func capabilityForCommand(kind string) string {
 		return "file_read"
 	case "git.status", "git.changes", "git.diff":
 		return "git_read"
+	// v0.8.8 P3b（V088-14/15 真实栈首曝）：会话控制 kind 的 capability 映射补齐。
+	// mode.set 及以下各 kind 的 runner 执行面在 v0.8.3 已存在，但从未进入本映射，
+	// hello 门一律 CAPABILITY_UNSUPPORTED 拒绝——移动端权限切档/审批应答/分叉
+	// 在真实栈不可达（V085-08 仅 runner/fixture 层验证，未过 relay 门）。
+	// 声明与执行解耦：hello 声明的是命令面；runner 仍按 adapter handle 逐会话
+	// fail-closed（无 handle 的 Provider 得到 capability_unsupported）。
+	case "mode.set":
+		return "permission_mode"
+	case "question.answer":
+		return "question"
+	case "plan.action":
+		return "plan"
+	case "goal.action":
+		return "goal"
+	case "skill.invoke":
+		return "invoke_skill"
+	case "permission.approve", "permission.reject":
+		return "permission"
+	case "session.fork":
+		return "fork"
 	default:
 		return ""
 	}

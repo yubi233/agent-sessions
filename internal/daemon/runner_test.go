@@ -166,6 +166,10 @@ type fakeHandle struct {
 	// sendErr/abortErr 注入传输层同步失败；失败时不得产生任何 Provider 事件。
 	sendErr  error
 	abortErr error
+	// sendGate 非 nil 时 Send 阻塞直到 close（V088-15b 抢占回归：模拟回合等待审批）。
+	sendGate chan struct{}
+	// sendGateWaiters 记录已进入阻塞的 Send 次数（测试同步点）。
+	sendGateWaiters int
 	// disposed 标记 Dispose 是否被调用（重复 start 回收语义的观测点）。
 	disposed bool
 	events   chan adapter.Event
@@ -385,7 +389,17 @@ func (h *fakeHandle) Send(ctx context.Context, text string) error {
 	h.mu.Lock()
 	h.sends = append(h.sends, text)
 	err := h.sendErr
+	if h.sendGate != nil {
+		h.sendGateWaiters += 1
+	}
 	h.mu.Unlock()
+	if h.sendGate != nil {
+		select {
+		case <-h.sendGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if err != nil {
 		return err
 	}

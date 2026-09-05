@@ -260,7 +260,7 @@
     {
       "id": "V088-13",
       "title": "App：localdev 深链优先于恢复导航——目标会话页不再被「新对话」空态页覆盖",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3b",
       "category": "app",
       "priority": "P0",
@@ -274,12 +274,16 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "flutter test test/v088_deep_link_priority_test.dart — macOS 画布同构路径：深链落地目标会话页 → 模拟恢复导航覆盖 → 再断言循环拉回（双分支）",
+        "真实栈：修复后 flutter.log 冷启动直达目标会话页（V087PAGE 目标会话 + V087REAL navigated），V087-12 帧遗留收口",
+        "修复面：_openSessionWhenReady 窗口 4s→60s + 落地后再断言循环 + pageBuilds 递增补齐（V087-12 遗留缺陷：只有声明无自增）+ 已在目标页时以路由为等效落地信号"
+      ]
     },
     {
       "id": "V088-14",
       "title": "配置/真实栈：cordis.yml 挂载 permission 插件块（三档预设）→ 目录落库 + controls 下发",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3b",
       "category": "integration",
       "priority": "P0",
@@ -293,12 +297,17 @@
       "cleanup": [
         "栈按 restart.sh 既有清理"
       ],
-      "evidence": []
+      "evidence": [
+        "node e2e-verify/real/v088-permission-modes.mjs（非模型阶段多次 passed）：controls 三档下发 + permission_mode=danger-full-access + daemon.log 无 sync failed",
+        "Relay SQLite 直查：available_permission_modes 列三档 JSON 落库（ws_v08_* dsh 会话）",
+        "cordis.yml permission 插件块挂载（三档 + defaultPreset=danger-full-access）",
+        "真实栈首曝缺陷修复：capabilityForCommand 缺 mode.set/question.answer/plan.action/goal.action/skill.invoke/permission.*/session.fork 映射 + hello 缺声明 → relay 门 CAPABILITY_UNSUPPORTED；回归 TestCapabilityForCommandSessionControlKinds + TestDaemonCapabilitiesAdvertiseSessionControlKinds"
+      ]
     },
     {
       "id": "V088-15",
       "title": "集成/真实栈：mode.set 切档原子往返（controls + dsh 终端双回读）+ ask 档审批卡放行/拒绝",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3b",
       "category": "integration",
       "priority": "P0",
@@ -312,12 +321,18 @@
       "cleanup": [
         "会话/回合按套件既有清理"
       ],
-      "evidence": []
+      "evidence": [
+        "mode.set 切档原子往返：danger-full-access↔workspace-write（+read-only）controls 回读一致（多次冷启动复现）",
+        "ask 审批卡真实栈（免费池 nemotron）：workspace-write(ask) bash 写 ~/ 被拒 → 模型 sandbox_permissions 升级重试 → permission_request 事件到达时间线（含 request_id，多轮复现）→ permission.approve → 回合从 waiting_permission 推进 completed → notes/v088-approval-probe.txt 落盘",
+        "真实栈首曝死锁修复：send 回合等审批持有 executionMu → approve 永远排队（SIGQUIT goroutine dump 实证 runner.go:252 阻塞）→ approve/reject 改抢占类（不取 executionMu）→ 修复后 approve succeeded；回归 TestV088PermissionApprovePreemptsInFlightSend",
+        "localdev 审批卡投影补齐：localdev_encoder 缺 EventPermissionRequest 投影（v0.8.2 通道 localdev 不可见）→ 补 permission_request 投影（与生产同白名单口径）",
+        "证据报告 e2e-verify/reports/ADAPTER-DSH/v088-permission-modes-real-2026-09-06.json"
+      ]
     },
     {
       "id": "V088-16",
       "title": "真实栈：read-only 档写拒绝、错误面可见、无越权",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3b",
       "category": "integration",
       "priority": "P0",
@@ -331,7 +346,10 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "read-only 档 bash 写工作区文件被拒：'Operation not permitted [sandbox: file access denied under read-only mode]'（tool.result 留档）",
+        "ask 拦截升级重试：升级请求经审批卡（拒绝后模型如实告知用户），无越权写入（工作区无 probe-readonly.txt / confirm 未落盘）"
+      ]
     }
   ]
 }

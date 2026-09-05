@@ -292,6 +292,31 @@ func (e *LocalDevEventEncoder) localDevFixturePayload(sessionID string, event ad
 			payload["prompt"] = title
 		}
 		return payload, true
+	case adapter.EventPermissionRequest:
+		// v0.8.8 P3b（V088-15b）：localdev 时间线的审批卡投影（v0.8.2 通道在此前
+		// 只有生产 E2EE 侧可见，本地开发投影缺失 → App 审批卡在 localdev 不可见）。
+		// request_id 是移动端 permission.approve/reject 的关联键；标题仅为展示，
+		// 命令正文/凭据不进协议（与生产投影同白名单口径）。
+		requestID, _ := event.Payload["request_id"].(string)
+		if strings.TrimSpace(requestID) == "" {
+			return nil, false
+		}
+		// permission 对象与 question 同构（fromRelayEvent 经 _permissionFromFixture
+		// 消费 payload["permission"]）；顶层 label 供时间线兜底展示。
+		permission := map[string]any{
+			"request_id": requestID,
+			"title":      nonEmptyOr(event.Payload["title"], "需要确认"),
+			"summary":    "Provider 请求执行需要你确认的操作。",
+		}
+		payload := map[string]any{
+			"kind":       "permission_request",
+			"permission": permission,
+			"label":      permission["title"],
+		}
+		if toolCallID := nonEmptyOr(event.Payload["tool_call_id"], ""); toolCallID != "" {
+			payload["inspect_target"] = toolCallID
+		}
+		return payload, true
 	case adapter.EventSessionError:
 		message, _ := event.Payload["message"].(string)
 		if strings.TrimSpace(message) == "" {

@@ -343,6 +343,16 @@ func daemonCapabilities() []string {
 		// file.read/code.read/git.status/git.changes/git.diff）。
 		"file_read",
 		"git_read",
+		// v0.8.8 P3b（V088-14/15 真实栈首曝）：会话控制命令面——runner 自 v0.8.3
+		// 起支持这些 kind，但 hello 未声明导致 relay 门一律拒绝。声明后执行层
+		// 仍按 adapter handle 逐会话 fail-closed（无 handle 即 capability_unsupported）。
+		"permission_mode",
+		"permission",
+		"question",
+		"plan",
+		"goal",
+		"invoke_skill",
+		"fork",
 	}
 }
 

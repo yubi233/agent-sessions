@@ -440,18 +440,26 @@ class _LocalVisualScenarioCoordinatorState
     await sessions.selectSession(sessionId);
     // 导航落地确认：booting 阶段的 router redirect 会把过早的 go() 弹到
     // /connect（空白壳），以「会话详情页真正 build 过」为信号，未落地则
-    // 重发导航（最长 30s）。
+    // 重发导航（最长 30s）。v0.8.8 P3b：深链优先修复后 App 可能已在目标页
+    // （_openSessionWhenReady 落地 + 再断言），此时 go() 同路由不触发重建、
+    // 重建计数不增长——以「路由已在目标」为等效落地信号，不再空等超时。
     final router = ref.read(appRouterProvider);
     final baseline = SessionDetailScreen.pageBuilds;
-    for (var attempt = 0; attempt < 30; attempt += 1) {
-      router.go('/sessions/$sessionId');
-      await Future<void>.delayed(const Duration(milliseconds: 1000));
-      if (SessionDetailScreen.pageBuilds > baseline) break;
-    }
-    if (SessionDetailScreen.pageBuilds <= baseline) {
-      // ignore: avoid_print
-      print('V087REAL navigate-timeout');
-      return;
+    final alreadyOnTarget = router.routeInformationProvider.value.uri
+        .toString()
+        .startsWith('/sessions/$sessionId');
+    if (!alreadyOnTarget) {
+      var landed = false;
+      for (var attempt = 0; attempt < 30 && !landed; attempt += 1) {
+        router.go('/sessions/$sessionId');
+        await Future<void>.delayed(const Duration(milliseconds: 1000));
+        landed = SessionDetailScreen.pageBuilds > baseline;
+      }
+      if (!landed) {
+        // ignore: avoid_print
+        print('V087REAL navigate-timeout');
+        return;
+      }
     }
     // ignore: avoid_print
     print('V087REAL navigated /sessions/$sessionId');
@@ -640,7 +648,10 @@ class _LocalVisualScenarioCoordinatorState
   Future<void> _openSessionWhenReady() async {
     final sessionId = widget.sessionId;
     if (sessionId == null || sessionId.isEmpty) return;
-    for (var attempt = 0; attempt < 80; attempt += 1) {
+    // v0.8.8 P3b（V088-13）：localdev 冷启动（owner bootstrap → 认证 → 会话
+    // 列表加载）可能远超旧 4s 窗口（80×50ms）——放宽到 60s，深链在窗口内
+    // 持续等待就绪，而不是超时后任由恢复导航覆盖。
+    for (var attempt = 0; attempt < 1200; attempt += 1) {
       final app = ref.read(appControllerProvider);
       if (!app.isAuthenticated) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -746,6 +757,26 @@ class _LocalVisualScenarioCoordinatorState
         router.go('/sessions/$sessionId/messages/1');
       } else {
         router.go('/sessions/$sessionId');
+      }
+      // v0.8.8 P3b（V088-13，迭代计划 §9.4）：深链优先于恢复导航——localdev
+      // 冷启动下 App 自身的最近会话恢复导航可能晚于深链落地并把目标会话页
+      // 覆盖为"新对话"空态页（V087-12 帧实证）。深链在位时做有限次"再断言"：
+      // 路由或选中会话被覆盖即重新落地；恢复语义本身不改。
+      final targetLocation = '/sessions/$sessionId';
+      for (var reassert = 0; reassert < 20; reassert += 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (!mounted) return;
+        final current = router.routeInformationProvider.value.uri.toString();
+        final selected = ref.read(sessionControllerProvider).selectedSessionId;
+        final settled = current.startsWith(targetLocation) &&
+            selected == sessionId;
+        if (settled) return;
+        if (ref.read(sessionControllerProvider).sessions.any(
+              (session) => session.id == sessionId,
+            )) {
+          await ref.read(sessionControllerProvider).selectSession(sessionId);
+          router.go(targetLocation);
+        }
       }
       return;
     }

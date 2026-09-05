@@ -176,3 +176,24 @@ func TestV088ReadonlyCommandChainFailsClosedOnDeniedPath(t *testing.T) {
 		}
 	}
 }
+
+// TestCapabilityForCommandSessionControlKinds（V088-14/15 真实栈首曝回归）：
+// 会话控制 kind 必须映射到 hello 声明的 capability——缺映射时 relay 门以
+// CAPABILITY_UNSUPPORTED 拒绝（v0.8.3 起 mode.set 等在真实栈不可达）。
+func TestCapabilityForCommandSessionControlKinds(t *testing.T) {
+	cases := map[string]string{
+		"mode.set":           "permission_mode",
+		"question.answer":    "question",
+		"plan.action":        "plan",
+		"goal.action":        "goal",
+		"skill.invoke":       "invoke_skill",
+		"permission.approve": "permission",
+		"permission.reject":  "permission",
+		"session.fork":       "fork",
+	}
+	for kind, want := range cases {
+		if got := capabilityForCommand(kind); got != want {
+			t.Fatalf("capabilityForCommand(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}

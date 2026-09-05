@@ -893,6 +893,15 @@ ensure_local_owner_bootstrap() {
   OWNER_ENCRYPTION_SEED_FILE="$STATE_DIR/owner_encryption_seed.b64"
   OWNER_ENCRYPTION_PUBLIC_KEY="$(go run "$ROOT_DIR/apps/daemon" encryption-keygen --out "$OWNER_ENCRYPTION_SEED_FILE")" || return 1
   LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64="$(tr -d '\n' < "$OWNER_ENCRYPTION_SEED_FILE")"
+  # 自愈：历史 owner bootstrap 可能登记的是占位公钥（v0.8.8 之前）——daemon 的
+  # 会话 DEK wrap 对非法公钥永远失败（附件入口恒禁用）。登记公钥与当前种子公钥
+  # 不一致时作废缓存并重置 Relay DB，走全新 bootstrap（一次性代价，幂等收敛）。
+  OWNER_KEY_STAMP_FILE="$STATE_DIR/owner_encryption_pub.used"
+  if [[ ! -s "$OWNER_KEY_STAMP_FILE" ]] || [[ "$(cat "$OWNER_KEY_STAMP_FILE")" != "$OWNER_ENCRYPTION_PUBLIC_KEY" ]]; then
+    rm -f "$owner_file" "$(local_token_file local-owner-token)" "$(local_token_file local-daemon-token)" "$(local_token_file local-daemon-approval.json)"
+    reset_default_local_relay_db || true
+    echo "owner: encryption key rotated (placeholder -> real X25519); relay db rebuilt"
+  fi
   if [[ -s "$owner_file" ]]; then
     refresh_token="$(json_get tokens.refresh_token < "$owner_file")"
     if response="$(http_request owner.refresh \
@@ -934,6 +943,7 @@ ensure_local_owner_bootstrap() {
   printf '%s\n' "$LOCAL_OWNER_ACCESS_TOKEN" > "$(local_token_file local-owner-token)"
   chmod 600 "$owner_file" "$(local_token_file local-owner-token)"
   stage_local_owner_bootstrap_for_flutter "$owner_file"
+  printf '%s\n' "$OWNER_ENCRYPTION_PUBLIC_KEY" > "$OWNER_KEY_STAMP_FILE"
   echo "owner: bootstrapped local dev owner via Relay"
 }
 

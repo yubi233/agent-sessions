@@ -249,6 +249,14 @@ func (r *SessionRunner) ConsumeCommand(ctx context.Context, cmd Command) error {
 	if commandKind(cmd) == "session.abort" {
 		return r.abortSession(ctx, cmd)
 	}
+	// v0.8.8 P3b（V088-15b 真实栈首曝）：permission.approve/reject 与 abort 同为
+	// 抢占类命令——ask 档下 send 回合在等待审批期间持有 executionMu（h.request
+	// 阻塞在 session/prompt），审批应答若走同一把锁会永远排队（死锁：回合等
+	// 审批、审批等回合）。决策回写只触 handle 的 one-shot map + 桥 JSON-RPC
+	// 应答，与回合执行天然互不干扰（ResolvePermission 自带 one-shot 校验）。
+	if commandKind(cmd) == "permission.approve" || commandKind(cmd) == "permission.reject" {
+		return r.respondPermission(ctx, cmd)
+	}
 	r.executionMu.Lock()
 	defer r.executionMu.Unlock()
 	kind := commandKind(cmd)

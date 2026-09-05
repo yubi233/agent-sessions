@@ -2204,6 +2204,10 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     final recovery = ref.watch(sessionRecoveryControllerProvider);
     final viewController = ref.watch(sessionViewControllerProvider);
     final viewMode = viewController.modeFor(widget.sessionId);
+    // V087-12/V088-13 诊断：详情页 build 计数（localdev 钩子据此确认导航落地）。
+    // 计数在 build 内自增——此前只有声明无递增，钩子的「计数增长」判定恒假，
+    // 真实栈只能靠 30s 超时兜底（navigate-timeout 误报）。
+    SessionDetailScreen.pageBuilds += 1;
     // ignore: avoid_print
     print('V087PAGE build session=${widget.sessionId} viewMode=$viewMode timeline=${sessions.timeline.length}');
     final session = sessions.selectedSession;

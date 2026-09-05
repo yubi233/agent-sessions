@@ -220,6 +220,22 @@ func TestDaemonCapabilitiesAlwaysAdvertiseReadonlyChannel(t *testing.T) {
 	}
 }
 
+// TestDaemonCapabilitiesAdvertiseSessionControlKinds（V088-14/15 真实栈首曝回归）：
+// 会话控制命令面（mode.set/question.answer/plan.action/goal.action/skill.invoke/
+// permission.approve|reject/session.fork）必须有 hello 声明——capabilityForCommand
+// 已映射这些 kind，但 hello 缺声明时 relay 门一律 CAPABILITY_UNSUPPORTED，
+// 移动端权限切档在真实栈不可达（v0.8.3 起的潜在缺陷，V088-15 首曝）。
+func TestDaemonCapabilitiesAdvertiseSessionControlKinds(t *testing.T) {
+	capabilities := daemonCapabilities()
+	for _, expected := range []string{
+		"permission_mode", "permission", "question", "plan", "goal", "invoke_skill", "fork",
+	} {
+		if !containsCapability(capabilities, expected) {
+			t.Fatalf("capabilities=%v, missing %q", capabilities, expected)
+		}
+	}
+}
+
 func containsCapability(capabilities []string, expected string) bool {
 	for _, capability := range capabilities {
 		if capability == expected {
