@@ -127,8 +127,10 @@ func TestBridgeFactMatrixGuard(t *testing.T) {
 		}
 	}
 
-	// attachments：桥 admission 已实现，但 Relay opaque attachment ref 链路未接通，
-	// 保持 unsupported 且 reason 如实（不残留「仅接受 text 块」旧口径）。
+	// attachments：v0.8.8 P1-P4 升格（emulated）——daemon 拉取出口 + 本机 DEK Open
+	// 契约（attachment_open.go，迭代计划 §9.1）+ 全链回归（V088-02/03/06）+
+	// 端到端（V088-09）。守护锚点：状态锁定 emulated（桥 admission 上限），
+	// reason 必须引用套件证据，旧口径不得残留。
 	c, ok := byName["attachments"]
 	if !ok {
 		t.Fatalf("能力矩阵缺少 attachments")
@@ -136,10 +138,41 @@ func TestBridgeFactMatrixGuard(t *testing.T) {
 	if !bridgeImplementedACP["image admission"] {
 		t.Fatalf("桥事实清单应登记 image admission（P1 起已实现）")
 	}
-	if c.Status != adapter.CapabilityUnsupported {
-		t.Fatalf("Relay opaque ref 链路接入前 attachments 保持 unsupported，得到 %s", c.Status)
+	if c.Status != adapter.CapabilityEmulated {
+		t.Fatalf("V088 升格后 attachments 应为 emulated（桥 admission 上限），得到 %s", c.Status)
 	}
-	if !strings.Contains(c.Reason, "opaque attachment ref") || strings.Contains(c.Reason, "仅接受 text 块") {
-		t.Fatalf("attachments reason 与桥事实不一致: %q", c.Reason)
+	if !strings.Contains(c.Reason, "V088-02") || !strings.Contains(c.Reason, "§9.1") {
+		t.Fatalf("attachments reason 必须引用 V088 证据与契约锚点: %q", c.Reason)
+	}
+	for _, stale := range []string{"未接通", "仅接受 text 块", "接入后按 deployment 条件升格"} {
+		if strings.Contains(c.Reason, stale) {
+			t.Fatalf("attachments reason 残留失效旧口径 %q: %q", stale, c.Reason)
+		}
+	}
+
+	// file_read / git_read：v0.8.8 P2-P4 升格（native）——应用层只读命令通道
+	// （恒声明 + ReadOnlyDispatcher 沙箱 + 移动端真实传输消费者）。守护锚点：
+	// 状态锁定 native、reason 引用 V088 证据、桥 ACP fs/* 排除口径必须保留
+	// （ADR-014 §9 的两套授权真相边界不因应用层通道升格而失效）。
+	for _, item := range []struct {
+		capName  string
+		evidence string
+	}{{"file_read", "V088-08"}, {"git_read", "V088-07"}} {
+		rc, ok := byName[item.capName]
+		if !ok {
+			t.Fatalf("能力矩阵缺少 %q", item.capName)
+		}
+		if rc.Status != adapter.CapabilityNative {
+			t.Fatalf("V088 升格后 %s 应为 native，得到 %s", item.capName, rc.Status)
+		}
+		if !strings.Contains(rc.Reason, item.evidence) {
+			t.Fatalf("%s reason 必须引用 V088 证据: %q", item.capName, rc.Reason)
+		}
+		if !strings.Contains(rc.Reason, "ADR-014 §9") {
+			t.Fatalf("%s reason 必须保留桥 ACP 排除口径（ADR-014 §9）: %q", item.capName, rc.Reason)
+		}
+		if strings.Contains(rc.Reason, "未实现") {
+			t.Fatalf("%s reason 残留失效旧口径: %q", item.capName, rc.Reason)
+		}
 	}
 }

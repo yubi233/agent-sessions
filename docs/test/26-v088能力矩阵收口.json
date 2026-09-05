@@ -12,7 +12,7 @@
     {
       "id": "V088-01",
       "title": "契约门：events.json/命令 kind 清单零改动 + refs schema 冻结复核",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "contract",
       "priority": "P0",
@@ -27,7 +27,11 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "git diff 37207fe..HEAD packages/protocol/schema/events.json = 0 行（V088 全部提交零改动）",
+        "refs schema 复核：fixtureAttachmentRef{attachment_id,mime,size_bytes,sha256} 与 mobile _completedAttachmentRefs 发送形状一致（P0 冻结现状裁决）",
+        "go test ./internal/domain ./internal/relay schema 白名单族全绿；V088-01 契约门随 test:v088:local 全绿"
+      ]
     },
     {
       "id": "V088-02",
@@ -75,7 +79,7 @@
     {
       "id": "V088-04",
       "title": "能力矩阵升格与守护测试同步：attachments/git_read/file_read 新状态 + 证据 reason；未动能力零漂移",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1-P3",
       "category": "matrix",
       "priority": "P0",
@@ -89,7 +93,11 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "successMatrix 三项升格（attachments→emulated 桥 admission 上限、file_read/git_read→native），reason 按 §9.3 冻结模板引用 V088 套件证据 + ADR-014 §9 排除口径保留",
+        "go test ./internal/adapter/dsh -run TestBridgeFactMatrixGuard — 守护测试同步修订后全绿（状态锁定 + 证据 reason 锚点 + 旧口径负向断言 + 未动能力零漂移）",
+        "fixture dsh 矩阵对齐升格后口径；V083-22/24 既有 gating 测试全绿（delegation 仍 unsupported 负向断言保持）"
+      ]
     },
     {
       "id": "V088-05",
@@ -221,7 +229,7 @@
     {
       "id": "V088-11",
       "title": "回归：v081–v087 聚合链式 + V085-04/05 既有附件语义 + schema 门 + 全量 flutter test 分诊",
-      "status": "pending",
+      "status": "passed",
       "phase": "P4",
       "category": "regression",
       "priority": "P0",
@@ -235,7 +243,10 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "task test:v083:local / v084 / v085 / v086 / v087 / v088 链式全部 exit=0（P4 收口日）",
+        "全量 flutter test 487 用例 All tests passed（新增/受影响文件零失败）"
+      ]
     },
     {
       "id": "V088-12",

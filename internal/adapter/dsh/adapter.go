@@ -461,17 +461,25 @@ func successMatrix(version string, catalogs ...ModelCatalog) adapter.Capabilitie
 				}
 			}
 		case "attachments":
-			// v0.8.3 P5：桥 admission 已实现且 SendContent 通道就绪；生产链路剩余
-			// Relay opaque attachment ref（附件 id → Daemon 授权解密 → 图像块），
-			// 未接通前保持 unsupported（text-only/缺服务部署本就准确拒绝，不伪造）。
-			status = adapter.CapabilityUnsupported
-			reason = "桥 admission 与 SendContent 通道就绪；Relay opaque attachment ref 接入后按 deployment 条件升格"
+			// v0.8.8 P1-P4 升格（emulated）：opaque attachment ref 全链路成立——
+			// daemon 拉取出口（NewRelayLoop 注册 fetchAndOpenAttachment）+ 本机 DEK
+			// Open 契约（attachment_open.go，迭代计划 §9.1）+ mobile Seal 同构字节级
+			// 回归（V088-02/03）+ localdev 端到端（V088-09）。明文只经内存；
+			// 桥 admission 上限 emulated，Keystore 实机 gate 承接 V085。
+			status = adapter.CapabilityEmulated
+			reason = "opaque attachment ref 全链路成立（daemon 拉取出口 + 本机 DEK Open 契约 §9.1 + 全链回归 V088-02/03）；明文只经内存，桥 admission 上限 emulated，Keystore 实机 gate 承接 V085"
 		case "file_read":
-			status = adapter.CapabilityUnsupported
-			reason = "桥 fs/* 请求按 -32601 拒绝，未接入文件读取"
+			// v0.8.8 P2-P4 升格（native）：应用层只读命令通道成立——daemonCapabilities
+			// 恒声明（V088-05）+ ReadOnlyDispatcher 沙箱 + 文件树/查看消费者真实传输
+			// （V088-08/10）。桥 ACP fs/* 维持 -32601（ADR-014 §9 两套授权真相不变）。
+			status = adapter.CapabilityNative
+			reason = "应用层只读命令通道成立（恒声明 + ReadOnlyDispatcher 沙箱 + 文件树/查看消费者 V088-08/10 证据）；桥 ACP fs/* 维持 -32601（ADR-014 §9）"
 		case "git_read":
-			status = adapter.CapabilityUnsupported
-			reason = "桥未实现 git 读取能力"
+			// v0.8.8 P2-P4 升格（native）：应用层只读命令通道成立——恒声明 +
+			// ReadOnlyDispatcher 沙箱（internal/gitread）+ GitDiff 真实传输
+			// （V088-07/10）。桥 ACP git 工具维持不做（ADR-014 §9 理由不变）。
+			status = adapter.CapabilityNative
+			reason = "应用层只读命令通道成立（恒声明 + ReadOnlyDispatcher 沙箱 + GitDiff 真实传输 V088-07/10 证据）；桥 ACP git 工具维持不做（ADR-014 §9）"
 		case "usage":
 			status = adapter.CapabilityNative
 		case "fork":

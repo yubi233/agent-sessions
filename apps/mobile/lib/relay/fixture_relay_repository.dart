@@ -1058,7 +1058,8 @@ class FixtureRelayRepository implements RelayRepository {
             'invoke_skill',
             'model_select',
             'effort_select',
-            'attachments',
+            // v0.8.8 P4：attachments 升格后为 emulated（桥 admission 上限）——
+            // fixture 矩阵与真实 successMatrix 对齐，不再按 native 消费。
             'permission_mode',
             'fork',
             'delegate_session',
@@ -1067,7 +1068,7 @@ class FixtureRelayRepository implements RelayRepository {
             'file_read',
             'git_read',
           },
-          emulated: const {'delegate_cross_provider'},
+          emulated: const {'delegate_cross_provider', 'attachments'},
         ),
         _fixtureProvider(
           'dsh',
@@ -1081,6 +1082,9 @@ class FixtureRelayRepository implements RelayRepository {
             // v0.8.3 P5 升格：deterministic overlay 通过后全链路成立。
             'permission_mode',
             'fork',
+            // v0.8.8 P4 升格：应用层只读命令通道成立（恒声明 + 沙箱 + 真实传输）。
+            'file_read',
+            'git_read',
           },
           emulated: const {
             'permission',
@@ -1090,13 +1094,13 @@ class FixtureRelayRepository implements RelayRepository {
             'goal',
             'skill_catalog',
             'invoke_skill',
+            // v0.8.8 P4 升格：opaque attachment ref 全链路成立，桥 admission 上限
+            // emulated（Keystore 实机 gate 承接 V085）。
+            'attachments',
           },
-          // 与 internal/adapter/dsh successMatrix P5 口径一致：
-          // 升格项 reason 引用 gate 证据；未接通项如实标注残余链路。
+          // 与 internal/adapter/dsh successMatrix v0.8.8 口径一致：
+          // 升格项 reason 引用套件证据；未接通项如实标注残余链路。
           unsupportedReasons: const {
-            'attachments': '桥 admission 与 SendContent 通道就绪；Relay opaque attachment ref 接入后按 deployment 条件升格',
-            'file_read': '桥 fs/* 请求按 -32601 拒绝，未接入文件读取',
-            'git_read': '桥未实现 git 读取能力',
             'delegate_session': '桥未实现会话委托',
             'delegate_cross_provider': '桥未实现跨 Provider 委托',
           },
