@@ -275,7 +275,7 @@
     {
       "id": "V087-12",
       "title": "实机可选：真实 dsh 回合双证据（截图 + 埋点日志），授权口径 real_model=true",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3",
       "category": "real",
       "priority": "P2",
@@ -290,8 +290,12 @@
         "结束清理桥子进程与采集产物中的敏感内容"
       ],
       "evidence": [
-        "e2e-verify/reports/"
-      ]
+        "e2e-verify/real/v087-real-live.mjs（真实栈 harness：restart.sh 起栈 + workspace.sync_dsh + lease/start + App localdev 自动发送）",
+        "e2e-verify/reports/ADAPTER-DSH/v087-real-live-2026-09-05T08-43-21-191Z.json（status=passed，real_model=true/real_upstream=true/headless=false）",
+        "同回合 streaming-gate：252 usable 采样、35 次严格递增、212 条 stream_delta（多块：assistant 19 块/thought 多块，块内单调）、首字延迟 15.1s、终态追平 729/729、reconcile consistent",
+        "Taskfile test:v087:real（AGENT_SESSIONS_DSH_REAL=1 授权门）"
+      ],
+      "notes": "2026-09-05 用户授权后执行 passed：真实 DSH 桥 + nemotron-3-ultra-free 免费池，App（localdev 可见窗口）自己发送演示问句，真实模型增量 214 条经完整真实栈到达，打字机组件逐帧构建（revealed 35 次严格递增）至终态追平。调试期间修复三处真实栈事实：① 多块流（thought/assistant 按 step 分块）→ sink 以累计回退检测新块 + schema v2 block 字段；② 追平判定以当前时间线为基准；③ localdev 冷启动导航确认（pageBuilds 信号重发 go）。残余：人审帧里可见页面被最近会话恢复导航覆盖（localdev quirk，流式机制机读证据不受影响），留遗留问题。"
     }
   ]
 }

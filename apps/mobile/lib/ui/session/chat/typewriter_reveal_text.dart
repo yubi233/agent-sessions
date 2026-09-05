@@ -112,8 +112,6 @@ class _TypewriterRevealTextState extends State<TypewriterRevealText> {
 
   /// 按需启停释放定时器：仅「已启用 + 仍在流式 + 有未释放字符」时运行。
   void _syncTimer() {
-    // ignore: avoid_print
-    print('V087SYNC enabled=$_effectiveEnabled streaming=${widget.streaming} revealed=$_revealed target=${widget.text.length}');
     final needsTimer =
         _effectiveEnabled &&
         widget.streaming &&

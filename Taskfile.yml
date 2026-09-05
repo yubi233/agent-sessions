@@ -366,6 +366,17 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
       - node e2e-verify/mobile/run-macos.mjs --test test/session_controller_test.dart --test test/session_trajectory_view_test.dart --case V085-23 --visual-scenario VISUAL-MOBILE-37
 
+  test:v087:real:
+    desc: v0.8.7 V087-12 真实 LLM 流式双证据 gate（需显式 AGENT_SESSIONS_DSH_REAL=1：真实 DSH 桥 + 免费池模型 + macOS App localdev 可见窗口；App 自动发送演示问句，双证据=App 采样/埋点经 validateV087StreamingGate + Relay delta 时间线；消耗免费池额度）
+    cmds:
+      - |
+        if [[ "${AGENT_SESSIONS_DSH_REAL:-}" != "1" ]]; then
+          echo "test:v087:real blocked: set AGENT_SESSIONS_DSH_REAL=1 (V087-12 用户已授权 2026-09-05) 并确认 cordis.yml 与 DSH bin 就绪" >&2
+          exit 2
+        fi
+      - caffeinate -u -t 5 >/dev/null 2>&1 || true
+      - node e2e-verify/real/v087-real-live.mjs
+
   test:v085:real:
     desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度。默认 grok-4.6 @ api.aabsv.sbs；可切 gpt-5.6-terra @ api.paktf.sbs：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra）
     cmds:

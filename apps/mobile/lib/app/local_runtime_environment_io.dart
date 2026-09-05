@@ -60,6 +60,13 @@ String get localVisualTelemetryExportPath {
   return '${Directory.systemTemp.path}/$name/streaming-gate.json';
 }
 
+/// v0.8.7 V087-12（真实栈口径）：localdev 模式注入的自动发送文本。非空时
+/// App 打开目标会话页后自己发送该消息——在途轮询与打字机渲染只有 App 自己
+/// 的 sendMessage 才会驱动，API 侧发送不产生可见流式。文本由 harness 固定
+/// 演示问句注入，不承载用户输入。
+String get localDevSendMessageFromRuntime =>
+    Platform.environment['LOCAL_DEV_SEND_MESSAGE'] ?? '';
+
 int get localVisualFrameCountFromRuntime =>
     _compileTimeLocalVisualFrameCount > 0
     ? _compileTimeLocalVisualFrameCount

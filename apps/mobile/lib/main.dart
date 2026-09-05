@@ -26,6 +26,7 @@ import 'storage/secure_token_store.dart';
 import 'storage/theme_preference_store.dart';
 import 'ui/app_theme.dart';
 import 'ui/session/chat/typewriter_reveal_text.dart';
+import 'ui/session_screens.dart' show SessionDetailScreen;
 import 'ui/code_viewer_screens.dart';
 
 const _compileTimeLocalFixtureMode = bool.fromEnvironment('LOCAL_FIXTURE_MODE');
@@ -359,16 +360,15 @@ class _LocalVisualScenarioCoordinatorState
       _runV087TypewriterStreamingScenario();
     } else if (widget.sessionId != null) {
       _openSessionWhenReady();
+      // v0.8.7 V087-12（真实栈口径）：localdev 注入发送文本时，打开会话页后
+      // 由 App 发起真实回合（采样+埋点导出与 fixture 场景共用同一采样器）。
+      unawaited(_maybeRunV087LocaldevSamplingTurn());
     }
   }
 
   /// v0.8.7 打字机流式可见场景（V087-08/09）：打开会话页并经 session
   /// controller 触发时间释放流式回合（真实时钟 ≈16.4s），让在途轮询
   /// （250ms 收紧档）与打字机释放动画在可见窗口真实运行。
-  ///
-  /// 采样：200ms 节拍记录「已释放前缀长度（动画）/ 已到达全文长度（数据）」，
-  /// 回合终态后把采样序列 + 移动端流式埋点一并写入 LOCAL_VISUAL_TELEMETRY_PATH
-  /// （e2e 校验器读取，作为门禁 1/2 的机读判定源；路径经 `open --env` 传入）。
   Future<void> _runV087TypewriterStreamingScenario() async {
     final sessionId = widget.sessionId;
     final ownerDeviceId = widget.localVisualOwnerDeviceId;
@@ -384,15 +384,99 @@ class _LocalVisualScenarioCoordinatorState
     ref.read(appRouterProvider).go('/sessions/$sessionId');
     // 等待会话页首帧渲染完成，再启动流式回合。
     await Future<void>.delayed(const Duration(milliseconds: 800));
-    TypewriterRevealText.diagnostics.reset();
-    final turn = sessions.sendMessage(
+    await _startV087SamplingTurn(
+      sessionId: sessionId,
       message: 'v087 timed',
       deviceId: ownerDeviceId,
+      maxTicks: 400,
+    );
+  }
+
+  /// v0.8.7 V087-12（真实栈口径）：localdev 模式下若注入 LOCAL_DEV_SEND_MESSAGE，
+  /// 打开会话页后由 App 自己发送该消息——在途轮询（250ms 收紧档）只有
+  /// App 自己的 sendMessage 才会驱动，API 侧发送不产生打字机渲染。
+  /// 真实免费池回合常见 30-60s，采样预算放宽到 800 拍（×200ms = 160s）。
+  Future<void> _maybeRunV087LocaldevSamplingTurn() async {
+    final sessionId = widget.sessionId;
+    final message = localDevSendMessageFromRuntime;
+    if (sessionId == null || message.isEmpty) return;
+    // localdev 冷启动（owner bootstrap → 认证 → 会话列表加载）可能远超
+    // _openSessionWhenReady 的 4s 窗口：这里自行等待就绪（最长 60s）、选择
+    // 会话并重新导航，避免停留在主页导致打字机气泡不挂载。
+    for (var attempt = 0; attempt < 240; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      final sessions = ref.read(sessionControllerProvider);
+      final ready = app.isAuthenticated &&
+          app.currentDevice?.id != null &&
+          sessions.sessions.any((session) => session.id == sessionId);
+      if (ready) break;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    final sessions = ref.read(sessionControllerProvider);
+    final device = ref.read(appControllerProvider).currentDevice;
+    final deviceId = device?.id;
+    if (deviceId == null || !sessions.sessions.any((session) => session.id == sessionId)) {
+      return;
+    }
+    // V087-12：真实免费池回合常见 1-3 分钟，超出 v0.8.6 默认轮询总窗
+    // （90s）会触发 App 侧显式超时并停止轮询——真实证据采集场景放宽窗口
+    // （前台 120s@250ms + 后台 120s@500ms = 240s）。仅在 harness 注入
+    // LOCAL_DEV_SEND_MESSAGE 时生效，产品路径不变。字段为 v0.8.6 的
+    // @visibleForTesting 注入口，此处是同一仓库内的诊断门用途。
+    // ignore: invalid_use_of_visible_for_testing_member
+    sessions
+      // ignore: invalid_use_of_visible_for_testing_member
+      ..foregroundPollAttempts = 480
+      // ignore: invalid_use_of_visible_for_testing_member
+      ..backgroundPollAttempts = 240;
+    await sessions.selectSession(sessionId);
+    // 导航落地确认：booting 阶段的 router redirect 会把过早的 go() 弹到
+    // /connect（空白壳），以「会话详情页真正 build 过」为信号，未落地则
+    // 重发导航（最长 30s）。
+    final router = ref.read(appRouterProvider);
+    final baseline = SessionDetailScreen.pageBuilds;
+    for (var attempt = 0; attempt < 30; attempt += 1) {
+      router.go('/sessions/$sessionId');
+      await Future<void>.delayed(const Duration(milliseconds: 1000));
+      if (SessionDetailScreen.pageBuilds > baseline) break;
+    }
+    if (SessionDetailScreen.pageBuilds <= baseline) {
+      // ignore: avoid_print
+      print('V087REAL navigate-timeout');
+      return;
+    }
+    // ignore: avoid_print
+    print('V087REAL navigated /sessions/$sessionId');
+    // 等待会话页首帧稳定，再启动真实回合。
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    await _startV087SamplingTurn(
+      sessionId: sessionId,
+      message: message,
+      deviceId: deviceId,
+      maxTicks: 800,
+    );
+  }
+
+  /// 发送消息并启动 200ms 节拍采样：记录「已释放前缀长度（动画）/ 已到达
+  /// 全文长度（数据）」，回合终态且释放动画追平（对账收敛）后，把采样序列
+  /// + 移动端流式埋点写入 [localVisualTelemetryExportPath]（V087-08/09 与
+  /// V087-12 双门禁的机读判定源；fixture 与真实栈共用同一采样器）。
+  Future<void> _startV087SamplingTurn({
+    required String sessionId,
+    required String message,
+    required String deviceId,
+    required int maxTicks,
+  }) async {
+    final sessions = ref.read(sessionControllerProvider);
+    TypewriterRevealText.diagnostics.reset();
+    final turn = sessions.sendMessage(
+      message: message,
+      deviceId: deviceId,
       canWrite: true,
     );
     final samples = <Map<String, Object?>>[];
     final startedAt = DateTime.now();
-    // 采样定时器：self-canceling，终态或 200 拍上限后停止（无需持有句柄）。
+    // 采样定时器：self-canceling，终态追平或拍数上限后停止（无需持有句柄）。
     Timer.periodic(const Duration(milliseconds: 200), (timer) {
       final controller = ref.read(sessionControllerProvider);
       final completed = controller.timeline.any((event) => event.completedTurn);
@@ -410,13 +494,15 @@ class _LocalVisualScenarioCoordinatorState
         'target_chars': targetText?.length,
       });
       final revealedNow = TypewriterRevealText.diagnostics.revealed;
-      final targetNow = TypewriterRevealText.diagnostics.target;
+      final timelineTarget = targetText?.length ?? 0;
+      // 追平判定以「当前时间线的 assistant 文本长度」为基准（widget 上报的
+      // diagnostics 可能滞后于最后一次 merge）；revealed 为 null 视为 UI 尚未
+      // 挂载打字机（真实栈 localdev 等价于已整段显示）。
       final caughtUp =
           revealedNow == null ||
-          targetNow == null ||
-          revealedNow >= targetNow;
+          (timelineTarget > 0 && revealedNow >= timelineTarget);
       // completed 后还要等释放动画追平（对账收敛），终态样本才允许定稿。
-      if ((completed && caughtUp) || timer.tick >= 400) {
+      if ((completed && caughtUp) || timer.tick >= maxTicks) {
         timer.cancel();
         _writeV087StreamingEvidence(
           localVisualTelemetryExportPath,
@@ -424,6 +510,19 @@ class _LocalVisualScenarioCoordinatorState
             'schema': 'v087-streaming-gate',
             'samples': samples,
             'telemetry': sessions.streamingTelemetry.export(),
+            // 控制器真相快照：finalize 时刻的时间线形态（kind+文本长度序列），
+            // 用于对账 UI 渲染与控制器状态的分叉（V087-12 真实栈诊断）。
+            'final_timeline': sessions.timeline
+                .map((event) => <String, Object?>{
+                    'seq': event.sequence,
+                    'kind': event.kind.name,
+                    'text_len': event.text?.length,
+                    'streaming': event.isStreaming,
+                    'completed_turn': event.completedTurn,
+                  })
+                .toList(),
+            'final_target_chars': timelineTarget,
+            'final_revealed': revealedNow,
           },
         );
       }

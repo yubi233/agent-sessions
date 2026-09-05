@@ -10,7 +10,10 @@
 library;
 
 /// 导出 schema 版本；字段演进必须升版本，消费方按版本判读。
-const int kStreamingTelemetrySchemaVersion = 1;
+/// v2（V087-12）：stream_delta 增加可选 `block` 字段——真实桥按 step 分多条
+/// assistant 消息（新块累积重新开始），sink 以累计回退检测新块并递增序号，
+/// 校验器按（身份, block）分段校验块内单调；缺失时视为 block 0（向后兼容）。
+const int kStreamingTelemetrySchemaVersion = 2;
 
 /// ring buffer 默认容量：覆盖约 2 分钟在途窗口（240 次轮询 + delta + 对账）。
 const int kStreamingTelemetryDefaultCapacity = 2000;
@@ -45,12 +48,16 @@ class _FrameState {
   int cumulativeChars;
   int lastStreamChars;
   DateTime lastTs;
+  // V087-12 真实桥事实：回答按 step 分多条 assistant 消息，投影层 message_id
+  // 缺失无法区分身份；以「累计长度回退」作为新块边界，block 序号随回退递增，
+  // 供校验器按块分段校验单调性（块内单调 = 打字机核心主张）。
+  int blockIndex;
 
   _FrameState({
     required this.cumulativeChars,
     required this.lastStreamChars,
     required this.lastTs,
-  });
+  }) : blockIndex = 0;
 }
 
 /// 流式埋点 sink：内存 ring buffer + schema v1 导出。
@@ -134,9 +141,25 @@ class StreamingTelemetry {
           ...identity,
           'latency_ms': now.difference(_sendAcceptedAt!).inMilliseconds,
         });
+      } else if (text.length < state.cumulativeChars) {
+        // 累计回退 = 新块开始（真实桥按 step 分多条消息）：重置块内计数并
+        // 递增 block 序号；本帧作为新块的起点记录（增量为整块首帧长度）。
+        state.blockIndex += 1;
+        _record('stream_delta', {
+          ...identity,
+          'block': state.blockIndex,
+          'delta_chars': text.length,
+          'cumulative_chars': text.length,
+          'since_last_ms': now.difference(state.lastTs).inMilliseconds,
+        });
+        state
+          ..cumulativeChars = text.length
+          ..lastStreamChars = text.length
+          ..lastTs = now;
       } else {
         _record('stream_delta', {
           ...identity,
+          'block': state.blockIndex,
           'delta_chars': text.length - state.cumulativeChars,
           'cumulative_chars': text.length,
           'since_last_ms': now.difference(state.lastTs).inMilliseconds,

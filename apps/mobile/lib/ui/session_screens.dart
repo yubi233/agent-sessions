@@ -1874,6 +1874,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
 }
 
 class _SessionChatView extends StatelessWidget {
+
   const _SessionChatView({
     required this.sessions,
     required this.recovery,
@@ -2096,6 +2097,10 @@ class _ConversationEmptyHero extends StatelessWidget {
 /// duration/equal-width 模式）与 record inspector 展示。真实 timeline 缩放/虚拟化
 /// 与选区重映射仍在 P6 后续阶段，本切片先固化「按投影渲染 + 搜索 + 折叠」契约。
 class SessionDetailScreen extends ConsumerStatefulWidget {
+  /// V087-12 诊断：会话详情页 build 计数（localdev 钩子据此确认导航落地）。
+  static int pageBuilds = 0;
+
+
   const SessionDetailScreen({required this.sessionId, super.key});
 
   final String sessionId;

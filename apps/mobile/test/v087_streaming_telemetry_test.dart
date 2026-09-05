@@ -287,6 +287,7 @@ void main() {
         'delta_chars',
         'cumulative_chars',
         'since_last_ms',
+        'block',
       },
       'stream_completed_reconcile': {
         'seq',
@@ -384,5 +385,42 @@ void main() {
       );
     }
     expect(telemetry.length, 3);
+  });
+
+  // V087-12 真实桥事实：回答按 step 分多条 assistant 消息（新块累积重新开始，
+  // message_id 缺失无法区分身份）。sink 以累计回退检测新块并递增 block 序号，
+  // 块内增量与累计保持单调，reconcile 以当前块对账。
+  test('V087-12 sink 多块流：累计回退递增 block、块内单调、终态按当前块对账', () {
+    final telemetry = StreamingTelemetry(now: () => _now);
+    telemetry.observeSendAccepted();
+    var seq = 0;
+    void frame(String text, {bool streaming = true}) {
+      telemetry.observeStreamingFrame(
+        sessionId: 's1',
+        seq: ++seq,
+        kind: 'assistant',
+        messageId: null,
+        text: text,
+        streaming: streaming,
+      );
+    }
+
+    frame('第一块'); // block 0 首帧
+    frame('第一块续'); // block 0 增量
+    frame('二'); // 累计回退 → block 1 起点
+    frame('第二块'); // block 1 增量
+    frame('第二块', streaming: false); // 终态对账（completed 全文=当前块）
+
+    final deltas = telemetry.events
+        .where((event) => event.type == 'stream_delta')
+        .toList();
+    // 块 0：'第一块'→首帧不计 delta（first_delta），'第一块续'→delta；
+    // 块 1：'二'（回退帧）+ '第二块' 两条 delta。
+    expect(deltas.map((e) => e.fields['block']), [0, 1, 1]);
+    expect(deltas.map((e) => e.fields['cumulative_chars']), [4, 1, 3]);
+    final reconcile = telemetry.events
+        .firstWhere((event) => event.type == 'stream_completed_reconcile');
+    expect(reconcile.fields['consistent'], isTrue);
+    expect(reconcile.fields['final_chars'], 3);
   });
 }

@@ -14,6 +14,9 @@ int get localVisualFrameCountFromRuntime => 0;
 /// v0.8.7 流式门禁证据导出路径：非 io 平台恒为空串（场景仅存在于 macOS debug）。
 String get localVisualTelemetryExportPath => '';
 
+/// v0.8.7 V087-12 真实栈自动发送文本：非 io 平台无进程环境，恒为空串。
+String get localDevSendMessageFromRuntime => '';
+
 int get localVisualFrameIntervalMsFromRuntime => 0;
 
 Future<void> writeLocalVisualFrame(String outputPath, Uint8List bytes) async {}

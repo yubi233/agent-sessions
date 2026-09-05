@@ -612,13 +612,31 @@ export function validateV087StreamingGate({
       break;
     }
   }
-  let cumulative = 0;
+  // v0.8.7 V087-12 真实回合修正：thought 与 assistant 是两条独立累积的流
+  // （各自从 0 递增到各自终长），全局串行检查会误判"非单调"。按身份分组
+  // 后逐组校验单调性，组间不比较。
+  // V087-12 真实回合事实：模型输出按 step 分多条消息（thought 与 assistant 都
+  // 可能是多块），sink 以「累计回退」检测新块并递增 block 序号。校验按
+  // （身份, block）分段：块内累计必须单调（打字机核心主张——每块都是逐步
+  // 生长的），块间允许重置；至少一个 assistant 块要有实质增长。
+  const blockState = new Map();
+  let bestBlockGrowth = 0;
   for (const delta of deltas) {
-    if (!Number.isFinite(delta.cumulative_chars) || delta.cumulative_chars < cumulative) {
-      failures.push("埋点累计长度非单调");
+    const identity = `${delta.kind ?? "assistant"}|${delta.message_id ?? ""}`;
+    const block = Number.isFinite(delta.block) ? delta.block : 0;
+    const blockKey = `${identity}#${block}`;
+    const previous = blockState.get(blockKey) ?? 0;
+    if (!Number.isFinite(delta.cumulative_chars) || delta.cumulative_chars < previous) {
+      failures.push(`埋点块内累计长度非单调（${blockKey}: ${previous} -> ${delta.cumulative_chars}）`);
       break;
     }
-    cumulative = delta.cumulative_chars;
+    blockState.set(blockKey, delta.cumulative_chars);
+    if ((delta.kind ?? "assistant") === "assistant") {
+      bestBlockGrowth = Math.max(bestBlockGrowth, delta.cumulative_chars);
+    }
+  }
+  if (bestBlockGrowth < minimumDeltas) {
+    failures.push(`assistant 块内增长不足（最大块累计 ${bestBlockGrowth} < ${minimumDeltas}）`);
   }
   if (firstDelta == null || !Number.isFinite(firstDelta.latency_ms)) {
     failures.push("缺少 stream_first_delta（首字延迟未记录）");
