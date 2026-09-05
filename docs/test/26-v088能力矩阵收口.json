@@ -94,7 +94,7 @@
     {
       "id": "V088-05",
       "title": "daemonCapabilities 声明条件：真实适配器声明 file_read/git_read；hello 契约单测",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "daemon",
       "priority": "P0",
@@ -108,7 +108,9 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "go test ./apps/daemon -run 'TestDaemonCapabilities' — TestDaemonCapabilitiesAlwaysAdvertiseReadonlyChannel（file_read/git_read 恒声明，web_read_transport 不得混入）+ 既有 DSH 声明断言；daemonCapabilities() 参数移除（恒声明裁决 §9.3-3）"
+      ]
     },
     {
       "id": "V088-06",
@@ -134,7 +136,7 @@
     {
       "id": "V088-07",
       "title": "GitDiff 真实传输契约：快照/stale/分页/失败态对齐既有 UI 契约；fixture 场景不回归",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "controller",
       "priority": "P0",
@@ -148,7 +150,11 @@
       "cleanup": [
         "无"
       ],
-      "evidence": []
+      "evidence": [
+        "go test ./internal/daemon -run 'TestV088Readonly' — 真实 git 仓库沙箱：git.status 全链（RelayLoop→ReadOnlyDispatcher→LocalDevEventEncoder 投影 tool_result+result 透传→receipt succeeded）；越权路径 fail-closed（WORKSPACE_PATH_DENIED 脱敏、无 tool_result 事件）",
+        "flutter test test/v088_git_read_transport_test.dart（5 用例）— 快照字段映射/diff 分页与 unified 行号解析/SNAPSHOT_STALE→stale/无 lease fail-closed 不提交命令/CAPABILITY_UNSUPPORTED→unavailable",
+        "flutter test test/git_diff_controller_test.dart test/git_diff_screens_test.dart — fixture main/restricted 场景回归全绿"
+      ]
     },
     {
       "id": "V088-08",

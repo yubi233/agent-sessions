@@ -304,7 +304,7 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, 
 	loop.Hostname = hostname
 	loop.Platform = runtime.GOOS
 	loop.WorkspaceManager = workspaceManager
-	loop.Capabilities = daemonCapabilities(useFixtureAdapter)
+	loop.Capabilities = daemonCapabilities()
 	if webRead != nil {
 		// 只在私钥实际可用时声明 browser read capability；缺失配置时 Web endpoint 必须保持
 		// fail-closed，不能因为普通 file_read capability 误认为可加密响应。
@@ -321,8 +321,15 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, 
 // daemonCapabilities 是 Relay 可安全路由到本机的命令能力。DSH 工作区同步和
 // 元数据导入在 RelayLoop 中已有受限执行器；若未在 hello 中声明，客户端会按
 // capability gate 正确隐藏同步目标，造成用户无法发起同步。
-func daemonCapabilities(useFixtureAdapter bool) []string {
-	capabilities := []string{
+//
+// v0.8.8 P2（V088-05，迭代计划 §9.3 裁决 3）：file_read/git_read 改为恒声明——
+// 只读执行器 ReadOnlyDispatcher 在 NewRelayLoop 恒建（relay.go），移动端命令
+// envelope 现状恒为 fixture_payload 形状，dispatcher 缺位/未登记 kind 时执行层
+// 仍 fail-closed（CommandErrorCode → capability_unsupported）。此前仅 fixture
+// 模式声明，导致真实适配器（含 localdev 真实桥）下客户端永久隐藏文件/Git 入口。
+// web_read_transport 与本函数无关：仅在私钥可用时由 cmdRun 单独追加。
+func daemonCapabilities() []string {
+	return []string{
 		"start",
 		"send",
 		"resume",
@@ -332,11 +339,11 @@ func daemonCapabilities(useFixtureAdapter bool) []string {
 		"workspace_create",
 		"dsh_workspace_sync",
 		"dsh_session_import",
+		// 应用层只读通道：与本机 ReadOnlyDispatcher 沙箱一一对应（file.tree/
+		// file.read/code.read/git.status/git.changes/git.diff）。
+		"file_read",
+		"git_read",
 	}
-	if useFixtureAdapter {
-		capabilities = append(capabilities, "file_read", "git_read")
-	}
-	return capabilities
 }
 
 // eventEncoderForRun 集中生产与 fixture 的加密边界：fixture 永远不接触生产 DEK；

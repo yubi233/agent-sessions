@@ -14,6 +14,8 @@ import '../relay/fixture_relay_repository.dart';
 import '../relay/relay_repository.dart';
 import '../relay/http_relay_repository.dart';
 import '../git/git_diff_repository.dart';
+import '../git/readonly_command_gateway.dart';
+import '../git/relay_git_diff_repository.dart';
 import '../files/workspace_files_repository.dart';
 import '../state/app_controller.dart';
 import '../state/code_viewer_controller.dart';
@@ -99,14 +101,42 @@ final relayRepositoryProvider = Provider<RelayRepository>((ref) {
   );
 });
 
-/// Git 读取独立于 Relay 会话 repository：本地 fixture 可验收 UI，而已配置 Relay 时必须等待加密 Daemon RPC。
+/// Git 读取独立于 Relay 会话 repository（明文不进会话时间线契约）：
+/// 本地 fixture 验收 UI；已配置 Relay 时走 v0.8.8 P2 真实传输——只读命令
+/// （git.status/git.diff）经同一 lease/幂等/鉴权链路提交，结果从 tool_result
+/// 事件回读（localdev 明文投影；生产 E2EE 下为密文占位，视图保持不可用）。
 final gitDiffRepositoryProvider = Provider<GitDiffRepository>((ref) {
   const relayBaseUrl = String.fromEnvironment('RELAY_BASE_URL');
   if (relayBaseUrl.isEmpty) {
     return FixtureGitDiffRepository();
   }
-  return const UnavailableDaemonGitDiffRepository();
+  return RelayGitDiffRepository(
+    gateway: ReadonlyCommandGateway(
+      transport: ref.read(relayRepositoryProvider),
+      contextSource: () => _readonlySessionContext(ref),
+    ),
+  );
 });
+
+/// 只读命令的会话上下文：当前选中会话 + 本机持有 lease 的 epoch。
+/// 无会话/无 lease/无设备绑定时返回 null——网关 fail-closed 提示不可用。
+ReadonlySessionContext? _readonlySessionContext(Ref ref) {
+  final sessions = ref.read(sessionControllerProvider);
+  final sessionId = sessions.selectedSessionId;
+  final lease = sessions.selectedLease;
+  final deviceId = ref.read(appControllerProvider).boundDeviceId;
+  if (sessionId == null || deviceId == null || deviceId.isEmpty) {
+    return null;
+  }
+  if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
+    return null;
+  }
+  return ReadonlySessionContext(
+    sessionId: sessionId,
+    deviceId: deviceId,
+    leaseEpoch: lease.epoch,
+  );
+}
 
 /// 只读文件浏览与 Git 一样独立于会话传输：fixture 验收 UI；真实 Relay 未部署加密 Daemon RPC 时不可用。
 final workspaceFilesRepositoryProvider = Provider<WorkspaceFilesRepository>((

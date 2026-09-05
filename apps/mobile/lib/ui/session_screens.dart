@@ -2383,6 +2383,11 @@ class _SessionQuickMenu extends StatelessWidget {
     );
     final resumeBlocked = sessions.resumeBlockedReason(canWrite: canWrite);
     final killBlocked = sessions.killBlockedReason(canWrite: canWrite);
+    // v0.8.8 P2（V088-07 门控）：Git 只读入口按矩阵 git_read 放行——capability
+    // unsupported 时禁用入口（只读视图不要求 canWrite，只看矩阵声明）。
+    final gitReadSupported = sessions.selectedProviderCapabilities
+        .capability('git_read')
+        .isSupported;
     return PopupMenuButton<String>(
       key: const Key('session-quick-menu-button'),
       tooltip: '会话操作',
@@ -2392,6 +2397,7 @@ class _SessionQuickMenu extends StatelessWidget {
           case 'refresh':
             onRefresh?.call();
           case 'git':
+            if (!gitReadSupported) return;
             context.push('/sessions/$sessionId/git');
           case 'observation':
             context.push('/sessions/$sessionId/observation');
@@ -2436,12 +2442,14 @@ class _SessionQuickMenu extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
           ),
         ),
-        const PopupMenuItem(
-          key: Key('session-open-git-button'),
+        PopupMenuItem(
+          key: const Key('session-open-git-button'),
           value: 'git',
+          enabled: gitReadSupported,
           child: ListTile(
             leading: Icon(Icons.difference_outlined),
-            title: Text('查看 Git 变更'),
+            // 矩阵未声明 git_read 时如实展示阻断事实（能力卡与入口双面一致）。
+            title: Text(gitReadSupported ? '查看 Git 变更' : '查看 Git 变更（当前 Provider 未启用）'),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),

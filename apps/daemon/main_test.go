@@ -195,13 +195,28 @@ func TestCodexAdapterRegistrationFollowsFeatureFlag(t *testing.T) {
 }
 
 func TestDaemonCapabilitiesAdvertiseDSHWorkspaceOperations(t *testing.T) {
-	for _, fixture := range []bool{false, true} {
-		capabilities := daemonCapabilities(fixture)
-		for _, expected := range []string{"dsh_workspace_sync", "dsh_session_import"} {
-			if !containsCapability(capabilities, expected) {
-				t.Fatalf("fixture=%v capabilities=%v, missing %q", fixture, capabilities, expected)
-			}
+	capabilities := daemonCapabilities()
+	for _, expected := range []string{"dsh_workspace_sync", "dsh_session_import"} {
+		if !containsCapability(capabilities, expected) {
+			t.Fatalf("capabilities=%v, missing %q", capabilities, expected)
 		}
+	}
+}
+
+// TestDaemonCapabilitiesAlwaysAdvertiseReadonlyChannel（V088-05，v0.8.8 P2）：
+// file_read/git_read 恒声明——ReadOnlyDispatcher 在 NewRelayLoop 恒建，真实适配器
+// （含 localdev 真实桥）此前因 fixture-only 声明导致客户端永久隐藏文件/Git 入口。
+// 声明与执行边界解耦：dispatcher 缺位时执行层仍 fail-closed（capability_unsupported）。
+// web_read_transport 与本函数无关：仅在私钥可用时由 cmdRun 单独追加，此处不得声明。
+func TestDaemonCapabilitiesAlwaysAdvertiseReadonlyChannel(t *testing.T) {
+	capabilities := daemonCapabilities()
+	for _, expected := range []string{"file_read", "git_read"} {
+		if !containsCapability(capabilities, expected) {
+			t.Fatalf("capabilities=%v, missing %q（恒声明裁决 §9.3-3）", capabilities, expected)
+		}
+	}
+	if containsCapability(capabilities, "web_read_transport") {
+		t.Fatalf("web_read_transport 必须由 cmdRun 按私钥可用性单独追加")
 	}
 }
 

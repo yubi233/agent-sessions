@@ -842,6 +842,19 @@ class FixtureRelayRepository implements RelayRepository {
         _applyPermissionModeSelect(state, input.ciphertext);
       case SessionCommandKind.goalEdit:
         _applyGoalEdit(state, input.ciphertext);
+      // v0.8.8 P2/P3：应用层只读命令（git/file）在 fixture 会话命令面不支持——
+      // fixture 的只读视图走独立 FixtureGitDiff/FixtureWorkspaceFiles 仓库，
+      // 不经会话命令链路；这里 fail-closed 拒绝，不伪造 tool_result 结果。
+      case SessionCommandKind.gitStatus:
+      case SessionCommandKind.gitChanges:
+      case SessionCommandKind.gitDiff:
+      case SessionCommandKind.fileTree:
+      case SessionCommandKind.fileRead:
+      case SessionCommandKind.codeRead:
+        throw const RelayFailure(
+          RelayFailureKind.unavailable,
+          'fixture 会话命令面不支持只读命令（只读视图走独立 fixture 仓库）。',
+        );
     }
     _commandSequence += 1;
     final receipt = SessionCommandReceipt(
@@ -1049,6 +1062,10 @@ class FixtureRelayRepository implements RelayRepository {
             'permission_mode',
             'fork',
             'delegate_session',
+            // v0.8.8 P2：daemonCapabilities 恒声明 file_read/git_read（§9.3-3），
+            // fixture 矩阵与真实 hello 对齐，Git/文件只读入口按矩阵放行。
+            'file_read',
+            'git_read',
           },
           emulated: const {'delegate_cross_provider'},
         ),

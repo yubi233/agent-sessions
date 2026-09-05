@@ -227,6 +227,24 @@ func (e *LocalDevEventEncoder) localDevFixturePayload(sessionID string, event ad
 			"inspect_target": nonEmptyOr(event.Payload["tool_call_id"], ""),
 		}, true
 	case adapter.EventToolResult:
+		// v0.8.8 P2（迭代计划 §3 表）：应用层只读命令结果（ReadOnlyDispatcher 形状：
+		// command_kind + workspace_id + result）投影为独立 "tool_result" 载荷，
+		// result 结构化对象整体透传——移动端 ReadonlyCommandGateway 从 snapshot
+		// 原始事件消费，不进会话时间线正文（timeline 解析层不识别该 kind，保持
+		// 占位）。events.json 顶层 event_type=tool.result 已在枚举，本轮零协议改动。
+		if commandKind := nonEmptyOr(event.Payload["command_kind"], ""); commandKind != "" {
+			if _, hasResult := event.Payload["result"]; hasResult {
+				payload := map[string]any{
+					"kind":         "tool_result",
+					"command_kind": commandKind,
+					"result":       event.Payload["result"],
+				}
+				if workspaceID := nonEmptyOr(event.Payload["workspace_id"], ""); workspaceID != "" {
+					payload["workspace_id"] = workspaceID
+				}
+				return payload, true
+			}
+		}
 		// DSH 结果载荷用 output_text/status(completed|failed)，opencode 风格用
 		// tool_name/output/state；label 优先取 title/tool_name，保留 tool_call_id。
 		name := nonEmptyOr(event.Payload["title"], nonEmptyOr(event.Payload["tool_name"], "工具"))

@@ -630,7 +630,16 @@ enum SessionCommandKind {
   // v0.5/P5-E2：模型设置中的 Goal clear 仍走统一会话命令链路，不在 UI 直接清本地状态。
   goalClear('goal.clear'),
   // v0.5/P5-E3：`/goal ...` command-input 创建目标，同样不能走普通消息发送。
-  goalCreate('goal.create');
+  goalCreate('goal.create'),
+  // v0.8.8 P2/P3（迭代计划 §3 表）：应用层只读命令（daemon ReadOnlyDispatcher
+  // 沙箱对应的六个 kind）。只读结果不进会话时间线正文，经 tool_result 事件由
+  // ReadonlyCommandGateway 消费；命令仍走同一 lease/幂等/鉴权链路。
+  gitStatus('git.status'),
+  gitChanges('git.changes'),
+  gitDiff('git.diff'),
+  fileTree('file.tree'),
+  fileRead('file.read'),
+  codeRead('code.read');
 
   const SessionCommandKind(this.wireValue);
 
@@ -675,6 +684,7 @@ class SessionCommandReceipt {
     required this.status,
     required this.idempotencyKey,
     this.leaseEpoch,
+    this.errorCode,
   });
 
   factory SessionCommandReceipt.fromRelayJson(Map<String, dynamic> json) =>
@@ -684,6 +694,8 @@ class SessionCommandReceipt {
         status: _requiredSessionString(json, 'status'),
         idempotencyKey: _requiredSessionString(json, 'idempotency_key'),
         leaseEpoch: (json['lease_epoch'] as num?)?.toInt(),
+        // v0.8.8 P2：daemon delivery 收口的稳定错误码（只读命令失败原因事实源）。
+        errorCode: json['error_code'] as String?,
       );
 
   final String id;
@@ -691,6 +703,7 @@ class SessionCommandReceipt {
   final String status;
   final String idempotencyKey;
   final int? leaseEpoch;
+  final String? errorCode;
 }
 
 enum SessionTimelineKind {

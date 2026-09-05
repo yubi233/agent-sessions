@@ -45,6 +45,10 @@ class AppController extends ChangeNotifier {
       _phase == AppAuthPhase.authenticated && _tokens != null;
   bool get isBusy => _busy;
   String? get errorMessage => _errorMessage;
+
+  /// v0.8.8 P2：本机绑定设备 id（只读命令 submit 的本地校验面）。
+  /// 与身份库的绑定状态同源，认证状态变化时由 _boundDeviceId 的既有写点维护。
+  String? get boundDeviceId => _boundDeviceId;
   List<Device> get devices => List<Device>.unmodifiable(_devices);
   List<PairingRequest> get pairings =>
       List<PairingRequest>.unmodifiable(_pairings.values);

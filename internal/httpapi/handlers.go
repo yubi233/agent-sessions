@@ -1292,7 +1292,12 @@ func (a *API) handleGetCommand(c *gin.Context) {
 		writeError(c, domain.ErrScopeDenied)
 		return
 	}
-	writeOK(c, newCommandView(cmd))
+	// v0.8.8 P2：补 daemon delivery 错误码（只读命令失败原因映射的事实源）。
+	errorCode := ""
+	if delivery, deliveryErr := a.Sessions.DaemonDeliveryForCommand(c.Request.Context(), cmd.ID); deliveryErr == nil {
+		errorCode = delivery.ErrorCode
+	}
+	writeOK(c, newCommandViewWithDelivery(cmd, errorCode))
 }
 
 // handleCapabilities 返回四类 Provider 的能力矩阵（客户端据此渲染入口）。
@@ -1817,6 +1822,9 @@ type commandView struct {
 	IdempotencyKey   string `json:"idempotency_key"`
 	LeaseEpoch       int64  `json:"lease_epoch,omitempty"`
 	TargetTerminalID string `json:"target_terminal_id,omitempty"`
+	// v0.8.8 P2（V088-07）：daemon delivery 收口的稳定错误码（SNAPSHOT_STALE 等），
+	// 供移动端只读命令（git/file）映射失败原因。命令成功时为空；字段 additive。
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 // delegationView 是 parent 图的安全投影。task_envelope 从不返回；summary_envelope 仍是客户端加密对象。
@@ -1861,6 +1869,14 @@ func newCommandView(command store.CommandRow) commandView {
 		ID: command.ID, Kind: command.Kind, Status: command.Status,
 		IdempotencyKey: command.IdempotencyKey, LeaseEpoch: command.LeaseEpoch, TargetTerminalID: command.TargetTerminalID,
 	}
+}
+
+// newCommandViewWithDelivery 在基础视图上补 daemon delivery 的稳定错误码。
+// delivery 缺失（命令尚未投递到 Terminal）时 errorCode 为空，调用方按 status 处理。
+func newCommandViewWithDelivery(command store.CommandRow, errorCode string) commandView {
+	view := newCommandView(command)
+	view.ErrorCode = errorCode
+	return view
 }
 
 type cipherEventView struct {
