@@ -344,9 +344,10 @@ tasks:
       - git diff --check
 
   test:v087:flutter:
-    desc: v0.8.7 打字机流式 macOS 可见窗口 targeted gate（本地 Flutter 口径，本轮不做 Android 实机；真实可见窗口 headless=false；需先关闭用户正在使用的 Agent Sessions 窗口；VISUAL-MOBILE-39 场景随 P3 定稿后启用 run-macos 行）
+    desc: v0.8.7 打字机流式 macOS 可见窗口 targeted gate（V087-08/09 双门禁：VISUAL-MOBILE-39 时间释放回合连续帧 + 帧级长度采样单调增长 + 同回合埋点导出；本地 Flutter 口径，不做 Android 实机；真实可见窗口 headless=false；需先关闭用户正在使用的 Agent Sessions 窗口）
     cmds:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs --test test/v087_typewriter_streaming_test.dart --test test/local_visual_fixture_test.dart --case V087-08 --visual-scenario VISUAL-MOBILE-39
 
   record:v087:
     desc: v0.8.7 打字机流式录屏（录屏内容先定（2026-09-05）：① fixture 时间释放流式回合全程连续帧——气泡文本逐步增长（门禁 1 人审证据）；② 同回合埋点导出 JSON 文件展示（门禁 2 证据）；③ 状态行相位与"运行中"尾标采样。不作为功能回归替代；record-macos scope v087 随 P3 注册）

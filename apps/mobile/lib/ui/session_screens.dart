@@ -2199,6 +2199,8 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
     final recovery = ref.watch(sessionRecoveryControllerProvider);
     final viewController = ref.watch(sessionViewControllerProvider);
     final viewMode = viewController.modeFor(widget.sessionId);
+    // ignore: avoid_print
+    print('V087PAGE build session=${widget.sessionId} viewMode=$viewMode timeline=${sessions.timeline.length}');
     final session = sessions.selectedSession;
     return Scaffold(
       key: const Key('session-detail-screen'),

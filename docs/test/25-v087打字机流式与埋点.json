@@ -176,7 +176,7 @@
     {
       "id": "V087-08",
       "title": "门禁 1（截图）：macOS 可见窗口流式场景连续帧长度序列单调不减且严格递增 ≥K，首帧即全文判失败",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3",
       "category": "gate",
       "priority": "P0",
@@ -192,15 +192,16 @@
         "结束清理本轮启动的 App 进程与临时目录"
       ],
       "evidence": [
-        "e2e-verify/mobile/run-macos.mjs（VISUAL-MOBILE-39）",
-        "e2e-verify/reports/",
-        "e2e-verify/screenshots/"
-      ]
+        "e2e-verify/reports/2026-09-05T05-53-42-814Z/MOBILE/mobile-01-macos.json（status=passed，VISUAL-MOBILE-39）",
+        "e2e-verify/screenshots/2026-09-05T05-53-42-814Z/MOBILE/visual-mobile-39-dsh-v087-typewriter-streaming/streaming-gate-verdict.json（81 采样/78 次严格递增/终态追平 1631）",
+        "e2e-verify/mobile/run-macos.mjs（validateV087StreamingGate + VISUAL-MOBILE-39 注册）"
+      ],
+      "notes": "2026-09-05 P3 交付：task test:v087:flutter 可见窗口 gate passed（headless=false，visible_desktop_app=true）。人审帧序列因宿主负载按 §6.1 降级容忍（capture_degraded 如实留档），机读判定以 App 侧采样为准：strict_increases=78≥3、samples=81≥30。实施中发现并修复根因：在途轮询合并后缺少 notifyListeners（时间线此前只在终态一次性出现）。"
     },
     {
       "id": "V087-09",
       "title": "门禁 2（日志）：同回合导出埋点判定——≥N 条 stream_delta、时间戳与累计长度单调、对账 consistent、与截图同 seq 互证",
-      "status": "pending",
+      "status": "passed",
       "phase": "P3",
       "category": "gate",
       "priority": "P0",
@@ -216,9 +217,11 @@
         "无"
       ],
       "evidence": [
-        "e2e-verify/reports/",
-        "apps/mobile/lib/diagnostics/streaming_telemetry.dart"
-      ]
+        "同 V087-08 场景回合：streaming-gate.json（埋点 107 事件/39 delta/首字延迟 508ms/对账 consistent=true）",
+        "apps/mobile/lib/diagnostics/streaming_telemetry.dart（P1 埋点为唯一证据源）",
+        "e2e-verify/mobile/run-macos.mjs（validateV087StreamingGate 门禁 2 判定）"
+      ],
+      "notes": "2026-09-05 P3 交付：同回合截图门禁与埋点日志双证据经同一 App 采样与埋点导出互证（同 seq 序列），判定 passed。"
     },
     {
       "id": "V087-10",

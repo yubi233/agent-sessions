@@ -8,6 +8,21 @@ import 'package:flutter/material.dart';
 /// 开关。V087-07 以置关断言回滚形态可用。
 bool typewriterRevealEnabled = true;
 
+/// 打字机释放动画的视觉 gate 采样面（V087-08）。
+///
+/// 记录最近一次释放推进的 (revealed, target) 字符数：视觉场景宿主按固定节拍
+/// 读取并写入 streaming-gate 证据文件（门禁 1 的机读判定源）。生产路径无人
+/// 消费，开销只是两次静态整数字段赋值。
+class TypewriterRevealDiagnostics {
+  int? revealed;
+  int? target;
+
+  void reset() {
+    revealed = null;
+    target = null;
+  }
+}
+
 /// 打字机平滑释放文本（v0.8.7 §3.2 裁决：数据驱动为主 + 平滑释放为辅）。
 ///
 /// fail-closed 约束（防「假打字机」伪造流式）：
@@ -51,6 +66,10 @@ class TypewriterRevealText extends StatefulWidget {
   /// 追赶除数：每 tick 释放 `落后 ~/ divisor + 1` 字符。
   final int catchUpDivisor;
 
+  /// 视觉 gate 采样面（仅视觉场景宿主读写；见 [TypewriterRevealDiagnostics]）。
+  static final TypewriterRevealDiagnostics diagnostics =
+      TypewriterRevealDiagnostics();
+
   @override
   State<TypewriterRevealText> createState() => _TypewriterRevealTextState();
 }
@@ -93,6 +112,8 @@ class _TypewriterRevealTextState extends State<TypewriterRevealText> {
 
   /// 按需启停释放定时器：仅「已启用 + 仍在流式 + 有未释放字符」时运行。
   void _syncTimer() {
+    // ignore: avoid_print
+    print('V087SYNC enabled=$_effectiveEnabled streaming=${widget.streaming} revealed=$_revealed target=${widget.text.length}');
     final needsTimer =
         _effectiveEnabled &&
         widget.streaming &&
@@ -135,6 +156,11 @@ class _TypewriterRevealTextState extends State<TypewriterRevealText> {
       return widget.builder(context, widget.text);
     }
     final safeEnd = _revealed.clamp(0, widget.text.length);
+    // 视觉 gate 采样以「实际渲染的前缀」为准（含 completed 追平帧）——
+    // _tick 之外的对账收敛也必须反映到诊断面，否则终态样本会滞留旧值。
+    TypewriterRevealText.diagnostics
+      ..revealed = safeEnd
+      ..target = widget.text.length;
     return widget.builder(context, widget.text.substring(0, safeEnd));
   }
 }

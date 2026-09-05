@@ -30,6 +30,9 @@ enum LocalVisualScenario {
   // v0.8.5 主计划可见场景：工作区显示名（无写死兜底）+ Agent 预设只读 label +
   // usage timing chips（首字/解码）+ 权限 mode 目录可点（实施记录 24 收口条件）。
   dshV085ReadonlyProjections,
+  // v0.8.7：打字机式流式传输可见场景（时间释放脚本真实时钟驱动，气泡文本
+  // 逐步生长；双门禁证据由场景宿主采样写入 streaming-gate 文件）。
+  dshV087TypewriterStreaming,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -79,6 +82,8 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'dsh-abort-trajectory' => LocalVisualScenario.dshAbortTrajectory,
   'dsh-v085-readonly-projections' =>
     LocalVisualScenario.dshV085ReadonlyProjections,
+  'dsh-v087-typewriter-streaming' =>
+    LocalVisualScenario.dshV087TypewriterStreaming,
   'pairing-pending' => LocalVisualScenario.pairingPending,
   'session-list' => LocalVisualScenario.sessionList,
   'session-detail' => LocalVisualScenario.sessionDetail,
@@ -121,11 +126,15 @@ class LocalVisualFixture {
     required this.tokens,
     required this.identities,
     required this.cache,
+    required this.ownerDeviceId,
     this.pairingRequestId,
     this.sessionId,
   });
 
   final LocalVisualScenario scenario;
+
+  /// fixture owner 设备绑定（v0.8.7 场景协调器经 controller 发送回合时使用）。
+  final String ownerDeviceId;
   final FixtureRelayRepository relay;
   final FixtureGitDiffRepository gitDiff;
   final InMemorySecureTokenStore tokens;
@@ -161,7 +170,12 @@ class LocalVisualFixture {
     if (scenario == LocalVisualScenario.none) return null;
 
     final relay = FixtureRelayRepository(
-      clock: () => DateTime.utc(2026, 8, 14, 12),
+      // v0.8.7 打字机流式场景必须用真实时钟：时间释放脚本按墙上时间到期
+      // （40×400ms ≈ 16.4s，落在可见 gate 60s 采集窗内）；其余场景保持
+      // 冻结时钟以稳定截图内容。
+      clock: scenario == LocalVisualScenario.dshV087TypewriterStreaming
+          ? null
+          : () => DateTime.utc(2026, 8, 14, 12),
     );
     if (scenario == LocalVisualScenario.sessionProviderUnavailable) {
       // 探测失败场景：能力矩阵全部 unavailable，状态条展示 fail-closed 原因。
@@ -290,7 +304,8 @@ class LocalVisualFixture {
         scenario == LocalVisualScenario.dshCapabilityGates ||
         scenario == LocalVisualScenario.dshStreamingTurnPhase ||
         scenario == LocalVisualScenario.dshAbortTrajectory ||
-        scenario == LocalVisualScenario.dshV085ReadonlyProjections;
+        scenario == LocalVisualScenario.dshV085ReadonlyProjections ||
+        scenario == LocalVisualScenario.dshV087TypewriterStreaming;
     String? dshSessionId;
     if (isDshScenario) {
       relay.replaceTerminals([
@@ -353,6 +368,12 @@ class LocalVisualFixture {
             },
           ),
         );
+      }
+      if (scenario == LocalVisualScenario.dshV087TypewriterStreaming) {
+        // v0.8.7：武装时间释放脚本（gateDefault：40 帧 × 400ms ≈ 16s）。
+        // 发送由 main.dart 场景协调器经 session controller 触发（'v087 timed'），
+        // 在途轮询（250ms 收紧档）驱动气泡文本逐步生长并写入双门禁证据。
+        relay.timedStreamSchedule = TimedStreamSchedule.gateDefault();
       }
       if (scenario == LocalVisualScenario.dshSessionToolTimeline) {
         // 时间线场景：fixture 发送一条消息，触发 fixture relay 生成完整的
@@ -454,6 +475,7 @@ class LocalVisualFixture {
       tokens: tokens,
       identities: identities,
       cache: cache,
+      ownerDeviceId: ownerDeviceId,
       pairingRequestId: pairingRequestId,
       sessionId: sessionId,
     );

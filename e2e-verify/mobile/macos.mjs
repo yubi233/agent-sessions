@@ -838,6 +838,7 @@ export function runMacosPrebuiltApp({
   observeWindow = unavailableWindowObserver,
   onWindowObserved = null,
   localVisualScenario = null,
+  localVisualTelemetryDirectory = null,
   localVisualFrameDirectoryName = null,
   localVisualFrameCount = 0,
   localVisualFrameIntervalMs = 0,
@@ -868,6 +869,7 @@ export function runMacosPrebuiltApp({
     LOCAL_FIXTURE_MODE: "true",
     // 空值会覆盖宿主机残留场景，避免登录场景意外继承上一轮 pairing fixture。
     LOCAL_VISUAL_SCENARIO: localVisualScenario ?? "",
+    LOCAL_VISUAL_TELEMETRY_DIRECTORY: localVisualTelemetryDirectory ?? "",
     // 仅 debug fixture 启用；目录与帧率均由本地 runner 固定传入，不能来自 UI 或 Relay。
     LOCAL_VISUAL_FRAME_DIRECTORY: localVisualFrameDirectoryName ?? "",
     LOCAL_VISUAL_FRAME_COUNT: hasFrameRecorder ? String(localVisualFrameCount) : "",
@@ -876,6 +878,7 @@ export function runMacosPrebuiltApp({
   const envArgs = [
     "--env", "LOCAL_FIXTURE_MODE=true",
     "--env", `LOCAL_VISUAL_SCENARIO=${fixtureEnv.LOCAL_VISUAL_SCENARIO}`,
+    "--env", `LOCAL_VISUAL_TELEMETRY_DIRECTORY=${fixtureEnv.LOCAL_VISUAL_TELEMETRY_DIRECTORY}`,
     "--env", `LOCAL_VISUAL_FRAME_DIRECTORY=${fixtureEnv.LOCAL_VISUAL_FRAME_DIRECTORY}`,
     "--env", `LOCAL_VISUAL_FRAME_COUNT=${fixtureEnv.LOCAL_VISUAL_FRAME_COUNT}`,
     "--env", `LOCAL_VISUAL_FRAME_INTERVAL_MS=${fixtureEnv.LOCAL_VISUAL_FRAME_INTERVAL_MS}`,

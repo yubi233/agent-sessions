@@ -38,6 +38,28 @@ String get localVisualFrameDirectoryFromRuntime {
   return '${Directory.systemTemp.path}/$name';
 }
 
+const _compileTimeLocalVisualTelemetryDirectory = String.fromEnvironment(
+  'LOCAL_VISUAL_TELEMETRY_DIRECTORY',
+);
+
+/// v0.8.7 流式门禁证据目录名（V087-08/09）：只接受固定清单形状的目录名，
+/// 不把 runner 提供的任意绝对路径交给已沙箱化的 App；证据文件写入沙箱容器
+/// tmp 下同名目录（runner 侧按同一目录名解析回收）。
+String get localVisualTelemetryDirectoryFromRuntime {
+  final name = _compileTimeLocalVisualTelemetryDirectory.isNotEmpty
+      ? _compileTimeLocalVisualTelemetryDirectory
+      : Platform.environment['LOCAL_VISUAL_TELEMETRY_DIRECTORY'] ?? '';
+  if (!RegExp(r'^[A-Za-z0-9_-]{1,120}$').hasMatch(name)) return '';
+  return name;
+}
+
+/// 双门禁证据导出文件路径；空串表示本轮未启用流式门禁场景。
+String get localVisualTelemetryExportPath {
+  final name = localVisualTelemetryDirectoryFromRuntime;
+  if (name.isEmpty) return '';
+  return '${Directory.systemTemp.path}/$name/streaming-gate.json';
+}
+
 int get localVisualFrameCountFromRuntime =>
     _compileTimeLocalVisualFrameCount > 0
     ? _compileTimeLocalVisualFrameCount

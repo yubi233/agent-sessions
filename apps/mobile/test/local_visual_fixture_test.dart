@@ -48,6 +48,37 @@ void main() {
     );
   });
 
+  test('V087-04：打字机流式视觉场景武装时间释放脚本并预置 DSH 会话', () async {
+    final fixture = await LocalVisualFixture.create(
+      'dsh-v087-typewriter-streaming',
+    );
+
+    expect(fixture, isNotNull);
+    expect(fixture!.scenario, LocalVisualScenario.dshV087TypewriterStreaming);
+    expect(fixture.sessionId, isNotNull);
+    expect(fixture.ownerDeviceId, isNotEmpty);
+    // 时间释放脚本必须已武装（40 帧 × 400ms 的 gate 默认脚本）：App 场景
+    // 协调器经 controller 发送 'v087 timed' 后，回合按真实时钟逐步到达。
+    final relay = fixture.relay;
+    expect(relay.timedStreamSchedule, isNotNull);
+    expect(relay.timedStreamSchedule!.offsets, hasLength(40));
+    final sessions = await relay.listSessions();
+    final dsh = sessions.single;
+    expect(dsh.provider, 'dsh');
+    // 脚本武装但尚未发送：此刻不产生任何流式帧。
+    final snapshot = await relay.getSessionSnapshot(dsh.id);
+    expect(
+      snapshot.events
+          .map(SessionTimelineEvent.fromRelayEvent)
+          .where(
+            (event) =>
+                event.kind == SessionTimelineKind.assistantMessage &&
+                event.isStreaming,
+          ),
+      isEmpty,
+    );
+  });
+
   test('V085-23：中止轨迹视觉场景预置“已中止 · 时间”并投影 stopped', () async {
     final fixture = await LocalVisualFixture.create('dsh-abort-trajectory');
 

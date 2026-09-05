@@ -1141,8 +1141,6 @@ class SessionController extends ChangeNotifier {
       notifyListeners();
     }
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
-      // ignore: avoid_print
-      print('DBG clear: send-not-accepted');
       _pendingOutgoingBySession.remove(sessionId);
       notifyListeners();
     }
@@ -2371,6 +2369,9 @@ class SessionController extends ChangeNotifier {
           // 被消费，而执行端随后才把 streaming 收口为 idle。
           if (_selectedSessionId == sessionId) {
             _mergeSnapshot(latest, appendTimeline: true);
+            // v0.8.7 打字机流式的核心一环：在途批次合并后必须通知 UI，气泡
+            // 文本才随 delta 逐步生长；否则时间线只在回合终态一次性出现。
+            notifyListeners();
           }
           completed = _snapshotCompletesTurn(latest);
           if (completed) break;
@@ -2424,6 +2425,8 @@ class SessionController extends ChangeNotifier {
       }
       if (_selectedSessionId != sessionId) return;
       _mergeSnapshot(latest, appendTimeline: true);
+      // v0.8.7：后台续轮同样通知 UI，保证非本端可见窗口的流式生长。
+      notifyListeners();
       completed = _snapshotCompletesTurn(latest);
     }
     if (completed) {
@@ -2438,8 +2441,6 @@ class SessionController extends ChangeNotifier {
       _turnInFlight = false;
       _turnTimedOut.add(sessionId);
       _pendingOutgoingBySession.remove(sessionId);
-      // ignore: avoid_print
-      print('DBG clear: timeout-convergence');
       // ignore: avoid_print
       notifyListeners();
     }
@@ -2609,8 +2610,6 @@ class SessionController extends ChangeNotifier {
               event.kind == SessionTimelineKind.userMessage &&
               event.text == pending,
         )) {
-      // ignore: avoid_print
-      print('DBG clear: merge-clear-account');
       _pendingOutgoingBySession.remove(snapshot.session.id);
     }
   }

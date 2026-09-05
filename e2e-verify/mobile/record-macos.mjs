@@ -123,6 +123,15 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-37", "VISUAL-MOBILE-38"]),
     requiredTestIds: Object.freeze([]),
   }),
+  // v0.8.7：打字机流式录屏范围。
+  // 内容先定（Taskfile record:v087，2026-09-05）：
+  //   A) VISUAL-MOBILE-39（dsh-v087-typewriter-streaming）：时间释放流式回合
+  //      全程连续帧——assistant 气泡文本逐步生长（门禁 1 人审证据）；状态行
+  //      相位与“运行中”尾标采样；不作为功能回归替代。
+  v087: Object.freeze({
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-39"]),
+    requiredTestIds: Object.freeze([]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {

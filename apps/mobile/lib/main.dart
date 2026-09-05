@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert' show jsonEncode;
+import 'dart:io' show File;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -14,6 +16,7 @@ import 'app/providers.dart';
 import 'app/router.dart';
 import 'app/runtime_recovery_binding.dart';
 import 'domain/control_models.dart';
+import 'domain/session_models.dart' show SessionTimelineKind;
 import 'relay/fixture_relay_repository.dart';
 import 'state/lifecycle_recovery_controller.dart';
 import 'storage/encrypted_cache.dart';
@@ -22,6 +25,7 @@ import 'storage/runtime_encrypted_cache.dart';
 import 'storage/secure_token_store.dart';
 import 'storage/theme_preference_store.dart';
 import 'ui/app_theme.dart';
+import 'ui/session/chat/typewriter_reveal_text.dart';
 import 'ui/code_viewer_screens.dart';
 
 const _compileTimeLocalFixtureMode = bool.fromEnvironment('LOCAL_FIXTURE_MODE');
@@ -125,6 +129,7 @@ Future<void> main() async {
             (_localDevTargetSessionId.isEmpty
                 ? null
                 : _localDevTargetSessionId),
+        localVisualOwnerDeviceId: localVisualFixture?.ownerDeviceId,
         localVisualRecovery: localVisualFixture?.stageLifecycleRecovery,
         localVisualFrameDirectory:
             (_useLocalFixtureMode || _localDevTargetSessionId.isNotEmpty) &&
@@ -152,6 +157,7 @@ class AgentSessionsApp extends ConsumerWidget {
     this.localVisualScenario = LocalVisualScenario.none,
     this.localVisualPairingRequestId,
     this.localVisualSessionId,
+    this.localVisualOwnerDeviceId,
     this.localVisualRecovery,
     this.localVisualFrameDirectory = '',
     this.localVisualFrameCount = 0,
@@ -164,6 +170,7 @@ class AgentSessionsApp extends ConsumerWidget {
   final LocalVisualScenario localVisualScenario;
   final String? localVisualPairingRequestId;
   final String? localVisualSessionId;
+  final String? localVisualOwnerDeviceId;
   final Future<void> Function(SessionRecoveryController)? localVisualRecovery;
   final String localVisualFrameDirectory;
   final int localVisualFrameCount;
@@ -192,6 +199,7 @@ class AgentSessionsApp extends ConsumerWidget {
           scenario: localVisualScenario,
           pairingRequestId: localVisualPairingRequestId,
           sessionId: localVisualSessionId,
+          localVisualOwnerDeviceId: localVisualOwnerDeviceId,
           localVisualRecovery: localVisualRecovery,
           child: runtimeBoundChild,
         );
@@ -311,6 +319,7 @@ class _LocalVisualScenarioCoordinator extends ConsumerStatefulWidget {
     required this.pairingRequestId,
     required this.sessionId,
     required this.localVisualRecovery,
+    required this.localVisualOwnerDeviceId,
     required this.child,
   });
 
@@ -318,6 +327,7 @@ class _LocalVisualScenarioCoordinator extends ConsumerStatefulWidget {
   final String? pairingRequestId;
   final String? sessionId;
   final Future<void> Function(SessionRecoveryController)? localVisualRecovery;
+  final String? localVisualOwnerDeviceId;
   final Widget child;
 
   @override
@@ -344,8 +354,97 @@ class _LocalVisualScenarioCoordinatorState
       _openUsageWhenReady();
     } else if (widget.scenario == LocalVisualScenario.commandPalette) {
       _openCommandPaletteWhenReady();
+    } else if (widget.scenario ==
+        LocalVisualScenario.dshV087TypewriterStreaming) {
+      _runV087TypewriterStreamingScenario();
     } else if (widget.sessionId != null) {
       _openSessionWhenReady();
+    }
+  }
+
+  /// v0.8.7 打字机流式可见场景（V087-08/09）：打开会话页并经 session
+  /// controller 触发时间释放流式回合（真实时钟 ≈16.4s），让在途轮询
+  /// （250ms 收紧档）与打字机释放动画在可见窗口真实运行。
+  ///
+  /// 采样：200ms 节拍记录「已释放前缀长度（动画）/ 已到达全文长度（数据）」，
+  /// 回合终态后把采样序列 + 移动端流式埋点一并写入 LOCAL_VISUAL_TELEMETRY_PATH
+  /// （e2e 校验器读取，作为门禁 1/2 的机读判定源；路径经 `open --env` 传入）。
+  Future<void> _runV087TypewriterStreamingScenario() async {
+    final sessionId = widget.sessionId;
+    final ownerDeviceId = widget.localVisualOwnerDeviceId;
+    if (sessionId == null || ownerDeviceId == null) return;
+    for (var attempt = 0; attempt < 80; attempt += 1) {
+      if (ref.read(appControllerProvider).isAuthenticated) break;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    final sessions = ref.read(sessionControllerProvider);
+    await sessions.initialize();
+    await sessions.selectSession(sessionId);
+    // 打开会话页（chat 是默认 activeView），让 assistant 气泡树真实挂载。
+    ref.read(appRouterProvider).go('/sessions/$sessionId');
+    // 等待会话页首帧渲染完成，再启动流式回合。
+    await Future<void>.delayed(const Duration(milliseconds: 800));
+    TypewriterRevealText.diagnostics.reset();
+    final turn = sessions.sendMessage(
+      message: 'v087 timed',
+      deviceId: ownerDeviceId,
+      canWrite: true,
+    );
+    final samples = <Map<String, Object?>>[];
+    final startedAt = DateTime.now();
+    // 采样定时器：self-canceling，终态或 200 拍上限后停止（无需持有句柄）。
+    Timer.periodic(const Duration(milliseconds: 200), (timer) {
+      final controller = ref.read(sessionControllerProvider);
+      final completed = controller.timeline.any((event) => event.completedTurn);
+      String? targetText;
+      for (final event in controller.timeline) {
+        if (event.kind == SessionTimelineKind.assistantMessage &&
+            !event.completedTurn &&
+            event.text != null) {
+          targetText = event.text;
+        }
+      }
+      samples.add(<String, Object?>{
+        't_ms': DateTime.now().difference(startedAt).inMilliseconds,
+        'revealed': TypewriterRevealText.diagnostics.revealed,
+        'target_chars': targetText?.length,
+      });
+      final revealedNow = TypewriterRevealText.diagnostics.revealed;
+      final targetNow = TypewriterRevealText.diagnostics.target;
+      final caughtUp =
+          revealedNow == null ||
+          targetNow == null ||
+          revealedNow >= targetNow;
+      // completed 后还要等释放动画追平（对账收敛），终态样本才允许定稿。
+      if ((completed && caughtUp) || timer.tick >= 400) {
+        timer.cancel();
+        _writeV087StreamingEvidence(
+          localVisualTelemetryExportPath,
+          <String, Object?>{
+            'schema': 'v087-streaming-gate',
+            'samples': samples,
+            'telemetry': sessions.streamingTelemetry.export(),
+          },
+        );
+      }
+    });
+    unawaited(turn);
+  }
+
+  /// 双门禁证据落盘：写入沙箱容器 tmp（App 视角的 systemTemp）下按白名单
+  /// 目录名解析出的导出路径；runner 侧按同一目录名解析回收。写失败不崩溃
+  /// App，由 e2e 校验器按缺文件判失败。
+  void _writeV087StreamingEvidence(
+    String exportPath,
+    Map<String, Object?> payload,
+  ) {
+    if (exportPath.isEmpty) return;
+    try {
+      final file = File(exportPath);
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(jsonEncode(payload));
+    } catch (_) {
+      // 证据写入失败按缺文件处理，不阻断可见窗口。
     }
   }
 

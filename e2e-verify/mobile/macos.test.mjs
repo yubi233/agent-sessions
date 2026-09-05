@@ -215,6 +215,8 @@ test("P2/P3/P4/P5/V081 截图场景在 runner 中固定登记，避免录制前�
       "VISUAL-MOBILE-37",
       // v0.8.5 主计划只读投影场景（V085-14 / VISUAL-MOBILE-38）。
       "VISUAL-MOBILE-38",
+      // v0.8.7 打字机流式场景（V087-08/09 / VISUAL-MOBILE-39，双门禁）。
+      "VISUAL-MOBILE-39",
     ],
   );
 });
@@ -309,6 +311,9 @@ test("macOS 可见截图从预构建 App bundle 启动，并只给本轮观测�
     "LOCAL_FIXTURE_MODE=true",
     "--env",
     "LOCAL_VISUAL_SCENARIO=owner-ready",
+    "--env",
+    // v0.8.7 流式门禁：证据目录名经 open --env 传入（非门禁场景为空串）。
+    "LOCAL_VISUAL_TELEMETRY_DIRECTORY=",
     "--env",
     "LOCAL_VISUAL_FRAME_DIRECTORY=",
     "--env",

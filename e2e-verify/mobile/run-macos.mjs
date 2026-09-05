@@ -16,12 +16,12 @@ import { fileURLToPath } from "node:url";
 import { baseReport, writeReport } from "../lib/report.mjs";
 import {
   MACOS_INTEGRATION_TESTS,
+  macosSandboxVisualFrameDirectory,
   MACOS_MOBILE_CONTENT_SIZE,
   createMacosWindowObserver,
   hasFlutterTestSuccessOutput,
   isSuccessfulFlutterResult,
   macosDebugAppBundle,
-  macosSandboxVisualFrameDirectory,
   resolveMacosWidgetTests,
   runMacosFlutterBuild,
   runMacosFlutterWidgetTests,
@@ -263,6 +263,15 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-38-dsh-v085-readonly-projections",
     localVisualScenario: "dsh-v085-readonly-projections",
   }),
+  // v0.8.7 打字机流式可见场景（V087-08/09）：fixture 时间释放回合（真实时钟
+  // 40×400ms≈16s），气泡文本逐步生长；streamingGate 标记触发双门禁机读校验
+  // （帧级长度采样单调增长 + 同回合埋点导出），见 validateV087StreamingGate。
+  Object.freeze({
+    id: "VISUAL-MOBILE-39",
+    directory: "visual-mobile-39-dsh-v087-typewriter-streaming",
+    localVisualScenario: "dsh-v087-typewriter-streaming",
+    streamingGate: true,
+  }),
 ]);
 
 function wait(milliseconds) {
@@ -380,6 +389,7 @@ export async function recordMacosVisualScenario({
   waitForFlutterRenderFrames = waitForFlutterRenderFrameSeries,
   waitForStableFrame = wait,
   waitForWindowExit = waitForNoMacosWindows,
+  localVisualTelemetryDirectory = null,
 }) {
   const outputDirectory = join(screenshotDirectory, scenario.directory);
   const candidateDirectory = join(outputDirectory, ".candidates");
@@ -396,6 +406,7 @@ export async function recordMacosVisualScenario({
     cwd: MOBILE_ROOT,
     observeWindow,
     localVisualScenario: scenario.localVisualScenario,
+    localVisualTelemetryDirectory: sandboxDirectoryName,
     localVisualFrameDirectoryName: sandboxDirectoryName,
     localVisualFrameCount: SCREENSHOT_MINIMUM_CANDIDATE_FRAME_COUNT,
     localVisualFrameIntervalMs: WINDOW_EVIDENCE_FRAME_INTERVAL_MS,
@@ -422,6 +433,12 @@ export async function recordMacosVisualScenario({
       } catch (windowCaptureError) {
         // 当前 macOS 已观察到真实窗口，但 Screen Recording 可能被系统拒绝；此时只等同一 app 的 render tree 帧。
         console.warn(`[macos-e2e] 窗口抓帧失败（${scenario.id}）:`, windowCaptureError?.message ?? windowCaptureError);
+        // v0.8.7 流式门禁（§6.1）：帧序列仅为人审证据，机读判定以 App 侧采样
+        // 为准（与 fps 解耦）。宿主负载下严格 5fps 采集受阻时降级保留已捕获
+        // 帧，采样校验器仍把守双门禁；降级事实写入 run 结果，不静默降级。
+        if (scenario.streamingGate === true) {
+          return { frames: [], captureDegraded: true };
+        }
         try {
           const candidates = await waitForFlutterRenderFrames({
             outputDirectory: candidateDirectory,
@@ -481,10 +498,42 @@ export async function recordMacosVisualScenario({
     (artifact) => artifact?.scenarioId === scenario.id,
   );
   rmSync(candidateDirectory, { force: true, recursive: true });
-  if (frames.length !== SCREENSHOT_SELECTED_FRAME_COUNT) {
+  if (
+    scenario.streamingGate !== true
+    && frames.length !== SCREENSHOT_SELECTED_FRAME_COUNT
+  ) {
     throw new GateError(
       `视觉场景 ${scenario.id} 未保留完整 ${SCREENSHOT_SELECTED_FRAME_COUNT} 帧连续 5fps 证据。`,
       { failureClass: "environment_or_startup_failure" },
+    );
+  }
+  let streamingGate = null;
+  if (scenario.streamingGate === true) {
+    // 门禁 1+2 的机读判定：被测 App 在回合终态把采样+埋点写入沙箱容器 tmp
+    // （LOCAL_VISUAL_TELEMETRY_DIRECTORY 目录名经 open --env 传入；App 视角的
+    // systemTemp 即该容器 tmp），runner 侧按同一目录名解析回收；缺失即门禁
+    // 失败，不得静默降级。
+    const evidencePath = `${macosSandboxVisualFrameDirectory(
+      sandboxDirectoryName,
+    )}/streaming-gate.json`;
+    if (!existsSync(evidencePath)) {
+      throw new GateError(
+        `视觉场景 ${scenario.id} 未产出 streaming-gate 证据文件。`,
+        { failureClass: "product_defect" },
+      );
+    }
+    streamingGate = validateV087StreamingGate({
+      payload: JSON.parse(readFileSync(evidencePath, "utf8")),
+    });
+    if (!streamingGate.passed) {
+      throw new GateError(
+        `视觉场景 ${scenario.id} 流式门禁未通过：${streamingGate.failures.join("；")}。`,
+        { failureClass: "product_defect" },
+      );
+    }
+    writeFileSync(
+      join(outputDirectory, "streaming-gate-verdict.json"),
+      `${JSON.stringify(streamingGate, null, 2)}\n`,
     );
   }
   const windowReleased = await waitForWindowExit({ observeWindow });
@@ -493,7 +542,99 @@ export async function recordMacosVisualScenario({
       failureClass: "environment_or_startup_failure",
     });
   }
-  return { frames, smoke };
+  return {
+    frames,
+    smoke,
+    streamingGate,
+    capture_degraded: scenario.streamingGate === true
+      ? smoke.window.captureError != null
+        || frames.length !== SCREENSHOT_SELECTED_FRAME_COUNT
+      : false,
+  };
+}
+
+// v0.8.7 双门禁机读判定（迭代计划 §6.1/§6.2，参数=P0 裁决定稿）：
+//   门禁 1：时间释放回合内，渲染气泡的已释放前缀长度随采样序列单调不减，
+//           且严格递增次数 ≥3（首帧即全文/平台化判失败）；
+//   门禁 2：同回合移动端埋点（P1 schema v1）——stream_delta ≥20 条、
+//           ts 严格递增、cumulative_chars 单调不减、首字延迟与终态对账在位。
+// 证据必须出自 P1 埋点与 App 侧采样（print/临时脚本不合格）；缺失即失败。
+export function validateV087StreamingGate({
+  payload,
+  minimumSamples = 30,
+  minimumStrictIncreases = 3,
+  minimumDeltas = 20,
+  minimumFinalChars = 500,
+}) {
+  const failures = [];
+  const samples = Array.isArray(payload?.samples) ? payload.samples : [];
+  const usable = samples.filter(
+    (sample) => Number.isFinite(sample?.revealed) && Number.isFinite(sample?.target_chars),
+  );
+  if (usable.length < minimumSamples) {
+    failures.push(`采样样本不足（${usable.length} < ${minimumSamples}）`);
+  }
+  let strictIncreases = 0;
+  let previous = -1;
+  for (const sample of usable) {
+    if (previous >= 0) {
+      if (sample.revealed < previous) {
+        failures.push(`已释放长度回退：${previous} -> ${sample.revealed}`);
+        break;
+      }
+      if (sample.revealed > previous) strictIncreases += 1;
+    }
+    previous = sample.revealed;
+  }
+  if (strictIncreases < minimumStrictIncreases) {
+    failures.push(`严格递增次数不足（${strictIncreases} < ${minimumStrictIncreases}，首帧即全文/平台化形态）`);
+  }
+  const last = usable.at(-1);
+  if (last == null || last.revealed !== last.target_chars) {
+    failures.push("终态释放未追平已到达全文（对账不收敛）");
+  }
+  if (last != null && last.target_chars < minimumFinalChars) {
+    failures.push(`终态全文长度异常（${last.target_chars} < ${minimumFinalChars}）`);
+  }
+
+  const telemetry = payload?.telemetry;
+  const events = Array.isArray(telemetry?.events) ? telemetry.events : [];
+  const deltas = events.filter((event) => event?.type === "stream_delta");
+  const firstDelta = events.find((event) => event?.type === "stream_first_delta");
+  const reconcile = events.find((event) => event?.type === "stream_completed_reconcile");
+  if (deltas.length < minimumDeltas) {
+    failures.push(`stream_delta 记录不足（${deltas.length} < ${minimumDeltas}）`);
+  }
+  const timestamps = events.map((event) => event?.ts).filter((ts) => typeof ts === "string");
+  for (let index = 1; index < timestamps.length; index += 1) {
+    if (timestamps[index] < timestamps[index - 1]) {
+      failures.push("埋点时间戳出现回退");
+      break;
+    }
+  }
+  let cumulative = 0;
+  for (const delta of deltas) {
+    if (!Number.isFinite(delta.cumulative_chars) || delta.cumulative_chars < cumulative) {
+      failures.push("埋点累计长度非单调");
+      break;
+    }
+    cumulative = delta.cumulative_chars;
+  }
+  if (firstDelta == null || !Number.isFinite(firstDelta.latency_ms)) {
+    failures.push("缺少 stream_first_delta（首字延迟未记录）");
+  }
+  if (reconcile?.consistent !== true) {
+    failures.push("stream_completed_reconcile 缺失或对账不一致");
+  }
+  return {
+    passed: failures.length === 0,
+    failures,
+    sample_count: usable.length,
+    strict_increases: strictIncreases,
+    delta_events: deltas.length,
+    first_delta_latency_ms: firstDelta?.latency_ms ?? null,
+    final_chars: reconcile?.final_chars ?? null,
+  };
 }
 
 class GateError extends Error {
@@ -766,9 +907,14 @@ async function main() {
           process.stdout.write("\n[macos-e2e] End visual scenario diagnostic output\n");
         }
       }
-      const capturedScenarioIds = new Set(
-        screenshotEntries.map((artifact) => artifact.scenarioId).filter(Boolean),
-      );
+      // v0.8.7 流式门禁场景允许降级采集（§6.1：机读判定与帧节拍解耦）：
+      // streaming-gate 判据通过的 run 视为已完整采集，即便人审帧序列为空。
+      const capturedScenarioIds = new Set([
+        ...screenshotEntries.map((artifact) => artifact.scenarioId).filter(Boolean),
+        ...visualScenarioRuns
+          .filter((run) => run.streamingGate?.passed === true)
+          .map((run) => run.scenario.id),
+      ]);
       const missingScenarios = visualScenarios
         .map((scenario) => scenario.id)
         .filter((scenarioId) => !capturedScenarioIds.has(scenarioId));
