@@ -12,7 +12,7 @@
     {
       "id": "V089-01",
       "title": "generation 迁移：同库重启稳定、删除重建必变、备份恢复可解释",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "contract/migration",
       "priority": "P0",
@@ -27,12 +27,15 @@
       "cleanup": [
         "删除临时 SQLite 文件"
       ],
-      "evidence": []
+      "evidence": [
+        "go test ./internal/store -run TestV089 -count=1 全绿（2026-09-06）：同库重开稳定/删除重建必变/备份复制随文件走/独立建库互异",
+        "generation 值格式 relgen_+48hex（crypto/rand 24B）；ensureRelayGeneration 幂等收敛存量库"
+      ]
     },
     {
       "id": "V089-02",
       "title": "hello/heartbeat additive 返回 relay_generation，Daemon 正确持久化和比较",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "relay-daemon integration",
       "priority": "P0",
@@ -48,12 +51,16 @@
       "cleanup": [
         "关闭 httptest server 与临时 store"
       ],
-      "evidence": []
+      "evidence": [
+        "go test ./internal/relay -run TestV089 -count=1 全绿（2026-09-06）：真实 gin 栈 hello/heartbeat 携带同一非空 relay_generation；restartRelay 同库重开稳定；新库必异",
+        "go test ./internal/daemon -run TestV089RelayLoopRuntimeGenerationChangeStopsLoopWithTerminalError：heartbeat 运行期发现变化→单事务收口→ErrRelayGenerationChanged 终态退出（不退避重试）",
+        "openapi.yaml DaemonHelloResponse/DaemonHeartbeatResponse additive relay_generation + 三语言生成物重生成零漂移"
+      ]
     },
     {
       "id": "V089-03",
       "title": "generation 变化时原子隔离 relay_commands、cursor、Terminal identity",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "daemon store",
       "priority": "P0",
@@ -68,12 +75,16 @@
       "cleanup": [
         "关闭临时 store"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089IsolateStaleRelayStateQuarantinesOldGenerationAtomically：单事务内 commands→completed/failed/RELAY_GENERATION_RESET、events/usages→quarantined、cursor 清零、Terminal 绑定清除、reset reason 落档",
+        "command_outbox（用户动作）在收口中保持 pending 不被误删（§3.2）",
+        "收口后新写入行自动打新世代标（TestV089RowsInsertedAfterIsolationCarryNewGeneration）"
+      ]
     },
     {
       "id": "V089-04",
       "title": "恢复集成：旧 received/starting/started 命令不进入新 Relay；新命令可正常执行",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "recovery integration",
       "priority": "P0",
@@ -88,7 +99,10 @@
       "cleanup": [
         "删除临时 SQLite 与 httptest server"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089RelayLoopHelloGenerationChangeIsolatesStaleAndServesNewCommands：hello 世代变化→旧 started 命令收口且对新 Relay resolve 次数=0；工作区重新确认后新 session.start 成功收口（quarantined 1/1/1 脱敏日志留档）",
+        "legacy 兼容：TestV089LegacyRelayWithoutGenerationKeepsRecordedState（不覆盖已记录世代、不隔离）；回滚开关：TestV089GenerationEnforcementDisabledRecordsWithoutIsolation"
+      ]
     },
     {
       "id": "V089-05",

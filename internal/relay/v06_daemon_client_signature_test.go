@@ -57,7 +57,7 @@ func TestV06DaemonClientSignedProductionLoop(t *testing.T) {
 	}
 
 	// 2) signed heartbeat：随机 nonce 自动生成；重复 nonce 由 Relay fail-closed（由契约套件覆盖）。
-	if err := client.Heartbeat(ctx); err != nil {
+	if _, err := client.Heartbeat(ctx); err != nil {
 		t.Fatalf("production signed heartbeat: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func TestV06DaemonSignerLoaderProductionWiring(t *testing.T) {
 	if hello.TerminalID == "" || hello.HeartbeatIntervalSeconds <= 0 {
 		t.Fatalf("hello projection incomplete: %+v", hello)
 	}
-	if err := client.Heartbeat(ctx); err != nil {
+	if _, err := client.Heartbeat(ctx); err != nil {
 		t.Fatalf("signed heartbeat via loader-built signer: %v", err)
 	}
 }

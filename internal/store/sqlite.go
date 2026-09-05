@@ -1566,6 +1566,21 @@ func (r *sqliteRepo) CountOutboxByStatus(ctx context.Context) (int64, int64, int
 	return pending, failed, delivered + legacyDone, nil
 }
 
+// RelayGeneration 读取持久化的 relay 实例代际（v0.8.9 P1）。
+// 行不存在时返回空串（而非错误），调用方按"世代未知"处理。
+func (r *sqliteRepo) RelayGeneration(ctx context.Context) (string, error) {
+	var value string
+	err := r.db.QueryRowContext(ctx,
+		`SELECT value FROM relay_instance_meta WHERE key='relay_generation'`).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
 // UpsertUsageEvent 以 usage_key_hash 唯一约束写入 usage 事件。重复 key 返回
 // (false, nil)，调用方按 ADR-010 去重语义返回同一 canonical receipt。
 func (r *sqliteRepo) UpsertUsageEvent(ctx context.Context, u UsageEventRow) (bool, error) {

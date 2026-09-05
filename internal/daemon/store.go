@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS command_outbox (
 	created_at INTEGER NOT NULL
 );
 -- Relay 下行命令与本机处理状态分开存放，不能与 Daemon 发起的本地 outbox 混用。
+-- relay_generation 是 v0.8.9 P1 的世代关联列（§3.2）：新行由 Store 打上当前世代，
+-- 世代切换时旧行据此被事务性隔离，保证旧命令不进入新 Relay 执行。
 CREATE TABLE IF NOT EXISTS relay_commands (
 	command_id TEXT PRIMARY KEY,
 	delivery_seq INTEGER NOT NULL,
@@ -48,13 +50,15 @@ CREATE TABLE IF NOT EXISTS relay_commands (
 	status TEXT NOT NULL DEFAULT 'received',
 	result_status TEXT NOT NULL DEFAULT '',
 	error_code TEXT NOT NULL DEFAULT '',
+	relay_generation TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS relay_commands_pending_idx
 	ON relay_commands(status, delivery_seq);
 -- Provider canonical event 在本机 outbox 内等待可靠上传；payload 只能是已加密 envelope。
--- attempts/next_attempt_at/last_error 由 migrate() 的 additive 列迁移补齐（v0.6 P2）。
+-- attempts/next_attempt_at/last_error 由 migrate() 的 additive 列迁移补齐（v0.6 P2）；
+-- relay_generation 由 v0.8.9 P1 补齐（世代隔离，见 relay_commands 注释）。
 CREATE TABLE IF NOT EXISTS relay_event_outbox (
 	event_id TEXT PRIMARY KEY,
 	command_id TEXT NOT NULL,
@@ -64,10 +68,11 @@ CREATE TABLE IF NOT EXISTS relay_event_outbox (
 	envelope_json TEXT NOT NULL,
 	created_at_unix_ms INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL DEFAULT 'pending',
+	relay_generation TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL
 );
 -- Provider usage 的白名单投影单独出队上传到 Relay usage API；这里不保存 prompt、
--- 回复正文、工具参数、路径、费用或 provider 私有 payload。
+-- 回复正文、工具参数、路径、费用或 provider 私有 payload。relay_generation 同上（v0.8.9 P1）。
 CREATE TABLE IF NOT EXISTS relay_usage_outbox (
 	usage_key TEXT PRIMARY KEY,
 	session_id TEXT NOT NULL DEFAULT '',
@@ -82,6 +87,7 @@ CREATE TABLE IF NOT EXISTS relay_usage_outbox (
 	ttft_ms INTEGER,
 	decode_throughput REAL,
 	status TEXT NOT NULL DEFAULT 'pending',
+	relay_generation TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS relay_usage_outbox_pending_idx
@@ -181,7 +187,19 @@ func (s *Store) migrate() error {
 	if err := s.ensureColumnIfExists("relay_event_outbox", "created_at_unix_ms", "created_at_unix_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	return s.ensureColumnIfExists("relay_usage_outbox", "context_window_tokens", "context_window_tokens INTEGER NOT NULL DEFAULT 0")
+	if err := s.ensureColumnIfExists("relay_usage_outbox", "context_window_tokens", "context_window_tokens INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// v0.8.9 P1（V089-03）：relay-scoped 三表增加 generation 关联列。旧行保持空串
+	// （"世代未知"），新写入行由 Store 统一打上当前 relay_generation；世代切换时
+	// 以该列区分"新世代活动行"与"待隔离旧行"，保证收口可审计、可回滚。
+	if err := s.ensureColumnIfExists("relay_commands", "relay_generation", "relay_generation TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumnIfExists("relay_event_outbox", "relay_generation", "relay_generation TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return s.ensureColumnIfExists("relay_usage_outbox", "relay_generation", "relay_generation TEXT NOT NULL DEFAULT ''")
 }
 
 // ensureColumnIfExists 是 additive 列迁移的最小实现：存在即跳过，缺失才 ALTER。
@@ -485,14 +503,20 @@ func (s *Store) RecordRelayCommand(command RelayCommand) (bool, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// 世代打标（v0.8.9 P1）：与命令写入同一事务内读取当前 relay_generation，
+	// 保证世代切换与打标串行化，不会出现"新世代行被旧值覆盖"的竞态。
+	generation, err := s.stateGenerationLocked(tx)
+	if err != nil {
+		return false, err
+	}
 	now := time.Now().UnixMilli()
 	result, err := tx.Exec(
 		`INSERT OR IGNORE INTO relay_commands(
 			command_id,delivery_seq,session_id,workspace_id,kind,lease_epoch,target_instance_id,target_terminal_id,
-			payload_json,status,result_status,error_code,created_at,updated_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,'','',?,?)`,
+			payload_json,status,result_status,error_code,relay_generation,created_at,updated_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,'','',?,?,?)`,
 		command.CommandID, command.DeliverySeq, command.SessionID, command.WorkspaceID, command.Kind, command.LeaseEpoch,
-		command.TargetInstanceID, command.TargetTerminalID, command.PayloadJSON, "received", now, now)
+		command.TargetInstanceID, command.TargetTerminalID, command.PayloadJSON, "received", generation, now, now)
 	if err != nil {
 		return false, err
 	}
@@ -587,6 +611,137 @@ func (s *Store) ResetRelayDeliveryCursor() error {
 	return nil
 }
 
+// RelayGeneration 返回本机记录的当前 Relay DB 世代（v0.8.9 P1 / §3.2）。
+// 从未记录（首次接触世代感知 Relay）时返回空串。
+func (s *Store) RelayGeneration() (string, error) {
+	value, err := s.Get("relay_generation")
+	if err != nil {
+		return "", nil
+	}
+	return value, nil
+}
+
+// stateGenerationLocked 在已持有的锁内读取当前世代。写路径用它给新行打标，
+// 避免"读取世代→写入行"之间发生世代切换造成错标。
+func (s *Store) stateGenerationLocked(tx *sql.Tx) (string, error) {
+	var value string
+	err := tx.QueryRow(`SELECT value FROM local_state WHERE key='relay_generation'`).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
+}
+
+// RelayResetSummary 是世代切换收口的脱敏投影：只含计数与原因，不含命令正文、
+// envelope、路径或 token。日志与诊断报告只允许使用本结构。
+type RelayResetSummary struct {
+	PreviousGeneration  string
+	NewGeneration       string
+	Reason              string
+	QuarantinedCommands int64
+	QuarantinedEvents   int64
+	QuarantinedUsages   int64
+}
+
+// RelayGenerationResetErrorCode 是 stale command 世代收口的固定本地错误码（§3.3）。
+// 不新增 wire 终态：命令行状态保持 completed + result_status=failed，仅以该错误码
+// 与"本机判定"区分于普通执行失败。未知 404 不使用该码。
+const RelayGenerationResetErrorCode = "RELAY_GENERATION_RESET"
+
+// IsolateStaleRelayState 在单个 SQLite 事务内完成世代切换收口（V089-03 / §2.2-2）：
+//  1. relay_commands 中未终态且不属于新世代的行 → completed/result_status=failed/
+//     RELAY_GENERATION_RESET（不再向新 Relay resolve/ack）；
+//  2. relay_event_outbox / relay_usage_outbox 中活动状态且不属于新世代的行 →
+//     quarantined（保留行供审计，不参与后续 flush/requeue）；
+//  3. delivery cursor 清零、旧 Terminal 绑定清除；
+//  4. 写入新世代与 reset 原因（脱敏诊断）。
+//
+// 原子性由单事务保证：任意一步失败整体回滚，不留半清理状态（§8 风险表）。
+func (s *Store) IsolateStaleRelayState(newGeneration, reason string) (RelayResetSummary, error) {
+	if strings.TrimSpace(newGeneration) == "" {
+		return RelayResetSummary{}, errors.New("isolate relay state: new generation is empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return RelayResetSummary{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	previous, err := s.stateGenerationLocked(tx)
+	if err != nil {
+		return RelayResetSummary{}, err
+	}
+	summary := RelayResetSummary{PreviousGeneration: previous, NewGeneration: newGeneration, Reason: reason}
+
+	// 未终态命令按 §3.3 收口为本地终态。旧世代行（含升级期 generation='' 的历史行）
+	// 一律隔离；新世代行不存在（本函数运行时新行尚未产生），条件保守排除。
+	result, err := tx.Exec(
+		`UPDATE relay_commands
+		 SET status='completed', result_status='failed', error_code=?, updated_at=?
+		 WHERE status IN ('received','rejecting','starting','started') AND relay_generation <> ?`,
+		RelayGenerationResetErrorCode, time.Now().UnixMilli(), newGeneration)
+	if err != nil {
+		return RelayResetSummary{}, err
+	}
+	if summary.QuarantinedCommands, err = result.RowsAffected(); err != nil {
+		return RelayResetSummary{}, err
+	}
+	// 事件 outbox：pending/failed → quarantined（fail-safe：QuarantinedForRecovery
+	// 等恢复入口按状态过滤，世代过滤在 P4 另加查询层防线）。
+	result, err = tx.Exec(
+		`UPDATE relay_event_outbox
+		 SET status='quarantined', next_attempt_at=0
+		 WHERE status IN ('pending','failed') AND relay_generation <> ?`, newGeneration)
+	if err != nil {
+		return RelayResetSummary{}, err
+	}
+	if summary.QuarantinedEvents, err = result.RowsAffected(); err != nil {
+		return RelayResetSummary{}, err
+	}
+	// usage outbox：仅 pending 是活动状态。
+	result, err = tx.Exec(
+		`UPDATE relay_usage_outbox
+		 SET status='quarantined'
+		 WHERE status='pending' AND relay_generation <> ?`, newGeneration)
+	if err != nil {
+		return RelayResetSummary{}, err
+	}
+	if summary.QuarantinedUsages, err = result.RowsAffected(); err != nil {
+		return RelayResetSummary{}, err
+	}
+	// 游标清零 + 旧 Terminal 绑定清除（新绑定由 hello 后的 adoptTerminalIdentity 写入）。
+	if _, err := tx.Exec(
+		`INSERT INTO local_state(key,value) VALUES('relay_delivery_seq','0')
+		 ON CONFLICT(key) DO UPDATE SET value='0'`); err != nil {
+		return RelayResetSummary{}, err
+	}
+	if _, err := tx.Exec(`DELETE FROM local_state WHERE key='terminal_id'`); err != nil {
+		return RelayResetSummary{}, err
+	}
+	for key, value := range map[string]string{
+		"relay_generation":   newGeneration,
+		"relay_reset_reason": reason,
+	} {
+		if _, err := tx.Exec(
+			`INSERT INTO local_state(key,value) VALUES(?,?)
+			 ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value); err != nil {
+			return RelayResetSummary{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return RelayResetSummary{}, err
+	}
+	return summary, nil
+}
+
+// SetRelayGeneration 仅记录世代（不隔离任何行）。用于"首次接触世代感知 Relay"的
+// 升级路径：本地旧行保持活动（它们属于当前 Relay），新行开始打标。
+func (s *Store) SetRelayGeneration(generation string) error {
+	return s.Set("relay_generation", generation)
+}
+
 func (s *Store) PendingRelayCommands() ([]RelayCommand, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -672,11 +827,26 @@ func (s *Store) EnqueueRelayEvent(event RelayEvent) error {
 	if event.EventID == "" || event.CommandID == "" || event.SessionID == "" || event.EventType == "" || event.EnvelopeJSON == "" {
 		return errors.New("invalid relay event")
 	}
-	_, err := s.db.Exec(
-		`INSERT OR IGNORE INTO relay_event_outbox(event_id,command_id,session_id,event_type,terminal_status,envelope_json,created_at_unix_ms,status,created_at)
-		 VALUES(?,?,?,?,?,?,?,'pending',?)`,
-		event.EventID, event.CommandID, event.SessionID, event.EventType, event.TerminalStatus, event.EnvelopeJSON, event.CreatedAtUnixMS, time.Now().UnixMilli())
+	// 世代打标（v0.8.9 P1）：事件随当前 relay_generation 入队，世代切换时旧行被隔离。
+	generation, err := s.generationLocked()
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
+		`INSERT OR IGNORE INTO relay_event_outbox(event_id,command_id,session_id,event_type,terminal_status,envelope_json,created_at_unix_ms,status,relay_generation,created_at)
+		 VALUES(?,?,?,?,?,?,?,'pending',?,?)`,
+		event.EventID, event.CommandID, event.SessionID, event.EventType, event.TerminalStatus, event.EnvelopeJSON, event.CreatedAtUnixMS, generation, time.Now().UnixMilli())
 	return err
+}
+
+// generationLocked 在已持有 s.mu 的前提下读取当前 relay_generation。
+func (s *Store) generationLocked() (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM local_state WHERE key='relay_generation'`).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
 }
 
 // relayEventRetry 常量定义事件 outbox 的重试上限与指数退避窗口。
@@ -856,14 +1026,19 @@ func (s *Store) EnqueueRelayUsage(usage RelayUsage) error {
 		usage.CacheReadTokens < 0 || usage.CacheWriteTokens < 0 {
 		return errors.New("invalid relay usage")
 	}
-	_, err := s.db.Exec(
+	// 世代打标（v0.8.9 P1）：usage 与事件同世代口径，切换后旧行被隔离不参与 flush。
+	generation, err := s.generationLocked()
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(
 		`INSERT OR IGNORE INTO relay_usage_outbox(
 			usage_key,session_id,provider,model,utc_day,input_tokens,output_tokens,
-			cache_read_tokens,cache_write_tokens,context_window_tokens,ttft_ms,decode_throughput,status,created_at
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)`,
+			cache_read_tokens,cache_write_tokens,context_window_tokens,ttft_ms,decode_throughput,status,relay_generation,created_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?)`,
 		usage.UsageKey, usage.SessionID, usage.Provider, usage.Model, usage.UTCDay,
 		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens,
-		usage.ContextWindowTokens, usage.TTFTMS, usage.DecodeThroughput, time.Now().UnixMilli())
+		usage.ContextWindowTokens, usage.TTFTMS, usage.DecodeThroughput, generation, time.Now().UnixMilli())
 	return err
 }
 

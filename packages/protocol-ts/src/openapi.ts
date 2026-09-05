@@ -1335,6 +1335,8 @@ export interface components {
             after_delivery_seq: number;
             /** @description ADR-012 能力协商：optional 兼容窗口为 [bearer, signature_v1]；required 窗口只剩 [signature_v1]。客户端据此选择认证方式，不得自行猜测。 */
             auth_modes?: ("bearer" | "signature_v1")[];
+            /** @description v0.8.9 P1 additive：Relay DB 实例代际（首次建库随机生成并持久；同库重启稳定、删除重建必变、备份随文件走）。Daemon 以 hello 为启动权威记录，运行期以 heartbeat 发现变化；旧 Relay 未登记时缺省，客户端按 legacy 兼容策略处理。该字段不进入业务 envelope，不替代 lease epoch。 */
+            relay_generation?: string;
         };
         DaemonHeartbeatRequest: {
             protocol_version: number;
@@ -1397,6 +1399,8 @@ export interface components {
             terminal_id: string;
             /** Format: int64 */
             server_time_unix_ms: number;
+            /** @description v0.8.9 P1 additive：Relay DB 实例代际的运行期发现通道。Daemon 每次心跳比较该值，变化说明 Relay DB 已被重建，必须停止命令处理并按契约收口本地 relay-scoped 状态。 */
+            relay_generation?: string;
         };
         DaemonCommandDelivery: {
             /** Format: int64 */

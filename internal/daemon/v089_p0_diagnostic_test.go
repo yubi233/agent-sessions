@@ -33,33 +33,60 @@ import (
 // result404=true 时模拟「删除重建后的空 Relay」：旧命令的 result 请求 404 NOT_FOUND
 // （v0.8.8 真实日志中「未建立 SSE 的 404 retry」的服务端形态）；
 // result404=false 时回显提交状态（正常存活 Relay 的权威收据契约）。
+// helloGeneration / heartbeatGeneration 模拟 Relay 世代字段（v0.8.9 P1）；
+// 两者为空时响应不含 relay_generation（旧 Relay legacy 形态）。
 type v089DiagRelay struct {
-	mu         sync.Mutex
-	result404  bool
-	result404s int
-	hellos     int
-	streamHits int
-	event404s  int
-	ackKinds   map[string][]string // command_id -> ack kinds（顺序，并发安全快照用 mu）
-	server     *httptest.Server
+	mu                  sync.Mutex
+	result404           bool
+	result404s          int
+	hellos              int
+	streamHits          int
+	event404s           int
+	helloGeneration     string
+	heartbeatGeneration string
+	// heartbeatIntervalSeconds 覆盖 hello 返回的心跳周期（默认 15s）；运行期世代
+	// 发现回归需要短周期（≥1s）才能在有界测试时间内触发 ticker 分支。
+	heartbeatIntervalSeconds int
+	ackKinds                 map[string][]string // command_id -> ack kinds（顺序，并发安全快照用 mu）
+	// resolvedCommands 记录 command_id -> 提交状态列表（/result 请求轨迹），
+	// 用于断言"某命令从未向该 Relay 发起 resolve"。
+	resolvedCommands map[string][]string
+	server           *httptest.Server
 	// sseCommands 是 SSE 待投递队列；Stream 命中后按序推出（诊断只关心 reader 到达时序）。
 	sseCommands chan string
 }
 
 func newV089DiagRelay(t *testing.T, result404 bool) *v089DiagRelay {
 	t.Helper()
-	r := &v089DiagRelay{result404: result404, ackKinds: map[string][]string{}, sseCommands: make(chan string, 16)}
+	r := &v089DiagRelay{result404: result404, ackKinds: map[string][]string{}, resolvedCommands: map[string][]string{}, sseCommands: make(chan string, 16)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/daemon/hello", func(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		r.hellos++
+		generation := r.helloGeneration
+		interval := r.heartbeatIntervalSeconds
 		r.mu.Unlock()
+		if interval <= 0 {
+			interval = 15
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"terminal_id":"term-v089-new","protocol_version":1,"min_protocol_version":1,"heartbeat_interval_seconds":15,"after_delivery_seq":0}`)
+		body := fmt.Sprintf(`{"terminal_id":"term-v089-new","protocol_version":1,"min_protocol_version":1,"heartbeat_interval_seconds":%d,"after_delivery_seq":0`, interval)
+		if generation != "" {
+			body += fmt.Sprintf(`,"relay_generation":%q`, generation)
+		}
+		body += `}`
+		_, _ = io.WriteString(w, body)
 	})
 	mux.HandleFunc("/v1/daemon/heartbeat", func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		generation := r.heartbeatGeneration
+		r.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{}`)
+		body := `{}`
+		if generation != "" {
+			body = fmt.Sprintf(`{"terminal_id":"term-v089-new","server_time_unix_ms":0,"relay_generation":%q}`, generation)
+		}
+		_, _ = io.WriteString(w, body)
 	})
 	mux.HandleFunc("/v1/daemon/sessions/recover", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -123,6 +150,7 @@ func newV089DiagRelay(t *testing.T, result404 bool) *v089DiagRelay {
 			r.mu.Lock()
 			should404 := r.result404
 			r.result404s++
+			r.resolvedCommands[commandID] = append(r.resolvedCommands[commandID], body.Status)
 			r.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			if should404 {
@@ -155,6 +183,13 @@ func (r *v089DiagRelay) hasAck(commandID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.ackKinds[commandID]) > 0
+}
+
+// resolveAttempts 并发安全地返回某命令向该 Relay 发起 /result 的次数。
+func (r *v089DiagRelay) resolveAttempts(commandID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.resolvedCommands[commandID])
 }
 
 // newDiagLogger 把 slog 诊断行打上 V089-EVIDENCE 前缀进测试日志，供报告归档提取。

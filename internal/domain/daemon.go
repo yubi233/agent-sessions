@@ -54,6 +54,10 @@ type DaemonHelloResult struct {
 	// AuthModes 是 Relay 当前接受的 Terminal 认证方式（ADR-012 能力协商）。
 	// optional 窗口为 ["bearer","signature_v1"]；required 窗口只剩 ["signature_v1"]。
 	AuthModes []string
+	// RelayGeneration 是当前 Relay DB 实例代际（v0.8.9 P1 / V089-02，additive）。
+	// Daemon 以 hello 为启动权威记录该值，运行期以 heartbeat 发现变化；
+	// 旧 Relay 未登记时为空串，客户端按 legacy 兼容策略处理。
+	RelayGeneration string
 }
 
 // terminalAuthModes 按兼容窗口进度返回 additive auth_modes 投影。
@@ -67,6 +71,9 @@ func (s *DaemonService) terminalAuthModes() []string {
 type DaemonHeartbeatResult struct {
 	TerminalID       string
 	ServerTimeUnixMS int64
+	// RelayGeneration 是运行期世代发现通道（v0.8.9 P1 / V089-02，additive）。
+	// Daemon 每次心跳比较该值：变化说明 Relay DB 已被重建，必须停止命令处理并收口。
+	RelayGeneration string
 }
 
 type DaemonCommandReceipt struct {
@@ -194,6 +201,12 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 	if err := s.repo.TouchDeviceLastSeen(ctx, in.DeviceID, now); err != nil {
 		return DaemonHelloResult{}, err
 	}
+	// relay_generation 是 additive 字段（v0.8.9 P1）：读取失败等同于 hello 失败，
+	// 不能静默降级为空值让 Daemon 误判为 legacy Relay。
+	generation, err := s.repo.RelayGeneration(ctx)
+	if err != nil {
+		return DaemonHelloResult{}, err
+	}
 	return DaemonHelloResult{
 		Terminal:                 terminal,
 		ProtocolVersion:          currentDaemonProtocolVersion,
@@ -201,6 +214,7 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 		HeartbeatIntervalSeconds: int(daemonHeartbeatInterval.Seconds()),
 		AfterDeliverySeq:         0,
 		AuthModes:                s.terminalAuthModes(),
+		RelayGeneration:          generation,
 	}, nil
 }
 
@@ -222,7 +236,11 @@ func (s *DaemonService) Heartbeat(ctx context.Context, accountID, deviceID, role
 	if err := s.repo.TouchDeviceLastSeen(ctx, deviceID, now); err != nil {
 		return DaemonHeartbeatResult{}, err
 	}
-	return DaemonHeartbeatResult{TerminalID: terminal.ID, ServerTimeUnixMS: now}, nil
+	generation, err := s.repo.RelayGeneration(ctx)
+	if err != nil {
+		return DaemonHeartbeatResult{}, err
+	}
+	return DaemonHeartbeatResult{TerminalID: terminal.ID, ServerTimeUnixMS: now, RelayGeneration: generation}, nil
 }
 
 func (s *DaemonService) TerminalForDevice(ctx context.Context, accountID, deviceID, role string) (store.TerminalRow, error) {

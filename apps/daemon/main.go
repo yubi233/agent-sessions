@@ -305,6 +305,13 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, 
 	loop.Platform = runtime.GOOS
 	loop.WorkspaceManager = workspaceManager
 	loop.Capabilities = daemonCapabilities()
+	// v0.8.9 P1 回滚开关：AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT=0/false 关闭
+	// generation 强制（仍记录世代，不做比较与隔离）。回滚不回退已完成的本地迁移。
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT"))) {
+	case "0", "false", "off":
+		loop.GenerationEnforcementDisabled = true
+		logger.Warn("relay generation enforcement disabled by environment; running without generation isolation")
+	}
 	if webRead != nil {
 		// 只在私钥实际可用时声明 browser read capability；缺失配置时 Web endpoint 必须保持
 		// fail-closed，不能因为普通 file_read capability 误认为可加密响应。

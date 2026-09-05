@@ -209,6 +209,11 @@ type Repository interface {
 	// CountOutboxByStatus 返回 outbox 各状态的行数投影，用于不含正文的可观测性指标。
 	CountOutboxByStatus(ctx context.Context) (pending, failed, delivered int64, err error)
 
+	// RelayGeneration 读取持久化的 relay_generation（v0.8.9 P1 / V089-01）。
+	// 值在首次建库时生成并持久（同库稳定/重建必变/备份随文件走）；
+	// 元数据缺失时返回空串（旧库漂移由 Open 的 ensureRelayGeneration 兜底）。
+	RelayGeneration(ctx context.Context) (string, error)
+
 	// Usage（ADR-010）：usage_key_hash 唯一约束去重；聚合只读白名单整数计数。
 	// UpsertUsageEvent 返回 false 表示该 usage key 已存在（重复上传，不重复累加）。
 	UpsertUsageEvent(ctx context.Context, u UsageEventRow) (bool, error)

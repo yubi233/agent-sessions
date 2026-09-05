@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -10,6 +12,10 @@ import (
 	// 使用纯 Go SQLite 驱动，保证 Relay 和 Daemon 无需 CGO 或外部数据库服务。
 	_ "modernc.org/sqlite"
 )
+
+// RelayGenerationPrefix 是 relay_generation 值的可识别前缀。完整值只保存在
+// relay_instance_meta；日志与诊断只允许输出该前缀形式（脱敏口径）。
+const RelayGenerationPrefix = "relgen_"
 
 // 编号迁移。只允许 additive 变更；删除列必须另开兼容窗口。
 var migrations = []string{
@@ -387,6 +393,13 @@ var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN available_permission_modes TEXT NOT NULL DEFAULT '[]';`,
 	// v0.8.5：会话实际 joined 的 DSH agent preset id（由 Daemon 上行同步，只读投影）。
 	`ALTER TABLE sessions ADD COLUMN agent_preset_id TEXT NOT NULL DEFAULT '';`,
+	// v0.8.9 P1（V089-01）：Relay 实例代际元数据。relay_generation 是删除重建即可辨识的
+	// 数据库世代锚点：同一 SQLite 文件重启不变，文件删除重建必变，备份/恢复随文件走。
+	// 该值只用于 Daemon 识别"Relay DB 已更换"，不进入业务 envelope，不替代 lease epoch。
+	`CREATE TABLE IF NOT EXISTS relay_instance_meta (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。
@@ -446,7 +459,43 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := ensureRelayGeneration(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+// ensureRelayGeneration 保证 Relay 实例代际存在且持久（v0.8.9 P1 / V089-01）。
+// 契约（迭代计划 §3.1）：
+//   - 首次创建数据库时生成随机、不可预测的 relay_generation 并持久化；
+//   - 同一 SQLite 文件重启保持不变；删除重建必变；备份/恢复随文件走；
+//   - 值只用于世代识别，不参与业务语义；日志只允许输出脱敏前缀。
+//
+// 使用 INSERT OR IGNORE 保证并发 Open 与存量库升级路径都幂等收敛。
+func ensureRelayGeneration(db *sql.DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS relay_instance_meta (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);`); err != nil {
+		return err
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM relay_instance_meta WHERE key='relay_generation'`).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		// crypto/rand 失败属于进程级异常，不能降级为可预测世代值。
+		return fmt.Errorf("generate relay generation: %w", err)
+	}
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO relay_instance_meta(key,value) VALUES('relay_generation',?)`,
+		RelayGenerationPrefix+hex.EncodeToString(raw))
+	return err
 }
 
 func ensureSessionEventCreatedAtColumn(db *sql.DB) error {

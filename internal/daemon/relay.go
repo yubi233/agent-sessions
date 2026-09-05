@@ -106,7 +106,23 @@ type RelayHello struct {
 	MinProtocolVersion       int    `json:"min_protocol_version"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
 	AfterDeliverySeq         int64  `json:"after_delivery_seq"`
+	// RelayGeneration 是 Relay DB 实例代际（v0.8.9 P1，additive）：同库稳定、重建必变。
+	// 旧 Relay 不返回该字段时为空串，Daemon 按明确 legacy 兼容策略处理（§3.1）。
+	RelayGeneration string `json:"relay_generation,omitempty"`
 }
+
+// RelayHeartbeat 是 heartbeat 响应的最小投影。RelayGeneration 是运行期世代发现
+// 通道：Daemon 每次心跳比较该值，变化即说明 Relay DB 已被重建（v0.8.9 P1）。
+type RelayHeartbeat struct {
+	TerminalID       string `json:"terminal_id"`
+	ServerTimeUnixMS int64  `json:"server_time_unix_ms"`
+	RelayGeneration  string `json:"relay_generation,omitempty"`
+}
+
+// ErrRelayGenerationChanged 表示运行期发现 Relay DB 已重建（heartbeat generation
+// 变化）。它不是 transient 错误：本地状态已收口，继续用当前 token/身份重试没有
+// 意义，必须走受控退出并要求重新配对（RunWithRetry 按终态处理，不退避重试）。
+var ErrRelayGenerationChanged = errors.New("relay generation changed; daemon requires restart and re-pairing")
 
 // RelayCommandReceipt 是 Relay 对 result 的权威持久化投影。Daemon 重放请求时必须以该值
 // 回填本地 SQLite，不能用本机旧意图覆盖 Relay 已提交的终态。
@@ -224,8 +240,10 @@ func (c *RelayClient) Challenge(ctx context.Context) (string, error) {
 	return payload.Challenge, nil
 }
 
-func (c *RelayClient) Heartbeat(ctx context.Context) error {
-	return c.postJSON(ctx, "/v1/daemon/heartbeat", map[string]any{"protocol_version": daemonProtocolVersion}, &struct{}{})
+func (c *RelayClient) Heartbeat(ctx context.Context) (RelayHeartbeat, error) {
+	var out RelayHeartbeat
+	err := c.postJSON(ctx, "/v1/daemon/heartbeat", map[string]any{"protocol_version": daemonProtocolVersion}, &out)
+	return out, err
 }
 
 // RecoverSessions 在进程启动后向 Relay 声明一次「上一进程已死亡」，触发 Relay
@@ -742,6 +760,12 @@ type RelayLoop struct {
 	inFlightSends map[string]struct{}
 	// sessionRecoveryDone 门限每进程一次的启动清扫声明；runOnce 串行执行，无需加锁。
 	sessionRecoveryDone bool
+	// GenerationEnforcementDisabled 关闭 generation 强制（v0.8.9 回滚开关，
+	// 由 apps/daemon 从 AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT 注入）。
+	// 关闭后仍记录 relay_generation，但不做比较与隔离；回滚不回退已完成的本地迁移。
+	GenerationEnforcementDisabled bool
+	// legacyRelayWarned 保证"旧 Relay 无 generation 字段"的 legacy 告警每进程只打一次。
+	legacyRelayWarned bool
 }
 
 func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, encoder EventEncoder, logger *slog.Logger) *RelayLoop {
@@ -837,6 +861,12 @@ func (l *RelayLoop) RunWithRetry(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// v0.8.9 P1：运行期世代变化是确定性终态（本地已收口）。退出而非退避重试，
+		// 避免在已失效的 Relay 世代上按 100ms-6.4s 无限刷日志（§2.2-4 / V089-06）。
+		if errors.Is(err, ErrRelayGenerationChanged) {
+			l.Logger.Warn("daemon relay loop stopping: relay generation changed; restart required after re-pairing")
+			return err
+		}
 		var httpErr *RelayHTTPError
 		if errors.As(err, &httpErr) && (httpErr.Status == http.StatusForbidden || httpErr.Status == http.StatusUnauthorized || httpErr.Status == http.StatusConflict || httpErr.Status == http.StatusUpgradeRequired) {
 			return err
@@ -877,6 +907,99 @@ func (l *RelayLoop) adoptTerminalIdentity(helloTerminalID string) error {
 	return l.Store.Set("terminal_id", helloTerminalID)
 }
 
+// sanitizeGeneration 输出世代值的脱敏前缀（§3.2 诊断红线：日志不落完整外部标识，
+// 只保留可关联的前缀段）。
+func sanitizeGeneration(generation string) string {
+	generation = strings.TrimSpace(generation)
+	if len(generation) > 16 {
+		return generation[:16]
+	}
+	return generation
+}
+
+// adoptRelayGeneration 是世代契约的 Daemon 侧入口（v0.8.9 P1 / §3.1-§3.2）：
+//   - hello 为启动权威：每次 runOnce 比对 Relay 返回的 relay_generation；
+//   - 本机从未记录（升级路径）→ 仅记录世代，旧行（generation=”）保持活动；
+//   - 世代变化 → 单事务隔离旧 relay-scoped state（命令收口/outbox quarantine/
+//     cursor 清零/Terminal 绑定清除），随后由 adoptTerminalIdentity 写入新绑定；
+//   - Relay 未返回世代（旧 Relay）→ 受控 legacy 模式：告警一次、跳过强制，
+//     不覆盖已记录世代，也不产生无限重试；
+//   - 回滚开关关闭 → 只记录，不做比较与隔离。
+func (l *RelayLoop) adoptRelayGeneration(helloGeneration string) error {
+	if l.GenerationEnforcementDisabled {
+		if helloGeneration != "" {
+			return l.Store.SetRelayGeneration(helloGeneration)
+		}
+		return nil
+	}
+	if strings.TrimSpace(helloGeneration) == "" {
+		// 旧 Relay 兼容策略（§3.1）：协议窗口内允许 legacy 模式继续服务，
+		// 但必须告警留痕，且不得把空值写成本机世代（否则会伪装成"世代一致"）。
+		if !l.legacyRelayWarned {
+			l.legacyRelayWarned = true
+			l.Logger.Warn("relay did not report relay_generation; running in legacy mode without generation enforcement")
+		}
+		return nil
+	}
+	stored, err := l.Store.RelayGeneration()
+	if err != nil {
+		return err
+	}
+	if stored == helloGeneration {
+		return nil
+	}
+	if stored == "" {
+		// 首次接触世代感知 Relay（升级路径）：只记录。generation='' 的历史行属于
+		// 当前 Relay（它们从未见过世代切换），隔离它们会错误丢弃仍在途的工作。
+		if err := l.Store.SetRelayGeneration(helloGeneration); err != nil {
+			return err
+		}
+		l.Logger.Info("relay generation recorded", "generation_prefix", sanitizeGeneration(helloGeneration))
+		return nil
+	}
+	// 世代变化（Relay DB 删除重建）：事务性收口 + 脱敏指标。
+	summary, err := l.Store.IsolateStaleRelayState(helloGeneration, "hello_generation_changed")
+	if err != nil {
+		return err
+	}
+	l.Logger.Warn("relay generation changed; local relay state isolated",
+		"reason", summary.Reason,
+		"previous_generation_prefix", sanitizeGeneration(summary.PreviousGeneration),
+		"generation_prefix", sanitizeGeneration(summary.NewGeneration),
+		"quarantined_commands", summary.QuarantinedCommands,
+		"quarantined_events", summary.QuarantinedEvents,
+		"quarantined_usages", summary.QuarantinedUsages)
+	return nil
+}
+
+// detectRuntimeGenerationChange 处理 heartbeat 通道的世代发现（§3.1）：变化时先
+// 完成与 hello 路径相同的本地收口，再返回 ErrRelayGenerationChanged 让 RunWithRetry
+// 按终态退出——运行期换库意味着 token/身份已失效，重试或继续服务只会放大错位。
+func (l *RelayLoop) detectRuntimeGenerationChange(hbGeneration string) error {
+	if l.GenerationEnforcementDisabled || strings.TrimSpace(hbGeneration) == "" {
+		return nil
+	}
+	stored, err := l.Store.RelayGeneration()
+	if err != nil {
+		return err
+	}
+	if stored == "" || stored == hbGeneration {
+		return nil
+	}
+	summary, err := l.Store.IsolateStaleRelayState(hbGeneration, "heartbeat_generation_changed")
+	if err != nil {
+		return err
+	}
+	l.Logger.Warn("relay generation changed at runtime; local relay state isolated and daemon will stop",
+		"reason", summary.Reason,
+		"previous_generation_prefix", sanitizeGeneration(summary.PreviousGeneration),
+		"generation_prefix", sanitizeGeneration(summary.NewGeneration),
+		"quarantined_commands", summary.QuarantinedCommands,
+		"quarantined_events", summary.QuarantinedEvents,
+		"quarantined_usages", summary.QuarantinedUsages)
+	return ErrRelayGenerationChanged
+}
+
 // ensureStartupSessionRecovery 每进程最多成功声明一次「进程已重启」。Relay 侧
 // 收口幂等，但成功后重复往返没有意义；返回 error 只表示本次未完成，调用方
 // 下一次 runOnce 重试，失败不阻塞命令主循环。
@@ -899,10 +1022,15 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// 世代契约（v0.8.9 P1）：hello 是启动权威。世代变化时在进入任何命令处理之前
+	// 完成本地收口，保证旧世代命令/outbox 不会流向新 Relay。
+	if err := l.adoptRelayGeneration(hello.RelayGeneration); err != nil {
+		return err
+	}
 	if err := l.adoptTerminalIdentity(hello.TerminalID); err != nil {
 		return err
 	}
-	if err := l.Client.Heartbeat(ctx); err != nil {
+	if _, err := l.Client.Heartbeat(ctx); err != nil {
 		return err
 	}
 	// hello 会在同一进程的网络重连中重复发送，不能作为进程启动信号；进程级
@@ -958,7 +1086,13 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 		case err := <-streamResult:
 			return err
 		case <-ticker.C:
-			if err := l.Client.Heartbeat(ctx); err != nil {
+			heartbeat, err := l.Client.Heartbeat(ctx)
+			if err != nil {
+				return err
+			}
+			// 运行期世代发现（§3.1）：heartbeat generation 变化 → 收口后按终态退出，
+			// 不进入退避重试（避免在已失效的 token/身份上无限循环）。
+			if err := l.detectRuntimeGenerationChange(heartbeat.RelayGeneration); err != nil {
 				return err
 			}
 			if err := l.flushOutboxes(ctx); err != nil {

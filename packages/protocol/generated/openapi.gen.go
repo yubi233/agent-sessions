@@ -1287,8 +1287,10 @@ type DaemonHeartbeatRequest struct {
 
 // DaemonHeartbeatResponse defines model for DaemonHeartbeatResponse.
 type DaemonHeartbeatResponse struct {
-	ServerTimeUnixMs int64  `json:"server_time_unix_ms"`
-	TerminalId       string `json:"terminal_id"`
+	// RelayGeneration v0.8.9 P1 additive：Relay DB 实例代际的运行期发现通道。Daemon 每次心跳比较该值，变化说明 Relay DB 已被重建，必须停止命令处理并按契约收口本地 relay-scoped 状态。
+	RelayGeneration  *string `json:"relay_generation,omitempty"`
+	ServerTimeUnixMs int64   `json:"server_time_unix_ms"`
+	TerminalId       string  `json:"terminal_id"`
 }
 
 // DaemonHelloRequest defines model for DaemonHelloRequest.
@@ -1312,7 +1314,10 @@ type DaemonHelloResponse struct {
 	HeartbeatIntervalSeconds int                             `json:"heartbeat_interval_seconds"`
 	MinProtocolVersion       int                             `json:"min_protocol_version"`
 	ProtocolVersion          int                             `json:"protocol_version"`
-	TerminalId               string                          `json:"terminal_id"`
+
+	// RelayGeneration v0.8.9 P1 additive：Relay DB 实例代际（首次建库随机生成并持久；同库重启稳定、删除重建必变、备份随文件走）。Daemon 以 hello 为启动权威记录，运行期以 heartbeat 发现变化；旧 Relay 未登记时缺省，客户端按 legacy 兼容策略处理。该字段不进入业务 envelope，不替代 lease epoch。
+	RelayGeneration *string `json:"relay_generation,omitempty"`
+	TerminalId      string  `json:"terminal_id"`
 }
 
 // DaemonHelloResponseAuthModes defines model for DaemonHelloResponse.AuthModes.

@@ -52,6 +52,7 @@ func (a *API) handleDaemonHello(c *gin.Context) {
 		HeartbeatIntervalSeconds: result.HeartbeatIntervalSeconds,
 		AfterDeliverySeq:         result.AfterDeliverySeq,
 		AuthModes:                result.AuthModes,
+		RelayGeneration:          result.RelayGeneration,
 	})
 }
 
@@ -122,7 +123,7 @@ func (a *API) handleDaemonHeartbeat(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	writeOK(c, daemonHeartbeatView{TerminalID: result.TerminalID, ServerTimeUnixMS: result.ServerTimeUnixMS})
+	writeOK(c, daemonHeartbeatView{TerminalID: result.TerminalID, ServerTimeUnixMS: result.ServerTimeUnixMS, RelayGeneration: result.RelayGeneration})
 }
 
 // handleDaemonCommandSSE 是专用 Terminal stream。它只发送 SQLite 已持久化的 command
@@ -618,11 +619,17 @@ type daemonHelloView struct {
 	AfterDeliverySeq         int64  `json:"after_delivery_seq"`
 	// AuthModes 是 additive 能力协商字段：客户端据此选择 bearer 或 signature_v1。
 	AuthModes []string `json:"auth_modes,omitempty"`
+	// RelayGeneration 是 Relay DB 实例代际（v0.8.9 P1，additive）：同库稳定、重建必变。
+	// Daemon 以 hello 为启动权威；空值表示旧 Relay，按 legacy 兼容策略处理。
+	RelayGeneration string `json:"relay_generation,omitempty"`
 }
 
 type daemonHeartbeatView struct {
 	TerminalID       string `json:"terminal_id"`
 	ServerTimeUnixMS int64  `json:"server_time_unix_ms"`
+	// RelayGeneration 是运行期世代发现通道（v0.8.9 P1，additive）：
+	// Daemon 心跳比较该值，变化即说明 Relay DB 已重建，需停止命令处理并收口。
+	RelayGeneration string `json:"relay_generation,omitempty"`
 }
 
 type daemonCommandView struct {
