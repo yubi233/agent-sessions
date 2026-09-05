@@ -350,8 +350,11 @@ type SessionModeItem struct {
 }
 
 // SyncSessionModes 把会话级 permission mode 目录快照上行到 Relay（PUT 端点）。
-// 这是会话运行期 handle 的事实；签名由 postJSON 在 Signer 非 nil 时自动附加
-// （兼容窗口内旧 bearer 放行由 Relay 端处理）。失败只记录不阻断主流程。
+// 这是会话运行期 handle 的事实；签名由 putJSON 在 Signer 非 nil 时自动附加
+// （v0.8.5 冻结契约：该端点为 PUT + 终端签名，handler 侧 VerifySignedTerminalRequest
+// 校验 method/path/body——历史上曾误用 POST 打到 PUT-only 路由被 gin 404，
+// 目录从此无法同步，App 侧"权限目录未同步"提示常驻，见实施记录 26 追加节）。
+// 失败只记录不阻断主流程。
 func (c *RelayClient) SyncSessionModes(ctx context.Context, sessionID, modeID, agentPresetID string, modes []SessionModeItem) error {
 	body := map[string]any{
 		"protocol_version":           daemonProtocolVersion,
@@ -361,7 +364,7 @@ func (c *RelayClient) SyncSessionModes(ctx context.Context, sessionID, modeID, a
 	if agentPresetID != "" {
 		body["agent_preset_id"] = agentPresetID
 	}
-	return c.postJSON(ctx, "/v1/daemon/sessions/"+sessionID+"/modes", body, &struct{}{})
+	return c.putJSON(ctx, "/v1/daemon/sessions/"+sessionID+"/modes", body, &struct{}{})
 }
 
 // AttachmentFetchProjection 是 Relay §3.3 读取端点的最小密文投影（Daemon 侧）：
