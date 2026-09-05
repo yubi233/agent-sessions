@@ -120,10 +120,22 @@ class SessionController extends ChangeNotifier {
 
   /// v0.8.6 B：权限目录为空时的禁用原因（capability 支持但目录未同步）。
   /// capability 不支持或只读等其它阻断由 controlBlockedReason 负责。
+  ///
+  /// v0.8.7 追加缺陷修复（V087-13 真实栈发现）：目录空有两种不同事实——
+  /// ① 会话未启动（stopped/未运行）：目录确实等启动后获取，维持 v0.8.6 文案；
+  /// ② 会话已启动甚至完成过回合而目录仍空：说明终端桥未上报模式目录（或上行
+  /// 失败），"启动后自动获取"与事实矛盾（误导用户反复重启）。按状态区分文案，
+  /// 事实性描述当前阻塞，不做任何能力伪造。
   String? get permissionDirectoryHint {
     final capability = selectedProviderCapabilities.capability('permission_mode');
     if (!capability.isSupported) return null;
     if (_controls.availablePermissionModes.isNotEmpty) return null;
+    final status = selectedSession?.status;
+    final started =
+        status == MobileSessionStatus.idle || status == MobileSessionStatus.streaming;
+    if (started) {
+      return '权限目录未同步——该会话的终端桥未上报模式目录。';
+    }
     return '权限目录未同步——启动会话后自动获取。';
   }
 

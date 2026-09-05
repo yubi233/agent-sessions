@@ -92,11 +92,47 @@ void main() {
 
     // 目录在位：无提示。
     expect(controller.permissionDirectoryHint, isNull);
-    // 目录被剥离（历史会话形态）：给出可执行原因。
+    // 目录被剥离 + 会话已启动（autoStart）：v0.8.7 V087-13 起按事实区分——
+    // 已启动会话目录仍空说明终端桥未上报模式目录，"启动后自动获取"与事实矛盾。
     relay.withCatalog = false;
     await controller.refreshSelectedControls();
     expect(controller.permissionDirectoryHint, contains('权限目录未同步'));
-    expect(controller.permissionDirectoryHint, contains('启动会话'));
+    expect(controller.permissionDirectoryHint, contains('终端桥未上报模式目录'));
+  });
+
+  test('V087-13：未启动会话目录空时维持"启动后自动获取"文案', () async {
+    final relay = _PermissionCatalogRelay(clock: () => DateTime.now());
+    final owner = await bootstrapFixtureOwner(relay);
+    relay.replaceWorkspaces([
+      const MobileWorkspace(
+        id: 'ws-v086',
+        projectId: 'v086-project',
+        terminalId: 'term-v086',
+        origin: MobileWorkspaceOrigin.dsh,
+        displayName: 'v086 工作区',
+        status: 'active',
+      ),
+    ]);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'ws-v086',
+      provider: 'dsh',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    // kill 走 fixture 停止流程进入 stopped（真实栈"从未启动/已停止"语义）：
+    // 目录确实等启动后获取，维持 v0.8.6 原文案。
+    await controller.killSelectedSession(
+      deviceId: owner.deviceId,
+      canWrite: true,
+    );
+    relay.withCatalog = false;
+    await controller.refreshSelectedControls();
+    expect(controller.selectedSession?.status, MobileSessionStatus.stopped);
+    expect(controller.permissionDirectoryHint, contains('权限目录未同步'));
+    expect(controller.permissionDirectoryHint, contains('启动会话后自动获取'));
   });
 
   test('V086-05：停止会话的 mode.set 预检拦截并提示启动会话', () async {
