@@ -1,0 +1,372 @@
+{
+  "suite": "v089-daemon-relay-lifecycle",
+  "plan_id": "V089",
+  "description": "v0.8.9 Daemon 与 Relay DB 生命周期、命令流和 outbox 可靠性收口：Relay DB generation 契约（同库稳定/重建必变）、Daemon 本地 relay-scoped state 世代隔离（事务性收口）、reset 生命周期编排（停止 Daemon → reset → 配对 → 启动）、stale 404 收口（failed/RELAY_GENERATION_RESET，无无限重试）、SSE reader 与命令执行解耦（scanner 落盘入队 + 控制优先队列）、event/usage outbox 世代隔离与重试分类。",
+  "environment": {
+    "local": "隔离 SQLite（Relay + Daemon 各自独立库）、httptest 假 Relay/Daemon、store/daemon/relay Go 测试；restart.sh 生命周期回归使用临时端口与本地夹具",
+    "relay_daemon_integration": "internal/relay + internal/daemon 集成测试（真实 HTTP 栈、进程内 SSE）",
+    "restart": "tools/restart_test.sh（隔离 state/端口、fake flutter/opencode）",
+    "browser": "V089-18 为 macOS 可见 Flutter 窗口的辅助可见诊断（headless=false、fixture 口径），不作为根因证据"
+  },
+  "cases": [
+    {
+      "id": "V089-01",
+      "title": "generation 迁移：同库重启稳定、删除重建必变、备份恢复可解释",
+      "status": "planned",
+      "phase": "P1",
+      "category": "contract/migration",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "Relay SQLite 经 store.Open 初始化 generation 元数据；字段 additive，不修改 events.json 与既有 command kind。",
+      "steps": [
+        "go test：对同一 SQLite 文件两次 Open，断言 relay_generation 不变",
+        "删除 DB 文件后重新 Open，断言 relay_generation 变化且不可预测（非空、格式受控）",
+        "备份复制 DB 文件到新路径后 Open，断言 generation 随文件走（备份恢复不重置）"
+      ],
+      "expected": "generation 只随 SQLite 文件生命周期变化：同文件稳定、删除重建变化、备份恢复保持原值。",
+      "cleanup": [
+        "删除临时 SQLite 文件"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-02",
+      "title": "hello/heartbeat additive 返回 relay_generation，Daemon 正确持久化和比较",
+      "status": "planned",
+      "phase": "P1",
+      "category": "relay-daemon integration",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "Relay daemon.hello / daemon.heartbeat 响应 additive 增加 relay_generation；旧 Relay 不返回该字段时走明确 legacy 策略（不无限重试）。",
+      "steps": [
+        "go test：httptest Relay 返回 generation，断言 Daemon RelayHello/heartbeat 结构解析并持久化到 local_state",
+        "hello generation 与本地记录不同时，断言 Daemon 停止新命令处理并触发世代切换收口",
+        "heartbeat 发现 generation 变化时，断言当前 Relay loop 被取消并进入受控恢复",
+        "旧 Relay（响应缺 relay_generation）时，断言按 legacy 策略告警或要求重启，不进入无限重试"
+      ],
+      "expected": "generation 以 hello 为启动权威、heartbeat 为运行期发现手段；变化触发收口；缺失走兼容策略。",
+      "cleanup": [
+        "关闭 httptest server 与临时 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-03",
+      "title": "generation 变化时原子隔离 relay_commands、cursor、Terminal identity",
+      "status": "planned",
+      "phase": "P1",
+      "category": "daemon store",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "Daemon 本地库中存在旧 generation 的 relay_commands/relay_event_outbox/relay_usage_outbox 行与 terminal_id/relay_delivery_seq 状态。",
+      "steps": [
+        "go test：调用世代切换收口（单事务），断言 relay_commands 旧行隔离/失效、delivery cursor 清零、Terminal 绑定清除",
+        "断言 command_outbox（Daemon 发起的本地 outbox）不被误删",
+        "断言收口后重新配对的新命令可正常入队执行（新 generation 关联）"
+      ],
+      "expected": "一次 SQLite 事务完成全部收口；旧行可审计（保留计数与原因），新命令走新 generation。",
+      "cleanup": [
+        "关闭临时 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-04",
+      "title": "恢复集成：旧 received/starting/started 命令不进入新 Relay；新命令可正常执行",
+      "status": "planned",
+      "phase": "P1",
+      "category": "recovery integration",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "隔离 Relay SQLite + 可复用 Daemon state：先在旧 Relay 下产生 pending 命令，再删除重建 Relay DB 模拟 reset。",
+      "steps": [
+        "go test：重建 Relay 后 Daemon 重新 hello（新 generation + 新 Terminal）",
+        "断言旧 generation 的 received/starting/started 命令被收口，不再向新 Relay 发送 resolve/ack",
+        "断言新 Relay 下发的新命令（start/send）可正常执行并回写终态"
+      ],
+      "expected": "世代切换后无旧命令泄漏到新 Relay；新命令链路完整可用。",
+      "cleanup": [
+        "删除临时 SQLite 与 httptest server"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-05",
+      "title": "stale 404 收口：Resolve/Ack/result 404 变为 failed/RELAY_GENERATION_RESET，无无限 retry",
+      "status": "planned",
+      "phase": "P2",
+      "category": "404 classification",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "请求上下文已确认是当前 generation 的 stale command（Relay 返回 404 NOT_FOUND 且命令属于旧世代）。",
+      "steps": [
+        "go test：Relay 对 resolve/ack 返回 404，断言本机命令落为 completed/result_status=failed/error_code=RELAY_GENERATION_RESET",
+        "断言 processPending/RunWithRetry 不再对该命令重试，SSE 与 heartbeat 正常进入",
+        "断言普通 404（无 generation 证据、非 stale command 上下文）仍按原错误传播，不被一刀切吞掉"
+      ],
+      "expected": "stale 404 有本地终态与稳定错误码；不新增 wire 终态；未知 404 不被静默清理。",
+      "cleanup": [
+        "关闭 httptest server 与临时 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-06",
+      "title": "retry 分类：reset、认证、协议、网络和普通 404 的重试/退出策略分离",
+      "status": "planned",
+      "phase": "P2",
+      "category": "retry policy",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "RunWithRetry 已有 401/403/409/426 与签名错误码的终止策略。",
+      "steps": [
+        "go test：generation reset / legacy 不确定状态时 RunWithRetry 退出或进入受控等待，不按 100ms-6.4s 退避永久刷日志",
+        "断言 401/403 仍立即退出；网络错误仍有界退避重试；普通 404 不再无限重试",
+        "断言各 failure class 日志分类可区分（脱敏）"
+      ],
+      "expected": "generation reset、认证失效、协议不兼容、网络断开分别有独立 failure class 与终止/等待策略。",
+      "cleanup": [
+        "关闭 httptest server"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-07",
+      "title": "restart 生命周期：owner key rotation、owner refresh、daemon pairing reset 严格停止 Daemon 后执行",
+      "status": "planned",
+      "phase": "P2",
+      "category": "restart lifecycle",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "restart.sh 所有 reset_default_local_relay_db 调用点接入生命周期锁（停止受管 Daemon 与孤儿 Daemon 后才 reset）。",
+      "steps": [
+        "bash tools/restart_test.sh：验证 reset 调用点在 Daemon 运行时先停止 Daemon（pid 文件与孤儿清理）",
+        "验证 reset 后重新 owner/daemon pairing、workspace confirm，再启动 Daemon 的顺序",
+        "验证 sequence 错误时 fail-closed 而不是静默制造旧 token/SSE 窗口"
+      ],
+      "expected": "任何重建 Relay DB 的 bootstrap 路径都不能在受管 Daemon 运行时执行。",
+      "cleanup": [
+        "restart.sh stop 清理临时 state 与进程"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-08",
+      "title": "restart-flutter 防护：Daemon 运行时 reset 被阻止或转交完整 restart",
+      "status": "planned",
+      "phase": "P2",
+      "category": "restart lifecycle",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "restart-flutter 需要触发 owner bootstrap reset 时（如加密密钥轮换自愈）。",
+      "steps": [
+        "bash tools/restart_test.sh：构造需要 reset 的场景执行 restart-flutter",
+        "断言返回可操作错误并提示执行完整 restart（或显式转交完整 restart 且有独立回归）",
+        "断言不产生旧 token/SSE 窗口（daemon 未被静默破坏）"
+      ],
+      "expected": "restart-flutter 不再静默制造 generation 错位窗口。",
+      "cleanup": [
+        "restart.sh stop 清理"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-09",
+      "title": "SSE reader 解耦：delivery 到达后只落盘入队，reader 不执行 Provider 或 Resolve",
+      "status": "planned",
+      "phase": "P3",
+      "category": "sse scheduling",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "scanner 仅解码 SSE、写 relay_commands、推进已落盘 cursor 并入队；普通命令由有界 worker 执行。",
+      "steps": [
+        "go test：慢命令（session.send 长阻塞）执行期间推送后续 delivery",
+        "断言 reader 在有界时间内继续消费 delivery 并落盘（reader 不被业务执行阻塞）",
+        "断言 worker 崩溃/阻塞不影响 reader last-read 推进"
+      ],
+      "expected": "接收顺序只保证落盘后入队；reader 与执行彻底解耦。",
+      "cleanup": [
+        "关闭临时 goroutine 与 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-10",
+      "title": "SSE 控制优先级：send 等审批时 approve/reject、abort、question answer 仍在有界时间内处理",
+      "status": "planned",
+      "phase": "P3",
+      "category": "sse scheduling",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "控制命令（permission.approve/reject、session.abort、question.answer）走控制优先队列，不等待普通 worker 的 executionMu。",
+      "steps": [
+        "go test：session.send 阻塞等待 permission（桥 sendGate）时，经 handleDelivery 送入 permission.approve",
+        "断言 approve 在有界时间内完成决策回写（复用 V088-15b 抢占语义）",
+        "断言 session.abort 与 question.answer 同样不被普通命令阻塞"
+      ],
+      "expected": "审批/中止/问答不被 Provider 执行阻塞；SSE 队头阻塞消除。",
+      "cleanup": [
+        "关闭 runner 与 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-11",
+      "title": "SSE 并发取消：disconnect、generation change、shutdown 时 worker 和 in-flight send 正确取消",
+      "status": "planned",
+      "phase": "P3",
+      "category": "lifecycle",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "worker 与 in-flight send 受当前 loop context 约束。",
+      "steps": [
+        "go test：in-flight send 执行中触发 disconnect（stream context cancel），断言 Provider 调用被取消、不脱离 loop context",
+        "generation change 时断言全部 worker 与 reader 一起退出并进入收口",
+        "进程 shutdown 时断言无泄漏 goroutine、无半提交命令状态"
+      ],
+      "expected": "三种取消路径下 worker/in-flight send 生命周期正确；durable starting/started 规则不被破坏。",
+      "cleanup": [
+        "等待 goroutine 退出并关闭 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-12",
+      "title": "heartbeat 活性：长命令执行期间 heartbeat 持续；reader 堵塞不会伪装成健康",
+      "status": "planned",
+      "phase": "P3",
+      "category": "liveness",
+      "priority": "P1",
+      "test_layer": "integration",
+      "precondition": "heartbeat loop 与命令执行解耦。",
+      "steps": [
+        "go test：长命令（>1 个 heartbeat 周期）执行期间断言 heartbeat 请求持续到达",
+        "断言 heartbeat 失败/reader 断开时 RunWithRetry 感知并重连，不静默挂起"
+      ],
+      "expected": "heartbeat 不因业务执行停止；连接健康状态真实可观测。",
+      "cleanup": [
+        "关闭 httptest server"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-13",
+      "title": "event outbox：旧 generation 事件 quarantine，不自动 requeue；新事件正常上传",
+      "status": "planned",
+      "phase": "P4",
+      "category": "outbox",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "event outbox 查询只返回当前 generation 行；旧行进入 quarantine 或显式 failed。",
+      "steps": [
+        "go test：世代切换后断言旧 pending/failed 事件不参与自动 requeue（RequeueTransientFailedRelayEvents 等入口按 generation 过滤）",
+        "断言新 generation 事件继续正常上传",
+        "断言人工恢复入口不能把旧 generation 行投到新 Relay（默认不恢复旧世代）"
+      ],
+      "expected": "旧世代事件不污染新 Relay；新事件上传不被旧事件阻塞。",
+      "cleanup": [
+        "关闭临时 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-14",
+      "title": "usage outbox：旧 generation usage 隔离，瞬态错误仍有界重试",
+      "status": "planned",
+      "phase": "P4",
+      "category": "outbox",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "usage outbox 与 generation 一致；原有有界退避保持。",
+      "steps": [
+        "go test：世代切换后断言旧 usage 行隔离（不参与 flush），新 usage 正常上传",
+        "断言 429/5xx/网络错误仍按原有有界退避重试，确定性 4xx 仍按毒丸收口",
+        "断言 generation reset / 永久业务拒绝 / 429 / 网络断开 / 5xx / timeout 的重试分类分离"
+      ],
+      "expected": "usage 与事件同世代口径；瞬态重试语义不回归。",
+      "cleanup": [
+        "关闭临时 store"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-15",
+      "title": "诊断脱敏：日志、报告、SQLite 投影不含 token、密钥、正文、路径、diff、envelope",
+      "status": "planned",
+      "phase": "P4",
+      "category": "audit",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "generation 诊断只保留 hash/ID 脱敏形式、数量、状态和错误码。",
+      "steps": [
+        "go test：世代切换/隔离/诊断投影路径的日志与投影字段白名单断言（不含 envelope、路径、正文）",
+        "shell audit：go run ./apps/deployctl scan 保持通过；人工抽查 P0/P1 报告无敏感字段"
+      ],
+      "expected": "全部新增诊断与日志脱敏；明文红线不回退。",
+      "cleanup": [
+        "清理临时文件"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-16",
+      "title": "端到端恢复：reset → 重新配对 → workspace confirm → 新 session start/send/approval 完成",
+      "status": "planned",
+      "phase": "P5",
+      "category": "e2e recovery",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "P1-P4 全绿；隔离本地栈（fixture adapter，不调用真实模型）。",
+      "steps": [
+        "go test ./internal/relay -run 集成链路：重建 Relay DB 后 daemon 重新配对并 confirm workspace",
+        "新 session start → send → permission 决策全链完成且事件上传成功",
+        "task test:e2e:relay 与 task test:restart 按实际可执行口径通过"
+      ],
+      "expected": "reset 后完整恢复链路可用；根因测试不可被端到端替代。",
+      "cleanup": [
+        "停止本地栈并清理临时 state"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-17",
+      "title": "回归聚合：v0.8.8 V088-01..16 与 v0.8.1-v0.8.7 聚合不回归",
+      "status": "planned",
+      "phase": "P5",
+      "category": "regression",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "P0-P4 已交付；Taskfile 聚合入口可用。",
+      "steps": [
+        "task test:v088:local（V088 套件聚合）",
+        "task check + task docs:verify + go test ./...（仓库全量 Go）",
+        "v083→v088 聚合链式入口按既有口径全部 exit=0"
+      ],
+      "expected": "能力矩阵、权限三档、附件 fail-closed、只读沙箱与既有聚合全部保持通过。",
+      "cleanup": [
+        "无"
+      ],
+      "evidence": []
+    },
+    {
+      "id": "V089-18",
+      "title": "可见诊断：reset 后 Flutter 重新连接、会话状态和权限卡可见（headed/fixture 辅助证据）",
+      "status": "planned",
+      "phase": "P5",
+      "category": "visible diagnostics",
+      "priority": "P2",
+      "test_layer": "e2e",
+      "precondition": "full gate 通过后执行；macOS 可见 Flutter 窗口（headless=false）、fixture 口径；仅作辅助证据，不替代根因测试。",
+      "steps": [
+        "制定可见诊断内容（录屏前先定回归内容，参考 flutter-smoke-recording 口径）",
+        "隔离本地栈执行 reset → Flutter 重连 → 会话状态恢复 → 权限卡可见采样",
+        "报告标记 fixture_data=true、local_test=true、headless=false；失败按 environment_or_startup_failure 分类保留证据"
+      ],
+      "expected": "用户可见状态与协议证据一致；可见失败不伪装为通过。",
+      "cleanup": [
+        "restart.sh stop 清理本地栈"
+      ],
+      "evidence": []
+    }
+  ]
+}
