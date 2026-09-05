@@ -1,6 +1,6 @@
 # ADR-014：DSH ACP 扩展契约与 v0.8.2 遗留能力收口
 
-- 状态：Accepted（v0.8.3 P0 冻结契约；P5 收口后对应 handler/adapter/Relay/客户端 gate 全链路成立并按证据升格：permission_mode/fork → native、question/plan/goal/skill_catalog/invoke_skill → emulated（dsh/* extension 承载）、attachments → 条件式 unsupported（v0.8.5 §3.3 已交付 Daemon 鉴权附件读取端点 `GET /v1/daemon/attachments/:id`，Relay opaque ref 命令消费与 §3.2 会话内容密钥分发未落地，真实发送仍 unsupported 并如实标注；证据见[实施记录 21](../zh/实施记录/21-v0.8.3-DSH-ACP能力收口与交互扩展.md) P5 节与[实施记录 24](../zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md) §4.9）
+- 状态：Accepted（v0.8.3 P0 冻结契约；P5 收口后 permission_mode/fork → native、question/plan/goal/skill_catalog/invoke_skill → emulated（dsh/* extension 承载），证据见[实施记录 21](../zh/实施记录/21-v0.8.3-DSH-ACP能力收口与交互扩展.md) P5 节与[实施记录 24](../zh/实施记录/24-v0.8.5-工作区显示名与权限契约.md) §4.9；**v0.8.8 修订**：attachments → emulated（opaque ref 全链路成立）、file_read/git_read → native（应用层只读命令通道），§9 C 类边界同步修订——桥侧 ACP fs/* 等排除口径不变，证据见[实施记录 27](../zh/实施记录/27-v0.8.8-能力矩阵收口与权限三档.md)与 26 号套件）
 - 关联：[迭代计划 v0.8.3](../zh/迭代计划/迭代计划v0.8.3.md)、[ADR-013](ADR-013-DeepSeek-Harness-Provider接入.md)、[实施记录 20](../zh/实施记录/20-v0.8.2-DSH能力补全与工具活动.md)、[实施记录 21](../zh/实施记录/21-v0.8.3-DSH-ACP能力收口与交互扩展.md)
 - 事实锚点：外部 deepseek-harness 仓库 `packages/acp/acp/src/index.ts`（桥）、`internal/adapter/dsh/`（Go 适配器）、`internal/daemon/runner.go`（命令分发）、`packages/protocol/schema/*`（公共协议）
 
@@ -87,9 +87,11 @@ v0.8.3 把 v0.8.2 判定"可通过 DSH ACP bridge 较小范围改动接入"的�
 - **skill**（B-9/B-10）：descriptor 白名单 `{ name, description, whenToUse, invocation }`；`path`、`resourceBase`、`locator`、provider metadata、skill body 不进目录。`catalogRevision` 只在 `complete=true` 时对排序后 descriptor 集合计算内容摘要；incomplete 保留 last-good 或保持 unavailable。`dsh/skill/invoke` 必须引用当前 `catalogRevision` 与已广播的 `userInvocable` skill name；未知/未广播/过期 revision 一律拒绝，不降级为普通 prompt。
 - **delegation**（B-12）：`dsh/delegation/changed` 字段仅 `{ runId, parentSessionId, state(running|completed|failed|cancelled), provider, local, stopReason?, summary? }`；不发送 task envelope、child 正文、凭据或本地路径；start 只在 child 已发布后出现，不合成 proposed 状态；parent dispose/断线触发 child-first drain，终态只能收敛 completed/failed/cancelled。
 
-## 9. C 类边界（继续 unsupported，不伪造）
+## 9. C 类边界（v0.8.8 修订：应用层通道接通，桥侧边界不变）
 
-`file_read`/`git_read`（Agent Sessions 已有独立 readonly transport，桥 fs 工具重复接入会产生两套授权真相）、ACP `fs/*`（方向为 Agent→Client，需改变 DSH 本地 fs 执行域）、terminal（PTY owner/生命周期跨域）、editor/NES、MCP 管理、`delegate_session`/`delegate_cross_provider`、ACP-controlled child session delegation。理由与 v0.8.3 计划 §3.2 一致；观察类投影（B-12）不得提升 delegation 能力。
+**v0.8.8 升格（应用层只读命令通道，与桥无关）**：`file_read`/`git_read` → native、`attachments` → emulated——经 daemon `ReadOnlyDispatcher` 沙箱 + 只读命令（file.tree/file.read/code.read/git.*）+ 移动端真实传输消费者（`ReadonlyCommandGateway`/`RelayGitDiffRepository`/`RelayWorkspaceFilesRepository`）全链路接通，证据见实施记录 27 与 26 号套件（V088-02..10）；`attachments` 另含 daemon 附件拉取出口 + 本机 DEK Open 契约（`attachment_open.go`，迭代计划 v0.8.8 §9.1）。守护锚点：`consistency_guard_test`（状态锁定 + 证据 reason + 旧口径负向断言）。
+
+**继续 unsupported（桥侧边界，理由不变）**：桥 ACP `fs/*`（方向为 Agent→Client，需改变 DSH 本地 fs 执行域；与本节已接通的应用层只读命令通道是两条路——前者维持 -32601，避免两套授权真相）、桥 git 工具接入、terminal（PTY owner/生命周期跨域）、editor/NES、MCP 管理、`delegate_session`/`delegate_cross_provider`（桥仅 B-12 观察投影，不得提升 delegation 能力）、ACP-controlled child session delegation。
 
 ## 10. V08-12 迁移与 resume→send 修复口径
 

@@ -498,8 +498,10 @@ func TestP5MatrixUpgradedAfterDeterministicGate(t *testing.T) {
 			t.Fatalf("%s 的 emulated 必须带残余风险 reason", name)
 		}
 	}
-	if c := byName["attachments"]; c.Status != adapter.CapabilityUnsupported {
-		t.Fatalf("attachments 在 opaque ref 接入前保持 unsupported，得到 %s", c.Status)
+	// v0.8.8 P4 升格：opaque ref 全链路成立后 attachments 为 emulated（桥 admission
+	// 上限）——与 successMatrix/consistency_guard 同口径（历史本断言为升格前口径）。
+	if c := byName["attachments"]; c.Status != adapter.CapabilityEmulated {
+		t.Fatalf("attachments 升格后应为 emulated（桥 admission 上限），得到 %s", c.Status)
 	}
 	// 观察不提升：delegation 两项在任何 gate 下保持 unsupported。
 	for _, name := range []string{"delegate_session", "delegate_cross_provider"} {
