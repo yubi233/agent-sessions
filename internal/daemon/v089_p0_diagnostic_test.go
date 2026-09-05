@@ -41,10 +41,14 @@ type v089DiagRelay struct {
 	result404           bool
 	result404s          int
 	hellos              int
+	heartbeatHits       int
 	streamHits          int
 	event404s           int
 	helloGeneration     string
 	heartbeatGeneration string
+	// helloTerminalID 覆盖 hello 返回的 Terminal 身份（默认 term-v089-new）；
+	// 调度器回归夹具的 store 已绑定固定 Terminal，二者必须一致才不会被 fence 拒绝。
+	helloTerminalID string
 	// heartbeatIntervalSeconds 覆盖 hello 返回的心跳周期（默认 15s）；运行期世代
 	// 发现回归需要短周期（≥1s）才能在有界测试时间内触发 ticker 分支。
 	heartbeatIntervalSeconds int
@@ -70,8 +74,12 @@ func newV089DiagRelay(t *testing.T, result404 bool) *v089DiagRelay {
 		if interval <= 0 {
 			interval = 15
 		}
+		terminalID := r.helloTerminalID
+		if terminalID == "" {
+			terminalID = "term-v089-new"
+		}
 		w.Header().Set("Content-Type", "application/json")
-		body := fmt.Sprintf(`{"terminal_id":"term-v089-new","protocol_version":1,"min_protocol_version":1,"heartbeat_interval_seconds":%d,"after_delivery_seq":0`, interval)
+		body := fmt.Sprintf(`{"terminal_id":%q,"protocol_version":1,"min_protocol_version":1,"heartbeat_interval_seconds":%d,"after_delivery_seq":0`, terminalID, interval)
 		if generation != "" {
 			body += fmt.Sprintf(`,"relay_generation":%q`, generation)
 		}
@@ -80,6 +88,7 @@ func newV089DiagRelay(t *testing.T, result404 bool) *v089DiagRelay {
 	})
 	mux.HandleFunc("/v1/daemon/heartbeat", func(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
+		r.heartbeatHits++
 		generation := r.heartbeatGeneration
 		r.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -186,6 +195,13 @@ func (r *v089DiagRelay) hasAck(commandID string) bool {
 	return len(r.ackKinds[commandID]) > 0
 }
 
+// heartbeatCount 并发安全地返回 heartbeat 请求次数。
+func (r *v089DiagRelay) heartbeatCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.heartbeatHits
+}
+
 // resolveAttempts 并发安全地返回某命令向该 Relay 发起 /result 的次数。
 func (r *v089DiagRelay) resolveAttempts(commandID string) int {
 	r.mu.Lock()
@@ -264,9 +280,11 @@ func TestV089StaleCommand404ConvergesLocallyAndEntersSSE(t *testing.T) {
 }
 
 // V089-06 回滚口径：enforcement 关闭（AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT=0）
-// 时，404 不被静默清理——保留 v0.8.9 前的退避重试行为（文档化的回滚语义，
-// 同时固化"未修复前 404 无限重试"的 P0 历史证据口径）。
-func TestV089RollbackSwitchPreservesLegacyRetryLoopOn404(t *testing.T) {
+// 时，404 不被静默清理——命令行保持 pending（不落 RELAY_GENERATION_RESET 终态），
+// 由 sweeper 按 heartbeat 节拍重驱动；且 v0.8.9 P3 后 404 失败不再阻塞 SSE 建立
+// （worker 异步消费 + 失败不外溢），根除"每 6.4 秒永久刷日志"的故障形态。
+// （P0 历史证据口径：未修复前 404 会造成退避循环且 SSE 永不建立——见 P0 诊断报告。）
+func TestV089RollbackSwitchKeepsStaleCommandPendingWithoutBlockingSSE(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -294,31 +312,33 @@ func TestV089RollbackSwitchPreservesLegacyRetryLoopOn404(t *testing.T) {
 	loop := NewRelayLoop(store, &RelayClient{BaseURL: relay.server.URL, AccessToken: "fixture"}, runner, nil, newDiagLogger(t))
 	loop.GenerationEnforcementDisabled = true
 
-	ctx, cancel := context.WithTimeout(context.Background(), 650*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
 	defer cancel()
-	if err := loop.RunWithRetry(ctx); err == nil {
-		t.Fatal("enforcement-off rollback must keep retrying (original error propagates)")
+	if err := loop.RunWithRetry(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunWithRetry must survive the observation window, got %v", err)
 	}
 	result404s, _, streamHits, _ := relay.snapshot()
-	t.Logf("V089-EVIDENCE V089-06 rollback: observe_window_ms=650 resolve_404_hits=%d stream_hits=%d", result404s, streamHits)
-	if result404s < 3 {
-		t.Fatalf("rollback switch must preserve retry loop, got %d attempts", result404s)
+	t.Logf("V089-EVIDENCE V089-06 rollback: observe_window_ms=900 resolve_404_hits=%d stream_hits=%d local_cmd=pending(不收口)", result404s, streamHits)
+	// 回滚语义 1：404 不清理——观察窗内恰好一次尝试（worker 单次执行 + sweeper 未到期），
+	// 命令行保持 started 无终态，等待人工处置。
+	if result404s != 1 {
+		t.Fatalf("rollback switch must not close or hot-retry stale 404, got %d attempts", result404s)
 	}
-	if streamHits != 0 {
-		t.Fatal("rollback switch must not enter SSE while stale 404 loops")
+	if streamHits == 0 {
+		t.Fatal("rollback switch must not block SSE entry on stale command failure")
 	}
 	stored, err := store.RelayCommandByID(stale.CommandID)
 	if err != nil || stored.Status != "started" || stored.ResultStatus != "" {
-		t.Fatalf("rollback switch must not close stale command locally: %+v err=%v", stored, err)
+		t.Fatalf("rollback switch must keep stale command pending: %+v err=%v", stored, err)
 	}
 }
 
-// 故障链二复现（迭代计划 §1.2）：SSE scanner 同步调用 consume=handleDelivery。
-// send 已异步执行（既有行为）但持有 executionMu 等待审批；紧随其后的 mode.set
-// 在 executeAndResolve→ConsumeCommand 上等待 executionMu——handleDelivery 阻塞，
-// scanner 无法继续读取第三条 permission.approve 投递，形成队头阻塞（控制命令不可达）。
-// 修复方向（P3）：scanner 只落盘入队；普通命令进有界 worker；控制命令走优先队列。
-func TestV089DiagSSEHeadOfLineBlockingStallsControlCommand(t *testing.T) {
+// V089-09（P3 修复后翻转诊断链二）：故障链二的修复回归。调度器启动后，scanner
+// （Stream 的 consume=handleDelivery）只落盘+回执+入队：send 等审批持有 executionMu、
+// mode.set 在普通 worker 上等待时，reader 继续消费第三条 permission.approve 投递并在
+// 有界时间内送达控制 worker（对比 P0：bounded 窗口内不可达）。reader last-read 随
+// delivery 推进而增长，不执行 Provider/Resolve（§3.4）。
+func TestV089SSEReaderKeepsConsumingWhileCommandsExecute(t *testing.T) {
 	s, runner, fake := newRunnerFixture(t, "dsh")
 	// 预置会话：start 完成后桥 handle 可注入 sendGate（模拟回合等待 DSH 审批）。
 	if err := runner.ConsumeCommand(context.Background(), Command{
@@ -340,14 +360,18 @@ func TestV089DiagSSEHeadOfLineBlockingStallsControlCommand(t *testing.T) {
 	if err := s.Set("terminal_id", "term-v089-hol"); err != nil {
 		t.Fatal(err)
 	}
+	// 启动调度器：production 口径（worker 异步消费，reader 不执行业务）。
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	loop.startSchedulers(schedCtx)
 
 	push := func(seq int64, cmd RelayCommand) {
 		wire := fmt.Sprintf(`{"delivery_seq":%d,"command":{"id":%q,"session_id":%q,"workspace_id":%q,"kind":%q,"lease_epoch":1,"target_terminal_id":"term-v089-hol","ciphertext":%s}}`,
 			seq, cmd.CommandID, cmd.SessionID, cmd.WorkspaceID, cmd.Kind, cmd.PayloadJSON)
 		relay.sseCommands <- wire
 	}
-	// 三条连续投递：send（等待审批）→ mode.set（会在执行器上排队）→ permission.approve（控制命令）。
-	// payload 为 Relay 下行的明文形状 envelope：命令元数据在顶层，语义字段在 ciphertext.fixture_payload。
+	// 三条连续投递：send（等待审批）→ mode.set（普通 worker 等待 executionMu）→
+	// permission.approve（控制命令）。
 	push(1, RelayCommand{CommandID: "cmd-hol-send", SessionID: "sess-v089-hol", WorkspaceID: "ws-v089-hol", Kind: "session.send", LeaseEpoch: 1, TargetTerminalID: "term-v089-hol", PayloadJSON: `{"session_id":"sess-v089-hol","ciphertext":{"fixture_payload":{"message":"等审批的消息"}}}`})
 	push(2, RelayCommand{CommandID: "cmd-hol-modeset", SessionID: "sess-v089-hol", WorkspaceID: "ws-v089-hol", Kind: "mode.set", LeaseEpoch: 1, TargetTerminalID: "term-v089-hol", PayloadJSON: `{"session_id":"sess-v089-hol","ciphertext":{"fixture_payload":{"mode_id":"acceptEdits"}}}`})
 	push(3, RelayCommand{CommandID: "cmd-hol-approve", SessionID: "sess-v089-hol", WorkspaceID: "ws-v089-hol", Kind: "permission.approve", LeaseEpoch: 1, TargetTerminalID: "term-v089-hol", PayloadJSON: `{"session_id":"sess-v089-hol","ciphertext":{"fixture_payload":{"request_id":"call-v089-1"}}}`})
@@ -359,8 +383,7 @@ func TestV089DiagSSEHeadOfLineBlockingStallsControlCommand(t *testing.T) {
 		streamDone <- loop.Client.Stream(ctx, 0, loop.handleDelivery)
 	}()
 
-	// 等待 send 已在桥上阻塞（executionMu 被异步 send 占住）。
-	// 注意：send 命令经 Stream 投递后才执行，必须先启动 reader 再等待。
+	// 等 send 已在桥上阻塞（executionMu 被 async send 占住）。
 	deadline := time.Now().Add(3 * time.Second)
 	var waiting int
 	for {
@@ -373,10 +396,10 @@ func TestV089DiagSSEHeadOfLineBlockingStallsControlCommand(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if waiting == 0 {
-		t.Fatalf("send 未进入桥阻塞，复现前提不成立")
+		t.Fatal("send 未进入桥阻塞，复现前提不成立")
 	}
 
-	// 有界观察：approve 投递应在 bounded 时间内被消费（当前缺陷下不会）。
+	// 有界观察：approve 必须在 bounded 时间内被 reader 消费并送达控制 worker。
 	const bounded = 1200 * time.Millisecond
 	deadline = time.Now().Add(bounded)
 	for time.Now().Before(deadline) {
@@ -386,24 +409,29 @@ func TestV089DiagSSEHeadOfLineBlockingStallsControlCommand(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	approveReachable := relay.hasAck("cmd-hol-approve")
-	t.Logf("V089-EVIDENCE 故障链二: bounded_window_ms=%d approve_reachable_within_bound=%v（当前缺陷预期 false）", bounded.Milliseconds(), approveReachable)
+	stats := loop.stats()
+	t.Logf("V089-EVIDENCE V089-09: bounded_window_ms=%d approve_reachable=%v reader_last_read_unix_ms=%d processed_control=%d",
+		bounded.Milliseconds(), approveReachable, stats.ReaderLastReadUnixMS, stats.ProcessedControl)
+	if !approveReachable {
+		t.Fatal("approve must be consumed within bound while send+mode.set execute (SSE HOL regression)")
+	}
+	if stats.ReaderLastReadUnixMS == 0 {
+		t.Fatal("reader last-read metric must advance as deliveries arrive")
+	}
 
-	// 放行 send：mode.set 与 approve 依序解阻（证明是队头阻塞而非命令丢失）。
+	// 放行 send：全部命令依序收敛，队列清空（证明 reader 未丢命令）。
 	close(gate)
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if relay.hasAck("cmd-hol-approve") {
+		if loop.queuesSettled() {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
 	<-streamDone
-	if !relay.hasAck("cmd-hol-approve") {
-		t.Fatalf("gate 释放后 approve 仍未被消费：队列丢命令")
-	}
-	if approveReachable {
-		t.Fatalf("当前代码预期 approve 在 send+mode.set 阻塞期间不可达（若已可达说明 P3 修复已落地，请翻转断言为 V089-10 回归）")
+	if !loop.queuesSettled() {
+		t.Fatal("queues must settle after gate release")
 	}
 }
 

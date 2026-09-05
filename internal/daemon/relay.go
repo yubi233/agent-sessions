@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
@@ -766,6 +767,21 @@ type RelayLoop struct {
 	GenerationEnforcementDisabled bool
 	// legacyRelayWarned 保证"旧 Relay 无 generation 字段"的 legacy 告警每进程只打一次。
 	legacyRelayWarned bool
+
+	// ---- v0.8.9 P3 调度器（见 relay_scheduler.go）：scanner 只落盘入队，worker 执行 ----
+	schedMu           sync.Mutex
+	normalQueue       []dispatchItem
+	controlQueue      []dispatchItem
+	dispatched        map[string]time.Time
+	schedulersStarted bool
+	// normalWake/controlWake 是各队列的独立唤醒令牌（缓冲 1，非阻塞投递），
+	// 防止共享令牌被另一 worker 抢走造成丢失唤醒、命令滞留队列。
+	normalWake        chan struct{}
+	controlWake       chan struct{}
+	readerLastRead    atomic.Int64 // reader last-read（unix ms，脱敏指标）
+	processedNormal   atomic.Int64
+	processedControl  atomic.Int64
+	lastControlWaitMS atomic.Int64
 }
 
 func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, encoder EventEncoder, logger *slog.Logger) *RelayLoop {
@@ -777,6 +793,10 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 		ReadOnly: NewReadOnlyDispatcher(store, ""), commandBySession: make(map[string]string),
 		usageContextBySession: make(map[string]usageContext), eventWake: make(chan struct{}, 1),
 		inFlightSends: make(map[string]struct{}),
+		// v0.8.9 P3：调度器初始化（worker 由 RunWithRetry 启动）。
+		normalWake:  make(chan struct{}, 1),
+		controlWake: make(chan struct{}, 1),
+		dispatched:  make(map[string]time.Time),
 	}
 	if runner != nil {
 		runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
@@ -855,6 +875,11 @@ func (l *RelayLoop) enqueueModeInfo(sessionID string, info adapter.SessionModeIn
 // RunWithRetry 保持每次只有一条真实 SSE 连接，并使用有界指数退避重连。
 // 在身份撤销、协议不兼容等不可恢复 HTTP 错误上直接退出，避免后台无意义重试。
 func (l *RelayLoop) RunWithRetry(ctx context.Context) error {
+	// v0.8.9 P3：worker 生命周期绑定本次 RunWithRetry。返回（含 generation 终态、
+	// shutdown、认证失败）时统一取消；断线重连不重建 worker，已入队命令继续消费。
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	defer schedCancel()
+	l.startSchedulers(schedCtx)
 	backoff := 100 * time.Millisecond
 	for {
 		err := l.runOnce(ctx)
@@ -1045,9 +1070,10 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	} else if recovered > 0 {
 		l.Logger.Info("daemon event outbox auto recovery", "requeued", recovered)
 	}
-	// delivery cursor 已跳过已落盘命令。进程重启后先收敛本地 pending 状态，不能只等待 SSE
+	// delivery cursor 已跳过已落盘命令。进程重启后先恢复本地 pending 状态，不能只等待 SSE
 	// 重放，否则 started 命令会永久滞留，或依赖下一条无关命令才恢复。
-	if err := l.processPending(ctx); err != nil {
+	// v0.8.9 P3：恢复改为"扫描入队"，由 worker 异步消费（不阻塞 SSE 建立）。
+	if err := l.dispatchPendingCommands(); err != nil {
 		return err
 	}
 	if err := l.flushOutboxes(ctx); err != nil {
@@ -1086,8 +1112,13 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 		case err := <-streamResult:
 			return err
 		case <-ticker.C:
+			l.logSchedulerStats(l.Logger)
 			heartbeat, err := l.Client.Heartbeat(ctx)
 			if err != nil {
+				return err
+			}
+			// sweeper：周期重驱动未派发的 pending 行（worker 失败/队列溢出兜底）。
+			if err := l.dispatchPendingCommands(); err != nil {
 				return err
 			}
 			// 运行期世代发现（§3.1）：heartbeat generation 变化 → 收口后按终态退出，
@@ -1121,7 +1152,8 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 		if err := l.ackReceived(ctx, command); err != nil {
 			return err
 		}
-		return l.processPending(l.commandExecutionContext(ctx))
+		// 重复投递的内存副本不携带权威行状态：全量扫描入队，让调度器按 DB 状态机推进。
+		return l.dispatchAndSweep()
 	}
 	// 专用 SSE 已由 Relay 按 Terminal 隔离，但 Daemon 仍要把 payload 当作不可信输入：
 	// 只有本机 hello 绑定的 Terminal、非空 Workspace 和已声明 capability 才能进入执行器。
@@ -1134,7 +1166,34 @@ func (l *RelayLoop) handleDelivery(ctx context.Context, delivery RelayDelivery) 
 	if err := l.ackReceived(ctx, command); err != nil {
 		return err
 	}
-	return l.processPending(l.commandExecutionContext(ctx))
+	// v0.8.9 P3：reader 到此为止——只落盘+回执+入队，执行交给调度器（§3.4）。
+	// 新落盘行的持久化状态固定为 received（RecordRelayCommand 契约），调度器据此
+	// 推进 received→starting→started 状态机；内存副本必须与之一致，否则会绕过
+	// started 回执与 fail-closed 语义直接执行。
+	command.Status = "received"
+	l.readerLastRead.Store(time.Now().UnixMilli())
+	return l.dispatchAndPump(command)
+}
+
+// dispatchAndPump 入队一条命令；调度器未启动（测试路径）时同步内联排空，
+// 保持与旧 processPending 相同的可观测行为。生产路径立即返回，不阻塞 reader。
+func (l *RelayLoop) dispatchAndPump(command RelayCommand) error {
+	l.dispatchCommand(command)
+	if !l.schedulersRunning() {
+		return l.drainQueuesInline(l.commandExecutionContext(context.Background()))
+	}
+	return nil
+}
+
+// dispatchAndSweep 全量扫描入队（不信任内存副本的行状态），内联口径同 dispatchAndPump。
+func (l *RelayLoop) dispatchAndSweep() error {
+	if err := l.dispatchPendingCommands(); err != nil {
+		return err
+	}
+	if !l.schedulersRunning() {
+		return l.drainQueuesInline(l.commandExecutionContext(context.Background()))
+	}
+	return nil
 }
 
 // ackReceived 发送 received 回执并处理 stale 404（§3.3）：重复投递的行可能属于旧世代，
@@ -1262,210 +1321,250 @@ func capabilityForCommand(kind string) string {
 	}
 }
 
-func (l *RelayLoop) processPending(ctx context.Context) error {
+// processOneCommand 推进单条命令的持久化状态机（received→starting→started→终态）并执行。
+// v0.8.9 P3 从 processPending 拆出：调度器（普通/控制 worker）逐条调用本函数，
+// 网络（ack/result）与 Provider 执行不在 processMu 临界区内（§3.4）。
+// 返回 error 表示本条命令的协议推进失败；行状态已落盘，调度器记录后由 sweeper 重驱动。
+func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand) error {
+	startedThisPass := false
+	if command.Status == "rejecting" {
+		if err := l.replayRejected(ctx, command.CommandID, command.DeliverySeq, command.ErrorCode); err != nil {
+			return err
+		}
+		return nil
+	}
+	if command.Status == "received" {
+		// runOnce 会在建立 SSE 前主动恢复本地 pending。这里必须重新执行本机目标与 capability
+		// 校验，否则 rejected 响应丢失留下的 received 行会在重启后绕过 handleDelivery。
+		if err := l.validateLocalDelivery(command); err != nil {
+			if rejectErr := l.rejectDelivery(ctx, command, CommandErrorCode(err)); rejectErr != nil {
+				return rejectErr
+			}
+			return nil
+		}
+		// 先持久化 starting，再向 Relay 发送 started。这样崩溃窗口只会留下可重放的
+		// started 回执，不会在重启后把同一个 command_id 再次交给 Provider。
+		if err := l.Store.MarkRelayCommandStarting(command.CommandID); err != nil {
+			return err
+		}
+		command.Status = "starting"
+	}
+	if command.Status == "starting" {
+		if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "started", ""); err != nil {
+			// stale lease/target 等拒绝需回写 rejected；Relay 允许该 ack 不经过旧 fence。
+			var httpErr *RelayHTTPError
+			if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
+				if rejectErr := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "rejected", "TARGET_STALE"); rejectErr != nil {
+					return rejectErr
+				}
+				if markErr := l.Store.MarkRelayCommandResult(command.CommandID, "rejected", "TARGET_STALE"); markErr != nil {
+					return markErr
+				}
+				return nil
+			}
+			// started ack 404 且带世代证据：Relay 侧无此命令（世代错位），本地收口
+			// 终态并跳过 Provider 执行，避免"started 回执失败→无限重试"。
+			if reason, stale := l.staleGeneration404(command, err); stale {
+				if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+					return closeErr
+				}
+				return nil
+			}
+			return err
+		}
+		if err := l.Store.MarkRelayCommandStarted(command.CommandID); err != nil {
+			return err
+		}
+		command.Status = "started"
+		startedThisPass = true
+	}
+	if command.ResultStatus != "" {
+		return nil
+	}
+	if command.Kind == "session.import_dsh" {
+		// 会话按需导入没有 Session lease；只允许 home Terminal 在本机已确认工作区下
+		// 扫描 JSONL 元数据并回传 opaque Relay session ids。
+		status, errorCode := "succeeded", ""
+		var sessionIDs []string
+		if l.WorkspaceManager == nil {
+			status, errorCode = "failed", protocol.ErrCapabilityUnsupported
+		} else {
+			var payload struct {
+				WorkspaceID string `json:"workspace_id"`
+			}
+			if err := json.Unmarshal([]byte(command.PayloadJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
+				status, errorCode = "failed", protocol.ErrWorkspacePathDenied
+			} else {
+				imported, importErr := l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store)
+				if importErr != nil {
+					status, errorCode = "failed", CommandErrorCode(importErr)
+					l.Logger.Warn("daemon dsh session import failed", "command", command.CommandID, "error_code", errorCode)
+				} else {
+					for _, item := range imported {
+						sessionIDs = append(sessionIDs, item.RelaySessionID)
+					}
+				}
+			}
+		}
+		receipt, resolveErr := l.Client.ResolveDSHImport(ctx, command.CommandID, command.DeliverySeq, sessionIDs, status, errorCode)
+		if resolveErr != nil {
+			// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
+			if reason, stale := l.staleGeneration404(command, resolveErr); stale {
+				if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+					return closeErr
+				}
+				return nil
+			}
+			return resolveErr
+		}
+		if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
+			return err
+		}
+		return nil
+	}
+	if command.Kind == "workspace.sync_dsh" {
+		// DSH 同步命令没有 Session lease；只在本机授权根内扫描并确认已有工作区，
+		// 结果必须走专用 dsh-workspace-result 通道。
+		status, errorCode := "succeeded", ""
+		var candidates []DSHWorkspaceCandidate
+		if l.WorkspaceManager == nil {
+			status, errorCode = "failed", protocol.ErrCapabilityUnsupported
+		} else {
+			scanner := NewDSHWorkspaceScanner(l.WorkspaceManager.Root())
+			scannedCandidates, summary, scanErr := scanner.Scan(ctx)
+			if scanErr != nil {
+				status, errorCode = "failed", CommandErrorCode(scanErr)
+				l.Logger.Warn("daemon dsh workspace scan failed", "command", command.CommandID, "error_code", errorCode)
+			} else {
+				if summary.LimitReached {
+					status, errorCode = "failed", protocol.ErrWorkspacePathDenied
+				} else {
+					candidates = scannedCandidates
+				}
+			}
+		}
+		receipt, resolveErr := l.Client.ResolveDSHWorkspace(ctx, command.CommandID, command.DeliverySeq, candidates, status, errorCode)
+		if resolveErr != nil {
+			// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
+			if reason, stale := l.staleGeneration404(command, resolveErr); stale {
+				if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+					return closeErr
+				}
+				return nil
+			}
+			return resolveErr
+		}
+		l.confirmDSHWorkspaceCandidates(ctx, command.CommandID, candidates, receipt)
+		if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
+			return err
+		}
+		return nil
+	}
+	if command.Kind == "workspace.create" {
+		// 工作区命令没有 Session lease；名称解析、mkdir、git init 和本机确认
+		// 全部在授权根边界内完成，结果必须走专用回执通道。
+		status, errorCode := "succeeded", ""
+		var confirmed ConfirmedWorkspace
+		var err error
+		if l.WorkspaceManager == nil {
+			status, errorCode = "failed", protocol.ErrCapabilityUnsupported
+		} else {
+			var payload WorkspaceCreatePayload
+			payload, err = DecodeWorkspaceCreatePayload(command.PayloadJSON, command.WorkspaceID)
+			if err == nil {
+				confirmed, err = l.WorkspaceManager.Create(ctx, command.WorkspaceID, payload.Name)
+			}
+			if err != nil {
+				status, errorCode = "failed", WorkspaceCreateErrorCode(err)
+				l.Logger.Warn("daemon workspace creation failed", "command", command.CommandID, "error_code", errorCode)
+			}
+		}
+		receipt, resolveErr := l.Client.ResolveWorkspace(ctx, command.CommandID, command.DeliverySeq,
+			command.WorkspaceID, confirmed.Root, status, errorCode)
+		if resolveErr != nil {
+			// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
+			if reason, stale := l.staleGeneration404(command, resolveErr); stale {
+				if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
+					return closeErr
+				}
+				return nil
+			}
+			return resolveErr
+		}
+		if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
+			return err
+		}
+		return nil
+	}
+	if command.Kind == "session.send" && startedThisPass {
+		// Send is the only command that can hold the Provider for an entire
+		// generation. Register it before returning to the SSE reader so a
+		// following session.abort can be consumed immediately.
+		if l.claimInFlightSend(command.CommandID) {
+			go l.executeSendAsync(ctx, command)
+		}
+		return nil
+	}
+	if command.Kind == "session.send" && l.isInFlightSend(command.CommandID) {
+		return nil
+	}
+	if command.Status == "started" && !startedThisPass {
+		// Daemon 在已确认 started 后崩溃时，不知道本地 Provider 是否仍活着或是否已部分执行。
+		// 为避免 at-least-once delivery 把同一 command 再次交给 Provider，这里 fail-closed，
+		// 由客户端根据明确失败状态重新创建带新 lease/idempotency key 的动作。
+		if err := l.resolveAndPersist(ctx, command, "failed", "DAEMON_RESTART_RECOVERY"); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := l.executeAndResolve(ctx, command); err != nil {
+		return err
+	}
+	return l.flushOutboxes(ctx)
+}
+
+// dispatchPendingCommands 扫描本机 pending 命令并入队（"状态扫描/入队"半程）。
+// 只在 processMu 内做查询与去重标记，入队为非阻塞：队列满时留在 DB，由下次
+// heartbeat sweeper 重驱动。生产路径在 runOnce 启动与每个 heartbeat 周期调用。
+func (l *RelayLoop) dispatchPendingCommands() error {
 	l.processMu.Lock()
-	defer l.processMu.Unlock()
 	commands, err := l.Store.PendingRelayCommands()
+	l.processMu.Unlock()
 	if err != nil {
 		return err
 	}
 	for _, command := range commands {
-		startedThisPass := false
-		if command.Status == "rejecting" {
-			if err := l.replayRejected(ctx, command.CommandID, command.DeliverySeq, command.ErrorCode); err != nil {
-				return err
+		l.dispatchCommand(command)
+	}
+	return nil
+}
+
+// processPending 是兼容入口：先扫描入队，再等待队列清空。
+// 调度器未启动（测试/手工构造 RelayLoop）时走同步内联路径，保持既有逐条
+// 串行语义；生产路径（RunWithRetry 已启动 worker）只做有界等待。
+func (l *RelayLoop) processPending(ctx context.Context) error {
+	if err := l.dispatchPendingCommands(); err != nil {
+		return err
+	}
+	if !l.schedulersRunning() {
+		return l.drainQueuesInline(ctx)
+	}
+	deadline := time.After(30 * time.Second)
+	ticker := time.NewTicker(2 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			l.Logger.Warn("relay command queue did not settle within deadline", "depth", l.stats())
+			return nil
+		case <-ticker.C:
+			if l.queuesSettled() {
+				return l.flushOutboxes(ctx)
 			}
-			continue
-		}
-		if command.Status == "received" {
-			// runOnce 会在建立 SSE 前主动恢复本地 pending。这里必须重新执行本机目标与 capability
-			// 校验，否则 rejected 响应丢失留下的 received 行会在重启后绕过 handleDelivery。
-			if err := l.validateLocalDelivery(command); err != nil {
-				if rejectErr := l.rejectDelivery(ctx, command, CommandErrorCode(err)); rejectErr != nil {
-					return rejectErr
-				}
-				continue
-			}
-			// 先持久化 starting，再向 Relay 发送 started。这样崩溃窗口只会留下可重放的
-			// started 回执，不会在重启后把同一个 command_id 再次交给 Provider。
-			if err := l.Store.MarkRelayCommandStarting(command.CommandID); err != nil {
-				return err
-			}
-			command.Status = "starting"
-		}
-		if command.Status == "starting" {
-			if err := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "started", ""); err != nil {
-				// stale lease/target 等拒绝需回写 rejected；Relay 允许该 ack 不经过旧 fence。
-				var httpErr *RelayHTTPError
-				if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
-					if rejectErr := l.Client.Ack(ctx, command.CommandID, command.DeliverySeq, "rejected", "TARGET_STALE"); rejectErr != nil {
-						return rejectErr
-					}
-					if markErr := l.Store.MarkRelayCommandResult(command.CommandID, "rejected", "TARGET_STALE"); markErr != nil {
-						return markErr
-					}
-					continue
-				}
-				// started ack 404 且带世代证据：Relay 侧无此命令（世代错位），本地收口
-				// 终态并跳过 Provider 执行，避免"started 回执失败→无限重试"。
-				if reason, stale := l.staleGeneration404(command, err); stale {
-					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
-						return closeErr
-					}
-					continue
-				}
-				return err
-			}
-			if err := l.Store.MarkRelayCommandStarted(command.CommandID); err != nil {
-				return err
-			}
-			command.Status = "started"
-			startedThisPass = true
-		}
-		if command.ResultStatus != "" {
-			continue
-		}
-		if command.Kind == "session.import_dsh" {
-			// 会话按需导入没有 Session lease；只允许 home Terminal 在本机已确认工作区下
-			// 扫描 JSONL 元数据并回传 opaque Relay session ids。
-			status, errorCode := "succeeded", ""
-			var sessionIDs []string
-			if l.WorkspaceManager == nil {
-				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
-			} else {
-				var payload struct {
-					WorkspaceID string `json:"workspace_id"`
-				}
-				if err := json.Unmarshal([]byte(command.PayloadJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
-					status, errorCode = "failed", protocol.ErrWorkspacePathDenied
-				} else {
-					imported, importErr := l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store)
-					if importErr != nil {
-						status, errorCode = "failed", CommandErrorCode(importErr)
-						l.Logger.Warn("daemon dsh session import failed", "command", command.CommandID, "error_code", errorCode)
-					} else {
-						for _, item := range imported {
-							sessionIDs = append(sessionIDs, item.RelaySessionID)
-						}
-					}
-				}
-			}
-			receipt, resolveErr := l.Client.ResolveDSHImport(ctx, command.CommandID, command.DeliverySeq, sessionIDs, status, errorCode)
-			if resolveErr != nil {
-				// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
-				if reason, stale := l.staleGeneration404(command, resolveErr); stale {
-					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
-						return closeErr
-					}
-					continue
-				}
-				return resolveErr
-			}
-			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
-				return err
-			}
-			continue
-		}
-		if command.Kind == "workspace.sync_dsh" {
-			// DSH 同步命令没有 Session lease；只在本机授权根内扫描并确认已有工作区，
-			// 结果必须走专用 dsh-workspace-result 通道。
-			status, errorCode := "succeeded", ""
-			var candidates []DSHWorkspaceCandidate
-			if l.WorkspaceManager == nil {
-				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
-			} else {
-				scanner := NewDSHWorkspaceScanner(l.WorkspaceManager.Root())
-				scannedCandidates, summary, scanErr := scanner.Scan(ctx)
-				if scanErr != nil {
-					status, errorCode = "failed", CommandErrorCode(scanErr)
-					l.Logger.Warn("daemon dsh workspace scan failed", "command", command.CommandID, "error_code", errorCode)
-				} else {
-					if summary.LimitReached {
-						status, errorCode = "failed", protocol.ErrWorkspacePathDenied
-					} else {
-						candidates = scannedCandidates
-					}
-				}
-			}
-			receipt, resolveErr := l.Client.ResolveDSHWorkspace(ctx, command.CommandID, command.DeliverySeq, candidates, status, errorCode)
-			if resolveErr != nil {
-				// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
-				if reason, stale := l.staleGeneration404(command, resolveErr); stale {
-					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
-						return closeErr
-					}
-					continue
-				}
-				return resolveErr
-			}
-			l.confirmDSHWorkspaceCandidates(ctx, command.CommandID, candidates, receipt)
-			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
-				return err
-			}
-			continue
-		}
-		if command.Kind == "workspace.create" {
-			// 工作区命令没有 Session lease；名称解析、mkdir、git init 和本机确认
-			// 全部在授权根边界内完成，结果必须走专用回执通道。
-			status, errorCode := "succeeded", ""
-			var confirmed ConfirmedWorkspace
-			var err error
-			if l.WorkspaceManager == nil {
-				status, errorCode = "failed", protocol.ErrCapabilityUnsupported
-			} else {
-				var payload WorkspaceCreatePayload
-				payload, err = DecodeWorkspaceCreatePayload(command.PayloadJSON, command.WorkspaceID)
-				if err == nil {
-					confirmed, err = l.WorkspaceManager.Create(ctx, command.WorkspaceID, payload.Name)
-				}
-				if err != nil {
-					status, errorCode = "failed", WorkspaceCreateErrorCode(err)
-					l.Logger.Warn("daemon workspace creation failed", "command", command.CommandID, "error_code", errorCode)
-				}
-			}
-			receipt, resolveErr := l.Client.ResolveWorkspace(ctx, command.CommandID, command.DeliverySeq,
-				command.WorkspaceID, confirmed.Root, status, errorCode)
-			if resolveErr != nil {
-				// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
-				if reason, stale := l.staleGeneration404(command, resolveErr); stale {
-					if closeErr := l.closeStaleGenerationCommand(command, reason); closeErr != nil {
-						return closeErr
-					}
-					continue
-				}
-				return resolveErr
-			}
-			if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
-				return err
-			}
-			continue
-		}
-		if command.Kind == "session.send" && startedThisPass {
-			// Send is the only command that can hold the Provider for an entire
-			// generation. Register it before returning to the SSE reader so a
-			// following session.abort can be consumed immediately.
-			if l.claimInFlightSend(command.CommandID) {
-				go l.executeSendAsync(ctx, command)
-			}
-			continue
-		}
-		if command.Kind == "session.send" && l.isInFlightSend(command.CommandID) {
-			continue
-		}
-		if command.Status == "started" && !startedThisPass {
-			// Daemon 在已确认 started 后崩溃时，不知道本地 Provider 是否仍活着或是否已部分执行。
-			// 为避免 at-least-once delivery 把同一 command 再次交给 Provider，这里 fail-closed，
-			// 由客户端根据明确失败状态重新创建带新 lease/idempotency key 的动作。
-			if err := l.resolveAndPersist(ctx, command, "failed", "DAEMON_RESTART_RECOVERY"); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := l.executeAndResolve(ctx, command); err != nil {
-			return err
 		}
 	}
-	return l.flushOutboxes(ctx)
 }
 
 func (l *RelayLoop) claimInFlightSend(commandID string) bool {

@@ -201,7 +201,7 @@
     {
       "id": "V089-09",
       "title": "SSE reader 解耦：delivery 到达后只落盘入队，reader 不执行 Provider 或 Resolve",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "sse scheduling",
       "priority": "P0",
@@ -216,12 +216,15 @@
       "cleanup": [
         "关闭临时 goroutine 与 store"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089SSEReaderKeepsConsumingWhileCommandsExecute（2026-09-06 passed）：调度器启动后经真实 Stream 推送 send/mode.set/approve 三连投递，approve 在 1200ms bounded 窗口内被 reader 消费（P0 时不可达），reader_last_read 指标推进",
+        "handleDelivery 瘦身为落盘+received ack+入队（§3.4）；processPending 拆为 dispatchPendingCommands（扫描/入队）+ processOneCommand（worker 逐条状态机），网络与 Provider 执行不在 processMu 内"
+      ]
     },
     {
       "id": "V089-10",
       "title": "SSE 控制优先级：send 等审批时 approve/reject、abort、question answer 仍在有界时间内处理",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "sse scheduling",
       "priority": "P0",
@@ -236,12 +239,15 @@
       "cleanup": [
         "关闭 runner 与 store"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089SchedulerKeepsReaderAndControlLiveDuringBlockedSend（passed）：send 桥阻塞持有 executionMu、mode.set 占住普通 worker 期间，approve 经控制 worker 完成决策回写（processed_control=1、last_control_wait_ms=0）；gate 释放后队列清空无命令丢失",
+        "控制优先队列成员：permission.approve/reject、session.abort、question.answer + rejecting 重放（isControlCommandKind）"
+      ]
     },
     {
       "id": "V089-11",
       "title": "SSE 并发取消：disconnect、generation change、shutdown 时 worker 和 in-flight send 正确取消",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "lifecycle",
       "priority": "P0",
@@ -256,12 +262,15 @@
       "cleanup": [
         "等待 goroutine 退出并关闭 store"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089SchedulerCancelLeavesUndispatchedRowsDurable（passed）：shutdown 取消后 pending 行保持 received/starting/started durable 状态机不变，由 sweeper/重启恢复兜底",
+        "worker 生命周期绑定 RunWithRetry（defer cancel）：ErrRelayGenerationChanged 终态/认证退出/shutdown 统一收束；async send 继续绑定 commandExecutionContext（断线不脱离 loop context，既有语义保持）"
+      ]
     },
     {
       "id": "V089-12",
       "title": "heartbeat 活性：长命令执行期间 heartbeat 持续；reader 堵塞不会伪装成健康",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "liveness",
       "priority": "P1",
@@ -275,7 +284,9 @@
       "cleanup": [
         "关闭 httptest server"
       ],
-      "evidence": []
+      "evidence": [
+        "TestV089HeartbeatContinuesDuringLongCommandExecution（passed）：完整 RunWithRetry 下 send 桥阻塞期间（≥2.2s）heartbeat 持续到达（计数=2，周期 1s）——drain loop 与 worker 独立，reader 堵塞不会伪装成健康"
+      ]
     },
     {
       "id": "V089-13",
