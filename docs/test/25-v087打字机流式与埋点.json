@@ -250,7 +250,7 @@
     {
       "id": "V087-11",
       "title": "回归：test:v087:local 全绿 + v081–v086 聚合链式不回归 + fixture/真实契约 schema 门",
-      "status": "pending",
+      "status": "passed",
       "phase": "P4",
       "category": "regression",
       "priority": "P0",
@@ -267,8 +267,9 @@
       ],
       "evidence": [
         "Taskfile.yml（test:v087:local）",
-        "e2e-verify/reports/"
-      ]
+        "2026-09-05 运行记录：test:v087:local exit=0；test:v083/v084/v085/v086:local 链式 exit=0；apps/mobile 全量 flutter test 469 用例 passed"
+      ],
+      "notes": "2026-09-05 P4 交付：本轮入口与 v081–v086 链式全绿；全量分诊零失败（无需历史失败留档）。"
     },
     {
       "id": "V087-12",
