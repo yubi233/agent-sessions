@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
 	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
+	"github.com/yubi233/agent-sessions/packages/crypto"
 )
 
 func main() {
@@ -50,6 +53,10 @@ func run(args []string) error {
 	// 否则 -out 会被当作未知全局参数拒绝。
 	if sub == "keygen" {
 		return cmdKeygen(args)
+	}
+	// v0.8.8 P1：encryption-keygen 同样使用独立 flag 集（--out <file>）。
+	if sub == "encryption-keygen" {
+		return cmdEncryptionKeygen(args)
 	}
 	fs.Parse(args)
 
@@ -84,8 +91,68 @@ func run(args []string) error {
 		// restart.sh 在 --terminal-signing 配对流程中调用；详见 internal/daemon/terminal_signing.go。
 		return cmdKeygen(fs.Args())
 	default:
-		return fmt.Errorf("unknown command %q (支持 status/doctor/run/runner/workspace-confirm/keygen)", sub)
+		return fmt.Errorf("unknown command %q (支持 status/doctor/run/runner/workspace-confirm/keygen/encryption-keygen)", sub)
 	}
+}
+
+// cmdEncryptionKeygen 生成本机会话附件链路用的 X25519 密钥对（v0.8.8 P1，
+// 迭代计划 §9.2 冻结决策）：localdev owner 设备此前用占位 encryption_public_key
+// bootstrap，daemon 的会话 DEK wrap 上行永远失败（「owner encryption public key
+// 无效」），移动端附件入口因此恒禁用。本子命令生成真实 32 字节 X25519 私钥种子：
+//   - --out 文件写入一行 base64url 私钥种子（0600），幂等：已存在时回放其公钥；
+//   - stdout 只输出 base64（RawStd）公钥，供 restart.sh 的 owner.bootstrap 载荷；
+//     私钥材料不进 stdout/日志，由 restart.sh 直接读文件注入 localdev 调试壳。
+//
+// RFC 7748 clamp 语义与 Dart cryptography 的 newKeyPairFromSeed 同构：同一
+// 种子在 Go/Dart 两侧推导出相同公钥与同一 ECDH 共享密钥（ADR-016 既有依赖）。
+func cmdEncryptionKeygen(args []string) error {
+	keyFs := flag.NewFlagSet("daemon encryption-keygen", flag.ExitOnError)
+	out := keyFs.String("out", "", "X25519 私钥种子文件输出路径（必须显式指定）")
+	if err := keyFs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*out) == "" {
+		return fmt.Errorf("encryption-keygen 需要 --out <file> 指定私钥种子文件路径")
+	}
+	if raw, err := os.ReadFile(*out); err == nil {
+		// 已存在：不覆盖（公钥可能已登记为 owner 设备密钥），只回放其公钥。
+		pubB64, pubErr := x25519PublicFromSeedFile(raw)
+		if pubErr != nil {
+			return fmt.Errorf("密钥文件 %s 内容非法: %w", *out, pubErr)
+		}
+		fmt.Println(pubB64)
+		return nil
+	}
+	seed := make([]byte, 32)
+	if _, err := rand.Read(seed); err != nil {
+		return fmt.Errorf("生成 X25519 种子失败: %w", err)
+	}
+	priv, err := ecdh.X25519().NewPrivateKey(seed)
+	if err != nil {
+		return fmt.Errorf("X25519 私钥非法: %w", err)
+	}
+	// 0600：只有运行 Daemon 的本机用户可读；写入失败时不落任何临时副本。
+	if err := os.WriteFile(*out, []byte(base64.RawURLEncoding.EncodeToString(seed)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("写入 X25519 私钥种子文件失败: %w", err)
+	}
+	fmt.Println(crypto.EncodePublic(priv.PublicKey().Bytes()))
+	return nil
+}
+
+// x25519PublicFromSeedFile 从种子文件（一行 base64url 32 字节）推导 base64 公钥。
+func x25519PublicFromSeedFile(raw []byte) (string, error) {
+	seed, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return "", fmt.Errorf("种子不是合法 base64url: %w", err)
+	}
+	if len(seed) != 32 {
+		return "", fmt.Errorf("种子长度必须为 32 字节，得到 %d", len(seed))
+	}
+	priv, err := ecdh.X25519().NewPrivateKey(seed)
+	if err != nil {
+		return "", fmt.Errorf("X25519 私钥非法: %w", err)
+	}
+	return crypto.EncodePublic(priv.PublicKey().Bytes()), nil
 }
 
 // cmdKeygen 生成本机 Terminal 签名身份密钥：--out 指定的文件写入一行 base64url

@@ -24,13 +24,15 @@
         "复核 fixtureAttachmentRef（runner.go）字段与 mobile _completedAttachmentRefs 发送形状一致"
       ],
       "expected": "零协议改动成立：events.json 不变、不新增 wire 事件类型与命令 kind；refs schema 冻结为现状。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     },
     {
       "id": "V088-02",
       "title": "附件生产接线：真实 FetchAttachment → 真实 DEK Open → runner refs 路径全链（无测试替身）",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "daemon",
       "priority": "P0",
@@ -41,13 +43,18 @@
         "断言明文 SHA-256 复算一致、块序拼接一致、明文只经内存（不落日志/事件 payload）"
       ],
       "expected": "生产接线全链字节级往返通过；不再出现「附件拉取出口未配置（attachments unsupported）」。",
-      "cleanup": ["临时 SQLite/状态目录清理"],
-      "evidence": []
+      "cleanup": [
+        "临时 SQLite/状态目录清理"
+      ],
+      "evidence": [
+        "go test ./internal/daemon -run 'TestV088AttachmentProductionSinkRoundTrip' — mobile 同构 Seal（逐块 envelope/AAD sessionId:attachment:chunk:seq:dekId）→ httptest Relay §3.3 投影 → 真实 RelayLoop.fetchAndOpenAttachment → runner refs → SendContent 图像块字节级一致",
+        "internal/daemon/attachment_open.go（§9.1 契约 daemon 侧唯一实现，中文注释）+ relay.go NewRelayLoop 生产注册 fetchAndOpenAttachment"
+      ]
     },
     {
       "id": "V088-03",
       "title": "附件 fail-closed：DEK 缺失/解密失败/chunk sha256 不符/ref 哈希尺寸不符逐分支脱敏收口",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "daemon",
       "priority": "P0",
@@ -58,8 +65,12 @@
         "go test：chunk sha256 不符 / envelope AAD 不符 / ref 哈希尺寸不符逐分支断言稳定脱敏错误码"
       ],
       "expected": "每条失败路径有稳定脱敏错误码、失败终态收敛、无明文或内部路径泄漏。",
-      "cleanup": ["临时 SQLite/状态目录清理"],
-      "evidence": []
+      "cleanup": [
+        "临时 SQLite/状态目录清理"
+      ],
+      "evidence": [
+        "go test ./internal/daemon -run 'TestV088AttachmentSinkFailClosedBranches' — 块哈希不符/AAD 跨会话不符/refs 全件哈希不符/DEK 缺失（errSessionDEKUnavailable）逐分支 fail-closed；错误文本无明文泄漏断言"
+      ]
     },
     {
       "id": "V088-04",
@@ -75,7 +86,9 @@
         "负向断言：已升格能力 reason 不再含旧口径（未接通/按 -32601 拒绝/未实现）；delegate/effort_select 等未动能力状态零改动"
       ],
       "expected": "矩阵与实现/证据互为锚点；升格 reason 引用套件 ID 与报告路径。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     },
     {
@@ -92,13 +105,15 @@
         "验证 relay capability gate 路由：hello 未声明时只读命令被拒（既有语义不回归）"
       ],
       "expected": "真实适配器（含 localdev 真实桥）hello 声明 file_read/git_read；fixture 行为不回归。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     },
     {
       "id": "V088-06",
       "title": "attachments 入口解锁回归：矩阵门控解除、refs 发送路径不回归、无密钥禁选语义保持",
-      "status": "pending",
+      "status": "passed",
       "phase": "P1",
       "category": "controller",
       "priority": "P0",
@@ -109,8 +124,12 @@
         "flutter test：无 DEK 会话（fetch null）→ 入口禁选「等待会话附件密钥」文案不变"
       ],
       "expected": "入口解锁且 fail-closed 语义双向保持。",
-      "cleanup": ["无"],
-      "evidence": []
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "flutter test test/v088_capability_closeout_test.dart（4 用例）— 06a 升格矩阵注入下 attachmentPickBlockedReason=null（入口解锁）；06b contentKeysReady=false 维持「等待会话附件密钥」禁选；06c 升格前 unsupported 矩阵入口仍阻断且 reason 保留 opaque attachment ref 锚点；06d 升格 reason 引用 V088-09 证据、旧口径零残留"
+      ]
     },
     {
       "id": "V088-07",
@@ -126,7 +145,9 @@
         "flutter test：FixtureGitDiffRepository main/restricted 场景既有断言保持绿"
       ],
       "expected": "真实传输与 fixture 同一 UI 契约；stale/分页/失败态行为一致。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     },
     {
@@ -143,7 +164,9 @@
         "flutter test：超限文件/目录外路径 → 稳定脱敏错误态呈现"
       ],
       "expected": "消费者 UI 契约与 daemon 沙箱边界一致。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     },
     {
@@ -161,7 +184,9 @@
         "可见证据：VISUAL-MOBILE-40 帧序列（选图入口 → 发送 → 图片回复）"
       ],
       "expected": "机读五要素 + 可见帧证据齐备，入 e2e-verify/reports/。",
-      "cleanup": ["栈与窗口按 record 脚本既有清理"],
+      "cleanup": [
+        "栈与窗口按 record 脚本既有清理"
+      ],
       "evidence": []
     },
     {
@@ -179,7 +204,9 @@
         "负向：目录外路径 → 稳定脱敏错误码并 UI 呈现"
       ],
       "expected": "往返机读证据（receipt succeeded + tool_result 到达 + UI 渲染断言）与负向脱敏齐备。",
-      "cleanup": ["栈与窗口按 record 脚本既有清理"],
+      "cleanup": [
+        "栈与窗口按 record 脚本既有清理"
+      ],
       "evidence": []
     },
     {
@@ -196,7 +223,9 @@
         "task test:v088:local 全绿；全量 flutter test 新增/受影响文件零失败"
       ],
       "expected": "聚合回归零失败；历史失败按遗留流程留档。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     },
     {
@@ -212,8 +241,12 @@
         "（授权后）task test:android:device 附件回合 + Keystore unwrap 实测"
       ],
       "expected": "不可达则如实标 blocked + failure_class=credential_or_quota_blocker（承接 V085 实机项）。",
-      "cleanup": ["无"],
-      "evidence": ["用户指示 2026-09-05：先不做 Android 实机测试，flutter 开发用本地环境"]
+      "cleanup": [
+        "无"
+      ],
+      "evidence": [
+        "用户指示 2026-09-05：先不做 Android 实机测试，flutter 开发用本地环境"
+      ]
     },
     {
       "id": "V088-13",
@@ -229,7 +262,9 @@
         "flutter test：无深链时恢复导航行为不回归"
       ],
       "expected": "深链优先语义成立且双分支回归锚定。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     },
     {
@@ -246,7 +281,9 @@
         "SQLite available_permission_modes 列含三档、permission_mode = danger-full-access；controls 下发三档；daemon 日志无 sync session modes failed"
       ],
       "expected": "三档目录全链路（桥 advertise → daemon PUT 落库 → controls 下发）证据齐备。",
-      "cleanup": ["栈按 restart.sh 既有清理"],
+      "cleanup": [
+        "栈按 restart.sh 既有清理"
+      ],
       "evidence": []
     },
     {
@@ -263,7 +300,9 @@
         "ask 档触发写工具回合 → 审批卡到达 App → 放行与拒绝两路径回执（v0.8.2 通道）"
       ],
       "expected": "切档双回读一致；审批卡两路径回执与时间线终态收敛。",
-      "cleanup": ["会话/回合按套件既有清理"],
+      "cleanup": [
+        "会话/回合按套件既有清理"
+      ],
       "evidence": []
     },
     {
@@ -280,7 +319,9 @@
         "断言无越权写入发生（工作区文件未变）"
       ],
       "expected": "拒绝路径证据齐备、错误面脱敏、无越权。",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": []
     }
   ]

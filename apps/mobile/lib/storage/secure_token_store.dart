@@ -322,7 +322,18 @@ class SecureDeviceIdentityStore implements DeviceIdentityStore {
   ]);
 }
 
+/// 内存设备身份库：fixture/测试与 localdev 调试壳使用。
+/// v0.8.8 P1（迭代计划 §9.2）：localdev 可注入确定性 X25519 私钥种子——种子由
+/// restart.sh 经 `daemon encryption-keygen` 生成并经 dart-define 注入，与
+/// owner.bootstrap 登记的真实公钥配对（附件 DEK unwrap 前置）；未播种时维持
+/// fixture 占位公钥、无私钥（附件入口 fail-closed）。生产 Android 使用
+/// [SecureDeviceIdentityStore]（secure storage/Keystore），不经过本类。
 class InMemoryDeviceIdentityStore implements DeviceIdentityStore {
+  InMemoryDeviceIdentityStore({String? seedEncryptionPrivateKeyB64})
+    : _seedEncryptionKeyB64 = seedEncryptionPrivateKeyB64,
+      assert(seedEncryptionPrivateKeyB64 == null || seedEncryptionPrivateKeyB64.isNotEmpty);
+
+  final String? _seedEncryptionKeyB64;
   DeviceRegistrationMaterial? _material;
   DeviceRegistrationMaterial? _recoveryCandidate;
   String? _boundDeviceId;
@@ -330,15 +341,40 @@ class InMemoryDeviceIdentityStore implements DeviceIdentityStore {
   var _requiresRecovery = false;
 
   @override
-  Future<DeviceRegistrationMaterial> createOrRead() async => _requiresRecovery
-      ? throw const RelayFailure(
-          RelayFailureKind.forbidden,
-          '本机设备密钥不完整，请使用恢复码恢复控制端。',
-        )
-      : _material ??= const DeviceRegistrationMaterial(
-          identityPublicKey: 'fixture-ed25519-public-key',
-          encryptionPublicKey: 'fixture-x25519-public-key',
-        );
+  Future<DeviceRegistrationMaterial> createOrRead() async {
+    if (_requiresRecovery) {
+      throw const RelayFailure(
+        RelayFailureKind.forbidden,
+        '本机设备密钥不完整，请使用恢复码恢复控制端。',
+      );
+    }
+    final existing = _material;
+    if (existing != null) return existing;
+    final seed = _seedEncryptionKeyB64;
+    if (seed == null || seed.isEmpty) {
+      return _material ??= const DeviceRegistrationMaterial(
+        identityPublicKey: 'fixture-ed25519-public-key',
+        encryptionPublicKey: 'fixture-x25519-public-key',
+      );
+    }
+    // 播种：从私钥种子推导真实 X25519 公钥（RFC 7748 clamp 与 Go
+    // encryption-keygen/NewPrivateKey 同构，同一密钥对的公钥两侧一致）。
+    final seedBytes = Uint8List.fromList(
+      base64Url.decode(base64Url.normalize(seed)),
+    );
+    if (seedBytes.length != 32) {
+      throw const RelayFailure(
+        RelayFailureKind.protocol,
+        '本地设备加密私钥种子形状非法。',
+      );
+    }
+    final pair = await X25519().newKeyPairFromSeed(seedBytes);
+    final publicBytes = (await pair.extractPublicKey()).bytes;
+    return _material = DeviceRegistrationMaterial(
+      identityPublicKey: 'fixture-ed25519-public-key',
+      encryptionPublicKey: base64UrlEncode(publicBytes),
+    );
+  }
 
   @override
   Future<DeviceRegistrationMaterial> createRecoveryCandidate() async =>
@@ -383,7 +419,7 @@ class InMemoryDeviceIdentityStore implements DeviceIdentityStore {
   }
 
   @override
-  Future<String?> readEncryptionPrivateKeyB64() async => null; // mock 无私钥；fixture 密封是预密封草稿
+  Future<String?> readEncryptionPrivateKeyB64() async => _seedEncryptionKeyB64;
 
   @override
   Future<void> clear() async {

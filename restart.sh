@@ -62,6 +62,9 @@ DAEMON_TOKEN_SOURCE=""
 LOCAL_DEV_TERMINAL_DEVICE_ID=""
 LOCAL_OWNER_ACCESS_TOKEN=""
 LOCAL_OWNER_BOOTSTRAP_B64=""
+# v0.8.8 P1：localdev owner X25519 私钥（ensure_local_owner_bootstrap 经
+# encryption-keygen 幂等生成；dry-run/无 pairing 路径保持空）。
+LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=""
 LOCAL_DEV_WORKSPACE_CONFIRMED=false
 DAEMON_HEARTBEAT_BASELINE=0
 
@@ -883,6 +886,13 @@ ensure_local_owner_bootstrap() {
 
   local owner_file response refresh_token
   owner_file="$(local_token_file local-owner-bootstrap.json)"
+  # v0.8.8 P1（迭代计划 §9.2 冻结决策）：owner 设备使用真实 X25519 密钥对 bootstrap。
+  # 此前为占位公钥，daemon 会话 DEK wrap 上行必失败（owner 公钥非法），移动端附件
+  # 入口因此恒禁用。密钥文件幂等（encryption-keygen 回放公钥）；私钥仅落本机 state
+  # 目录（0600），经 dart-define 注入 localdev 调试壳，生产 Android Keystore 路径不变。
+  OWNER_ENCRYPTION_SEED_FILE="$STATE_DIR/owner_encryption_seed.b64"
+  OWNER_ENCRYPTION_PUBLIC_KEY="$(go run "$ROOT_DIR/apps/daemon" encryption-keygen --out "$OWNER_ENCRYPTION_SEED_FILE")" || return 1
+  LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64="$(tr -d '\n' < "$OWNER_ENCRYPTION_SEED_FILE")"
   if [[ -s "$owner_file" ]]; then
     refresh_token="$(json_get tokens.refresh_token < "$owner_file")"
     if response="$(http_request owner.refresh \
@@ -904,12 +914,12 @@ ensure_local_owner_bootstrap() {
 
   if ! response="$(http_request owner.bootstrap \
     -H 'Content-Type: application/json' \
-    -d '{"display_name":"Local Dev Android Owner","platform":"local","identity_public_key":"local-dev-owner-identity-public-key","encryption_public_key":"local-dev-owner-encryption-public-key"}' \
+    -d "$(printf '{"display_name":"Local Dev Android Owner","platform":"local","identity_public_key":"local-dev-owner-identity-public-key","encryption_public_key":"%s"}' "$OWNER_ENCRYPTION_PUBLIC_KEY")" \
     "http://$RELAY_ADDR/v1/auth/device-bootstrap")"; then
     if reset_default_local_relay_db; then
       response="$(http_request owner.bootstrap_after_reset \
         -H 'Content-Type: application/json' \
-        -d '{"display_name":"Local Dev Android Owner","platform":"local","identity_public_key":"local-dev-owner-identity-public-key","encryption_public_key":"local-dev-owner-encryption-public-key"}' \
+        -d "$(printf '{"display_name":"Local Dev Android Owner","platform":"local","identity_public_key":"local-dev-owner-identity-public-key","encryption_public_key":"%s"}' "$OWNER_ENCRYPTION_PUBLIC_KEY")" \
         "http://$RELAY_ADDR/v1/auth/device-bootstrap")" || {
           echo "owner: local dev owner bootstrap failed after resetting $RELAY_DB_PATH" >&2
           return 1
@@ -1108,6 +1118,11 @@ start_flutter() {
   local args=("$FLUTTER_BIN" run -d "$FLUTTER_TARGET" --no-pub "--dart-define=RELAY_BASE_URL=$FLUTTER_RELAY_BASE")
   if [[ -n "$LOCAL_OWNER_BOOTSTRAP_B64" && "$FLUTTER_MODE" == "mac" ]]; then
     args+=("--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=$LOCAL_OWNER_BOOTSTRAP_B64")
+  fi
+  # v0.8.8 P1：localdev owner X25519 私钥播种（迭代计划 §9.2）——仅 localdev 调试壳；
+  # 与 owner.bootstrap 的真实公钥配对，使 daemon 会话 DEK wrap 可被本机 unwrap。
+  if [[ -n "$LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64" && "$FLUTTER_MODE" == "mac" ]]; then
+    args+=("--dart-define=LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=$LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64")
   fi
   if [[ "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
     args+=("--dart-define=LOCAL_DEV_WORKSPACE_ID=$LOCAL_DEV_WORKSPACE_ID")

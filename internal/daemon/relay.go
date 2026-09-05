@@ -758,8 +758,37 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 		runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
 		runner.SetModeInfoSink(loop.enqueueModeInfo)
 		runner.SetDEKPublisher(loop.enqueueSessionDEK)
+		// v0.8.8 P1：生产接线附件拉取出口（迭代计划 §3 表）——此前只有测试注入
+		// sink，真实 send 携带 refs 时报「附件拉取出口未配置」。出口 = RelayClient
+		// §3.3 拉密文 + 本机会话 DEK Open（§9.1 契约）→ 明文只经内存交 runner。
+		runner.SetAttachmentFetchSink(loop.fetchAndOpenAttachment)
 	}
 	return loop
+}
+
+// fetchAndOpenAttachment 是附件 opaque ref 的生产拉取出口（v0.8.8 P1）：
+// 1) RelayClient.FetchAttachment 经 §3.3 端点拉密文投影（GET 幂等只读）；
+// 2) 从本机 local_state 读取会话 DEK（SessionDEKManager 首启已生成）；
+// 3) 按计划 §9.1 冻结契约逐块解密、复算 sha256、按序拼接为明文字节。
+// 任何失败都原样返回错误，由 runner 的整批 session_error + turn_completed
+// 收口（runner.go 附件 refs 路径），本函数不做日志脱敏以外的副作用；
+// 错误文本不含明文、密钥或密文内容。
+func (l *RelayLoop) fetchAndOpenAttachment(ctx context.Context, sessionID, attachmentID string) ([]byte, error) {
+	if l.Client == nil || l.Store == nil {
+		return nil, errors.New("附件拉取出口未配置（Relay 或本机状态缺失）")
+	}
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(attachmentID) == "" {
+		return nil, errors.New("附件 ref 缺少会话或附件标识")
+	}
+	proj, err := l.Client.FetchAttachment(ctx, attachmentID)
+	if err != nil {
+		return nil, fmt.Errorf("附件密文拉取失败: %w", err)
+	}
+	dek, err := loadSessionDEK(l.Store, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return openAttachmentProjection(dek, sessionID, proj)
 }
 
 // enqueueSessionDEK 是 runner 会话内容 DEK 的本机出口（v0.8.5 §3.2 / ADR-016）：

@@ -69,9 +69,17 @@ Future<void> main() async {
   final localDevTokens = localDevOwnerBootstrap == null
       ? null
       : InMemorySecureTokenStore();
+  // v0.8.8 P1（迭代计划 §9.2）：localdev owner X25519 私钥种子播种——与
+  // restart.sh owner.bootstrap 的真实公钥配对，附件 DEK unwrap 前置；未注入时
+  // 身份库维持占位公钥（附件入口 fail-closed）。生产 Android 走 Keystore 路径。
+  final localDevEncryptionPrivateKeyB64 = localDevOwnerBootstrap == null
+      ? null
+      : readLocalDevEncryptionPrivateKeyB64();
   final localDevIdentities = localDevOwnerBootstrap == null
       ? null
-      : InMemoryDeviceIdentityStore();
+      : InMemoryDeviceIdentityStore(
+          seedEncryptionPrivateKeyB64: localDevEncryptionPrivateKeyB64,
+        );
   if (localDevOwnerBootstrap != null &&
       localDevTokens != null &&
       localDevIdentities != null) {
