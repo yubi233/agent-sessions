@@ -1,0 +1,220 @@
+{
+  "suite": "v087-typewriter-streaming-telemetry",
+  "description": "v0.8.7 会话 LLM 打字机式流式传输：移动端流式埋点先行（门禁 2：日志证明 delta 逐步到达）、macOS 可见窗口连续帧截图门禁（门禁 1：气泡文本单调增长）、fixture 逐 delta 时间释放、在途轮询收紧与平滑释放动画。主计划 V087-01..12（docs/zh/迭代计划/迭代计划v0.8.7.md）；临时脚本/print 日志、单帧截图、录屏不作为门禁证据。",
+  "environment": {
+    "local": "隔离 SQLite、内存假桥/fixture、store/daemon/runner Go 测试",
+    "browser": "macOS 可见 Flutter 窗口（门禁 1 连续帧；本轮不做 Android 实机、无 headless 验收）",
+    "flutter": "macOS fixture 窗口（本地可见 gate；flutter-smoke-recording 同口径录屏）",
+    "dsh_overlay": "本地确定性真实 DSH bridge overlay（不调用真实模型）",
+    "real": "本轮主线路径无真实模型用例；V087-12 为授权口径可选路径（allow_real_upstream=false）"
+  },
+  "cases": [
+    {
+      "id": "V087-01",
+      "title": "契约门：message.delta/message.thought_delta/turn.phase 白名单与 payload 字段冻结，fixture 与真实同 schema",
+      "status": "pending",
+      "phase": "P1",
+      "category": "contract",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "packages/protocol/schema/events.json enum 已含三类事件；localdev encoder 投影契约（全量已收文本 + streaming:true）不变。",
+      "steps": [
+        "go test ./internal/domain/... ./internal/daemon/... -run 'TestV087|RelayEventType|LocalDevEventEncoder|ValidDaemonEventType' -count=1",
+        "断言事件白名单、wire 名映射与 encoder 投影字段不回归"
+      ],
+      "expected": "本轮零协议改动成立：events.json 不变、不新增 wire 事件类型；encoder 全量投影语义与 v0.8.4 一致。",
+      "cleanup": ["无"],
+      "evidence": ["internal/domain/daemon.go（validDaemonEventType）", "internal/daemon/relay.go（relayEventType）", "internal/daemon/localdev_encoder.go"]
+    },
+    {
+      "id": "V087-02",
+      "title": "埋点序列：逐 delta 注入下 stream_first_delta/stream_delta/stream_completed_reconcile 字段齐全且时间戳、累计长度单调",
+      "status": "pending",
+      "phase": "P1",
+      "category": "telemetry",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "移动端流式埋点 sink（ring buffer）已接线 _mergeSnapshot、发送轮询循环与终态对账三处；注入式逐 delta relay 可用。",
+      "steps": [
+        "cd apps/mobile && flutter test test/v087_streaming_telemetry_test.dart --concurrency=1",
+        "controller 测试以逐 delta relay 驱动一个完整流式回合，导出埋点序列并断言"
+      ],
+      "expected": "stream_first_delta 含 latency_ms；每条 stream_delta 的 ts 严格递增、cumulative_chars 单调不减、delta_chars 与帧差一致；stream_completed_reconcile.consistent=true；ring buffer 容量上限行为符合冻结值。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/lib/diagnostics/streaming_telemetry.dart", "apps/mobile/test/v087_streaming_telemetry_test.dart"]
+    },
+    {
+      "id": "V087-03",
+      "title": "埋点审计：导出 JSON 可解析、schema_version 在位、全程不含消息正文/工具原文",
+      "status": "pending",
+      "phase": "P1",
+      "category": "telemetry",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "埋点导出入口（JSON 文件/schema v1）已实现；测试回合包含含中文与代码符号的正文。",
+      "steps": [
+        "cd apps/mobile && flutter test test/v087_streaming_telemetry_test.dart --concurrency=1",
+        "断言导出内容仅含元数据字段（seq/kind/message_id/长度/时间差），正文字符串不出现在导出负载"
+      ],
+      "expected": "导出 JSON 解析成功且 schema_version=1；对注入正文的任何子串零命中；无内部路径/错误码原文。",
+      "cleanup": ["删除临时导出文件"],
+      "evidence": ["apps/mobile/lib/diagnostics/streaming_telemetry.dart", "apps/mobile/test/v087_streaming_telemetry_test.dart"]
+    },
+    {
+      "id": "V087-04",
+      "title": "fixture 逐 delta 时间释放：注入时钟推进下 snapshot 逐步可见新 delta，计划表（帧数/间隔/增量）生效",
+      "status": "pending",
+      "phase": "P2",
+      "category": "fixture",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "FixtureRelayRepository 新增时间释放流式模式；注入时钟（clock）机制沿用既有先例。",
+      "steps": [
+        "cd apps/mobile && flutter test test/v087_typewriter_streaming_test.dart --concurrency=1",
+        "controller/widget 测试推进注入时钟，逐批拉取 snapshot 断言新 delta 可见性与计划表一致性"
+      ],
+      "expected": "每个时间步只暴露计划表对应的新 delta；完成后 completed 全文到达；既有 'v084 stream' 一次性场景不回归。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/lib/relay/fixture_relay_repository.dart", "apps/mobile/test/v087_typewriter_streaming_test.dart"]
+    },
+    {
+      "id": "V087-05",
+      "title": "在途轮询收紧档：参数化收紧值生效，v0.8.6 超时收敛/防抖/清账语义不回归",
+      "status": "pending",
+      "phase": "P2",
+      "category": "controller",
+      "priority": "P0",
+      "test_layer": "unit",
+      "precondition": "v0.8.6 参数化入口（foregroundPollAttempts/backgroundPollAttempts/pollInterval）在位；新增在途收紧档为独立可注入字段。",
+      "steps": [
+        "cd apps/mobile && flutter test test/v087_typewriter_streaming_test.dart test/v086_turn_convergence_test.dart test/session_controller_test.dart --concurrency=1",
+        "controller 测试断言发送后在途窗口使用收紧档间隔、窗口耗尽仍走 v0.8.6 显式超时收敛"
+      ],
+      "expected": "收紧档间隔生效且仅限在途前台窗口；超时收敛、重发防抖、乐观回显清账行为与 v0.8.6 交付一致（v086_turn_convergence_test 全绿）。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/lib/state/session_controller.dart", "apps/mobile/test/v087_typewriter_streaming_test.dart"]
+    },
+    {
+      "id": "V087-06",
+      "title": "打字机渲染：多批 pump 文本渐进增长、动画不超前 buffer、completed 全文收敛、partial Markdown 中间态不崩不闪",
+      "status": "pending",
+      "phase": "P2",
+      "category": "widget",
+      "priority": "P0",
+      "test_layer": "component",
+      "precondition": "平滑释放动画默认开启（fail-closed：只释放已到达 buffer）；SessionMarkdownText partial 降级在位。",
+      "steps": [
+        "cd apps/mobile && flutter test test/v087_typewriter_streaming_test.dart test/v084_streaming_projection_test.dart test/v084_turn_status_row_test.dart --concurrency=1",
+        "widget 测试以时间释放 fixture 多批 pump，断言每批渲染文本长度严格递增、无未到达字符、completed 后全文一致；注入含代码块/表格正文验证半开中间态"
+      ],
+      "expected": "渲染文本长度随批次单调递增且任意时刻 ≤ 已到达长度；completed 后与全文一致；半开 Markdown 中间态无异常/无闪烁崩溃；'运行中'尾标、状态行与超时横幅语义不回归。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/lib/ui/session/chat/session_chat_node_seat.dart", "apps/mobile/test/v087_typewriter_streaming_test.dart"]
+    },
+    {
+      "id": "V087-07",
+      "title": "回滚形态：动画开关置关时回到整段渲染现状形态，既有断言保持绿",
+      "status": "pending",
+      "phase": "P2",
+      "category": "widget",
+      "priority": "P1",
+      "test_layer": "component",
+      "precondition": "动画开关为构造/注入参数，默认开启。",
+      "steps": [
+        "cd apps/mobile && flutter test test/v087_typewriter_streaming_test.dart --concurrency=1",
+        "以动画关闭配置运行同一时间释放回合，断言文本一次性整段渲染（现状形态）且无动画态残留"
+      ],
+      "expected": "关闭开关后行为与 v0.8.6 交付形态一致；回滚路径可用。",
+      "cleanup": ["无"],
+      "evidence": ["apps/mobile/test/v087_typewriter_streaming_test.dart"]
+    },
+    {
+      "id": "V087-08",
+      "title": "门禁 1（截图）：macOS 可见窗口流式场景连续帧长度序列单调不减且严格递增 ≥K，首帧即全文判失败",
+      "status": "pending",
+      "phase": "P3",
+      "category": "gate",
+      "priority": "P0",
+      "test_layer": "browser_e2e",
+      "precondition": "环境前提（TCC 屏幕录制授权、caffeinate 防休眠、预构建 App）检查通过；fixture 时间释放回合计划表冻结（40 条 × 400ms ≈ 16s）；帧级长度采样入 manifest。",
+      "steps": [
+        "task test:v087:flutter（真实可见窗口，headless=false）",
+        "场景 VISUAL-MOBILE-39：驱动时间释放流式回合，逐帧截图 + manifest 长度采样",
+        "校验器断言：≥30 帧子序列长度单调不减且严格递增次数 ≥3；首帧即全文/平台化判失败"
+      ],
+      "expected": "real_browser=true、headless=false 的连续帧证据 + 机读 manifest 判定通过；帧 PNG 供人审辨认文本逐步变长；报告与截图落 e2e-verify/。",
+      "cleanup": ["结束清理本轮启动的 App 进程与临时目录"],
+      "evidence": ["e2e-verify/mobile/run-macos.mjs（VISUAL-MOBILE-39）", "e2e-verify/reports/", "e2e-verify/screenshots/"]
+    },
+    {
+      "id": "V087-09",
+      "title": "门禁 2（日志）：同回合导出埋点判定——≥N 条 stream_delta、时间戳与累计长度单调、对账 consistent、与截图同 seq 互证",
+      "status": "pending",
+      "phase": "P3",
+      "category": "gate",
+      "priority": "P0",
+      "test_layer": "browser_e2e",
+      "precondition": "V087-08 场景同回合开启埋点导出；证据必须出自 P1 埋点（临时 print 不合格）。",
+      "steps": [
+        "在 V087-08 场景回合结束后导出埋点 JSON",
+        "机读判定：stream_delta 条数 ≥ 计划表帧数下限、ts 严格递增、cumulative_chars 单调递增、stream_first_delta.latency_ms 在位、stream_completed_reconcile.consistent=true",
+        "与 V087-08 manifest 的 seq 序列互证后一并登记 evidence"
+      ],
+      "expected": "双门禁同回合互证通过；日志文件原样入 evidence 不改写；无正文（审计红线）。",
+      "cleanup": ["无"],
+      "evidence": ["e2e-verify/reports/", "apps/mobile/lib/diagnostics/streaming_telemetry.dart"]
+    },
+    {
+      "id": "V087-10",
+      "title": "daemon 回合流式摘要日志：终态一条 info（delta 条数/字符数/时长），逐 delta 不打日志，outbox/白名单不回归",
+      "status": "pending",
+      "phase": "P1",
+      "category": "contract",
+      "priority": "P1",
+      "test_layer": "integration",
+      "precondition": "SessionRunner 单 goroutine 事件泵内维护 per-session 流式计数；开关 env 可关闭。",
+      "steps": [
+        "go test ./internal/daemon -run 'TestV087' -count=1",
+        "契约测试断言：含 delta 回合终态输出一条摘要（条数/字符/时长）、无 delta 回合不输出、开关关闭不输出"
+      ],
+      "expected": "摘要日志每回合至多一条；事件白名单与 outbox 逐条上行语义不回归；作为门禁 2 的服务端佐证。",
+      "cleanup": ["无"],
+      "evidence": ["internal/daemon/runner.go", "internal/daemon/turn_stream_summary_test.go"]
+    },
+    {
+      "id": "V087-11",
+      "title": "回归：test:v087:local 全绿 + v081–v086 聚合链式不回归 + fixture/真实契约 schema 门",
+      "status": "pending",
+      "phase": "P4",
+      "category": "regression",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "P1-P3 全部落地；聚合入口已更新至含 v087 专项行。",
+      "steps": [
+        "task test:v087:local",
+        "task test:v083:local && task test:v084:local && task test:v085:local && task test:v086:local",
+        "apps/mobile 全量 flutter test 分诊"
+      ],
+      "expected": "本轮入口与 v081–v086 链式全部通过；全量分诊中本轮新增/受影响文件零失败，历史失败按遗留流程留档。",
+      "cleanup": ["无"],
+      "evidence": ["Taskfile.yml（test:v087:local）", "e2e-verify/reports/"]
+    },
+    {
+      "id": "V087-12",
+      "title": "实机可选：真实 dsh 回合双证据（截图 + 埋点日志），授权口径 real_model=true",
+      "status": "pending",
+      "phase": "P3",
+      "category": "real",
+      "priority": "P2",
+      "test_layer": "real_model",
+      "precondition": "用户显式授权真实模型/上游（默认不授权）；本地 dsh 桥可用。",
+      "steps": [
+        "授权后：真实 dsh 会话发送一问，采集可见窗口连续帧 + 同回合埋点导出",
+        "按 V087-08/09 同口径判定"
+      ],
+      "expected": "真实链路下双证据通过或如实标 blocked（failure_class=credential_or_quota_blocker）；不阻塞主线收口。",
+      "cleanup": ["结束清理桥子进程与采集产物中的敏感内容"],
+      "evidence": ["e2e-verify/reports/"]
+    }
+  ]
+}

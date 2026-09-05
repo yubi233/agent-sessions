@@ -331,6 +331,33 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
       - node e2e-verify/mobile/record-macos.mjs --scope v086 --gate-report "$V086_FLUTTER_GATE_REPORT"
 
+  test:v087:local:
+    desc: v0.8.7 打字机式流式传输（埋点先行，截图+日志双门禁）本地统一回归入口（V087-01..12；P0 先落基线：docs+check+Flutter 受影响既有文件+web；v087 专项 Go/Flutter 行随 P1-P3 落地后追加；不调用真实模型）
+    cmds:
+      - task: docs:verify
+      - task: check
+      # P1（V087-02/03/10）落地后追加：go test ./internal/daemon -run 'TestV087'；
+      # P2/P3（V087-04..07）落地后追加 flutter test test/v087_*.dart 行。
+      - cmd: cd apps/mobile && flutter analyze && flutter test test/session_controller_test.dart test/v086_turn_convergence_test.dart test/v084_streaming_projection_test.dart test/v084_turn_status_row_test.dart --concurrency=1
+      - pnpm --filter @agent-sessions/web test
+      - git diff --check
+
+  test:v087:flutter:
+    desc: v0.8.7 打字机流式 macOS 可见窗口 targeted gate（本地 Flutter 口径，本轮不做 Android 实机；真实可见窗口 headless=false；需先关闭用户正在使用的 Agent Sessions 窗口；VISUAL-MOBILE-39 场景随 P3 定稿后启用 run-macos 行）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+
+  record:v087:
+    desc: v0.8.7 打字机流式录屏（录屏内容先定（2026-09-05）：① fixture 时间释放流式回合全程连续帧——气泡文本逐步增长（门禁 1 人审证据）；② 同回合埋点导出 JSON 文件展示（门禁 2 证据）；③ 状态行相位与"运行中"尾标采样。不作为功能回归替代；record-macos scope v087 随 P3 注册）
+    cmds:
+      - |
+        if [[ -z "${V087_FLUTTER_GATE_REPORT:-}" || ! -f "$V087_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v087 blocked: set V087_FLUTTER_GATE_REPORT to a passed v0.8.7 macOS gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v087 --gate-report "$V087_FLUTTER_GATE_REPORT"
+
   test:v085:flutter:
     desc: v0.8.5 中止与轨迹时间 macOS 可见窗口 targeted gate（需先关闭用户正在使用的 Agent Sessions 窗口；不运行 Android）
     cmds:
