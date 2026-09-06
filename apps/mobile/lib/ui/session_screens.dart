@@ -1945,6 +1945,12 @@ class _SessionChatView extends StatelessWidget {
       turnPhase: projection.turnPhase,
       // v0.8.6 A①：客户端回合超时标记——超时横幅替代无限转圈。
       turnTimedOut: sessions.isTurnTimedOut(sessionId),
+      // v0.9.0 C3：事件新鲜度次级行 + 「查看结果」手动出口（强制快照同步，
+      // 成功只在真实事实到达时清横幅）。
+      timeoutFreshnessText: _formatTimeoutFreshness(
+        sessions.lastMergedAtFor(sessionId),
+      ),
+      onViewResult: () => sessions.refreshTurnResult(),
       leading: _SessionRecoveryStrip(
         controller: recovery,
         sessionId: sessionId,
@@ -5989,4 +5995,13 @@ String _relativeTime(DateTime? value) {
   if (difference.inHours < 1) return '${difference.inMinutes} 分钟';
   if (difference.inDays < 1) return '${difference.inHours} 小时';
   return '${difference.inDays} 天';
+}
+
+/// v0.9.0 C3/T5：超时横幅次级行的事件新鲜度文案。
+/// 只做展示格式化（客户端墙钟 HH:mm），网络健康判断不消费该值。
+String _formatTimeoutFreshness(DateTime? mergedAt) {
+  if (mergedAt == null) return '尚未同步到事件';
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '最近同步 '
+      '${two(mergedAt.hour)}:${two(mergedAt.minute)}:${two(mergedAt.second)}';
 }

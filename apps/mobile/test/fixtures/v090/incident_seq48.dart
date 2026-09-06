@@ -28,6 +28,18 @@ const int v090IncidentStallSeq = 48;
 const int v090IncidentRecoveryStartSeq = 49;
 const int v090IncidentRecoveryEndSeq = 62;
 
+/// 事故时间线的阶段：服务端已落库事实推进到哪一步。
+enum V090IncidentPhase {
+  /// 阶段一：App 停滞窗口（seq<=48 已回传，客户端随后停止拉取）。
+  stall,
+
+  /// 阶段二：执行端恢复上行（seq 49-62 已落库，App 未接收）。
+  recovery,
+
+  /// 阶段三：seq 460 终态到达，会话转 idle。
+  terminal,
+}
+
 /// 构造一条合成 Relay 事件。envelope 走 fixture_payload 通道，
 /// 与 FixtureRelayRepository 的既有事件形状保持同一口径。
 RelaySessionEvent _event(
@@ -95,8 +107,11 @@ class V090IncidentFixture {
   MobileSession _session({
     required MobileSessionStatus status,
     required int lastSeq,
+    String? sessionIdOverride,
   }) => MobileSession(
-    id: sessionId,
+    // sessionIdOverride：脚本化假 Relay 把 fixture 事件供给真实测试会话时，
+    // 快照内的 session row 必须与请求的会话 id 一致，否则合并按错误 id 落键。
+    id: sessionIdOverride ?? sessionId,
     workspaceId: 'ws-v090fixture',
     status: status,
     provider: 'dsh',
@@ -137,4 +152,43 @@ class V090IncidentFixture {
       _terminalEvent,
     ],
   );
+
+  /// 按 [phase] 给出服务端已落库事实的增量快照（`after_seq` 过滤、严格升序），
+  /// 供脚本化假 Relay 直接服务 L1 续轮/快照请求——与真实 Relay 的
+  /// after_seq 语义同规：已确认事件不重复回放。
+  SessionSnapshot incrementalSnapshot(
+    V090IncidentPhase phase, {
+    int afterSeq = 0,
+    String? sessionIdOverride,
+  }) {
+    final events = switch (phase) {
+      V090IncidentPhase.stall => [_userQuestion, ..._stallWindowEvents],
+      V090IncidentPhase.recovery => [
+        _userQuestion,
+        ..._stallWindowEvents,
+        ..._recoveryWindowEvents,
+      ],
+      V090IncidentPhase.terminal => [
+        _userQuestion,
+        ..._stallWindowEvents,
+        ..._recoveryWindowEvents,
+        _terminalEvent,
+      ],
+    }.where((event) => event.sequence > afterSeq).toList(growable: false);
+    final lastSeq = switch (phase) {
+      V090IncidentPhase.stall => v090IncidentStallSeq,
+      V090IncidentPhase.recovery => v090IncidentRecoveryEndSeq,
+      V090IncidentPhase.terminal => v090IncidentTerminalSeq,
+    };
+    return SessionSnapshot(
+      session: _session(
+        status: phase == V090IncidentPhase.terminal
+            ? MobileSessionStatus.idle
+            : MobileSessionStatus.streaming,
+        lastSeq: lastSeq,
+        sessionIdOverride: sessionIdOverride,
+      ),
+      events: events,
+    );
+  }
 }

@@ -1,10 +1,12 @@
 // v0.8.6 A 组回合收敛 controller/widget 回归（V086-11/12/13）：
-// 1) 轮询窗口（前台+后台）耗尽仍无终态 → 显式超时收敛：turnInFlight 复位、
-//    乐观回显清账、isTurnTimedOut 置位；
-// 2) 迟到终态事实事件到达 → 按事件校正清除超时标记；
+// 1) 轮询窗口（前台+后台）耗尽仍无终态 → v0.9.0 C1 收敛：锚点 2 分钟 deadline
+//    切 UX 超时（isTurnTimedOut 置位、乐观回显清账），同步不停止（L1 降频续轮），
+//    活动回合事实保持（中断仍可用）；
+// 2) 迟到终态事实事件到达 → L1 零干预自动翻正：按事件校正清除超时标记并收敛回合；
 // 3) 上一回合未终态时的同文本重发被防抖拦截（幂等去重会吞掉第二次事件，
 //    双重置的乐观回显永远等不到清账——实机双气泡根因）；
-// 4) SessionChatView 在 turnTimedOut 时显示超时横幅替代"处理中"状态条。
+// 4) SessionChatView 在 turnTimedOut 时显示超时横幅替代"处理中"状态条，
+//    并提供「查看结果」出口与新鲜度次级行（v0.9.0 C3）。
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
 import 'package:agent_sessions_mobile/state/session_controller.dart';
@@ -87,10 +89,15 @@ void main() {
       relay: relay,
       modelEffortMemory: store,
     );
-    // 测试窗口：前台 2×10ms + 后台 2×10ms，总约 40ms 后应显式超时。
+    // 测试窗口：前台 2×10ms + 后台 2×10ms，窗口耗尽后交接 L1 降频续轮。
     controller.foregroundPollAttempts = 2;
     controller.backgroundPollAttempts = 2;
     controller.pollInterval = const Duration(milliseconds: 10);
+    controller.l1PollInterval = const Duration(milliseconds: 5);
+    // v0.9.0 C1：超时由锚点 deadline 驱动（可注入单调时钟），不再由
+    // attempts×interval 推导——窗口耗尽只决定"何时交接 L1"。
+    var monotonicMs = 0;
+    controller.monotonicElapsed = () => Duration(milliseconds: monotonicMs);
     await controller.initialize();
     await controller.createSession(
       workspaceId: 'fixture-workspace',
@@ -108,7 +115,9 @@ void main() {
     );
 
     // ignore: avoid_print
-    // 前台窗口耗尽：sendMessage 已返回，后台轮询继续；轮询到超时标记置位。
+    // v0.9.0 C1：窗口耗尽只交接 L1；超时在锚点 2 分钟 deadline 处置位——
+    // 前推单调时钟跨过 deadline，等待 L1 下一拍评估。
+    monotonicMs = 2 * 60 * 1000 + 1;
     final deadline = DateTime.now().add(const Duration(seconds: 3));
     while (!controller.isTurnTimedOut(sessionId) &&
         DateTime.now().isBefore(deadline)) {
@@ -116,20 +125,23 @@ void main() {
     }
     // ignore: avoid_print
     expect(controller.isTurnTimedOut(sessionId), isTrue);
-    // 显式收敛：在途标记复位（composer 恢复发送）、乐观回显清账。
-    expect(controller.isTurnInFlight, isFalse);
+    // v0.9.0 C1：超时只切 UX 表达——活动回合事实保持（中断仍可用），
+    // 乐观回显清账，L1 降频续轮继续（10 秒档，测试 5ms）。
+    expect(controller.isTurnInFlight, isTrue);
     expect(controller.pendingOutgoingMessage, isNull);
 
     // 迟到的终态事实事件到达（daemon 看门狗/Provider 收敛）→ 按事件校正。
     relay.completeTurn = true;
-    // 重进会话：走全量快照合并路径，终态事实按事件校正清除超时标记。
-    await controller.selectSession(sessionId);
+    // v0.9.0 根因回归：无需用户任何操作（不重进会话），L1 下一拍增量快照
+    // 合并 idle 投影，终态事实自动清除超时标记并收敛回合。
     final corrected = DateTime.now().add(const Duration(seconds: 3));
-    while (controller.isTurnTimedOut(sessionId) &&
-        DateTime.now().isBefore(corrected)) {
+    while ((controller.isTurnTimedOut(sessionId) ||
+                controller.isTurnInFlight) &&
+            DateTime.now().isBefore(corrected)) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     expect(controller.isTurnTimedOut(sessionId), isFalse);
+    expect(controller.isTurnInFlight, isFalse);
   });
 
   test('V086-12：上一回合未终态时的同文本重发被防抖拦截', () async {
@@ -185,7 +197,8 @@ void main() {
       ),
     );
     expect(find.byKey(const Key('session-turn-timeout-row')), findsOneWidget);
-    expect(find.textContaining('回合超时'), findsOneWidget);
+    // v0.9.0 C1：横幅文案改为「等待结果已超时，仍在同步」。
+    expect(find.text('等待结果已超时，仍在同步。'), findsOneWidget);
 
     // 未超时的常规在途：仍显示原状态条，不显示超时横幅。
     await tester.pumpWidget(

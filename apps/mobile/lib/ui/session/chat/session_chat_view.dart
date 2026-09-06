@@ -20,6 +20,8 @@ class SessionChatView extends StatefulWidget {
     required this.running,
     this.turnPhase,
     this.turnTimedOut = false,
+    this.timeoutFreshnessText,
+    this.onViewResult,
     this.emptyHero,
     this.leading,
     this.footer = const [],
@@ -45,6 +47,12 @@ class SessionChatView extends StatefulWidget {
   /// 显式超时横幅替代"处理中"状态条，不再无限转圈；迟到的终态事实事件
   /// 到达后 controller 会按事件校正清除该标记。
   final bool turnTimedOut;
+
+  /// v0.9.0 C3：超时横幅次级行的事件新鲜度文案（最近一次成功合并的客户端时刻）。
+  final String? timeoutFreshnessText;
+
+  /// v0.9.0 C3：「查看结果」手动出口（controller.refreshTurnResult）。
+  final Future<void> Function()? onViewResult;
   final Widget? emptyHero;
 
   /// 位于消息流上方的会话级控制带（如子会话面板）。它属于 Chat 投影上下文，
@@ -265,7 +273,10 @@ class _SessionChatViewState extends State<SessionChatView> {
             left: 16,
             right: 16,
             bottom: 12,
-            child: const _TurnTimeoutRow(),
+            child: _TurnTimeoutRow(
+              freshnessText: widget.timeoutFreshnessText,
+              onViewResult: widget.onViewResult,
+            ),
           )
         else if (widget.running)
           Positioned(
@@ -446,10 +457,18 @@ class _FileOpenErrorDialog extends StatelessWidget {
   }
 }
 
-/// v0.8.6 A①：回合超时横幅。轮询窗口耗尽仍无终态时替代"处理中"状态条，
-/// 给出明确失败语义与恢复动作提示；终态事实事件到达后由 controller 清除标记。
+/// v0.9.0 C1/C3：回合超时横幅。UX deadline（锚点 + 2 分钟）到达仍无 canonical
+/// 终态时替代"处理中"状态条：明确"等待结果已超时，仍在同步"（同步未停止——
+/// L1 降频续轮/L3/SSE 仍会发现迟到事实）；次级行展示事件新鲜度（T5 裁决），
+/// 并提供「查看结果」手动出口（强制一次快照同步，成功只在真实事实到达时清横幅）。
 class _TurnTimeoutRow extends StatelessWidget {
-  const _TurnTimeoutRow();
+  const _TurnTimeoutRow({this.freshnessText, this.onViewResult});
+
+  /// 最近一次成功合并事件的展示文案（客户端时刻）；null 时不显示次级行。
+  final String? freshnessText;
+
+  /// 「查看结果」回调；null 时按钮隐藏（例如控制器尚未就绪）。
+  final Future<void> Function()? onViewResult;
 
   @override
   Widget build(BuildContext context) {
@@ -463,18 +482,56 @@ class _TurnTimeoutRow extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           color: theme.colorScheme.errorContainer,
         ),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.timer_off_outlined,
-                size: 16, color: theme.colorScheme.error),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '回合超时：执行端长时间无响应。可点击中断后重发，或检查终端状态。',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.error),
-              ),
+            Row(
+              children: [
+                Icon(Icons.timer_off_outlined,
+                    size: 16, color: theme.colorScheme.error),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '等待结果已超时，仍在同步。',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.error),
+                  ),
+                ),
+              ],
             ),
+            if (freshnessText != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 24, top: 2),
+                child: Text(
+                  freshnessText!,
+                  key: const Key('session-turn-timeout-freshness'),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            if (onViewResult != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 24, top: 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    key: const Key('session-turn-timeout-view-result'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: () => onViewResult!(),
+                    icon: Icon(
+                      Icons.sync_outlined,
+                      size: 16,
+                      color: theme.colorScheme.error,
+                    ),
+                    label: const Text('查看结果'),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

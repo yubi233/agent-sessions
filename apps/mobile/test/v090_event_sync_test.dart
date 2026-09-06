@@ -7,6 +7,7 @@ import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:agent_sessions_mobile/state/session_turn_runtime.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'fixtures/v090/incident_seq48.dart';
 import 'support/fixture_owner.dart';
 
 /// V090-02/05 地基回归：三重代际（认证/选择/同步）、202 即时受理锚点、
@@ -283,6 +284,187 @@ void main() {
     expect(controller.selectedSessionId, session.id);
     controller.dispose();
   });
+
+  test('V090-01: UX 超时由锚点 2 分钟 deadline 驱动，而非轮询窗口耗尽', () async {
+    final relay = _V090StreamingRelay();
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = _newController(relay);
+    await controller.initialize();
+    final session = await _createStartedSession(controller, relay, owner);
+    // 轮询窗口立即耗尽（attempts=0），同步责任交给 L1——若超时仍由窗口推导，
+    // 超时会在窗口耗尽瞬间出现；锚点语义下必须等 fake 时钟走到 2 分钟。
+    controller.foregroundPollAttempts = 0;
+    controller.backgroundPollAttempts = 0;
+    controller.l1PollInterval = const Duration(milliseconds: 5);
+    var monotonicMs = 0;
+    controller.monotonicElapsed = () => Duration(milliseconds: monotonicMs);
+
+    await controller.sendMessage(
+      message: 'V090-01 deadline 锚点',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
+    );
+    // 窗口已耗尽、L1 已接管：给若干真实毫秒让 L1 跑几拍。
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(
+      controller.isTurnTimedOut(session.id),
+      isFalse,
+      reason: '锚点未到 2 分钟，窗口耗尽不得触发 UX 超时（事故根因契约）',
+    );
+    expect(controller.activeTurnFor(session.id), isNotNull);
+
+    // fake 时钟前推到 2 分钟+1ms：L1 下一拍置位超时标记（只切 UX 表达）。
+    monotonicMs = 2 * 60 * 1000 + 1;
+    await _waitFor(() => controller.isTurnTimedOut(session.id));
+    expect(controller.activeTurnFor(session.id), isNotNull);
+    // L1 在超时后仍在续轮（仍在同步）：请求数继续增长。
+    final requestsAtTimeout = relay.snapshotRequests;
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(relay.snapshotRequests, greaterThan(requestsAtTimeout));
+    controller.dispose();
+  });
+
+  test('V090-01: 60 分钟 continuation deadline 到期只停止 L1 并保留超时提示', () async {
+    final relay = _V090StreamingRelay();
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = _newController(relay);
+    await controller.initialize();
+    final session = await _createStartedSession(controller, relay, owner);
+    controller.foregroundPollAttempts = 0;
+    controller.backgroundPollAttempts = 0;
+    controller.l1PollInterval = const Duration(milliseconds: 5);
+    var monotonicMs = 0;
+    controller.monotonicElapsed = () => Duration(milliseconds: monotonicMs);
+
+    await controller.sendMessage(
+      message: 'V090-01 60 分钟到期',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
+    );
+    monotonicMs = 2 * 60 * 1000 + 1;
+    await _waitFor(() => controller.isTurnTimedOut(session.id));
+
+    // 前推到 60 分钟+1ms：L1 到期停止任务，超时提示保留，回合事实不被伪造。
+    monotonicMs = 60 * 60 * 1000 + 1;
+    final requestsBeforeDeadline = relay.snapshotRequests;
+    await _waitForL1Stopped(relay, requestsBeforeDeadline);
+    expect(controller.isTurnTimedOut(session.id), isTrue);
+    expect(controller.activeTurnFor(session.id), isNotNull);
+    final stable = relay.snapshotRequests;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(relay.snapshotRequests, stable, reason: 'L1 已停止，不再发起新请求');
+    controller.dispose();
+  });
+
+  test('V090-01: L1 续轮拿到迟到终态后自动收敛并停止（默认 10 秒档位存在）', () async {
+    final relay = _V090StreamingRelay();
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = _newController(relay);
+    // T7 裁决默认档位：选中会话 L1 10 秒一拍（单会话 0.1 QPS）。
+    expect(controller.l1PollInterval, const Duration(seconds: 10));
+    await controller.initialize();
+    final session = await _createStartedSession(controller, relay, owner);
+    controller.foregroundPollAttempts = 0;
+    controller.backgroundPollAttempts = 0;
+    controller.l1PollInterval = const Duration(milliseconds: 5);
+    var monotonicMs = 0;
+    controller.monotonicElapsed = () => Duration(milliseconds: monotonicMs);
+
+    await controller.sendMessage(
+      message: 'V090-01 迟到终态',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
+    );
+    monotonicMs = 2 * 60 * 1000 + 1;
+    await _waitFor(() => controller.isTurnTimedOut(session.id));
+
+    // L1 下一拍拉到 canonical 终态：超时清除、活动回合移除、L1 停止。
+    relay.completeTurn = true;
+    await _waitFor(() => !controller.isTurnTimedOut(session.id));
+    await _waitFor(() => !controller.isTurnInFlight);
+    final requestsAfterTerminal = relay.snapshotRequests;
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(relay.snapshotRequests, requestsAfterTerminal, reason: '终态后 L1 停止');
+    controller.dispose();
+  });
+
+  test('V090-03: seq48 事故时间线零干预自动翻正（停滞→恢复→seq460 终态）', () async {
+    final incident = const V090IncidentFixture();
+    final relay = _V090IncidentRelay(incident);
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = _newController(relay);
+    await controller.initialize();
+    // 先建会话并注册受管 id，再做选择：保证首次全量快照就走事故 fixture。
+    final created = await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    relay.managedSessionId = created!.id;
+    await controller.selectSession(created.id);
+    await controller.acquireSelectedLease(
+      deviceId: owner.deviceId,
+      canWrite: true,
+    );
+    final session = created;
+    controller.foregroundPollAttempts = 0;
+    controller.backgroundPollAttempts = 0;
+    controller.l1PollInterval = const Duration(milliseconds: 5);
+    var monotonicMs = 0;
+    controller.monotonicElapsed = () => Duration(milliseconds: monotonicMs);
+
+    // 阶段一（停滞）：选中会话时的全量快照停留在 seq48（streaming）。
+    expect(relay.phase, V090IncidentPhase.stall);
+    expect(controller.selectedCursor, v090IncidentStallSeq);
+    expect(
+      controller.timeline.any(
+        (event) => event.sequence == v090IncidentStallSeq,
+      ),
+      isTrue,
+    );
+
+    await controller.sendMessage(
+      message: 'V090-FIXTURE-QUESTION（合成占位：用于事故回放的用户提问）',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
+    );
+    // 锚点 2 分钟到达：与事故一致，客户端进入超时表达。
+    monotonicMs = 2 * 60 * 1000 + 1;
+    await _waitFor(() => controller.isTurnTimedOut(session.id));
+
+    // 阶段二（恢复）：执行端已落库 seq 49-62，L1 下一拍零干预补齐增量。
+    relay.phase = V090IncidentPhase.recovery;
+    await _waitFor(
+      () => controller.timeline.any(
+        (event) => event.sequence == v090IncidentRecoveryEndSeq,
+      ),
+    );
+
+    // 阶段三（终态）：seq 460 迟到答案到达——超时清除、完整答案展示、L1 停止。
+    relay.phase = V090IncidentPhase.terminal;
+    await _waitFor(() => !controller.isTurnTimedOut(session.id));
+    expect(controller.selectedSession?.status, MobileSessionStatus.idle);
+    expect(
+      controller.timeline.any(
+        (event) => event.text?.startsWith('V090-FIXTURE-FULL-ANSWER') ?? false,
+      ),
+      isTrue,
+      reason: '迟到的完整答案必须可见（事故中人工刷新才出现）',
+    );
+    // 按 sequence 去重：恢复窗口事件不重复出现，无重复 UI 节点。
+    final sequences = controller.timeline
+        .map((event) => event.sequence)
+        .toList();
+    expect(sequences.toSet().length, sequences.length);
+    expect(controller.isTurnInFlight, isFalse);
+    controller.dispose();
+  });
 }
 
 SessionController _newController(FixtureRelayRepository relay) => SessionController(
@@ -383,5 +565,79 @@ class _DeterministicRandom implements Random {
   int nextInt(int max) {
     _value = (_value * 1103515245 + 12345) & 0x7fffffff;
     return _value % max;
+  }
+}
+
+/// 永不自行终态的 streaming 假 Relay：send 后所有快照返回空增量 streaming；
+/// [completeTurn] 置 true 后返回 idle 终态投影（模拟迟到的 daemon 看门狗事实）。
+class _V090StreamingRelay extends FixtureRelayRepository {
+  bool completeTurn = false;
+
+  /// 快照请求计数（L1 节奏/停止断言用）。
+  int snapshotRequests = 0;
+
+  @override
+  Future<SessionSnapshot> getSessionSnapshot(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    snapshotRequests += 1;
+    final snapshot = await super.getSessionSnapshot(
+      sessionId,
+      afterSequence: afterSequence,
+    );
+    if (completeTurn) {
+      return SessionSnapshot(
+        session: snapshot.session.copyWith(status: MobileSessionStatus.idle),
+        events: snapshot.events,
+      );
+    }
+    return SessionSnapshot(
+      session: snapshot.session.copyWith(status: MobileSessionStatus.streaming),
+      events: const [],
+    );
+  }
+}
+
+/// 事故回放假 Relay：快照完全由脱敏 fixture 按阶段供给（after_seq 语义同规），
+/// 阶段推进由测试显式控制，复现"服务端在前进、客户端已停更"的错位。
+class _V090IncidentRelay extends FixtureRelayRepository {
+  _V090IncidentRelay(this.incident);
+
+  final V090IncidentFixture incident;
+  V090IncidentPhase phase = V090IncidentPhase.stall;
+
+  /// 受 fixture 管理的测试会话 id（createSession 后由测试注入）；
+  /// 该会话的快照完全由事故 fixture 供给，其余会话走默认路径。
+  String? managedSessionId;
+
+  @override
+  Future<SessionSnapshot> getSessionSnapshot(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    if (sessionId == managedSessionId) {
+      // 快照内 session row 必须携带请求的会话 id（合并按它落键）。
+      return incident.incrementalSnapshot(
+        phase,
+        afterSeq: afterSequence,
+        sessionIdOverride: sessionId,
+      );
+    }
+    return super.getSessionSnapshot(sessionId, afterSequence: afterSequence);
+  }
+}
+
+/// 等待快照请求数停止增长（L1 已退出）。
+Future<void> _waitForL1Stopped(
+  _V090StreamingRelay relay,
+  int baseline,
+) async {
+  final deadline = DateTime.now().add(const Duration(milliseconds: 150));
+  while (DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    if (relay.snapshotRequests > baseline) {
+      baseline = relay.snapshotRequests;
+    }
   }
 }

@@ -166,11 +166,10 @@ class SessionController extends ChangeNotifier {
   final Map<String, String> _idempotencyKeys = {};
   // cursor 只在内存保存为会话序号；生命周期恢复不接触消息正文、密文或待发送内容。
   final Map<String, int> _sessionCursors = {};
-  // 回合在途：send 受理即置位，直到回合终态（completed/cancelled/failed）、
-  // abort/kill 或切换会话才清除。比 status==streaming 更早成立、更晚结束，
-  // 覆盖"乐观回显已并入、status 尚未翻到 streaming"的受理窗口，保证中断
-  // 按钮从发送那一刻起始终可用。
-  bool _turnInFlight = false;
+  // v0.9.0 C1：回合在途不再用可分布尔表达，改为从活动回合表派生
+  // （见 isTurnInFlight）——"服务端仍有活动回合 / UX 已超时 / 同步任务在执行"
+  // 三件事彻底拆开：超时不清除活动回合，活动回合只在 canonical 终态、
+  // 用户 abort/kill 或认证边界清除。
   // v0.2/P2：composer 草稿只保存在内存（不落明文盘）；按会话隔离，切换页面/会话后仍可恢复。
   final Map<String, String> _composerDrafts = {};
   // v0.5：reference occurrences 与 transient queue 也按 session 隔离，不能随 widget 重建丢失。
@@ -211,6 +210,13 @@ class SessionController extends ChangeNotifier {
   /// 其余请求只置 pending；当前请求结束后从已合并 cursor 再拉一轮。
   final Map<String, Future<void>> _snapshotTurnsInFlight = {};
   final Set<String> _snapshotTurnsPending = {};
+
+  /// v0.9.0 C3：按会话记录最近一次成功合并事件的客户端时刻（内存，不持久化）。
+  final Map<String, DateTime> _lastSnapshotMergedAt = {};
+
+  /// 指定会话最近一次成功合并事件的时刻；null 表示尚未合并过。
+  DateTime? lastMergedAtFor(String? sessionId) =>
+      sessionId == null ? null : _lastSnapshotMergedAt[sessionId];
 
   /// 只读暴露：认证代际（测试断言用）。
   @visibleForTesting
@@ -321,8 +327,12 @@ class SessionController extends ChangeNotifier {
   bool get isStreaming =>
       selectedSession?.status == MobileSessionStatus.streaming;
 
-  /// 回合在途（见 [_turnInFlight]）。composer 以它决定主按钮是否为"中断"。
-  bool get isTurnInFlight => _turnInFlight;
+  /// 回合在途：派生自当前选中会话的活动回合状态（v0.9.0 C1 状态拆分）。
+  /// send 受理（202）即成立，直到 canonical 终态/abort/kill/认证边界才结束；
+  /// UX 超时不清除它——超时后中断按钮仍可用（C1：空草稿仍允许用户中止），
+  /// composer 的发送入口按既有 queue/steer 交互收敛。
+  bool get isTurnInFlight =>
+      _selectedSessionId != null && _activeTurns.containsKey(_selectedSessionId);
   bool get isEmpty => _phase == SessionListPhase.ready && _sessions.isEmpty;
   int get selectedCursor => _cursorFor(_selectedSessionId);
 
@@ -1073,7 +1083,9 @@ class SessionController extends ChangeNotifier {
       if (blocked != null) _setError(blocked);
       return;
     }
-    _turnInFlight = false;
+    // kill 与 abort 同口径：用户发起的强制终止，本地活动回合事实随命令受理移除。
+    _activeTurns.remove(sessionId);
+    _turnTimedOut.remove(sessionId);
     await _submitCommand(
       sessionId: sessionId,
       operation: 'kill:$sessionId:${selectedSession?.lastSequence ?? 0}',
@@ -1107,6 +1119,31 @@ class SessionController extends ChangeNotifier {
       recovery = await _recoverSelectedSessionFromCursorTurn(sessionId);
     });
     return recovery;
+  }
+
+  /// v0.9.0 C3：超时横幅「查看结果」手动出口——对选中会话触发一次强制快照
+  /// 同步（只读），服从单航班与代际守卫。成功只在真实状态/事件到达时清横幅
+  /// （返回是否已不再超时）；失败保留横幅并经既有 errorMessage 呈现脱敏错误。
+  Future<bool> refreshTurnResult() async {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return false;
+    await _runSnapshotTurn(sessionId, () async {
+      try {
+        final snapshot = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: _cursorFor(sessionId),
+        );
+        if (_selectedSessionId != sessionId) return;
+        _mergeSnapshot(snapshot, appendTimeline: true);
+      } on RelayFailure catch (failure) {
+        // 脱敏错误浮出；横幅保留，等待下一拍/L1/SSE 的真实事实。
+        _errorMessage = failure.message;
+      } catch (_) {
+        _errorMessage = '会话内容暂时不可用，请稍后重试。';
+      }
+    });
+    _notifyListeners();
+    return !isTurnTimedOut(sessionId);
   }
 
   Future<SessionCursorRecovery?> _recoverSelectedSessionFromCursorTurn(
@@ -1198,7 +1235,7 @@ class SessionController extends ChangeNotifier {
     // v0.8.6 A②：上一回合未终态时的同文本重发会被 Relay 幂等去重（不产生
     // 新的 canonical 事件），第二次设置的乐观回显永远等不到清账，实机表现为
     // 同一条消息两条气泡。这里直接拦截：用户应等待终态或点击中断后再发送。
-    if (_turnInFlight) {
+    if (isTurnInFlight) {
       String? lastUserText;
       for (final event in _timeline) {
         if (event.kind == SessionTimelineKind.userMessage) {
@@ -1278,12 +1315,13 @@ class SessionController extends ChangeNotifier {
       deviceId: deviceId!,
     );
     if (accepted) {
-      // 用户主动中止即清除本地超时标记（与 daemon 看门狗撤防同口径）。
+      // 用户主动中止即清除本地超时标记（与 daemon 看门狗撤防同口径），
+      // 并移除活动回合状态（用户发起的终止动作，不属于伪造服务端事实）。
       _turnTimedOut.remove(sessionId);
+      _activeTurns.remove(sessionId);
       // Abort 的命令回执和 canonical session.aborted/stopped 投影可能分开
       // 抵达。先确认命令成功，再用有界增量轮询等 Relay 投影完成，避免刷新过早
       // 错过可见的“已中止”轨迹。
-      _turnInFlight = false;
       _pendingOutgoingBySession.remove(sessionId);
       _errorMessage = null;
       _notifyListeners();
@@ -2271,7 +2309,6 @@ class SessionController extends ChangeNotifier {
     }
     final selectionGeneration = ++_selectionGeneration;
     _errorMessage = null;
-    _turnInFlight = false;
     _historyErrorMessage = null;
     _historyLoading = false;
     _selectedSessionId = sessionId;
@@ -2515,6 +2552,8 @@ class SessionController extends ChangeNotifier {
           if (generationsStale()) return true;
           if (_selectedSessionId == sessionId) {
             _mergeSnapshot(latest, appendTimeline: true);
+            // v0.9.0 C1：每拍按锚点评估 UX deadline（2 分钟只切 UX 表达）。
+            _evaluateTurnDeadlines(sessionId);
             // v0.8.7 打字机流式的核心一环：在途批次合并后必须通知 UI，气泡
             // 文本才随 delta 逐步生长；否则时间线只在回合终态一次性出现。
             _notifyListeners();
@@ -2524,7 +2563,8 @@ class SessionController extends ChangeNotifier {
         }
       }
       if (kind == SessionCommandKind.send && completed) {
-        _turnInFlight = false;
+        // 终态已由 _mergeSnapshot 的 canonical 收口路径移除活动回合；
+        // 这里只负责刷新 controls。
         await _refreshControlsAfterTurn(sessionId);
       }
       if (kind == SessionCommandKind.send &&
@@ -2577,7 +2617,6 @@ class SessionController extends ChangeNotifier {
       // 新回合受理即清除上一轮的本地超时标记（重新计时）。
       _turnTimedOut.remove(sessionId);
     }
-    _turnInFlight = true;
     _notifyListeners();
   }
 
@@ -2626,6 +2665,8 @@ class SessionController extends ChangeNotifier {
       // v0.9.0 C2：代际失配即正常取消——新回合/steer 已接管该会话的同步。
       if (generationsStale()) return;
       _mergeSnapshot(latest, appendTimeline: true);
+      // v0.9.0 C1：每拍按锚点评估 UX deadline（2 分钟只切 UX 表达）。
+      _evaluateTurnDeadlines(sessionId);
       // v0.8.7：后台续轮同样通知 UI，保证非本端可见窗口的流式生长。
       _notifyListeners();
       completed = _snapshotCompletesTurn(latest);
@@ -2634,19 +2675,74 @@ class SessionController extends ChangeNotifier {
     // 当前回合的任何状态（包括超时标记与在途标记）。
     if (generationsStale()) return;
     if (completed) {
-      _turnInFlight = false;
       _turnTimedOut.remove(sessionId);
       await _refreshControlsAfterTurn(sessionId);
     } else {
-      // v0.8.6 A①：后台窗口耗尽仍无终态——显式收敛为"回合超时"，不再允许
-      // "处理中"永久驻留：复位在途标记（composer 恢复发送）、清账乐观回显
-      // （canonical user_message 已在时间线中或本次发送已失败）、置会话级
-      // 超时标记供状态条展示；迟到的 daemon 看门狗事实事件会按事件校正。
-      _turnInFlight = false;
-      _turnTimedOut.add(sessionId);
-      _pendingOutgoingBySession.remove(sessionId);
-      // ignore: avoid_print
-      _notifyListeners();
+      // v0.9.0 C1（seq48 事故根因修复）：有界后台窗口耗尽仍无终态时，不再
+      // "停止数据同步"、不伪造终态、不停止回合事实——按锚点评估 deadline
+      // （已到 2 分钟则切 UX 超时表达），并交接给 L1 10 秒降频续轮继续同步，
+      // 直到 canonical 终态或 60 分钟续轮期限。迟到的 daemon 看门狗事实事件
+      // 仍按事件校正清除超时。
+      _evaluateTurnDeadlines(sessionId);
+      if (generationsStale()) return;
+      unawaited(_runL1DegradedPolling(sessionId));
+    }
+  }
+
+  /// v0.9.0 C1/T7：按单调锚点评估回合 deadline。到达 2 分钟 UX deadline 只切换
+  /// UX 表达（超时标记 + 清账乐观回显 + 通知），活动回合事实与同步任务保持；
+  /// 等待时长唯一来源是锚点，禁止 poll attempts×interval 或服务端时间推导。
+  void _evaluateTurnDeadlines(String sessionId) {
+    final turn = _activeTurns[sessionId];
+    if (turn == null || turn.timedOut) return;
+    if (monotonicElapsed().inMilliseconds < turn.uxDeadlineMs) return;
+    turn.timedOut = true;
+    _turnTimedOut.add(sessionId);
+    // 超时清账乐观回显（canonical user_message 多半已入时间线；本次发送已失败
+    // 时不留永久回显）。空草稿仍允许用户中止，有草稿走既有 queue/steer 交互。
+    _pendingOutgoingBySession.remove(sessionId);
+    _notifyListeners();
+  }
+
+  /// v0.9.0 C1/T7：L1 降频续轮——选中会话 10 秒一拍（单会话 0.1 QPS），
+  /// 从已合并 cursor 增量拉快照直到 canonical 终态；到 60 分钟 continuation
+  /// deadline 只停止该任务并保留超时提示。切换会话/认证切换/新同步代际按
+  /// 正常取消退出；SSE（P4）与 L3（P3）仍可独立发现迟到事实。
+  @visibleForTesting
+  Duration l1PollInterval = const Duration(seconds: 10);
+
+  Future<void> _runL1DegradedPolling(String sessionId) async {
+    final authGenerationAtStart = _authGeneration;
+    final syncGenerationAtStart = _syncGenerations[sessionId] ?? 0;
+    bool stale() =>
+        _disposed ||
+        _authGeneration != authGenerationAtStart ||
+        _syncGenerations[sessionId] != syncGenerationAtStart ||
+        _selectedSessionId != sessionId;
+    while (true) {
+      if (stale()) return;
+      final turn = _activeTurns[sessionId];
+      if (turn == null) return;
+      // 到期只停止该任务并保留超时提示；不伪造终态、不清活动回合。
+      if (monotonicElapsed().inMilliseconds >= turn.continuationDeadlineMs) {
+        return;
+      }
+      await Future<void>.delayed(l1PollInterval);
+      if (stale()) return;
+      try {
+        final snapshot = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: _cursorFor(sessionId),
+        );
+        if (stale()) return;
+        _mergeSnapshot(snapshot, appendTimeline: true);
+        // 终态合并在 _mergeSnapshot 内推进同步代际，下一拍由 stale() 退出。
+        if (stale()) return;
+        _evaluateTurnDeadlines(sessionId);
+        _notifyListeners();
+      } catch (_) {
+        // 单次快照失败不终止续轮；下一拍继续（轮询托底语义）。
+      }
     }
   }
 
@@ -2736,6 +2832,9 @@ class SessionController extends ChangeNotifier {
   }
 
   void _mergeSnapshot(SessionSnapshot snapshot, {bool appendTimeline = false}) {
+    // v0.9.0 C3：记录客户端成功合并事件的时刻（墙钟），供超时横幅新鲜度
+    // 次级行展示；服务端时间只用于事件展示，不用于网络健康判断。
+    _lastSnapshotMergedAt[snapshot.session.id] = _clock();
     // 以 sequence 为唯一序：重复投递去重、乱序排序，replace 与 append 两条路径同规。
     final incoming =
         <int, SessionTimelineEvent>{
@@ -3030,7 +3129,6 @@ class SessionController extends ChangeNotifier {
     _syncGenerations.clear();
     _snapshotTurnsPending.clear();
     _effortsByModel = {};
-    _turnInFlight = false;
     _clearSelection();
     _sessions = const [];
     _phase = SessionListPhase.loading;
