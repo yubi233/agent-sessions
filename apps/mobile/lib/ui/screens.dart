@@ -210,7 +210,7 @@ class HomeScreen extends ConsumerWidget {
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
               border: Border.all(color: Theme.of(context).dividerColor),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppRadius.card),
             ),
             child: app.requiresRecovery
                 ? const ListTile(
@@ -467,7 +467,7 @@ class _PairingRequestTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -669,7 +669,7 @@ class _StatusScaffold extends StatelessWidget {
                         border: Border.all(
                           color: Theme.of(context).colorScheme.error,
                         ),
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(AppRadius.card),
                       ),
                       child: Row(
                         children: [
@@ -772,7 +772,7 @@ class _AuthMark extends StatelessWidget {
         height: 42,
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: const Icon(Icons.hub_outlined),
       ),

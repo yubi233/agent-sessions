@@ -2,6 +2,8 @@
 // 从 session_screens.dart 迁出；原 _QuestionRequestItem / _PlanReviewPanel。
 import 'package:flutter/material.dart';
 
+import '../../app_theme.dart';
+
 import '../../../domain/session_models.dart';
 import '../../../state/session_controller.dart';
 import 'session_approval_panel.dart';
@@ -84,7 +86,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Row(
           key: Key('question-local-cancelled-${question.requestId}'),
@@ -113,7 +115,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Row(
           key: Key('question-minimized-${question.requestId}'),
@@ -142,7 +144,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -611,7 +613,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Row(
           key: Key('plan-review-dismissed-${question.requestId}'),
@@ -639,7 +641,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -652,7 +654,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.primaryContainer,
               borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(8),
+                top: Radius.circular(AppRadius.card),
               ),
             ),
             child: Row(
@@ -692,9 +694,8 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
                   child: Text(
                     plan,
                     key: Key('plan-review-body-${question.requestId}'),
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
+                    style: AppTypography.mono.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                 ),

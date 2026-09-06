@@ -2,6 +2,8 @@
 // 从 session_screens.dart 迁出；原 _PermissionRequestItem / _SystemNotice。
 import 'package:flutter/material.dart';
 
+import '../../app_theme.dart';
+
 import '../../../domain/session_models.dart';
 import '../../../state/session_controller.dart';
 class SessionApprovalPanel extends StatelessWidget {
@@ -36,7 +38,7 @@ class SessionApprovalPanel extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.tertiaryContainer,
         border: Border.all(color: Theme.of(context).colorScheme.tertiary),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -46,7 +48,7 @@ class SessionApprovalPanel extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.tertiary,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(AppRadius.small),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -112,7 +114,7 @@ class SessionApprovalPanel extends StatelessWidget {
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.surface,
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(AppRadius.small),
                         border: Border.all(
                           color: Theme.of(context).dividerColor,
                         ),

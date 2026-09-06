@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../app_theme.dart';
 import 'package:flutter/services.dart';
 
 import '../../../domain/control_models.dart';
@@ -152,7 +154,7 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

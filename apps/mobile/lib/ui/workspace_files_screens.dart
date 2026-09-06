@@ -185,7 +185,7 @@ class _WorkspaceSearchField extends StatelessWidget {
                 icon: const Icon(Icons.close, size: 18),
               )
             : null,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.card)),
         isDense: true,
       ),
       onChanged: controller.search,
@@ -210,7 +210,7 @@ class _WorkspaceRejectionBanner extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
       border: Border.all(color: Theme.of(context).colorScheme.error),
     ),
     child: Row(
@@ -372,7 +372,7 @@ class _WorkspacePreviewPanel extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: context.appColors.border),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

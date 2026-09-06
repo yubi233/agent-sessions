@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app_theme.dart';
+
 import '../../../domain/session_models.dart';
 import '../../../domain/session_projection_models.dart';
 import '../../../state/session_message_feedback_controller.dart';
@@ -380,7 +382,7 @@ class _FileOpenStatus extends StatelessWidget {
     key: const Key('session-file-open-busy'),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -414,7 +416,9 @@ class _FileOpenErrorDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return ColoredBox(
-      color: Colors.black.withValues(alpha: 0.24),
+      color: Theme.of(context).colorScheme.scrim.withValues(
+        alpha: AppOpacity.scrim,
+      ),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
@@ -479,7 +483,7 @@ class _TurnTimeoutRow extends StatelessWidget {
         key: const Key('session-turn-timeout-row'),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
           color: theme.colorScheme.errorContainer,
         ),
         child: Column(
@@ -571,7 +575,7 @@ class _TurnStatusRow extends StatelessWidget {
         key: const Key('session-turn-status-row'),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
         ),
         child: Row(

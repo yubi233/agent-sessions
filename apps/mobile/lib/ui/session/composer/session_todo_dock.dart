@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app_theme.dart';
+
 import '../../../domain/control_models.dart';
 
 /// v0.5/P5-E4：TodoDock 是 `conversation.input.dock` 的只读 todo strip。
@@ -43,7 +45,7 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -51,7 +53,7 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
         children: [
           InkWell(
             key: const Key('session-todo-dock-toggle'),
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(AppRadius.card),
             onTap: () => setState(() => _collapsed = !_collapsed),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),

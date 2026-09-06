@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../../app_theme.dart';
 import 'package:flutter/services.dart';
 
 import '../../../domain/session_projection_models.dart';
@@ -140,8 +142,8 @@ class _ChatBubble extends StatelessWidget {
                       : scheme.outlineVariant,
                 ),
                 borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(12),
-                  topRight: const Radius.circular(12),
+                  topLeft: const Radius.circular(AppRadius.large),
+                  topRight: const Radius.circular(AppRadius.large),
                   bottomLeft: Radius.circular(user ? 12 : 4),
                   bottomRight: Radius.circular(user ? 4 : 12),
                 ),
@@ -273,9 +275,10 @@ class _PendingSteeringBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
     key: const Key('session-pending-steering-badge'),
-    decoration: BoxDecoration(
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: foreground.withValues(alpha: 0.36)),
+    decoration: ShapeDecoration(
+      shape: StadiumBorder(
+        side: BorderSide(color: foreground.withValues(alpha: 0.36)),
+      ),
     ),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -350,9 +353,9 @@ class _ReferenceChip extends StatelessWidget {
       );
     }
     return DecoratedBox(
-      decoration: BoxDecoration(
+      decoration: ShapeDecoration(
         color: foreground.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(999),
+        shape: const StadiumBorder(),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -608,7 +611,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
             offset: const Offset(0, 36),
             child: Material(
               elevation: 8,
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppRadius.card),
               child: SizedBox(
                 width: 260,
                 child: Padding(
@@ -756,7 +759,7 @@ class _ReasoningRow extends StatelessWidget {
       key: Key('session-reasoning-row-${node.sequence}'),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       // ExpansionTile 的 ListTile 需要最近的 Material 承载背景和水波纹，
       // 否则外层 DecoratedBox 会触发 Flutter 的不可见水波纹断言。
@@ -832,7 +835,7 @@ class _ToolStepRow extends StatelessWidget {
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLowest,
         border: Border.all(color: color.withValues(alpha: 0.5)),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       // 与推理折叠行保持同一 Material 边界，保证点击反馈不会被卡片背景遮住。
       child: Material(
@@ -997,7 +1000,7 @@ class _ToolDetailBlock extends StatelessWidget {
       constraints: const BoxConstraints(maxHeight: 180),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
         ),
         child: SingleChildScrollView(
@@ -1185,7 +1188,7 @@ class _CompactSystemRow extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                         decoration: BoxDecoration(
                           color: scheme.errorContainer,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(AppRadius.micro),
                         ),
                         child: Text(
                           node.httpStatus != 0

@@ -598,7 +598,7 @@ class _LimitedDiffState extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -654,7 +654,7 @@ class _GitHunkPanel extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surface,
       border: Border.all(color: context.appColors.border),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -730,9 +730,8 @@ class _UnifiedDiffLine extends StatelessWidget {
               key: Key('git-unified-line-${line.oldLine ?? line.newLine ?? 0}'),
               softWrap: true,
               // 差异正文是核心内容：显式 onSurface，避免继承 bodyMedium 的次级灰。
-              style: TextStyle(
+              style: (Theme.of(context).textTheme.labelSmall ?? const TextStyle()).copyWith(
                 fontFamily: 'monospace',
-                fontSize: 12,
                 height: 1.35,
                 color: Theme.of(context).colorScheme.onSurface,
               ),
@@ -792,9 +791,8 @@ class _SplitCell extends StatelessWidget {
               show ? line.text : '',
               softWrap: true,
               // 与统一视图同口径：显式 onSurface，12px 对齐统一视图行。
-              style: TextStyle(
+              style: (Theme.of(context).textTheme.labelSmall ?? const TextStyle()).copyWith(
                 fontFamily: 'monospace',
-                fontSize: 12,
                 height: 1.35,
                 color: Theme.of(context).colorScheme.onSurface,
               ),
@@ -864,7 +862,7 @@ class _GitDiffFailureState extends StatelessWidget {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border.all(color: context.appColors.border),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,

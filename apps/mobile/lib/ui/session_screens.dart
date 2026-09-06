@@ -753,7 +753,7 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                     selected: selected,
                     child: InkWell(
                       key: Key('dsh-workspace-select-${workspace.id}'),
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(AppRadius.micro),
                       onTap: onSelectWorkspace,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -857,7 +857,7 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
         dense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 8),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(AppRadius.micro),
           side: BorderSide(
             color: selected
                 ? Theme.of(context).colorScheme.primary
@@ -1562,7 +1562,7 @@ class _TerminalWorkspaceCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerLow,
         border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.large),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2871,7 +2871,7 @@ class _DelegationPanel extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3648,7 +3648,7 @@ class _SkillConfirmationCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: context.appColors.warning),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -4888,7 +4888,7 @@ class _CommandLauncherMenu extends StatelessWidget {
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         shape: RoundedRectangleBorder(
           side: BorderSide(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -5017,7 +5017,7 @@ class _ComposerControlStrip extends StatelessWidget {
             //（目录未同步时提示恢复路径：启动会话后自动获取）。
             helperText: sessions.permissionDirectoryHint ?? ' ',
             helperMaxLines: 2,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.card)),
             isDense: true,
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 10,
@@ -5086,7 +5086,7 @@ class _ComposerSuggestions extends StatelessWidget {
         decoration: BoxDecoration(
           color: theme.colorScheme.surfaceContainerHigh,
           border: Border.all(color: theme.dividerColor),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -5238,7 +5238,7 @@ class _AttachmentChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Row(
         children: [
@@ -5330,7 +5330,7 @@ class _AttachmentRejectedChip extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Row(
       children: [
@@ -5376,7 +5376,7 @@ class _ReadOnlyBanner extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
       border: Border.all(color: Theme.of(context).dividerColor),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: const Row(
       children: [
@@ -5569,7 +5569,7 @@ class _SessionRecoveryStrip extends StatelessWidget {
       decoration: BoxDecoration(
         color: presentation.color.withValues(alpha: 0.1),
         border: Border.all(color: presentation.color.withValues(alpha: 0.45)),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Row(
         children: [
@@ -5683,7 +5683,7 @@ class _InlineError extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Row(
       children: [

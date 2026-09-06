@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app_theme.dart';
+
 import '../../../domain/control_models.dart';
 import '../../../domain/session_projection_models.dart';
 
@@ -71,7 +73,7 @@ class _SessionContextMeterState extends State<SessionContextMeter> {
               LinearProgressIndicator(
                 value: ratio?.clamp(0.0, 1.0),
                 minHeight: 8,
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(AppRadius.micro),
               ),
           ],
         ),
@@ -106,13 +108,13 @@ class _SessionContextMeterState extends State<SessionContextMeter> {
         child: InkWell(
           key: const Key('session-context-meter-open'),
           focusNode: _triggerFocus,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
           onTap: _toggleBreakdown,
           child: Row(
             children: [
               Expanded(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(AppRadius.micro),
                   child: LinearProgressIndicator(
                     value: ratio.clamp(0.0, 1.0),
                     minHeight: 8,

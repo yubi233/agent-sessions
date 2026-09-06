@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'app_theme.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -105,13 +107,13 @@ class _CameraPairingScannerState extends State<CameraPairingScanner> {
   Widget build(BuildContext context) => AspectRatio(
     aspectRatio: 1,
     child: ClipRRect(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
       child: MobileScanner(
         key: const Key('pairing-camera-preview'),
         controller: _controller,
         onDetect: _onDetect,
-        placeholderBuilder: (context) => const ColoredBox(
-          color: Colors.black,
+        placeholderBuilder: (context) => ColoredBox(
+          color: Theme.of(context).colorScheme.scrim,
           child: Center(child: CircularProgressIndicator()),
         ),
         errorBuilder: _buildError,

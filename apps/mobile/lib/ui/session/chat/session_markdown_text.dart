@@ -10,6 +10,8 @@
 // - 流式安全：partial 文本（未闭合 `**`、未完成表格行）按普通段落降级，
 //   不会抛错；上层以 ~2Hz 快照合并频率重渲染，无需额外节流。
 import 'package:flutter/material.dart';
+
+import '../../app_theme.dart';
 import 'package:markdown/markdown.dart' as md;
 
 /// 单条会话消息的 Markdown 渲染入口。
@@ -379,12 +381,12 @@ class _MarkdownCodeBlock extends StatelessWidget {
     padding: const EdgeInsets.all(10),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: SingleChildScrollView(
       child: SelectableText(
         text,
-        style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+        style: AppTypography.mono.copyWith(color: Theme.of(context).colorScheme.onSurface),
       ),
     ),
   );

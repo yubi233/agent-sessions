@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../app_theme.dart';
 import 'package:flutter/services.dart';
 
 import '../../domain/delegation_models.dart';
@@ -388,7 +390,7 @@ class SessionSubagentBreadcrumb extends StatelessWidget {
         key: const Key('session-subagent-breadcrumb'),
         onTap: onOpenParent,
         // 小控件圆角对齐全局 6 档（原为孤例 4）。
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(AppRadius.small),
         child: const Padding(
           padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           child: Row(
@@ -419,7 +421,7 @@ class SessionSubagentReadOnlyComposer extends StatelessWidget {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

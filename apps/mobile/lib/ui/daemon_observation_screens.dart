@@ -183,7 +183,7 @@ class _CommandObservationTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border.all(color: context.appColors.border),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -251,7 +251,7 @@ class _CipherEventObservationTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border.all(color: context.appColors.border),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(AppRadius.card),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -359,7 +359,7 @@ class _ObservationInlineError extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Row(
       children: [
@@ -396,7 +396,7 @@ class _ObservationBoundaryNote extends StatelessWidget {
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: const Row(
       crossAxisAlignment: CrossAxisAlignment.start,

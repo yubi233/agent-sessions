@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../app_theme.dart';
+
 import '../../../state/session_composer_controller.dart';
 
 /// v0.5/P5：会话级权威 transient inbox（队列）投影组件。
@@ -114,7 +116,7 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         children: [

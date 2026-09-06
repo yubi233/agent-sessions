@@ -152,7 +152,7 @@ class _UsageTotalCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Row(
         children: [
@@ -249,7 +249,7 @@ class _UsageProviderChart extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -283,7 +283,7 @@ class _UsageProviderChart extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: context.appColors.info,
                             borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(4),
+                              top: Radius.circular(AppRadius.micro),
                             ),
                           ),
                         ),
@@ -317,7 +317,7 @@ class _UsageNoDataState extends StatelessWidget {
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: const Row(
       crossAxisAlignment: CrossAxisAlignment.start,

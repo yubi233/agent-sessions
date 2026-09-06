@@ -484,7 +484,7 @@ class _TrajectoryRow extends StatelessWidget {
     return InkWell(
       key: Key('trajectory-row-${record.key}'),
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
         decoration: selected
@@ -492,7 +492,7 @@ class _TrajectoryRow extends StatelessWidget {
                 color: theme.colorScheme.primaryContainer.withValues(
                   alpha: 0.35,
                 ),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(AppRadius.card),
               )
             : null,
         child: Row(
@@ -516,7 +516,7 @@ class _TrajectoryRow extends StatelessWidget {
                   height: 30,
                   decoration: BoxDecoration(
                     color: _kindColor(theme, record.kind),
-                    borderRadius: BorderRadius.circular(2),
+                    borderRadius: BorderRadius.circular(AppRadius.micro),
                   ),
                 ),
               ),
@@ -781,7 +781,7 @@ class _TrajectoryTimelineState extends State<_TrajectoryTimeline> {
                               width: 2,
                               decoration: BoxDecoration(
                                 color: _kindColor(theme, record.kind),
-                                borderRadius: BorderRadius.circular(1),
+                                borderRadius: BorderRadius.circular(AppRadius.micro),
                               ),
                             ),
                           ),
@@ -820,7 +820,7 @@ class _TrajectoryInspectorDialog extends StatelessWidget {
     final theme = Theme.of(context);
     return Dialog(
       backgroundColor: theme.colorScheme.surfaceContainerHigh,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.large)),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420),
         child: SingleChildScrollView(
@@ -883,7 +883,7 @@ class _TrajectoryInspectBanner extends StatelessWidget {
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.primaryContainer,
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Row(
       children: [

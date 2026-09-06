@@ -407,7 +407,7 @@ class _RecentInlineError extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Row(
       children: [

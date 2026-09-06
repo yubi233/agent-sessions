@@ -151,7 +151,7 @@ class _MessageCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -211,7 +211,7 @@ class _DeepLinkBoundaryNote extends StatelessWidget {
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,

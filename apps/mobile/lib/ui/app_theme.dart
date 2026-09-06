@@ -85,8 +85,11 @@ extension AppThemeContext on BuildContext {
   }
 }
 
-/// 样式专项 token：4pt 网格间距。业务代码用语义档位取值，不再散落魔法数。
+/// 样式专项 token（v0.9.0 B1 按规范 §7 扩充）：4pt 网格 + 2pt micro。
+/// 业务代码用语义档位取值，不再散落魔法数；档位变更必须先改规范再迁码。
 abstract final class AppSpacing {
+  /// 发丝间距：图标与文字微调、紧凑徽标内衬。
+  static const double micro = 2;
   static const double xs = 4;
   static const double sm = 8;
   static const double md = 12;
@@ -95,10 +98,13 @@ abstract final class AppSpacing {
   static const double xxl = 24;
 }
 
-/// 圆角三档：小控件（chip/ripple/tooltip）6、卡片 8、胶囊（composer 输入坞）22。
+/// 圆角档位（B1 扩充）：发丝 4、chip/ripple 6、卡片 8、大浮层 12、
+/// composer 输入坞胶囊 22；全圆形状用 StadiumBorder/CircleBorder。
 abstract final class AppRadius {
+  static const double micro = 4;
   static const double small = 6;
   static const double card = 8;
+  static const double large = 12;
   static const double pill = 22;
 }
 
@@ -108,6 +114,28 @@ abstract final class AppSizes {
   static const double avatarSmall = 34;
   static const double avatarMedium = 38;
   static const double avatarLarge = 42;
+
+  /// 图标四档（规范 §5，2pt 步进）：行内 16、默认 18、工具栏 20、空态/强调 24。
+  static const double iconSm = 16;
+  static const double iconMd = 18;
+  static const double iconLg = 20;
+  static const double iconXl = 24;
+}
+
+/// 等宽字档（规范 §4.1）：代码、diff、路径、终端输出共用，业务代码禁止
+/// 另写 fontSize: 13 monospace。唯一定义点在 token 定义文件。
+abstract final class AppTypography {
+  // 保持 inherit 默认（SelectableText 要求可继承样式带 textBaseline），
+  // 颜色由消费方 copyWith 主题色。
+  static const TextStyle mono = TextStyle(
+    fontSize: 13,
+    fontFamily: 'monospace',
+  );
+}
+
+/// 透明度修饰 token（规范 §7）：模态压暗强度；基色始终来自 colorScheme.scrim。
+abstract final class AppOpacity {
+  static const double scrim = 0.24;
 }
 
 /// 阴影 token：目前仅 composer 胶囊一处投影，先收口避免第二处硬编码扩散。
@@ -130,37 +158,40 @@ abstract final class AppTheme {
     required AppAccent accent,
   }) {
     final isDark = brightness == Brightness.dark;
-    final canvas = isDark ? const Color(0xff000000) : const Color(0xfff5f5f7);
-    final surface = isDark ? const Color(0xff1d1d1f) : const Color(0xffffffff);
+    // Dark uses the same layered neutrals as VS Code's workbench. Keeping the
+    // roles explicit is important here: ColorScheme.fromSeed otherwise adds a
+    // noticeable hue to container surfaces, which makes the UI read purple.
+    final canvas = isDark ? const Color(0xff252526) : const Color(0xfff5f5f7);
+    final surface = isDark ? const Color(0xff2d2d30) : const Color(0xffffffff);
     final surfaceRaised = isDark
-        ? const Color(0xff2c2c2e)
+        ? const Color(0xff37373d)
         : const Color(0xfffbfbfd);
-    final border = isDark ? const Color(0xff424245) : const Color(0xffd2d2d7);
+    final border = isDark ? const Color(0xff5a5a5a) : const Color(0xffd2d2d7);
     final primaryText = isDark
-        ? const Color(0xfff5f5f7)
+        ? const Color(0xffd4d4d4)
         : const Color(0xff1d1d1f);
     final secondaryText = isDark
-        ? const Color(0xffa1a1a6)
+        ? const Color(0xffa6a6a6)
         : const Color(0xff6e6e73);
     final primary = _accentColor(accent, isDark);
     final onPrimary =
         ThemeData.estimateBrightnessForColor(primary) == Brightness.dark
         ? Colors.white
         : const Color(0xff101010);
-    final error = isDark ? const Color(0xffffb4ab) : const Color(0xffba1a1a);
+    final error = isDark ? const Color(0xfff48771) : const Color(0xffba1a1a);
     final errorContainer = isDark
-        ? const Color(0xff5b1f25)
+        ? const Color(0xff4b2522)
         : const Color(0xffffdad6);
     final semantics = AppSemanticColors(
       surfaceRaised: surfaceRaised,
       border: border,
       textSecondary: secondaryText,
-      success: isDark ? const Color(0xff75d99b) : const Color(0xff16803c),
-      warning: isDark ? const Color(0xffffc05c) : const Color(0xffa85f00),
-      info: isDark ? const Color(0xff64b5ff) : const Color(0xff006fc9),
-      neutral: secondaryText,
-      diffAddition: isDark ? const Color(0xff193c2c) : const Color(0xffe2f5e8),
-      diffDeletion: isDark ? const Color(0xff49262a) : const Color(0xffffe9eb),
+      success: isDark ? const Color(0xff89d185) : const Color(0xff16803c),
+      warning: isDark ? const Color(0xffcca700) : const Color(0xffa85f00),
+      info: isDark ? const Color(0xff3794ff) : const Color(0xff006fc9),
+      neutral: isDark ? const Color(0xff858585) : secondaryText,
+      diffAddition: isDark ? const Color(0xff203b2a) : const Color(0xffe2f5e8),
+      diffDeletion: isDark ? const Color(0xff4b2522) : const Color(0xffffe9eb),
     );
     final colorScheme =
         ColorScheme.fromSeed(
@@ -170,23 +201,41 @@ abstract final class AppTheme {
           primary: primary,
           onPrimary: onPrimary,
           secondary: semantics.success,
-          onSecondary: isDark ? const Color(0xff062c18) : Colors.white,
+          onSecondary: isDark ? const Color(0xff252526) : Colors.white,
+          secondaryContainer: isDark ? const Color(0xff2d4a36) : null,
+          onSecondaryContainer: isDark ? const Color(0xffd6f5d8) : null,
           tertiary: semantics.warning,
-          onTertiary: const Color(0xff1d1d1f),
+          onTertiary: isDark
+              ? const Color(0xff252526)
+              : const Color(0xff1d1d1f),
+          tertiaryContainer: isDark ? const Color(0xff4b3d00) : null,
+          onTertiaryContainer: isDark ? const Color(0xfffff3b0) : null,
           surface: surface,
           onSurface: primaryText,
           surfaceContainerLowest: canvas,
           surfaceContainerLow: surface,
           surfaceContainer: surface,
           surfaceContainerHigh: surfaceRaised,
-          surfaceContainerHighest: surfaceRaised,
+          surfaceContainerHighest: isDark
+              ? const Color(0xff414147)
+              : surfaceRaised,
+          surfaceDim: isDark ? const Color(0xff202020) : null,
+          surfaceBright: isDark ? const Color(0xff46464d) : null,
+          onSurfaceVariant: secondaryText,
           outline: border,
+          outlineVariant: isDark ? const Color(0xff3c3c3c) : null,
           error: error,
-          onError: isDark ? const Color(0xff690005) : Colors.white,
+          onError: isDark ? const Color(0xff252526) : Colors.white,
           errorContainer: errorContainer,
           onErrorContainer: isDark
-              ? const Color(0xffffdad6)
+              ? const Color(0xffffd8d0)
               : const Color(0xff410002),
+          primaryContainer: isDark ? _primaryContainer(accent) : null,
+          onPrimaryContainer: isDark ? _onPrimaryContainer(accent) : null,
+          inverseSurface: isDark ? const Color(0xffcccccc) : null,
+          onInverseSurface: isDark ? const Color(0xff252526) : null,
+          inversePrimary: isDark ? primary : null,
+          surfaceTint: isDark ? Colors.transparent : null,
         );
     const shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.all(Radius.circular(8)),
@@ -395,11 +444,23 @@ abstract final class AppTheme {
 
   static Color _accentColor(AppAccent accent, bool isDark) => switch (accent) {
     AppAccent.ocean =>
-      isDark ? const Color(0xff0a84ff) : const Color(0xff0077ed),
+      isDark ? const Color(0xff007acc) : const Color(0xff0077ed),
     AppAccent.mint =>
-      isDark ? const Color(0xff34c759) : const Color(0xff16803c),
+      isDark ? const Color(0xff89d185) : const Color(0xff16803c),
     AppAccent.berry =>
-      isDark ? const Color(0xffff6482) : const Color(0xffc72e50),
+      isDark ? const Color(0xfff14c4c) : const Color(0xffc72e50),
+  };
+
+  static Color _primaryContainer(AppAccent accent) => switch (accent) {
+    AppAccent.ocean => const Color(0xff094771),
+    AppAccent.mint => const Color(0xff294b2b),
+    AppAccent.berry => const Color(0xff542626),
+  };
+
+  static Color _onPrimaryContainer(AppAccent accent) => switch (accent) {
+    AppAccent.ocean => const Color(0xffd6ecff),
+    AppAccent.mint => const Color(0xffd6f5d8),
+    AppAccent.berry => const Color(0xffffd9d9),
   };
 }
 

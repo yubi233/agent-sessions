@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../app_theme.dart';
 import 'package:flutter/services.dart';
 
 import '../../domain/session_models.dart';
@@ -184,7 +186,7 @@ class _SessionWorkspacePickerState extends State<SessionWorkspacePicker> {
               child: InkWell(
                 key: const Key('session-workspace-picker'),
                 onTap: _busy ? null : controller.open,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(AppRadius.small),
                 child: widget.asComposerInput
                     ? TextField(
                         key: const Key('session-composer-input'),

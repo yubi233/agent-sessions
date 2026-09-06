@@ -497,7 +497,7 @@ class _InfoCard extends StatelessWidget {
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surface,
       border: Border.all(color: context.appColors.border),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -550,9 +550,9 @@ class _TerminalInfoRow extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(
+        SizedBox(
           width: 80,
-          child: Text('终端', style: TextStyle(fontSize: 12)),
+          child: Text('终端', style: Theme.of(context).textTheme.labelSmall),
         ),
         Expanded(
           child: Text(
@@ -611,7 +611,7 @@ class _BoundaryNote extends StatelessWidget {
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
