@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -39,6 +40,10 @@ for window in windowList {
     "id": identifier,
     "pid": processID,
     "width": Int(bounds.width.rounded()),
+    // v0.9.0 B7：窗口原点 + 主屏缩放系数（全屏截图后按此裁剪窗口区域）。
+    "x": Int(bounds.origin.x.rounded()),
+    "y": Int(bounds.origin.y.rounded()),
+    "scale": Int((NSScreen.main?.backingScaleFactor ?? 1).rounded()),
   ])
 }
 

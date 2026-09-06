@@ -425,10 +425,10 @@ tasks:
       - git diff --check
 
   test:v090:flutter:
-    desc: v0.9.0 可见 Flutter gate（V090-14：真实 macOS Flutter 窗口 headless=false；亮/暗主题 × 360x800/430x932 移动视口 + 1280x800 桌面视口 + 200% 文本；结构化报告与截图必需，MP4 可选；本地 fixture 口径，不做 Android 实机；需先关闭用户正在使用的 Agent Sessions 窗口；视口矩阵参数随 P5 B7 落地后经 CLI_ARGS 固化）
+    desc: v0.9.0 可见 Flutter gate（V090-14：真实 macOS Flutter 窗口 headless=false；亮/暗主题 × 360x800/430x932 移动视口 + 1280x800 桌面视口 + 200% 文本；结构化报告与截图必需，MP4 可选；本地 fixture 口径，不做 Android 实机；需先关闭用户正在使用的 Agent Sessions 窗口）
     cmds:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
-      - node e2e-verify/mobile/run-macos.mjs {{.CLI_ARGS}}
+      - node e2e-verify/mobile/run-macos-v090.mjs
 
   test:v085:real:
     desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度。默认 grok-4.6 @ api.aabsv.sbs；可切 gpt-5.6-terra @ api.paktf.sbs：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra）

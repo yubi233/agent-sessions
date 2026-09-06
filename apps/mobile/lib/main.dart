@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -37,6 +38,29 @@ const _compileTimeLocalDevTargetSessionId = String.fromEnvironment(
   'LOCAL_DEV_TARGET_SESSION_ID',
 );
 
+/// v0.9.0 B7（V090-14）：headed 可见验收注入。
+/// 仅在 `flutter run --dart-define` 显式提供时生效（可见 gate 专用，
+/// 生产 Android/Web 不设置这些值，主题与文本缩放完全由用户偏好驱动）。
+const _v090VisualTheme = String.fromEnvironment('V090_VISUAL_THEME');
+const _v090VisualTextScale = String.fromEnvironment('V090_VISUAL_TEXT_SCALE');
+
+/// B7 注入的文本缩放；null 表示未注入（不覆盖系统/MediaQuery 行为）。
+double? get v090VisualTextScaleOverride {
+  if (_v090VisualTextScale.isEmpty) return null;
+  return double.tryParse(_v090VisualTextScale);
+}
+
+/// B7 注入的主题模式覆盖：'light' / 'dark'；其余值不覆盖。
+ThemeMode? get v090VisualThemeModeOverride => switch (_v090VisualTheme) {
+  'light' => ThemeMode.light,
+  'dark' => ThemeMode.dark,
+  _ => null,
+};
+
+/// B7 注入的窗口视口（逻辑像素）；仅在 macOS 可见验收运行时非空。
+const _v090WindowWidth = String.fromEnvironment('V090_WINDOW_W');
+const _v090WindowHeight = String.fromEnvironment('V090_WINDOW_H');
+
 /// 编译期定义仍是 CI/Android 的唯一 fixture 开关；macOS debug 视觉 runner 可在已构建 app 上安全切换固定场景。
 bool get _useLocalFixtureMode =>
     _compileTimeLocalFixtureMode || (kDebugMode && localFixtureModeFromRuntime);
@@ -58,8 +82,26 @@ String get _localDevTargetSessionId =>
 /// Android 目标手机画布，macOS 本地验收也使用同一逻辑尺寸，避免桌面屏幕高度改变移动布局。
 const macBookPhoneLogicalSize = Size(480, 960);
 
+/// v0.9.0 B7：macOS 可见验收视口注入。flutter run 不透传进程 env 到应用，
+/// Swift 无法读 env；改由 Dart 读编译期 dart-define 后经 MethodChannel 调
+/// MainFlutterWindow 的 setContentSize。仅 dart-define 提供时生效。
+void _scheduleV090WindowResize() {
+  final width = int.tryParse(_v090WindowWidth);
+  final height = int.tryParse(_v090WindowHeight);
+  if (width == null || height == null) return;
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      const channel = MethodChannel('v090/visual_gate');
+      unawaited(
+        channel.invokeMethod<void>('resize', {'w': width, 'h': height}),
+      );
+    });
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _scheduleV090WindowResize();
   final localVisualFixture = _useLocalFixtureMode
       ? await LocalVisualFixture.create(_localVisualScenarioValue)
       : null;
@@ -194,16 +236,15 @@ class AgentSessionsApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(appearance.accent),
       darkTheme: AppTheme.dark(appearance.accent),
-      themeMode: appearance.materialThemeMode,
+      themeMode:
+          v090VisualThemeModeOverride ?? appearance.materialThemeMode,
       builder: (context, child) {
         if (child == null) return const SizedBox.shrink();
         // 生命周期观察必须在 Android、macOS 和 widget harness 都存在；MacBook 画布仅影响可见尺寸。
-        final runtimeBoundChild = RuntimeRecoveryBinding(child: child);
-        if (!useMacBookPhoneCanvas ||
-            kIsWeb ||
-            defaultTargetPlatform != TargetPlatform.macOS) {
-          return runtimeBoundChild;
-        }
+        Widget runtimeBoundChild = RuntimeRecoveryBinding(child: child);
+        // v0.9.0 B7：视口注入激活时跳过手机画布——窗口已被 resize 到代表性
+        // 视口（360x800/430x932/1280x800），内容按真实视口布局。
+        final viewportOverrideActive = _v090WindowWidth.isNotEmpty;
         final coordinated = _LocalVisualScenarioCoordinator(
           scenario: localVisualScenario,
           pairingRequestId: localVisualPairingRequestId,
@@ -212,8 +253,9 @@ class AgentSessionsApp extends ConsumerWidget {
           localVisualRecovery: localVisualRecovery,
           child: runtimeBoundChild,
         );
-        // CoreGraphics 失败时，debug fixture 可从已经显示的 Flutter render tree 取帧；
-        // 此 hook 不进入 release/Android/Web，也不会截取宿主桌面或访问真实会话内容。
+        // CoreGraphics 失败（显示器休眠/锁屏）时，debug fixture 可从已经显示的
+        // Flutter render tree 取帧；此 hook 不进入 release/Android/Web，也不会
+        // 截取宿主桌面或访问真实会话内容。
         final captured =
             localVisualFrameDirectory.isNotEmpty &&
                 localVisualFrameCount > 0 &&
@@ -225,7 +267,26 @@ class AgentSessionsApp extends ConsumerWidget {
                 child: coordinated,
               )
             : coordinated;
-        return MacBookPhoneCanvas(child: captured);
+        // v0.9.0 B7：200% 文本缩放注入（仅 dart-define 提供时生效），最外层包装。
+        final textScaleOverride = v090VisualTextScaleOverride;
+        Widget visualChild = captured;
+        if (textScaleOverride != null) {
+          visualChild = MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScaleOverride)),
+            child: visualChild,
+          );
+        }
+        if (viewportOverrideActive) {
+          return visualChild;
+        }
+        if (!useMacBookPhoneCanvas ||
+            kIsWeb ||
+            defaultTargetPlatform != TargetPlatform.macOS) {
+          return visualChild;
+        }
+        return MacBookPhoneCanvas(child: visualChild);
       },
     );
   }
