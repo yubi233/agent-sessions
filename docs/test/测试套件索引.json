@@ -1132,6 +1132,39 @@
       "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "v0.8.9 拥有 Daemon 与 Relay DB 生命周期可靠性专项的全部新增回归：Relay DB generation 迁移契约（同库稳定/重建必变/备份恢复可解释，V089-01）、hello/heartbeat additive generation 与 legacy 兼容策略（V089-02）、generation 变化的 Daemon 本地 relay-scoped state 原子隔离（V089-03/04）、stale 404 收口与 RELAY_GENERATION_RESET 本地终态（V089-05）、retry 分类分离（V089-06）、restart 生命周期锁与 restart-flutter 防护（V089-07/08）、SSE reader 解耦与控制优先队列/取消/心跳活性（V089-09..12）、event/usage outbox 世代隔离与重试分类（V089-13/14）、诊断脱敏（V089-15）、端到端恢复与聚合回归（V089-16/17）。V089-18 为 headed/fixture 可见诊断（辅助证据，headless=false），不替代根因测试。本轮不调用真实模型、不做 Android 实机（allow_real_upstream=false）。"
+    },
+    {
+      "plan_id": "V090",
+      "suite_path": "docs/test/28-v090-mobile-event-stream-and-style.json",
+      "owner": "Mobile/Relay",
+      "id_prefix": [
+        "V090-"
+      ],
+      "owned_ids": [
+        "V090-01",
+        "V090-02",
+        "V090-03",
+        "V090-04",
+        "V090-05",
+        "V090-06",
+        "V090-07",
+        "V090-08",
+        "V090-09",
+        "V090-10",
+        "V090-11",
+        "V090-12",
+        "V090-13",
+        "V090-14"
+      ],
+      "consumed_ids": [],
+      "dependencies": [
+        "V089",
+        "V086",
+        "V085"
+      ],
+      "status": "in_progress",
+      "allow_real_upstream": false,
+      "uniqueness_rule": "拥有 V090-01..14：A 线事件流可靠性（超时解耦/三重代际/quiet reconcile/会话级 SSE/full gate）与 B 线样式一致性（token/守卫/可见验收）。账号级 /v1/events 既有 ID 归属原 suite，本 suite 不得重定义。"
     }
   ]
 }

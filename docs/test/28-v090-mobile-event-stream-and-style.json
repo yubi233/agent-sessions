@@ -1,0 +1,334 @@
+{
+  "suite": "V090",
+  "plan_id": "V090",
+  "description": "v0.9.0 移动端事件流可靠性（A 线 L1-L4）与样式一致性（B 线 B1-B7）收口。A 线：超时与同步解耦、三重代际隔离、quiet reconcile、会话级 SSE；B 线：token 执法、存量迁移与 headed 可见验收。",
+  "environment": {
+    "local": "隔离 SQLite（Relay 独立库）、Go httptest 进程内 SSE、FixtureRelayRepository 与合成脚本化假 Relay；不启动真实 Provider 或真实模型",
+    "flutter": "apps/mobile 本地 flutter test（单 worker）+ macOS 可见窗口 harness（headless=false）",
+    "web": "@agent-sessions/web 本地 vitest/node 测试（不改账号级 /v1/events 消费语义）",
+    "evidence": "e2e-verify/reports/<timestamp>/v0.9.0/（截图、结构化报告；不含正文与密钥）"
+  },
+  "cases": [
+    {
+      "id": "V090-01",
+      "title": "L1 超时与同步解耦：2/60 分钟单调 deadline 只改 UX，10 秒续轮+迟到终态自动翻正",
+      "status": "planned",
+      "phase": "P2",
+      "category": "状态机/超时语义",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "send 收到 Relay 202 即时受理；controller 以单调时钟记录 acceptedAt/uxDeadline/continuationDeadline；fake clock 可注入并锁定边界。",
+      "steps": [
+        "脚本化假 Relay：202 受理后保持 streaming，不再返回任何事件",
+        "fake clock 前推 2 分钟：断言置 turnTimedOut、横幅为超时表达，且活动回合事实未被清除",
+        "继续前推至 60 分钟：断言 10 秒降频续轮停止且仅停止该任务，超时提示保留",
+        "续轮窗口内假 Relay 返回迟到终态快照（fixture seq 460）：断言超时清除、完整答案合并、L1 停止",
+        "断言锚点不因 awaitTurnCompletion 路径或轮询间隔漂移；后台/前台恢复 elapsed 不重置"
+      ],
+      "expected": "2 分钟只切换 UX 表达；10 秒续轮在 60 分钟 deadline 内持续提供同步；迟到终态零干预自动翻正并停止 L1；任何路径不伪造 idle/completed。",
+      "cleanup": [
+        "dispose controller；假 Relay 计数清零"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-02",
+      "title": "三重代际与提交意图：迟到回包/steer/切换/认证切换不能污染当前回合",
+      "status": "planned",
+      "phase": "P1",
+      "category": "并发/生命周期",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "authGeneration/selectionGeneration/syncGeneration 三重代际已实现；send 与 steer 以 TurnSubmissionIntent 显式传入 controller；completer 可控的假 Relay 能任意延迟回包。",
+      "steps": [
+        "旧回合快照响应被 completer 扣住；发起新回合（newTurn）后放行旧回包：断言旧回包不写入时间线/状态/controls",
+        "steer 提交：断言不创建新业务回合、不清超时、不重置 60 分钟期限，但推进 syncGeneration 使提交前旧快照作废",
+        "切换会话与离开会话页面：断言 selectionGeneration 推进，旧选择的 UI 状态与 L1 不再写入",
+        "认证失效与重新登录：断言 authGeneration 推进，旧代际 Timer/回包全部丢弃",
+        "相同幂等命令重试复用已有受理锚点，不重复续期"
+      ],
+      "expected": "任何迟到响应、会话切换、认证切换都不能改写当前回合状态；代际不匹配按正常取消处理，不显示错误。",
+      "cleanup": [
+        "dispose controller"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-03",
+      "title": "seq48 事故 fixture 零干预回放：停滞→恢复事件→seq460 终态自动翻正",
+      "status": "planned",
+      "phase": "P2",
+      "category": "事故回放",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "apps/mobile/test/fixtures/v090/ 脱敏 fixture 已固化（seq 1-48 停滞窗口、seq 49-62 恢复窗口、seq 460 终态）；无真实正文/路径/凭据。",
+      "steps": [
+        "controller 合并 stallSnapshot（last_seq=48，streaming），耗尽轮询窗口进入超时",
+        "假 Relay 按 recoverySnapshot 响应 L1 续轮（seq 49-62）",
+        "fake clock 前推后按 finalSnapshot 响应（seq 460，idle）",
+        "断言：无需用户操作，超时清除、完整答案与恢复增量全部合并、无重复 UI 节点"
+      ],
+      "expected": "事故时间线在 seq 48 停滞后无需人工刷新即恢复到终态，与事故中'人工刷新才出现答案'的缺陷形成根因回归。",
+      "cleanup": [
+        "dispose controller"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-04",
+      "title": "超时横幅'查看结果'与事件新鲜度：成功/失败、Key/Semantics、200% 文本",
+      "status": "planned",
+      "phase": "P2",
+      "category": "widget/可访问性",
+      "priority": "P1",
+      "test_layer": "widget",
+      "precondition": "横幅组件已提供'查看结果'动作与新鲜度次级行；新鲜度取客户端成功合并事件的单调/墙钟组合。",
+      "steps": [
+        "超时态渲染横幅：断言'等待结果已超时，仍在同步'文案与'查看结果'按钮存在且带 Semantics",
+        "点按'查看结果'且快照成功：真实终态到达才清横幅；断言强制快照请求发出且服从单航班",
+        "点按'查看结果'但快照失败：断言横幅保留并显示脱敏错误",
+        "200% 文本缩放渲染：断言无溢出/遮挡（widget 测试 textScale 2.0）"
+      ],
+      "expected": "查看结果只在真实状态/事件到达时清除横幅；失败路径保留横幅与脱敏错误；语义与缩放均不回归。",
+      "cleanup": [
+        "dispose controller"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-05",
+      "title": "生命周期恢复：桌面失焦、后台/前台、离线/在线、重启观察锚点、注销/换账号",
+      "status": "planned",
+      "phase": "P1",
+      "category": "recovery/生命周期",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "lifecycle_recovery_controller 接入统一 scheduler；单调锚点不跨进程持久化；进程重启后以首次成功观察时刻重建运行期预算。",
+      "steps": [
+        "桌面失焦/最小化：断言延续 V085-25 口径不误判移动端后台",
+        "后台/离线：断言停止新拍与新请求，恢复前台后 cursor recovery + 单个去重首拍（与 quiet reconcile 共享请求）",
+        "进程重启后重新初始化：断言先合并 canonical snapshot，再以 observedAt 重建 2/60 分钟预算",
+        "注销/账号切换：断言 resetForAuthBoundary 后无迟到回包写入，Timer/SSE 全部取消",
+        "后台期间 elapsed 继续累计不重置；前台恢复只有一个去重后的首拍"
+      ],
+      "expected": "生命周期边界上无新请求、无迟到写入；恢复语义不回归 v0.8.6/v0.8.9 既有口径。",
+      "cleanup": [
+        "dispose controller"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-06",
+      "title": "L3 差异检测与完成角标：差异才拉快照；角标只在确认终态后出现并在打开后清除",
+      "status": "planned",
+      "phase": "P3",
+      "category": "对账/widget",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "quiet reconcile 与完成角标集合（内存、不持久化）已实现；列表项提供稳定 Key 与 Semantics。",
+      "steps": [
+        "本地 streaming 会话 vs listSessions 状态翻转：仅 status 翻转或 last_seq 前进才入快照队列",
+        "快照确认 canonical turn.completed 的 idle 投影：断言置位'有新完成结果'角标并带 Semantics label",
+        "turn.completed 的 stopped 投影/仅序号前进/拉取失败：断言不显示完成",
+        "打开该会话成功合并快照：断言角标清除；会话移出列表或认证代际结束同样清除",
+        "负向：快照失败不置位；重进页面角标状态与内存集合一致"
+      ],
+      "expected": "完成角标只在快照确认真实终态后出现、打开后清除；失败与非完成终态不伪装完成。",
+      "cleanup": [
+        "dispose controller"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-07",
+      "title": "L3 调度预算：quiet reconcile 不闪 loading；25 秒节流、每拍 4 个/并发 2、single-flight、后台零请求",
+      "status": "planned",
+      "phase": "P3",
+      "category": "调度/流量预算",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "手动刷新与 quiet reconcile 共享 loader 与 single-flight；定时条件（认证有效、前台、网络在线、存在已确认活动回合会话）可注入。",
+      "steps": [
+        "周期 reconcile 运行：断言 SessionListPhase 不进入 loading/error，已有列表不被覆盖",
+        "list 请求计数：25 秒窗口内至多 1 次；与手动刷新共享 single-flight 不叠加",
+        "差异会话超过 4 个：断言每拍最多 4 个快照、并发最多 2、状态翻转优先、剩余进入后续拍",
+        "正在被 L1/SSE 拉取的会话：断言由单航班去重不重复请求",
+        "切后台：断言零新请求；恢复前台：cursor recovery + 单首拍不叠加"
+      ],
+      "expected": "L3 后台流量不超过 0.04 list QPS + 0.16 snapshot QPS；页面不闪烁；后台零请求。",
+      "cleanup": [
+        "dispose controller"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-08",
+      "title": "Relay 会话级 SSE 契约：授权错误码、session cursor、flush/header、Hub 丢唤醒补偿、心跳撤销、kill switch",
+      "status": "planned",
+      "phase": "P4",
+      "category": "Relay 集成契约",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "GET /v1/sessions/{id}/events 已实现（additive）；AGENT_SESSIONS_SESSION_SSE_ENABLED kill switch 可注入；既有 TestP4AccountSSE* 三项回归保持。",
+      "steps": [
+        "本账号会话建流：断言 200、text/event-stream、Cache-Control: no-cache、X-Accel-Buffering: no、初始连接注释 flush",
+        "事件上行：断言帧 id 为 session-local event_seq、event: invalidated、data: {}、严格升序去重",
+        "Last-Event-ID 优先于 after_seq；二者均为 session cursor（非账号 cursor）",
+        "跨账号 403/SCOPE_DENIED、会话不存在 404/INVALID_REQUEST、设备撤销 403/DEVICE_REVOKED",
+        "Hub 丢唤醒：下一 heartbeat tick 从 SQLite 补缺口后自愈",
+        "设备撤销：最多一个心跳周期内关闭连接且释放订阅与 ticker",
+        "kill switch=0：断言 501/CAPABILITY_UNSUPPORTED",
+        "既有 TestP4AccountSSE* 三项账号级回归全部通过（/v1/events 语义不变）"
+      ],
+      "expected": "会话 SSE 契约逐项满足 C5；账号级 /v1/events 的 cursor、frame 与 Web 消费者零变化。",
+      "cleanup": [
+        "关闭 httptest server 与临时 SQLite"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-09",
+      "title": "App 传输状态机：parser、超时隔离、watchdog、typed 401/403/404、cursor commit、poll fallback",
+      "status": "planned",
+      "phase": "P4",
+      "category": "App transport",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "SessionEventTransport 抽象与专用 streaming client 已实现；快照与建流顺序（先合并快照再建 SSE）可验证；SESSION_EVENT_TRANSPORT=auto|poll_only 可注入。",
+      "steps": [
+        "建流：断言先成功合并一次快照，再以 session cursor 建 SSE；握手 10 秒、40 秒无字节 watchdog、REST 12 秒 receive timeout 不作用于流",
+        "收到 frame：仅置 pending wake 驱动增量快照；快照失败时 SSE id 不推进 cursor",
+        "临时错误（EOF/429/5xx/网络）：断言 1-30 秒带 jitter 指数退避且轮询托底，不永久降级",
+        "401：single-flight refresh 一次成功重连；403 DEVICE_REVOKED 进 authInvalid；SCOPE_DENIED 进 resourceInvalid 不注销",
+        "404 探测：snapshot 200 判定旧 Relay 进 pollFallback；snapshot 404/403 进 resourceInvalid；501/CAPABILITY_UNSUPPORTED 直接固定回落",
+        "重复协议错误：当前认证代际内固定回落轮询；kill switch/poll_only 下 L1/L3 完整工作",
+        "离开页面/后台/offline/dispose：断言 stream、watchdog、backoff delay、L1、pending wake 全部取消"
+      ],
+      "expected": "SSE 只是失效通知加速路径，快照仍是唯一事实源；任何错误分类都不能导致跳事件、误注销或僵死连接。",
+      "cleanup": [
+        "dispose controller 与 fake server"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-10",
+      "title": "唯一本地 full gate：task test:v090:local 一次通过",
+      "status": "planned",
+      "phase": "P6",
+      "category": "full gate",
+      "priority": "P0",
+      "test_layer": "gate",
+      "precondition": "Taskfile 已登记 test:v090:local 唯一聚合入口；任何子项失败则 gate failed。",
+      "steps": [
+        "运行 task test:v090:local（docs:verify、check、Go V090+TestP4AccountSSE、TestV089、go test ./...、test:restart、flutter analyze+test、web test、git diff --check）",
+        "记录命令、退出码与耗时到 e2e-verify/reports"
+      ],
+      "expected": "一次通过，exit=0；不以其它绿色命令替代聚合入口。",
+      "cleanup": [
+        "清理本轮启动的进程与临时文件"
+      ],
+      "evidence": [
+        "planned：待 V090 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-11",
+      "title": "B1 token 扩充与档位测试",
+      "status": "planned",
+      "phase": "P5",
+      "category": "token/主题",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "app_theme.dart 按规范 §7 扩充：AppSpacing.micro、AppRadius.micro/large、AppTypography.mono、AppSizes.icon*、AppOpacity.scrim。",
+      "steps": [
+        "app_theme_test.dart 断言各 token 档位值",
+        "断言亮/暗两套 colorScheme.scrim 均存在且语义一致"
+      ],
+      "expected": "token 档位与亮暗断言全绿；不覆盖工作区已有深色盘改动。",
+      "cleanup": [],
+      "evidence": [
+        "planned：待 B1 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-12",
+      "title": "B2/B3 Wave 1 静态守卫：AST 禁裸色、字号、圆角，守卫自身正负 fixture",
+      "status": "planned",
+      "phase": "P5",
+      "category": "静态守卫",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "analyzer 已登记为显式 dev dependency；apps/mobile/test/style_guard_test.dart 基于 AST 扫描 lib/**（protocol/ 豁免）。",
+      "steps": [
+        "守卫扫描全量 lib：断言无 Color(0x（除 app_theme）、无裸 Colors.*（transparent 除外）、无 fontSize:（除定义点）、无数字参数 BorderRadius.circular",
+        "正负 fixture：违规样例被拦截、token 样例放行；注释/字符串/生成代码不误报"
+      ],
+      "expected": "Wave 1 守卫全绿且自证有效性；存量 P0 清理（79 圆角/5 字号/2 裸色）同步完成。",
+      "cleanup": [],
+      "evidence": [
+        "planned：待 B2/B3 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-13",
+      "title": "B4/B5 Wave 2 静态守卫：间距与图标 token 强制，逐条理由 allowlist",
+      "status": "planned",
+      "phase": "P5",
+      "category": "静态守卫",
+      "priority": "P1",
+      "test_layer": "unit",
+      "precondition": "间距与图标存量迁移完成；守卫升级强制 AppSpacing/AppSizes 引用；allowlist 每条附理由。",
+      "steps": [
+        "守卫扫描：SizedBox/EdgeInsets 通用间距必须引用 AppSpacing.*；Icon/IconButton 尺寸必须引用 AppSizes.*",
+        "正负 fixture 覆盖：数字字面量被拦截、token/EdgeInsets.zero/SizedBox.shrink 放行",
+        "allowlist 逐条核对理由注释；protocol/ 生成代码豁免"
+      ],
+      "expected": "Wave 2 守卫全绿；6/10/14 等半档存量清零；固定控件尺寸走具名常量。",
+      "cleanup": [],
+      "evidence": [
+        "planned：待 B4/B5 实现后回填运行结果"
+      ]
+    },
+    {
+      "id": "V090-14",
+      "title": "B7 headed 可见验收：亮暗主题、三视口、200% 文本，报告与截图必需",
+      "status": "planned",
+      "phase": "P6",
+      "category": "可见验收",
+      "priority": "P0",
+      "test_layer": "e2e",
+      "precondition": "task test:v090:flutter 已登记；macOS 可见 Flutter 窗口 harness 可用（headless=false）；fixture 覆盖本次代表状态。",
+      "steps": [
+        "task test:v090:flutter 启动真实 macOS Flutter 窗口",
+        "覆盖亮/暗主题 × 360x800、430x932 移动视口与 1280x800 桌面视口",
+        "至少一个受影响密集页面运行 200% 文本缩放",
+        "生成结构化报告与代表帧截图到 e2e-verify/reports；逐帧核查无溢出、遮挡、语义丢失或非预期交互变化"
+      ],
+      "expected": "可见验收全绿；报告与截图留档；MP4 可选且不替代断言。",
+      "cleanup": [
+        "关闭 Flutter 进程与录屏子进程"
+      ],
+      "evidence": [
+        "planned：待 B7 执行后回填运行结果"
+      ]
+    }
+  ]
+}

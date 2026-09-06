@@ -407,6 +407,29 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
       - node e2e-verify/mobile/record-macos.mjs --scope v088 --gate-report "$V088_FLUTTER_GATE_REPORT"
 
+  test:v090:local:
+    desc: v0.9.0 移动端事件流可靠性与样式一致性本地 full gate（V090-10 唯一聚合入口：文档、生成物、Go V090 会话 SSE 契约 + 既有账号 SSE 回归 + v0.8.9 根因回归 + 全仓、restart、全量 Flutter、Web SSE 回归；不调用真实模型、不运行 Android 实机；任何子项失败即 gate failed）
+    cmds:
+      - task: docs:verify
+      - task: check
+      # A 线 P4：session SSE 契约 + 既有 TestP4AccountSSE* 三项回归（/v1/events 语义不变）。
+      - go test ./internal/httpapi ./internal/relay ./internal/store -run '^(TestV090|TestP4AccountSSE)' -count=1
+      # v0.8.9 根因回归基线（generation 契约/SSE reader 调度/outbox 世代隔离不得回退）。
+      - go test ./internal/store ./internal/relay ./internal/daemon -run 'TestV089' -count=1
+      - go test ./... -count=1
+      - task: test:restart
+      # A/B 两线全量 Flutter（单 worker，规避 macOS listener 清理竞态）；命令先登记，运行结果随实现回填。
+      - cmd: cd apps/mobile && flutter analyze && flutter test --machine --concurrency=1
+      # Web SSE 回归（证明账号级 /v1/events 消费语义未被改坏）。
+      - pnpm --filter @agent-sessions/web test
+      - git diff --check
+
+  test:v090:flutter:
+    desc: v0.9.0 可见 Flutter gate（V090-14：真实 macOS Flutter 窗口 headless=false；亮/暗主题 × 360x800/430x932 移动视口 + 1280x800 桌面视口 + 200% 文本；结构化报告与截图必需，MP4 可选；本地 fixture 口径，不做 Android 实机；需先关闭用户正在使用的 Agent Sessions 窗口；视口矩阵参数随 P5 B7 落地后经 CLI_ARGS 固化）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos.mjs {{.CLI_ARGS}}
+
   test:v085:real:
     desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度。默认 grok-4.6 @ api.aabsv.sbs；可切 gpt-5.6-terra @ api.paktf.sbs：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra）
     cmds:
