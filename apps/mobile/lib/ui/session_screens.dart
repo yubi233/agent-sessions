@@ -450,6 +450,8 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                           sessions.sessions,
                           visibleSelection.id,
                         ),
+                        unseenCompletedSessionIds:
+                            sessions.unseenCompletedSessionIds,
                         app: app,
                         terminals: terminalStatus,
                         importState:
@@ -685,6 +687,7 @@ class _DSHWorkspaceGroup extends StatelessWidget {
     required this.onToggle,
     required this.onSelectWorkspace,
     required this.onOpenSession,
+    this.unseenCompletedSessionIds = const {},
   });
 
   final MobileWorkspace workspace;
@@ -695,6 +698,9 @@ class _DSHWorkspaceGroup extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onSelectWorkspace;
   final ValueChanged<MobileSession> onOpenSession;
+
+  /// v0.9.0 C4：完成角标集合（来自 SessionController）。
+  final Set<String> unseenCompletedSessionIds;
 
   @override
   Widget build(BuildContext context) {
@@ -811,6 +817,8 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                         _DSHWorkspaceSessionItem(
                           session: session,
                           selected: session.id == selectedSessionId,
+                          hasUnseenCompletion:
+                              unseenCompletedSessionIds.contains(session.id),
                           onTap: () => onOpenSession(session),
                         ),
                     ],
@@ -829,11 +837,15 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
     required this.session,
     required this.selected,
     required this.onTap,
+    this.hasUnseenCompletion = false,
   });
 
   final MobileSession session;
   final bool selected;
   final VoidCallback onTap;
+
+  /// v0.9.0 C4：非当前会话「有新完成结果」角标（快照确认真实终态后置位）。
+  final bool hasUnseenCompletion;
 
   @override
   Widget build(BuildContext context) {
@@ -865,13 +877,31 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: Semantics(
-          label: status.label,
-          child: Icon(
-            Icons.circle,
-            size: 10,
-            color: _sessionStatusColor(context, status.tone),
-          ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasUnseenCompletion)
+              Semantics(
+                label: '有新完成结果',
+                child: Padding(
+                  key: Key('session-completion-badge-${session.id}'),
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Icon(
+                    Icons.mark_chat_unread_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            Semantics(
+              label: status.label,
+              child: Icon(
+                Icons.circle,
+                size: 10,
+                color: _sessionStatusColor(context, status.tone),
+              ),
+            ),
+          ],
         ),
         onTap: onTap,
       ),
@@ -977,10 +1007,14 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
     required this.onStopImportWaiting,
     required this.onDismissError,
     required this.onOpenSession,
+    this.unseenCompletedSessionIds = const {},
   });
 
   final MobileWorkspace workspace;
   final List<MobileSession> sessions;
+
+  /// v0.9.0 C4：完成角标集合（来自 SessionController）。
+  final Set<String> unseenCompletedSessionIds;
   final AppController app;
   final TerminalStatusController terminals;
   final WorkspaceImportState? importState;
@@ -1233,6 +1267,9 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
               _DSHWorkspaceSessionItem(
                 session: session,
                 selected: false,
+                hasUnseenCompletion: unseenCompletedSessionIds.contains(
+                  session.id,
+                ),
                 onTap: () => onOpenSession(session),
               ),
               const SizedBox(height: 4),
@@ -1298,6 +1335,7 @@ class DSHWorkspaceDetailScreen extends ConsumerWidget {
       body: _DSHWorkspaceDetailPane(
         workspace: selectedWorkspace,
         sessions: workspaceSessions,
+        unseenCompletedSessionIds: sessionsController.unseenCompletedSessionIds,
         app: app,
         terminals: terminals,
         importState:
@@ -1600,6 +1638,7 @@ class _TerminalWorkspaceCard extends StatelessWidget {
               expanded: expandedWorkspaceIds.contains(workspace.id),
               selected: selectedWorkspaceId == workspace.id,
               selectedSessionId: selectedSessionId,
+              unseenCompletedSessionIds: sessions.unseenCompletedSessionIds,
               onToggle: () => onToggle(workspace.id),
               onSelectWorkspace: () => onSelectWorkspace(workspace),
               onOpenSession: onOpenSession,

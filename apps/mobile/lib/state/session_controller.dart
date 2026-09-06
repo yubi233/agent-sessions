@@ -214,6 +214,33 @@ class SessionController extends ChangeNotifier {
   /// v0.9.0 C3：按会话记录最近一次成功合并事件的客户端时刻（内存，不持久化）。
   final Map<String, DateTime> _lastSnapshotMergedAt = {};
 
+  // ─── v0.9.0 C4：L3 quiet reconcile 与非当前完成角标 ────────────────────
+  /// quiet reconcile 启停（由 lifecycle recovery 驱动：前台+在线开启，
+  /// 后台/离线关闭；关闭时零新请求）。
+  bool _quietReconcileActive = false;
+  Timer? _quietReconcileTimer;
+
+  /// quiet reconcile 周期（T7：全局 25 秒一拍，0.04 list QPS）。
+  @visibleForTesting
+  Duration quietReconcileInterval = const Duration(seconds: 25);
+
+  /// 每拍最多调度的差异会话快照数（C4：每拍最多 4 个）。
+  @visibleForTesting
+  int quietReconcileBatchSize = 4;
+
+  /// 快照调度并发上限（C4：并发最多 2）。
+  @visibleForTesting
+  int quietReconcileConcurrency = 2;
+
+  /// 「有新完成结果」角标：认证运行期内存集合，不持久化（C4）。
+  final Set<String> _unseenCompletedSessionIds = {};
+
+  /// 本机曾观察为活动回合的会话（角标置位前置条件）。
+  final Set<String> _observedActiveSessionIds = {};
+
+  /// 手动刷新与 quiet reconcile 共享的 listSessions single-flight。
+  Future<List<MobileSession>>? _listSessionsInFlight;
+
   /// 指定会话最近一次成功合并事件的时刻；null 表示尚未合并过。
   DateTime? lastMergedAtFor(String? sessionId) =>
       sessionId == null ? null : _lastSnapshotMergedAt[sessionId];
@@ -232,6 +259,24 @@ class SessionController extends ChangeNotifier {
   /// 当前会话的活动回合运行期状态（C1）；null 表示无已锚定的活动回合。
   SessionActiveTurn? activeTurnFor(String? sessionId) =>
       sessionId == null ? null : _activeTurns[sessionId];
+
+  /// 该会话是否显示「有新完成结果」角标（C4：认证运行期内存集合）。
+  bool hasUnseenCompletion(String? sessionId) =>
+      sessionId != null && _unseenCompletedSessionIds.contains(sessionId);
+
+  /// 角标集合只读快照（列表 UI 消费）。
+  Set<String> get unseenCompletedSessionIds =>
+      Set<String>.unmodifiable(_unseenCompletedSessionIds);
+
+  /// 本地是否存在已确认活动回合的会话（L3 运行前置条件之一）。
+  bool get _hasObservableActiveTurns =>
+      _activeTurns.isNotEmpty ||
+      _sessions.any(
+        (session) =>
+            session.status == MobileSessionStatus.streaming ||
+            session.status == MobileSessionStatus.waitingPermission ||
+            session.status == MobileSessionStatus.waitingQuestion,
+      );
 
   /// v0.9.0 C2：离开/进入会话页面 surface 时由路由层调用。离开时推进选择代际，
   /// 旧选择的迟到写入不得落到当前页面。
@@ -425,7 +470,7 @@ class SessionController extends ChangeNotifier {
     _phase = SessionListPhase.loading;
     _notifyListeners();
     try {
-      final loaded = await _relay.listSessions();
+      final loaded = await _listSessionsShared();
       // 按最后活动时间稳定排序（服务端同样排序，这里兜底合并/刷新路径）。
       _sessions = [...loaded]..sort(MobileSession.compareByLastActivity);
       _phase = SessionListPhase.ready;
@@ -433,6 +478,10 @@ class SessionController extends ChangeNotifier {
           _sessionById(_selectedSessionId) == null) {
         _clearSelection();
       }
+      // v0.9.0 C4：会话被移出列表（含归档）时清除其完成角标。
+      _unseenCompletedSessionIds.removeWhere(
+        (id) => _sessionById(id) == null,
+      );
     } on RelayFailure catch (failure) {
       _phase = SessionListPhase.error;
       _errorMessage = failure.message;
@@ -441,6 +490,18 @@ class SessionController extends ChangeNotifier {
       _errorMessage = '会话列表暂时不可用，请稍后重试。';
     }
     _notifyListeners();
+  }
+
+  /// v0.9.0 C4：listSessions 共享 single-flight——手动刷新与 quiet reconcile
+  /// 并发时只发一次请求，双方消费同一结果。
+  Future<List<MobileSession>> _listSessionsShared() {
+    final existing = _listSessionsInFlight;
+    if (existing != null) return existing;
+    final task = _relay
+        .listSessions()
+        .whenComplete(() => _listSessionsInFlight = null);
+    _listSessionsInFlight = task;
+    return task;
   }
 
   Future<void> refreshWorkspaces() async {
@@ -2340,6 +2401,8 @@ class SessionController extends ChangeNotifier {
         return;
       }
       _mergeSnapshot(snapshot);
+      // v0.9.0 C4：打开并成功合并该会话快照后清除完成角标。
+      _unseenCompletedSessionIds.remove(sessionId);
       final controls = await _relay.getSessionControls(sessionId);
       if (_selectedSessionId == sessionId &&
           _selectionGeneration == selectionGeneration) {
@@ -2689,6 +2752,82 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  // ─── v0.9.0 C4：L3 quiet reconcile ─────────────────────────────────────
+  /// quiet reconcile 启停（lifecycle recovery 驱动）。开启时启动全局周期拍；
+  /// 前台恢复的即时首拍由 recovery 在 cursor recovery 后显式触发一次，
+  /// Timer.periodic 首拍在完整间隔之后——二者不叠加。
+  void setQuietReconcileActive(bool active) {
+    if (_quietReconcileActive == active) return;
+    _quietReconcileActive = active;
+    if (active && !_disposed) {
+      _quietReconcileTimer ??= Timer.periodic(
+        quietReconcileInterval,
+        (_) => unawaited(quietReconcileTick()),
+      );
+    } else {
+      _quietReconcileTimer?.cancel();
+      _quietReconcileTimer = null;
+    }
+  }
+
+  /// L3 一拍：quiet list reconcile + 差异快照调度。
+  /// 约束（C4）：不把列表切 loading/error、不覆盖已有列表；失败只记脱敏状态
+  /// 等下一拍；只比较本地与远端的 status/lastSequence，status 翻转优先于仅序号
+  /// 前进；每拍最多 [quietReconcileBatchSize] 个快照、并发最多
+  /// [quietReconcileConcurrency]，正在被 L1/SSE/手动拉取的会话由单航班去重。
+  Future<void> quietReconcileTick() async {
+    if (_disposed || !_quietReconcileActive) return;
+    if (!_hasObservableActiveTurns) return;
+    List<MobileSession> remote;
+    try {
+      remote = await _listSessionsShared();
+    } catch (_) {
+      // quiet 路径不触发列表错误态；等待下一拍。
+      return;
+    }
+    if (_disposed || !_quietReconcileActive) return;
+    final flipped = <String>[];
+    final advanced = <String>[];
+    for (final remoteSession in remote) {
+      final local = _sessionById(remoteSession.id);
+      if (local == null) continue;
+      if (remoteSession.status != local.status) {
+        flipped.add(remoteSession.id);
+      } else if (remoteSession.lastSequence > local.lastSequence) {
+        advanced.add(remoteSession.id);
+      }
+    }
+    // 状态翻转优先于仅序号前进；每拍限量，未处理项留到后续拍。
+    final batch = [...flipped, ...advanced].take(quietReconcileBatchSize);
+    var index = 0;
+    final ids = batch.toList(growable: false);
+    Future<void> worker() async {
+      while (index < ids.length && !_disposed && _quietReconcileActive) {
+        final id = ids[index++];
+        await _runSnapshotTurn(id, () => _reconcileSnapshotTurn(id));
+      }
+    }
+    await Future.wait([
+      for (var i = 0; i < quietReconcileConcurrency; i++) worker(),
+    ]);
+  }
+
+  /// L3 差异快照回合并：只读增量，失败不置角标、不进错误态（下一拍重试）。
+  Future<void> _reconcileSnapshotTurn(String sessionId) async {
+    final authGenerationAtStart = _authGeneration;
+    try {
+      final snapshot = await _relay.getSessionSnapshot(
+        sessionId,
+        afterSequence: _cursorFor(sessionId),
+      );
+      if (_disposed || _authGeneration != authGenerationAtStart) return;
+      _mergeSnapshot(snapshot, appendTimeline: true);
+      _notifyListeners();
+    } catch (_) {
+      // 单次失败保留现状；下一拍/L1/手动刷新仍可发现事实。
+    }
+  }
+
   /// v0.9.0 C1/T7：按单调锚点评估回合 deadline。到达 2 分钟 UX deadline 只切换
   /// UX 表达（超时标记 + 清账乐观回显 + 通知），活动回合事实与同步任务保持；
   /// 等待时长唯一来源是锚点，禁止 poll attempts×interval 或服务端时间推导。
@@ -2886,6 +3025,20 @@ class SessionController extends ChangeNotifier {
         canonicalTerminalStatuses.contains(snapshot.session.status)) {
       _activeTurns.remove(snapshot.session.id);
       _bumpSyncGeneration(snapshot.session.id);
+      // v0.9.0 C4：完成角标——只有该会话此前在本机被观察为活动、且本次快照
+      // 确认真实 idle 投影、且它不是当前选中会话时才置位；stopped/errored
+      // 投影不算「完成结果」。
+      final wasObservedActive = _observedActiveSessionIds.remove(
+        snapshot.session.id,
+      );
+      if (wasObservedActive &&
+          _selectedSessionId != snapshot.session.id &&
+          snapshot.session.status == MobileSessionStatus.idle) {
+        _unseenCompletedSessionIds.add(snapshot.session.id);
+      }
+    } else if (snapshot.session.status == MobileSessionStatus.streaming) {
+      // 本机观察为活动：角标置位的资格条件。
+      _observedActiveSessionIds.add(snapshot.session.id);
     }
     final priorCursor = _cursorFor(snapshot.session.id);
     final highestIncoming = incoming.fold<int>(
@@ -3129,6 +3282,11 @@ class SessionController extends ChangeNotifier {
     _syncGenerations.clear();
     _snapshotTurnsPending.clear();
     _effortsByModel = {};
+    _unseenCompletedSessionIds.clear();
+    _observedActiveSessionIds.clear();
+    _quietReconcileActive = false;
+    _quietReconcileTimer?.cancel();
+    _quietReconcileTimer = null;
     _clearSelection();
     _sessions = const [];
     _phase = SessionListPhase.loading;
@@ -3149,6 +3307,8 @@ class SessionController extends ChangeNotifier {
     _activeTurns.clear();
     _snapshotTurnsPending.clear();
     _snapshotTurnsInFlight.clear();
+    _quietReconcileTimer?.cancel();
+    _quietReconcileTimer = null;
     super.dispose();
   }
 

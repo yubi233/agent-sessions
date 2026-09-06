@@ -40,6 +40,10 @@ class _RecentSessionsScreenState extends ConsumerState<RecentSessionsScreen>
   Widget build(BuildContext context) {
     super.build(context);
     final controller = ref.watch(recentSessionsControllerProvider);
+    // v0.9.0 C4：完成角标集合来自 SessionController（认证运行期内存集合）。
+    final unseenCompleted = ref.watch(
+      sessionControllerProvider,
+    ).unseenCompletedSessionIds;
     return Scaffold(
       key: const Key('recent-sessions-screen'),
       appBar: AppBar(
@@ -71,7 +75,10 @@ class _RecentSessionsScreenState extends ConsumerState<RecentSessionsScreen>
             child: RefreshIndicator(
               key: _refreshIndicatorKey,
               onRefresh: controller.refresh,
-              child: _RecentSessionsBody(controller: controller),
+              child: _RecentSessionsBody(
+                controller: controller,
+                unseenCompletedSessionIds: unseenCompleted,
+              ),
             ),
           ),
         ),
@@ -81,9 +88,15 @@ class _RecentSessionsScreenState extends ConsumerState<RecentSessionsScreen>
 }
 
 class _RecentSessionsBody extends StatelessWidget {
-  const _RecentSessionsBody({required this.controller});
+  const _RecentSessionsBody({
+    required this.controller,
+    this.unseenCompletedSessionIds = const {},
+  });
 
   final RecentSessionsController controller;
+
+  /// v0.9.0 C4：完成角标集合（来自 SessionController）。
+  final Set<String> unseenCompletedSessionIds;
 
   @override
   Widget build(BuildContext context) {
@@ -143,6 +156,9 @@ class _RecentSessionsBody extends StatelessWidget {
             else
               _RecentSessionTile(
                 session: session,
+                hasUnseenCompletion: unseenCompletedSessionIds.contains(
+                  session.id,
+                ),
                 onTap: () => context.push('/sessions/${session.id}'),
               ),
       ],
@@ -227,10 +243,17 @@ class _ArchivedSessionTile extends StatelessWidget {
 }
 
 class _RecentSessionTile extends StatelessWidget {
-  const _RecentSessionTile({required this.session, required this.onTap});
+  const _RecentSessionTile({
+    required this.session,
+    required this.onTap,
+    this.hasUnseenCompletion = false,
+  });
 
   final MobileSession session;
   final VoidCallback onTap;
+
+  /// v0.9.0 C4：「有新完成结果」角标（快照确认真实 idle 终态后置位）。
+  final bool hasUnseenCompletion;
 
   @override
   Widget build(BuildContext context) {
@@ -252,7 +275,25 @@ class _RecentSessionTile extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: const Icon(Icons.chevron_right),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (hasUnseenCompletion)
+            Semantics(
+              label: '有新完成结果',
+              child: Padding(
+                key: Key('session-completion-badge-${session.id}'),
+                padding: const EdgeInsets.only(right: 4),
+                child: Icon(
+                  Icons.mark_chat_unread_outlined,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ),
+          const Icon(Icons.chevron_right),
+        ],
+      ),
       onTap: onTap,
     );
   }

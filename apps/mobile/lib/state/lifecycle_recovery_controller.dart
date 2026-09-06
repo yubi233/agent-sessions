@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'session_controller.dart';
@@ -76,6 +78,8 @@ class SessionRecoveryController extends ChangeNotifier {
       _sessions.invalidateSelectedLeaseForRuntimePause();
       // 后台期间禁止写命令自动补获取 lease，防止静默发出用户未看到的输入。
       _sessions.setAutoLeaseEnabled(false);
+      // v0.9.0 C4：后台停拍——quiet reconcile 停止，零新请求。
+      _sessions.setQuietReconcileActive(false);
       _phase = SessionRecoveryPhase.paused;
       _message = '应用已进入后台，返回后将重新确认可操作状态。';
       if (changed) notifyListeners();
@@ -104,6 +108,8 @@ class SessionRecoveryController extends ChangeNotifier {
       _sessions.invalidateSelectedLeaseForRuntimePause();
       // 离线时同样禁止自动补获取（请求必然失败，也不该在弱网下发起写）。
       _sessions.setAutoLeaseEnabled(false);
+      // v0.9.0 C4：离线停拍。
+      _sessions.setQuietReconcileActive(false);
       _phase = _visibility == MobileAppVisibility.background
           ? SessionRecoveryPhase.paused
           : SessionRecoveryPhase.waitingForNetwork;
@@ -180,6 +186,11 @@ class SessionRecoveryController extends ChangeNotifier {
       _recoveryPending = false;
       // 回到前台/在线：重新打开自动获取闸门。
       _sessions.setAutoLeaseEnabled(true);
+      // v0.9.0 C4：前台恢复重新开启 quiet reconcile，并立即执行一次首拍
+      // （与上面的 cursor recovery 共享单航班请求，不叠加）。周期拍由
+      // Timer.periodic 在完整 25 秒间隔后才会触发，首拍不会重复。
+      _sessions.setQuietReconcileActive(true);
+      unawaited(_sessions.quietReconcileTick());
       // 恢复只读事件后自动重取会话写权（沿用最近一次成功授权参数），
       // 用户从后台/断网回到前台即可直接发送，无需手动点按“暂不可操作”重试。
       await _sessions.reacquireLeaseAfterRuntimePause();
