@@ -9,11 +9,32 @@ import 'appearance_controls.dart';
 import 'app_theme.dart';
 
 /// P3 的只读机器页：只消费 Relay 白名单状态，不展示终端 ID、路径、日志或任何写操作。
-class TerminalStatusScreen extends ConsumerWidget {
+class TerminalStatusScreen extends ConsumerStatefulWidget {
   const TerminalStatusScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TerminalStatusScreen> createState() =>
+      _TerminalStatusScreenState();
+}
+
+class _TerminalStatusScreenState extends ConsumerState<TerminalStatusScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // 遗留 2026-09-02 #3 收口：controller 只在 App 启动时 initialize 一次，
+    // 本页此前进入时直接渲染旧快照——长时间挂机后 lastSeen 落到 90s 新鲜度
+    // 窗口之外，会把实际在线的终端渲染成「状态过期」。与主页终端卡片
+    // v0.8.6 同口径：每次进入页面后下一帧刷新一次；controller.refresh()
+    // 自带并发去重，AppBar 手动刷新按钮语义不变。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(terminalStatusControllerProvider).refresh();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final controller = ref.watch(terminalStatusControllerProvider);
     return Scaffold(
       key: const Key('terminal-status-screen'),

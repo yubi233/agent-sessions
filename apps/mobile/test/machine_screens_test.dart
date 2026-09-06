@@ -283,6 +283,63 @@ void main() {
       expect(find.byKey(const Key('terminal-status-loading')), findsOneWidget);
     });
 
+    // 遗留 2026-09-02 #3 收口回归（2026-09-06 用户实测）：App 长时间挂机后进入
+    // 终端状态页，此前只渲染启动时拉取的旧快照——lastSeen 落到 90s 新鲜度窗口外，
+    // 实际在线的终端被误渲染为「状态过期」（daemon 每 15s 心跳一直正常）。
+    // 修复=页面进入后下一帧 refresh() 重拉。本用例把 fixture 时钟前推 5 分钟并
+    // 更新终端 lastSeen（模拟 daemon 持续心跳），断言进入页面后展示「在线」。
+    testWidgets('长时间挂机后进入页面触发刷新，旧快照的「状态过期」纠正为「在线」', (tester) async {
+      var current = now;
+      final relay = FixtureRelayRepository(clock: () => current);
+      relay.replaceTerminals([
+        TerminalSummary(
+          id: 'term_opaque_idle',
+          hostname: 'Build Mac',
+          platform: 'macos',
+          status: TerminalConnectionStatus.online,
+          protocolVersion: 1,
+          daemonVersion: 'agent-sessions-daemon-p2',
+          lastSeen: now.subtract(const Duration(seconds: 10)),
+        ),
+      ]);
+      final controller = TerminalStatusController(
+        relay: relay,
+        clock: () => current,
+      );
+      await controller.initialize();
+
+      // App 挂机 5 分钟：fixture 时钟前推，daemon 心跳持续（lastSeen 同步前推），
+      // 但 controller 尚未重新拉取——此刻其快照已落在 90s 窗口之外。
+      current = now.add(const Duration(minutes: 5));
+      relay.replaceTerminals([
+        TerminalSummary(
+          id: 'term_opaque_idle',
+          hostname: 'Build Mac',
+          platform: 'macos',
+          status: TerminalConnectionStatus.online,
+          protocolVersion: 1,
+          daemonVersion: 'agent-sessions-daemon-p2',
+          lastSeen: current.subtract(const Duration(seconds: 10)),
+        ),
+      ]);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          key: UniqueKey(),
+          overrides: [
+            relayRepositoryProvider.overrideWithValue(relay),
+            terminalStatusControllerProvider.overrideWith((_) => controller),
+          ],
+          child: const MaterialApp(home: TerminalStatusScreen()),
+        ),
+      );
+      // 进入页面触发 entry refresh：pumpAndSettle 等待重拉完成。
+      await tester.pumpAndSettle();
+
+      expect(find.text('在线'), findsOneWidget);
+      expect(find.text('状态过期'), findsNothing);
+    });
+
     testWidgets('empty 与 Relay 错误都展示明确状态', (tester) async {
       final emptyRelay = FixtureRelayRepository(clock: () => now);
       final emptyController = TerminalStatusController(
