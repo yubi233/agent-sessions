@@ -231,7 +231,7 @@
     {
       "id": "V090-10",
       "title": "唯一本地 full gate：task test:v090:local 一次通过",
-      "status": "planned",
+      "status": "passed",
       "phase": "P6",
       "category": "full gate",
       "priority": "P0",
@@ -246,7 +246,7 @@
         "清理本轮启动的进程与临时文件"
       ],
       "evidence": [
-        "planned：待 V090 实现后回填运行结果"
+        "task test:v090:local exit=0、耗时 239s（2026-09-07）：docs:verify PASS、check 含生成物无漂移、Go TestV090+TestP4AccountSSE ok、TestV089 ok、go test ./... 全 ok、test:restart ok、flutter analyze 零告警+全量 test done success、web 25/25、git diff --check 干净"
       ]
     },
     {
