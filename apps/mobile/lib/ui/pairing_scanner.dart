@@ -183,12 +183,12 @@ class _PairingScannerScreenState extends ConsumerState<PairingScannerScreen> {
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppSpacing.lg),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text('将终端显示的配对二维码置于取景框内。'),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               if (_invalidPayloadMessage != null)
                 _ScannerMessage(
                   key: const Key('pairing-scanner-invalid-payload'),
@@ -204,7 +204,7 @@ class _PairingScannerScreenState extends ConsumerState<PairingScannerScreen> {
                   onDetected: _handleDetectedValue,
                   onUnavailable: _handleUnavailable,
                 ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               TextButton.icon(
                 key: const Key('pairing-scanner-manual-fallback-button'),
                 onPressed: () => context.pop(),
@@ -288,7 +288,7 @@ class _ScannerMessage extends StatelessWidget {
     liveRegion: true,
     child: Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       color: Theme.of(context).colorScheme.errorContainer,
       child: Text(message),
     ),

@@ -133,7 +133,7 @@ class _ChatBubble extends StatelessWidget {
               : CrossAxisAlignment.start,
           children: [
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(AppSpacing.md),
               decoration: BoxDecoration(
                 color: background,
                 border: Border.all(
@@ -163,13 +163,13 @@ class _ChatBubble extends StatelessWidget {
                             ),
                       ),
                       if (node.pendingSteering) ...[
-                        const SizedBox(width: 8),
+                        const SizedBox(width: AppSpacing.sm),
                         _PendingSteeringBadge(foreground: foreground),
                       ],
                     ],
                   ),
                   if (node.text?.trim().isNotEmpty == true) ...[
-                    const SizedBox(height: 6),
+                    const SizedBox(height: AppSpacing.sm),
                     user
                         ? Text(node.text!, style: TextStyle(color: foreground))
                         // v0.8.7 打字机平滑释放：只释放已到达文本的前缀
@@ -186,7 +186,7 @@ class _ChatBubble extends StatelessWidget {
                           ),
                   ],
                   if (node.references.isNotEmpty) ...[
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     _ReferenceChips(
                       sequence: node.sequence,
                       references: node.references,
@@ -232,7 +232,7 @@ class _AssistantTailStatus extends StatelessWidget {
     if (label == null) return const SizedBox.shrink();
     return Padding(
       key: Key('session-assistant-tail-status-${node.sequence}'),
-      padding: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.only(top: AppSpacing.xs),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -242,9 +242,9 @@ class _AssistantTailStatus extends StatelessWidget {
                 : stopped
                 ? Icons.stop_circle_outlined
                 : Icons.check_circle_outline,
-            size: 14,
+            size: AppSizes.iconSm,
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: AppSpacing.xs),
           Text(label, style: Theme.of(context).textTheme.labelSmall),
         ],
       ),
@@ -281,7 +281,7 @@ class _PendingSteeringBadge extends StatelessWidget {
       ),
     ),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.micro),
       child: Text(
         '等待接管',
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -347,7 +347,7 @@ class _ReferenceChip extends StatelessWidget {
         onOpenFile != null;
     if (canOpen) {
       return ActionChip(
-        avatar: Icon(icon, size: 14, color: foreground.withValues(alpha: 0.74)),
+        avatar: Icon(icon, size: AppSizes.iconSm, color: foreground.withValues(alpha: 0.74)),
         label: Text(reference.label),
         onPressed: () => unawaited(onOpenFile!(reference.target!)),
       );
@@ -358,12 +358,12 @@ class _ReferenceChip extends StatelessWidget {
         shape: const StadiumBorder(),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: foreground.withValues(alpha: 0.74)),
-            const SizedBox(width: 4),
+            Icon(icon, size: AppSizes.iconSm, color: foreground.withValues(alpha: 0.74)),
+            const SizedBox(width: AppSpacing.xs),
             Text(
               reference.label,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -445,7 +445,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
     if (!hasActions) return const SizedBox.shrink();
 
     return Padding(
-      padding: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.only(top: AppSpacing.xs),
       child: Wrap(
         key: Key('session-message-actions-${node.sequence}'),
         crossAxisAlignment: WrapCrossAlignment.center,
@@ -453,7 +453,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
         children: [
           if (node.showTimestamp && node.createdAt != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
               child: Text(
                 _formatTime(node.createdAt!),
                 key: Key('session-message-time-${node.sequence}'),
@@ -464,7 +464,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
             IconButton(
               key: Key('session-message-copy-${node.sequence}'),
               tooltip: '复制',
-              iconSize: 18,
+              iconSize: AppSizes.iconMd,
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               padding: EdgeInsets.zero,
               onPressed: () => _copy(node),
@@ -477,7 +477,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
                     ? 'session-message-fork-${node.sequence}'
                     : 'session-message-fork-unavailable-${node.sequence}',
               ),
-              iconSize: 18,
+              iconSize: AppSizes.iconMd,
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               padding: EdgeInsets.zero,
               tooltip: node.canFork && widget.onFork != null
@@ -526,7 +526,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
                   ),
                   focusNode: _noteTriggerFocus,
                   tooltip: item.note?.isNotEmpty == true ? '编辑反馈备注' : '添加反馈备注',
-                  iconSize: 18,
+                  iconSize: AppSizes.iconMd,
                   constraints: const BoxConstraints.tightFor(
                     width: 32,
                     height: 32,
@@ -615,7 +615,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
               child: SizedBox(
                 width: 260,
                 child: Padding(
-                  padding: const EdgeInsets.all(10),
+                  padding: const EdgeInsets.all(AppSpacing.sm),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -635,7 +635,7 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
                           isDense: true,
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: AppSpacing.sm),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
@@ -735,7 +735,7 @@ class _FeedbackButton extends StatelessWidget {
         onEnter: (_) => unawaited(onEnsure()),
         child: IconButton(
           tooltip: label,
-          iconSize: 18,
+          iconSize: AppSizes.iconMd,
           constraints: const BoxConstraints.tightFor(width: 32, height: 32),
           padding: EdgeInsets.zero,
           color: active ? Theme.of(context).colorScheme.primary : null,
@@ -775,7 +775,7 @@ class _ReasoningRow extends StatelessWidget {
           ),
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.lg),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
@@ -857,7 +857,7 @@ class _ToolStepRow extends StatelessWidget {
             hasPath: hasPath,
             onOpenFile: onOpenFile,
           ),
-          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+          childrenPadding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.lg),
           children: [
             if (details?.input?.trim().isNotEmpty == true)
               _ToolDetailBlock(
@@ -883,7 +883,7 @@ class _ToolStepRow extends StatelessWidget {
                 child: OutlinedButton.icon(
                   key: Key('session-tool-inspect-${node.sequence}'),
                   onPressed: () => onInspect?.call(details!.inspectTarget!),
-                  icon: const Icon(Icons.manage_search_outlined, size: 16),
+                  icon: const Icon(Icons.manage_search_outlined, size: AppSizes.iconSm),
                   label: const Text('Inspect'),
                 ),
               ),
@@ -906,15 +906,15 @@ class _ToolSubcallTree extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(left: 12, top: 4),
+    padding: const EdgeInsets.only(left: AppSpacing.md, top: AppSpacing.xs),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final call in subcalls)
           Container(
             key: ValueKey(call.callId),
-            margin: const EdgeInsets.only(bottom: 6),
-            padding: const EdgeInsets.only(left: 10),
+            margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+            padding: const EdgeInsets.only(left: AppSpacing.sm),
             decoration: BoxDecoration(
               border: Border(
                 left: BorderSide(
@@ -978,7 +978,7 @@ class _ToolRowSubtitle extends StatelessWidget {
             child: TextButton.icon(
               key: Key('session-tool-open-path-${node.sequence}'),
               onPressed: () => onOpenFile?.call(node.filePath!),
-              icon: const Icon(Icons.open_in_new_outlined, size: 16),
+              icon: const Icon(Icons.open_in_new_outlined, size: AppSizes.iconSm),
               label: Text(node.filePath!),
             ),
           ),
@@ -995,7 +995,7 @@ class _ToolDetailBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
+    padding: const EdgeInsets.only(bottom: AppSpacing.sm),
     child: ConstrainedBox(
       constraints: const BoxConstraints(maxHeight: 180),
       child: DecoratedBox(
@@ -1005,7 +1005,7 @@ class _ToolDetailBlock extends StatelessWidget {
         ),
         child: SingleChildScrollView(
           key: Key('session-tool-detail-scroll-$label'),
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(AppSpacing.sm),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1059,7 +1059,7 @@ class _ProducedFilesRow extends StatelessWidget {
     final hidden = files.length - visibleCount;
     return Container(
       key: Key('session-produced-files-row-${node.sequence}'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
       decoration: BoxDecoration(
         border: Border(
           left: BorderSide(
@@ -1076,10 +1076,10 @@ class _ProducedFilesRow extends StatelessWidget {
             children: [
               Icon(
                 Icons.task_outlined,
-                size: 18,
+                size: AppSizes.iconMd,
                 color: Theme.of(context).colorScheme.primary,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               Text(
                 '产物文件',
                 style: Theme.of(
@@ -1088,7 +1088,7 @@ class _ProducedFilesRow extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -1099,7 +1099,7 @@ class _ProducedFilesRow extends StatelessWidget {
                   key: Key('session-produced-file-${node.sequence}-$index'),
                   avatar: const Icon(
                     Icons.insert_drive_file_outlined,
-                    size: 16,
+                    size: AppSizes.iconSm,
                   ),
                   label: Text(files[index].label),
                   tooltip: files[index].path,
@@ -1116,7 +1116,7 @@ class _ProducedFilesRow extends StatelessWidget {
                     'session-produced-files-open-folder-${node.sequence}',
                   ),
                   onPressed: () => onOpenFile?.call('.'),
-                  icon: const Icon(Icons.folder_open_outlined, size: 16),
+                  icon: const Icon(Icons.folder_open_outlined, size: AppSizes.iconSm),
                   label: const Text('打开目录'),
                 ),
             ],
@@ -1155,7 +1155,7 @@ class _CompactSystemRow extends StatelessWidget {
     final detail = trailing ?? node.toolStatus ?? node.text;
     return Container(
       key: Key('session-compact-node-${node.sequence}-${node.kind.name}'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
       decoration: BoxDecoration(
         border: Border(left: BorderSide(color: color, width: 3)),
         color: scheme.surfaceContainerLowest,
@@ -1163,8 +1163,8 @@ class _CompactSystemRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(width: 8),
+          Icon(icon, size: AppSizes.iconMd, color: color),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1182,10 +1182,10 @@ class _CompactSystemRow extends StatelessWidget {
                       ),
                     ),
                     if (node.errorCode?.trim().isNotEmpty == true) ...[
-                      const SizedBox(width: 8),
+                      const SizedBox(width: AppSpacing.sm),
                       Container(
                         key: Key('session-error-code-${node.sequence}'),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 1),
                         decoration: BoxDecoration(
                           color: scheme.errorContainer,
                           borderRadius: BorderRadius.circular(AppRadius.micro),
@@ -1204,17 +1204,17 @@ class _CompactSystemRow extends StatelessWidget {
                   ],
                 ),
                 if (detail?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: AppSpacing.xs),
                   Text(detail!, style: Theme.of(context).textTheme.bodySmall),
                 ],
                 if (node.filePath?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: TextButton.icon(
                       key: Key('session-tool-open-path-${node.sequence}'),
                       onPressed: () => onOpenFile?.call(node.filePath!),
-                      icon: const Icon(Icons.open_in_new_outlined, size: 16),
+                      icon: const Icon(Icons.open_in_new_outlined, size: AppSizes.iconSm),
                       label: Text(node.filePath!),
                     ),
                   ),

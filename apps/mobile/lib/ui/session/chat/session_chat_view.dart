@@ -262,9 +262,9 @@ class _SessionChatViewState extends State<SessionChatView> {
         ListView.separated(
           key: const Key('session-chat-view'),
           controller: _controller,
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.xxl),
           itemCount: children.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 10),
+          separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
           itemBuilder: (context, index) => children[index],
         ),
         // v0.5/回归修复：streaming 状态行固定为一个可见 overlay，而不是懒加载列表项。
@@ -324,7 +324,7 @@ class _HistoryLoadingRow extends StatelessWidget {
   Widget build(BuildContext context) => const Center(
     key: Key('session-chat-history-loading'),
     child: Padding(
-      padding: EdgeInsets.all(12),
+      padding: EdgeInsets.all(AppSpacing.md),
       child: CircularProgressIndicator(strokeWidth: 2),
     ),
   );
@@ -385,7 +385,7 @@ class _FileOpenStatus extends StatelessWidget {
       borderRadius: BorderRadius.circular(AppRadius.card),
     ),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -393,7 +393,7 @@ class _FileOpenStatus extends StatelessWidget {
             dimension: 14,
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           Text('正在打开 $path'),
         ],
       ),
@@ -434,7 +434,7 @@ class _FileOpenErrorDialog extends StatelessWidget {
                   key: const Key('session-file-open-error-path'),
                   style: const TextStyle(fontFamily: 'monospace'),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 Text(
                   error.message,
                   key: const Key('session-file-open-error-message'),
@@ -481,7 +481,7 @@ class _TurnTimeoutRow extends StatelessWidget {
       liveRegion: true,
       child: Container(
         key: const Key('session-turn-timeout-row'),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppRadius.card),
           color: theme.colorScheme.errorContainer,
@@ -493,8 +493,8 @@ class _TurnTimeoutRow extends StatelessWidget {
             Row(
               children: [
                 Icon(Icons.timer_off_outlined,
-                    size: 16, color: theme.colorScheme.error),
-                const SizedBox(width: 8),
+                    size: AppSizes.iconSm, color: theme.colorScheme.error),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
                     '等待结果已超时，仍在同步。',
@@ -506,7 +506,7 @@ class _TurnTimeoutRow extends StatelessWidget {
             ),
             if (freshnessText != null)
               Padding(
-                padding: const EdgeInsets.only(left: 24, top: 2),
+                padding: const EdgeInsets.only(left: AppSpacing.xxl, top: AppSpacing.micro),
                 child: Text(
                   freshnessText!,
                   key: const Key('session-turn-timeout-freshness'),
@@ -517,19 +517,19 @@ class _TurnTimeoutRow extends StatelessWidget {
               ),
             if (onViewResult != null)
               Padding(
-                padding: const EdgeInsets.only(left: 24, top: 4),
+                padding: const EdgeInsets.only(left: AppSpacing.xxl, top: AppSpacing.xs),
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
                     key: const Key('session-turn-timeout-view-result'),
                     style: TextButton.styleFrom(
                       visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
                     ),
                     onPressed: () => onViewResult!(),
                     icon: Icon(
                       Icons.sync_outlined,
-                      size: 16,
+                      size: AppSizes.iconSm,
                       color: theme.colorScheme.error,
                     ),
                     label: const Text('查看结果'),
@@ -573,7 +573,7 @@ class _TurnStatusRow extends StatelessWidget {
       liveRegion: true,
       child: Container(
         key: const Key('session-turn-status-row'),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(AppRadius.card),
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -588,7 +588,7 @@ class _TurnStatusRow extends StatelessWidget {
                 color: Theme.of(context).colorScheme.primary,
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(child: Text(label)),
           ],
         ),

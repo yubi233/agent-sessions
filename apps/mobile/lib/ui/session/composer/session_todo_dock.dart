@@ -41,7 +41,7 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
     final theme = Theme.of(context);
     return Container(
       key: const Key('session-todo-dock'),
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
@@ -56,13 +56,13 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
             borderRadius: BorderRadius.circular(AppRadius.card),
             onTap: () => setState(() => _collapsed = !_collapsed),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
               child: Row(
                 children: [
-                  const Icon(Icons.checklist_outlined, size: 18),
-                  const SizedBox(width: 8),
+                  const Icon(Icons.checklist_outlined, size: AppSizes.iconMd),
+                  const SizedBox(width: AppSpacing.sm),
                   Text('Todo', style: theme.textTheme.labelLarge),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: AppSpacing.sm),
                   Expanded(
                     child: Text(
                       _progressLabel,
@@ -77,7 +77,7 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
                     _collapsed
                         ? Icons.keyboard_arrow_up
                         : Icons.keyboard_arrow_down,
-                    size: 18,
+                    size: AppSizes.iconMd,
                   ),
                 ],
               ),
@@ -85,7 +85,7 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
           ),
           if (!_collapsed)
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.sm, 0, AppSpacing.sm, AppSpacing.sm),
               child: Column(
                 key: const Key('session-todo-dock-list'),
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -114,17 +114,17 @@ class _TodoDockItem extends StatelessWidget {
       TodoItemStatus.pending => Icons.radio_button_unchecked,
     };
     return Padding(
-      padding: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.only(top: AppSpacing.sm),
       child: Row(
         key: Key(
           'session-todo-item-${item.status.wireValue}-${item.content.hashCode}',
         ),
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 16, color: theme.colorScheme.primary),
-          const SizedBox(width: 8),
+          Icon(icon, size: AppSizes.iconSm, color: theme.colorScheme.primary),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(child: Text(item.content)),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpacing.sm),
           Text(
             item.status.label,
             style: theme.textTheme.labelSmall?.copyWith(

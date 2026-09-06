@@ -79,7 +79,7 @@ class SessionMarkdownText extends StatelessWidget {
       case 'h6':
         final level = int.parse(tag.substring(1));
         return Padding(
-          padding: const EdgeInsets.only(top: 6, bottom: 2),
+          padding: const EdgeInsets.only(top: AppSpacing.sm, bottom: AppSpacing.micro),
           child: Text(
             _inlinePlainText(node),
             style: _headingStyle(context, level, style),
@@ -87,7 +87,7 @@ class SessionMarkdownText extends StatelessWidget {
         );
       case 'p':
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.micro),
           child: _buildInline(context, node, style),
         );
       case 'ul':
@@ -95,9 +95,9 @@ class SessionMarkdownText extends StatelessWidget {
         return _buildList(context, node, style, ordered: tag == 'ol');
       case 'blockquote':
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.micro),
           child: Container(
-            padding: const EdgeInsets.fromLTRB(10, 4, 8, 4),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.xs, AppSpacing.sm, AppSpacing.xs),
             decoration: BoxDecoration(
               border: Border(
                 left: BorderSide(
@@ -115,12 +115,12 @@ class SessionMarkdownText extends StatelessWidget {
         return _MarkdownCodeBlock(text: code);
       case 'hr':
         return const Padding(
-          padding: EdgeInsets.symmetric(vertical: 6),
+          padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
           child: Divider(),
         );
       case 'table':
         return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
           child: _buildTable(context, node, style),
         );
       default:
@@ -168,7 +168,7 @@ class SessionMarkdownText extends StatelessWidget {
       children.add(
         Padding(
           key: ValueKey('md-li-$index-${child.textContent.hashCode}'),
-          padding: const EdgeInsets.only(left: 4, top: 2),
+          padding: const EdgeInsets.only(left: AppSpacing.xs, top: AppSpacing.micro),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -182,7 +182,7 @@ class SessionMarkdownText extends StatelessWidget {
       for (final element in nested ?? const <md.Element>[]) {
         children.add(
           Padding(
-            padding: const EdgeInsets.only(left: 16),
+            padding: const EdgeInsets.only(left: AppSpacing.lg),
             child: _buildList(
               context,
               element,
@@ -244,7 +244,7 @@ class SessionMarkdownText extends StatelessWidget {
               children: [
                 for (final cell in headerCells)
                   Padding(
-                    padding: const EdgeInsets.all(6),
+                    padding: const EdgeInsets.all(AppSpacing.sm),
                     child: _buildInline(context, cell, headerStyle),
                   ),
               ],
@@ -254,7 +254,7 @@ class SessionMarkdownText extends StatelessWidget {
                 children: [
                   for (final cell in row.children ?? const <md.Node>[])
                     Padding(
-                      padding: const EdgeInsets.all(6),
+                      padding: const EdgeInsets.all(AppSpacing.sm),
                       child: _buildInline(
                         context,
                         cell is md.Element ? cell : md.Element('p', [cell]),
@@ -377,8 +377,8 @@ class _MarkdownCodeBlock extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     width: double.infinity,
     constraints: const BoxConstraints(maxHeight: 240),
-    margin: const EdgeInsets.symmetric(vertical: 4),
-    padding: const EdgeInsets.all(10),
+    margin: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+    padding: const EdgeInsets.all(AppSpacing.sm),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
       borderRadius: BorderRadius.circular(AppRadius.card),

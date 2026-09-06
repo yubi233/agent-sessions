@@ -108,12 +108,12 @@ class _MessageDeepLinkBody extends StatelessWidget {
       return Center(
         key: const Key('message-deeplink-empty'),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.search_off_outlined, size: 32),
-              const SizedBox(height: 12),
+              const Icon(Icons.search_off_outlined, size: AppSizes.iconEmpty),
+              const SizedBox(height: AppSpacing.md),
               Text(
                 '未找到消息。链接可能已过期或无权访问。',
                 textAlign: TextAlign.center,
@@ -126,10 +126,10 @@ class _MessageDeepLinkBody extends StatelessWidget {
     }
     return ListView(
       key: const Key('message-deeplink-list'),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         _MessageCard(event: event),
-        const SizedBox(height: 12),
+        const SizedBox(height: AppSpacing.md),
         const _DeepLinkBoundaryNote(),
       ],
     );
@@ -147,7 +147,7 @@ class _MessageCard extends StatelessWidget {
     final content = text == null || text.isEmpty ? event.label : text;
     return Container(
       key: const Key('message-deeplink-card'),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
@@ -158,8 +158,8 @@ class _MessageCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(_kindIcon(event.kind), size: 16),
-              const SizedBox(width: 8),
+              Icon(_kindIcon(event.kind), size: AppSizes.iconSm),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
                   event.label,
@@ -169,14 +169,14 @@ class _MessageCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppSpacing.sm),
           // 只选择可见消息文本；复制不含 token/内部 ID/隐藏正文。
           SelectableText(
             content,
             key: const Key('message-deeplink-text'),
             style: Theme.of(context).textTheme.bodyMedium,
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             '事件序号 ${event.sequence}',
             key: const Key('message-deeplink-sequence'),
@@ -207,7 +207,7 @@ class _DeepLinkBoundaryNote extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('message-deeplink-note'),
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.all(AppSpacing.md),
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
@@ -216,8 +216,8 @@ class _DeepLinkBoundaryNote extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.info_outline, size: 18),
-        const SizedBox(width: 10),
+        const Icon(Icons.info_outline, size: AppSizes.iconMd),
+        const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(
             '深链只定位当前账户可见会话中的消息；复制不会附加 token、内部 ID 或隐藏正文。',
@@ -239,14 +239,14 @@ class _DeepLinkError extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('message-deeplink-error'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.cloud_off_outlined, size: 32),
-          const SizedBox(height: 12),
+          const Icon(Icons.cloud_off_outlined, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           IconButton(
             key: const Key('message-deeplink-retry-button'),
             tooltip: '重试读取消息',

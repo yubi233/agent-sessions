@@ -125,7 +125,7 @@ class _GitDiffBody extends StatelessWidget {
             _GitSnapshotHeader(snapshot: snapshot!),
             _GitFilterBar(controller: controller),
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
               child: TextField(
                 key: const Key('git-diff-search-input'),
                 controller: searchController,
@@ -158,14 +158,14 @@ class _GitSnapshotHeader extends StatelessWidget {
     final summary = snapshot.summary;
     final textTheme = Theme.of(context).textTheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.xs),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.account_tree_outlined, size: 18),
-              const SizedBox(width: 8),
+              const Icon(Icons.account_tree_outlined, size: AppSizes.iconMd),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
                   snapshot.repositoryLabel,
@@ -175,7 +175,7 @@ class _GitSnapshotHeader extends StatelessWidget {
                   style: textTheme.labelLarge,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               // 长分支名在 480 宽下会撑爆 Row：包 Flexible 让 ellipsis 生效。
               Flexible(
                 child: Text(
@@ -188,7 +188,7 @@ class _GitSnapshotHeader extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
               _Metric(label: '文件', value: '${summary.changedFiles}'),
@@ -255,7 +255,7 @@ class _GitFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+    padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
     child: SizedBox(
       width: double.infinity,
       child: SegmentedButton<GitChangeFilter>(
@@ -298,10 +298,10 @@ class _GitFileTree extends StatelessWidget {
                 children: [
                   Icon(
                     Icons.filter_alt_off_outlined,
-                    size: 32,
+                    size: AppSizes.iconEmpty,
                     color: context.appColors.textSecondary,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   Text(
                     '没有匹配的变更文件。',
                     style: Theme.of(context).textTheme.bodyMedium,
@@ -311,7 +311,7 @@ class _GitFileTree extends StatelessWidget {
             )
           : ListView.builder(
               key: const Key('git-file-tree'),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
               itemCount: files.length,
               itemBuilder: (context, index) {
                 final file = files[index];
@@ -353,15 +353,15 @@ class _GitFileRow extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.card),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
           child: Row(
             children: [
               Icon(
                 _iconFor(file),
-                size: 17,
+                size: AppSizes.iconMd,
                 color: _changeColor(file, context),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -389,7 +389,7 @@ class _GitFileRow extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               SizedBox(
                 width: 58,
                 child: Text(
@@ -438,7 +438,7 @@ class _GitDiffToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     height: 50,
-    padding: const EdgeInsets.symmetric(horizontal: 12),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
     decoration: BoxDecoration(
       border: Border(top: BorderSide(color: context.appColors.border)),
     ),
@@ -515,10 +515,10 @@ class _GitDiffContent extends StatelessWidget {
           children: [
             Icon(
               Icons.folder_open_outlined,
-              size: 32,
+              size: AppSizes.iconEmpty,
               color: context.appColors.textSecondary,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             Text(
               '工作区没有可显示的变更。',
               style: Theme.of(context).textTheme.bodyMedium,
@@ -537,10 +537,10 @@ class _GitDiffContent extends StatelessWidget {
           children: [
             Icon(
               Icons.notes,
-              size: 32,
+              size: AppSizes.iconEmpty,
               color: context.appColors.textSecondary,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             Text(
               '此文件没有可显示的文本差异。',
               style: Theme.of(context).textTheme.bodyMedium,
@@ -551,7 +551,7 @@ class _GitDiffContent extends StatelessWidget {
     }
     return ListView(
       key: const Key('git-diff-scroll'),
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 16),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.lg),
       children: [
         for (final hunk in controller.hunks)
           _GitHunkPanel(
@@ -571,8 +571,8 @@ class _GitDiffContent extends StatelessWidget {
                   : () => unawaited(controller.loadNextPage()),
               icon: controller.isLoadingMore
                   ? const SizedBox(
-                      width: 18,
-                      height: 18,
+                      width: AppSpacing.lg,
+                      height: AppSpacing.lg,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.expand_more),
@@ -590,11 +590,11 @@ class _LimitedDiffState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.all(16),
+    padding: const EdgeInsets.all(AppSpacing.lg),
     child: Container(
       key: const Key('git-diff-limited-state'),
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
@@ -606,8 +606,8 @@ class _LimitedDiffState extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.info_outline, size: 18),
-              const SizedBox(width: 8),
+              const Icon(Icons.info_outline, size: AppSizes.iconMd),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
                   file.limitedKind.label,
@@ -616,13 +616,13 @@ class _LimitedDiffState extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             file.limitedKind.detail,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           if (file.renameFrom != null) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               '${file.renameFrom} -> ${file.path}',
               style: Theme.of(context).textTheme.labelMedium,
@@ -650,7 +650,7 @@ class _GitHunkPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: Key('git-hunk-${hunk.id}'),
-    margin: const EdgeInsets.only(bottom: 10),
+    margin: const EdgeInsets.only(bottom: AppSpacing.sm),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surface,
       border: Border.all(color: context.appColors.border),
@@ -665,7 +665,7 @@ class _GitHunkPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.only(left: 10),
+                  padding: const EdgeInsets.only(left: AppSpacing.sm),
                   child: Text(
                     hunk.header,
                     maxLines: 1,
@@ -718,7 +718,7 @@ class _UnifiedDiffLine extends StatelessWidget {
     return Container(
       width: double.infinity,
       color: background,
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.micro),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -737,7 +737,7 @@ class _UnifiedDiffLine extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpacing.sm),
         ],
       ),
     );
@@ -781,7 +781,7 @@ class _SplitCell extends StatelessWidget {
     final number = left ? line.oldLine : line.newLine;
     return Container(
       color: show ? _lineBackground(context, line.kind) : Colors.transparent,
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.micro),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -798,7 +798,7 @@ class _SplitCell extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: AppSpacing.xs),
         ],
       ),
     );
@@ -852,13 +852,13 @@ class _GitDiffFailureState extends StatelessWidget {
     final isStale = phase == GitDiffPhase.stale;
     return SingleChildScrollView(
       key: const Key('git-diff-failure-scroll'),
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(AppSpacing.xl),
       child: Container(
         key: isStale
             ? const Key('git-snapshot-stale')
             : const Key('git-diff-error-state'),
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.lg),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border.all(color: context.appColors.border),
@@ -869,15 +869,15 @@ class _GitDiffFailureState extends StatelessWidget {
           children: [
             Icon(
               isStale ? Icons.sync_problem_outlined : Icons.cloud_off_outlined,
-              size: 28,
+              size: AppSizes.iconXl,
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               message ?? 'Git 变更暂时不可用。',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             IconButton(
               key: isStale
                   ? const Key('git-stale-retry-button')

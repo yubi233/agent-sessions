@@ -149,8 +149,8 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
     final blocked = widget.blockedReason;
     return Container(
       key: const Key('session-goal-dock'),
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.sm),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
@@ -164,10 +164,10 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
             children: [
               Icon(
                 Icons.flag_outlined,
-                size: 18,
+                size: AppSizes.iconMd,
                 color: theme.colorScheme.primary,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
                   'Goal · ${goal.phase.label} · ${goal.progressLabel}',
@@ -179,7 +179,7 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
                 key: const Key('session-goal-dock-edit'),
                 tooltip: blocked ?? '编辑 Goal',
                 onPressed: _blocked ? null : _startEditing,
-                icon: const Icon(Icons.edit_outlined, size: 19),
+                icon: const Icon(Icons.edit_outlined, size: AppSizes.iconMd),
               ),
               IconButton(
                 key: const Key('session-goal-dock-toggle'),
@@ -191,19 +191,19 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
                   goal.phase == GoalPhase.active
                       ? Icons.pause_circle_outline
                       : Icons.play_circle_outline,
-                  size: 20,
+                  size: AppSizes.iconLg,
                 ),
               ),
               IconButton(
                 key: const Key('session-goal-dock-clear'),
                 tooltip: blocked ?? '清除 Goal',
                 onPressed: _blocked ? null : _clear,
-                icon: const Icon(Icons.clear_outlined, size: 20),
+                icon: const Icon(Icons.clear_outlined, size: AppSizes.iconLg),
               ),
             ],
           ),
           if (_editing) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Shortcuts(
               shortcuts: const {
                 SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
@@ -232,7 +232,7 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
                 ),
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -251,11 +251,11 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
               ],
             ),
           ] else ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Text(goal.title, key: const Key('session-goal-dock-title')),
           ],
           if (blocked != null) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               blocked,
               key: const Key('session-goal-dock-blocked'),
@@ -265,7 +265,7 @@ class _SessionGoalDockState extends State<SessionGoalDock> {
             ),
           ],
           if (_inlineError != null) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               _inlineError!,
               key: const Key('session-goal-dock-error'),

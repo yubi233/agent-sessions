@@ -111,8 +111,8 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
         : [messages.first, messages.last];
     return Container(
       key: const Key('session-queue-dock'),
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(10, 8, 6, 6),
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border.all(color: theme.dividerColor),
@@ -136,7 +136,7 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
               TextButton.icon(
                 key: const Key('session-queue-send-all'),
                 onPressed: widget.onSendAll,
-                icon: const Icon(Icons.send_outlined, size: 16),
+                icon: const Icon(Icons.send_outlined, size: AppSizes.iconSm),
                 label: const Text('全部发送'),
               ),
             ],
@@ -148,7 +148,7 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
               !expanded &&
               visible.length < messages.length)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: AppSpacing.xs),
               child: Text(
                 '还有 ${messages.length - visible.length} 条排队消息未显示',
                 style: theme.textTheme.labelSmall,
@@ -169,7 +169,7 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
     final editing = _editingId == item.id;
     return Container(
       key: Key('session-queue-row-${item.id}'),
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: editing
           ? Row(
               children: [
@@ -192,13 +192,13 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
                     }
                     setState(() => _editingId = null);
                   },
-                  icon: const Icon(Icons.check, size: 18),
+                  icon: const Icon(Icons.check, size: AppSizes.iconMd),
                 ),
                 IconButton(
                   key: Key('session-queue-edit-cancel-${item.id}'),
                   tooltip: '取消编辑',
                   onPressed: () => setState(() => _editingId = null),
-                  icon: const Icon(Icons.close, size: 18),
+                  icon: const Icon(Icons.close, size: AppSizes.iconMd),
                 ),
               ],
             )
@@ -218,19 +218,19 @@ class _SessionQueueDockState extends State<SessionQueueDock> {
                         key: Key('session-queue-steer-${item.id}'),
                         tooltip: '只提交这条',
                         onPressed: () => widget.onSteer(item.id),
-                        icon: const Icon(Icons.send, size: 18),
+                        icon: const Icon(Icons.send, size: AppSizes.iconMd),
                       ),
                     IconButton(
                       key: Key('session-queue-edit-${item.id}'),
                       tooltip: item.editable ? '编辑排队消息' : '该队列项不可编辑',
                       onPressed: item.editable ? () => _startEdit(item) : null,
-                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      icon: const Icon(Icons.edit_outlined, size: AppSizes.iconMd),
                     ),
                     IconButton(
                       key: Key('session-queue-remove-${item.id}'),
                       tooltip: '删除排队消息',
                       onPressed: () => widget.onRemove(item.id),
-                      icon: const Icon(Icons.delete_outline, size: 18),
+                      icon: const Icon(Icons.delete_outline, size: AppSizes.iconMd),
                     ),
                   ],
                 ),

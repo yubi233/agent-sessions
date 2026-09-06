@@ -6,6 +6,7 @@ import '../../../domain/session_models.dart';
 import '../../../state/session_controller.dart';
 import 'session_approval_panel.dart';
 import 'session_question_panel.dart';
+import '../../app_theme.dart';
 class SessionComposerChain extends StatelessWidget {
   const SessionComposerChain({
     super.key,
@@ -35,7 +36,7 @@ class SessionComposerChain extends StatelessWidget {
     final planReview = _planReviewStep(question);
     return Padding(
       key: const Key('session-composer-chain'),
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: question != null
           ? KeyedSubtree(
               key: const Key('session-question-panel'),

@@ -34,7 +34,7 @@ class SessionApprovalPanel extends StatelessWidget {
     final enabled = canWrite && !resolved && !pending;
     return Container(
       key: Key('permission-card-${permission.requestId}'),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.tertiaryContainer,
         border: Border.all(color: Theme.of(context).colorScheme.tertiary),
@@ -45,7 +45,7 @@ class SessionApprovalPanel extends StatelessWidget {
         children: [
           Container(
             key: Key('permission-waiting-strip-${permission.requestId}'),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.tertiary,
               borderRadius: BorderRadius.circular(AppRadius.small),
@@ -55,10 +55,10 @@ class SessionApprovalPanel extends StatelessWidget {
               children: [
                 Icon(
                   Icons.circle,
-                  size: 8,
+                  size: AppSizes.statusDot,
                   color: Theme.of(context).colorScheme.onTertiary,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Text(
                   '等待确认',
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -67,7 +67,7 @@ class SessionApprovalPanel extends StatelessWidget {
                   ),
                 ),
                 if (pending) ...[
-                  const SizedBox(width: 8),
+                  const SizedBox(width: AppSpacing.sm),
                   SizedBox(
                     width: 14,
                     height: 14,
@@ -80,11 +80,11 @@ class SessionApprovalPanel extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
               const Icon(Icons.shield_outlined),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
                   permission.title,
@@ -93,7 +93,7 @@ class SessionApprovalPanel extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           // v0.5/P4-D：理由和命令可能是模型生成的长文本；滚动区只包住正文，
           // 决策按钮留在外层，避免命令过长时 allow/reject 不可达。
           ConstrainedBox(
@@ -105,13 +105,13 @@ class SessionApprovalPanel extends StatelessWidget {
                 children: [
                   Text(permission.summary),
                   if (permission.command != null) ...[
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     Container(
                       key: Key(
                         'permission-command-text-${permission.requestId}',
                       ),
                       width: double.infinity,
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(AppSpacing.sm),
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.surface,
                         borderRadius: BorderRadius.circular(AppRadius.small),
@@ -131,7 +131,7 @@ class SessionApprovalPanel extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [

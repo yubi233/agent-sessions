@@ -280,7 +280,7 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
               key: const Key('session-info-list'),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 if (session == null)
                   const _InfoEmptyState()
@@ -334,7 +334,7 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                         ),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   _InfoCard(
                     title: '机器',
                     children: [
@@ -345,7 +345,7 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                           _TerminalInfoRow(terminal: terminal),
                     ],
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   _InfoCard(
                     title: '能力',
                     children: [
@@ -370,13 +370,13 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                     ],
                   ),
                   if (app.canManageDevices) ...[
-                    const SizedBox(height: 12),
+                    const SizedBox(height: AppSpacing.md),
                     _SessionInfoActions(
                       sessions: sessions,
                       deviceId: app.currentDevice?.id,
                     ),
                   ],
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.lg),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -385,7 +385,7 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                         key: const Key('session-info-copy-id-button'),
                         onPressed: () =>
                             Clipboard.setData(ClipboardData(text: session.id)),
-                        icon: const Icon(Icons.copy_outlined, size: 16),
+                        icon: const Icon(Icons.copy_outlined, size: AppSizes.iconSm),
                         label: const Text('复制会话 ID'),
                       ),
                       OutlinedButton.icon(
@@ -393,7 +393,7 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                         onPressed: () => Clipboard.setData(
                           ClipboardData(text: session.provider),
                         ),
-                        icon: const Icon(Icons.copy_outlined, size: 16),
+                        icon: const Icon(Icons.copy_outlined, size: AppSizes.iconSm),
                         label: const Text('复制 Provider'),
                       ),
                       OutlinedButton.icon(
@@ -401,12 +401,12 @@ class _SessionInfoScreenState extends ConsumerState<SessionInfoScreen> {
                         onPressed: () => Clipboard.setData(
                           ClipboardData(text: _debugInfoText(session)),
                         ),
-                        icon: const Icon(Icons.bug_report_outlined, size: 16),
+                        icon: const Icon(Icons.bug_report_outlined, size: AppSizes.iconSm),
                         label: const Text('复制 Debug 信息'),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   const _BoundaryNote(
                     message:
                         '此页面只显示 Relay 白名单元数据；消息正文、token 与完整路径不会显示。终止与恢复需要 owner 可操作状态与 Provider 能力，分享暂不可用。',
@@ -447,7 +447,7 @@ class _SessionInfoActions extends StatelessWidget {
           icon: const Icon(Icons.play_arrow_outlined),
           label: Text(startBlocked == null ? '启动会话' : '启动不可用：$startBlocked'),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.sm),
         OutlinedButton.icon(
           key: const Key('session-kill-button'),
           onPressed: killBlocked == null && !sessions.isBusy
@@ -493,7 +493,7 @@ class _InfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(14),
+    padding: const EdgeInsets.all(AppSpacing.lg),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surface,
       border: Border.all(color: context.appColors.border),
@@ -503,7 +503,7 @@ class _InfoCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.sm),
         ...children,
       ],
     ),
@@ -518,7 +518,7 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
+    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -546,7 +546,7 @@ class _TerminalInfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
+    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -578,7 +578,7 @@ class _CapabilityRow extends StatelessWidget {
     final colors = context.appColors;
     final blocked = blockedReason != null;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -607,7 +607,7 @@ class _BoundaryNote extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.all(AppSpacing.md),
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
@@ -616,8 +616,8 @@ class _BoundaryNote extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.info_outline, size: 18),
-        const SizedBox(width: 10),
+        const Icon(Icons.info_outline, size: AppSizes.iconMd),
+        const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(message, style: Theme.of(context).textTheme.bodySmall),
         ),
@@ -633,16 +633,16 @@ class _InfoEmptyState extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('session-info-empty'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 56),
+      padding: const EdgeInsets.symmetric(vertical: AppLayout.emptyStateInset),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
             Icons.info_outline,
-            size: 32,
+            size: AppSizes.iconEmpty,
             color: context.appColors.textSecondary,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           Text('未找到会话信息。', style: Theme.of(context).textTheme.bodyMedium),
         ],
       ),

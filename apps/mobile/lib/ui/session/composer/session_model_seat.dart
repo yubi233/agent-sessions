@@ -270,7 +270,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                   'Provider 能力',
                   style: Theme.of(dialogContext).textTheme.titleSmall,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 if (_effectiveCapabilities.isEmpty)
                   const Text('暂无能力状态。')
                 else
@@ -296,7 +296,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                     '任务控制',
                     style: Theme.of(dialogContext).textTheme.titleSmall,
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   widget.taskControls!,
                 ],
                 if (usage != null) ...[
@@ -305,7 +305,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                     '用量统计',
                     style: Theme.of(dialogContext).textTheme.titleSmall,
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.sm),
                   SessionStatsLine(
                     stats: SessionStatsLineProjection.fromUsage(usage),
                   ),
@@ -349,15 +349,15 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
         children: [
           Icon(
             Icons.account_tree_outlined,
-            size: 14,
+            size: AppSizes.iconSm,
             color: theme.colorScheme.onSurfaceVariant,
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: AppSpacing.xs),
           const SizedBox(
-            width: 36,
+            width: AppLayout.modelSelectorRow,
             child: Text('main', maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Tooltip(
               message: _pickerHint,
@@ -375,15 +375,15 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                     label: '模型 $_displayModel，推理等级 $_displayEffort',
                     hint: _pickerHint,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
                       child: Row(
                         children: [
                           Icon(
                             _providerIcon(widget.provider),
-                            size: 14,
+                            size: AppSizes.iconSm,
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: AppSpacing.xs),
                           Flexible(
                             flex: 3,
                             child: Text(
@@ -409,10 +409,10 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                               style: theme.textTheme.labelSmall,
                             ),
                           ),
-                          const SizedBox(width: 2),
+                          const SizedBox(width: AppSpacing.micro),
                           Icon(
                             Icons.expand_more,
-                            size: 16,
+                            size: AppSizes.iconSm,
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
                         ],
@@ -432,7 +432,7 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints.tightFor(width: 32, height: 32),
               onPressed: _openDetails,
-              icon: const Icon(Icons.info_outline, size: 17),
+              icon: const Icon(Icons.info_outline, size: AppSizes.iconMd),
             ),
           ),
         ],
@@ -589,7 +589,7 @@ class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
             Container(
               width: 32,
               height: 4,
-              margin: const EdgeInsets.only(top: 8, bottom: 6),
+              margin: const EdgeInsets.only(top: AppSpacing.sm, bottom: AppSpacing.sm),
               decoration: BoxDecoration(
                 color: theme.colorScheme.onSurfaceVariant.withValues(
                   alpha: 0.4,
@@ -598,7 +598,7 @@ class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.sm, AppSpacing.xs),
               child: Row(
                 children: [
                   Expanded(
@@ -608,7 +608,7 @@ class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
                     key: const Key('session-model-selection-close'),
                     tooltip: '关闭模型选择',
                     onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close, size: 20),
+                    icon: const Icon(Icons.close, size: AppSizes.iconLg),
                   ),
                 ],
               ),
@@ -620,7 +620,7 @@ class _SessionModelPickerSheetState extends State<_SessionModelPickerSheet> {
               ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
+                padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.lg),
                 children: [
                   if (_catalogError != null)
                     _CatalogNotice(
@@ -711,7 +711,7 @@ class _PickerSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+          padding: const EdgeInsets.fromLTRB(AppSpacing.sm, 0, AppSpacing.sm, AppSpacing.xs),
           child: Text(title, style: theme.textTheme.labelLarge),
         ),
         if (!enabled)
@@ -719,7 +719,7 @@ class _PickerSection extends StatelessWidget {
             key: Key(
               'session-model-selection-${title == '模型' ? 'model' : 'effort'}-blocked',
             ),
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(AppSpacing.sm),
             child: Text(
               disabledReason ?? '$title 当前不可用。',
               style: theme.textTheme.labelSmall?.copyWith(
@@ -730,13 +730,13 @@ class _PickerSection extends StatelessWidget {
         else if (options.isEmpty && groups.isEmpty)
           Padding(
             key: emptyKey,
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(AppSpacing.sm),
             child: const Text('当前目录为空，Host 尚未提供可用选项。'),
           )
         else if (groups.isNotEmpty)
           for (final group in groups) ...[
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 10, 8, 2),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.micro),
               child: Text(group.name, style: theme.textTheme.labelLarge),
             ),
             for (final option in group.models)
@@ -748,7 +748,7 @@ class _PickerSection extends StatelessWidget {
                   option.value == selected
                       ? Icons.check_circle
                       : Icons.circle_outlined,
-                  size: 18,
+                  size: AppSizes.iconMd,
                 ),
                 title: Text(
                   option.name,
@@ -786,7 +786,7 @@ class _PickerSection extends StatelessWidget {
               enabled: !selectionBusy,
               leading: Icon(
                 option == selected ? Icons.check_circle : Icons.circle_outlined,
-                size: 18,
+                size: AppSizes.iconMd,
               ),
               title: Text(option, maxLines: 1, overflow: TextOverflow.ellipsis),
               trailing: switch (effortForOption?.call(option, const [])) {
@@ -820,8 +820,8 @@ class _CatalogNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 8),
-    padding: const EdgeInsets.all(8),
+    margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+    padding: const EdgeInsets.all(AppSpacing.sm),
     color: Theme.of(context).colorScheme.errorContainer,
     child: Row(
       children: [
@@ -841,7 +841,7 @@ class _ModelDetailRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
+    padding: const EdgeInsets.only(bottom: AppSpacing.sm),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -891,10 +891,10 @@ class _ModelCapabilityLabel extends StatelessWidget {
                 : entry.availability == CapabilityAvailability.emulated
                 ? Icons.auto_awesome_outlined
                 : Icons.block_outlined,
-            size: 14,
+            size: AppSizes.iconSm,
             color: color,
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: AppSpacing.xs),
           Text(
             '${entry.name} ${entry.availability.label}',
             style: Theme.of(

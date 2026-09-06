@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../app_theme.dart';
 
 class SessionAgentPresetOption {
   const SessionAgentPresetOption({
@@ -61,8 +62,8 @@ class SessionAgentPresetSeat extends StatelessWidget {
               dense: true,
               contentPadding: EdgeInsets.zero,
               leading: option.id == current.id
-                  ? const Icon(Icons.check, size: 18)
-                  : const SizedBox(width: 18),
+                  ? const Icon(Icons.check, size: AppSizes.iconMd)
+                  : const SizedBox(width: AppSpacing.lg),
               title: Text(option.name),
               subtitle: Text(option.description),
             ),
@@ -96,7 +97,7 @@ class SessionAgentPresetLabel extends StatelessWidget {
       message: option?.description ?? '此会话的 Agent preset',
       child: Chip(
         key: const Key('session-agent-preset-label'),
-        avatar: const Icon(Icons.tune, size: 15),
+        avatar: const Icon(Icons.tune, size: AppSizes.iconSm),
         label: Text(option?.name ?? id),
         visualDensity: VisualDensity.compact,
       ),

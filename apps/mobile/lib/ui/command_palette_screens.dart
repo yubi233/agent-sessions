@@ -64,7 +64,7 @@ class _CommandPaletteScreenState extends ConsumerState<CommandPaletteScreen> {
             child: Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.sm),
                   child: TextField(
                     key: const Key('command-palette-input'),
                     controller: _searchController,
@@ -156,10 +156,10 @@ class _PaletteResults extends StatelessWidget {
           children: [
             Icon(
               Icons.manage_search_outlined,
-              size: 32,
+              size: AppSizes.iconEmpty,
               color: context.appColors.textSecondary,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             Text(
               controller.query.trim().isEmpty ? '输入关键字开始搜索' : '没有匹配的命令',
               style: Theme.of(context).textTheme.bodyMedium,
@@ -170,7 +170,7 @@ class _PaletteResults extends StatelessWidget {
     }
     return ListView(
       key: const Key('command-palette-results'),
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.xxl),
       children: [
         for (var index = 0; index < results.length; index += 1)
           _PaletteResultTile(

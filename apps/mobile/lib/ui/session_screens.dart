@@ -172,7 +172,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
     if (sessions.workspacePhase == WorkspaceListPhase.error &&
         sessions.workspaces.isEmpty) {
       return ListView(
-        padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xxl, AppSpacing.lg, AppSpacing.xxl),
         children: [
           _InlineError(
             key: const Key('dsh-workspace-list-error'),
@@ -211,7 +211,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
 
     return ListView(
       key: const Key('dsh-workspace-list-scroll'),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.xxl),
       children: [
         if (sessions.errorMessage != null) ...[
           _InlineError(
@@ -219,17 +219,17 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
             message: sessions.errorMessage!,
             onRetry: sessions.clearError,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
         ],
         if (!app.canManageDevices) ...[
           const _ReadOnlyBanner(),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
         ],
         _DSHWorkspaceToolbar(
           searchController: _searchController,
           onSearchChanged: (value) => setState(() => _workspaceSearch = value),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: AppSpacing.md),
         if (sessions.workspaceSyncState != null ||
             sessions.workspaceSyncWaiting)
           _DSHWorkspaceSyncNotice(
@@ -240,7 +240,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
           ),
         if (sessions.workspaceSyncState != null ||
             sessions.workspaceSyncWaiting)
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
         // v0.8.6 C：无工作区但存在可同步终端时也渲染终端空卡（卡内同步直发），
         // 保证首次使用场景有同步入口；搜索无命中时展示空态。
         // v0.8.6 C：空态仅在"既无工作区也无已知终端"时展示；终端刷新挂起时
@@ -249,7 +249,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
         if (terminalStatus.isRefreshing && terminalStatus.terminals.isEmpty)
           const Padding(
             key: Key('terminal-sync-loading'),
-            padding: EdgeInsets.symmetric(vertical: 16),
+            padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
             child: Center(child: Text('正在读取本机终端状态…')),
           )
         else if (dshWorkspaces.isEmpty && terminalStatus.terminals.isEmpty)
@@ -326,7 +326,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
           syncBusy: _syncBusy,
           terminalsRefreshing: terminalStatus.isRefreshing,
         ),
-      const SizedBox(height: 8),
+      const SizedBox(height: AppSpacing.sm),
     ];
   }
 
@@ -359,7 +359,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
     }
     return ListView(
       key: const Key('dsh-workspace-master-detail-scroll'),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.xxl),
       children: [
         SizedBox(
           height: panelHeight,
@@ -371,7 +371,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                 child: Material(
                   color: Theme.of(context).colorScheme.surface,
                   child: Padding(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(AppSpacing.md),
                     child: ListView(
                       children: [
                         if (sessions.errorMessage != null) ...[
@@ -380,18 +380,18 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                             message: sessions.errorMessage!,
                             onRetry: sessions.clearError,
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: AppSpacing.sm),
                         ],
                         if (!app.canManageDevices) ...[
                           const _ReadOnlyBanner(),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: AppSpacing.md),
                         ],
                         _DSHWorkspaceToolbar(
                           searchController: _searchController,
                           onSearchChanged: (value) =>
                               setState(() => _workspaceSearch = value),
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: AppSpacing.md),
                         if (sessions.workspaceSyncState != null ||
                             sessions.workspaceSyncWaiting)
                           _DSHWorkspaceSyncNotice(
@@ -403,12 +403,12 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                           ),
                         if (sessions.workspaceSyncState != null ||
                             sessions.workspaceSyncWaiting)
-                          const SizedBox(height: 12),
+                          const SizedBox(height: AppSpacing.md),
                         if (terminalStatus.isRefreshing &&
                             terminalStatus.terminals.isEmpty)
                           const Padding(
                             key: Key('terminal-sync-loading'),
-                            padding: EdgeInsets.symmetric(vertical: 16),
+                            padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
                             child: Center(child: Text('正在读取本机终端状态…')),
                           )
                         else if (dshWorkspaces.isEmpty &&
@@ -756,11 +756,11 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                       borderRadius: BorderRadius.circular(AppRadius.micro),
                       onTap: onSelectWorkspace,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
                         child: Row(
                           children: [
-                            const Icon(Icons.folder_outlined, size: 20),
-                            const SizedBox(width: 8),
+                            const Icon(Icons.folder_outlined, size: AppSizes.iconLg),
+                            const SizedBox(width: AppSpacing.sm),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -771,7 +771,7 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                                     overflow: TextOverflow.ellipsis,
                                     style: theme.textTheme.titleSmall,
                                   ),
-                                  const SizedBox(height: 2),
+                                  const SizedBox(height: AppSpacing.micro),
                                   Text(
                                     statusLabel,
                                     maxLines: 1,
@@ -789,7 +789,7 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                 ),
                 if (selected)
                   Padding(
-                    padding: const EdgeInsets.only(right: 12),
+                    padding: const EdgeInsets.only(right: AppSpacing.md),
                     child: Icon(
                       Icons.check_circle_outline,
                       color: theme.colorScheme.primary,
@@ -802,7 +802,9 @@ class _DSHWorkspaceGroup extends StatelessWidget {
               const Divider(height: 1),
               if (sessions.isEmpty)
                 const Padding(
-                  padding: EdgeInsets.fromLTRB(52, 14, 12, 14),
+                  padding: EdgeInsets.fromLTRB(
+                    AppLayout.workspaceHeaderIndent,
+                    AppSpacing.lg, AppSpacing.md, AppSpacing.lg),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text('尚无 DSH 会话'),
@@ -810,7 +812,7 @@ class _DSHWorkspaceGroup extends StatelessWidget {
                 )
               else
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 2),
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.sm, AppSpacing.sm, AppSpacing.micro),
                   child: Column(
                     children: [
                       for (final session in sessions)
@@ -855,7 +857,7 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
       child: ListTile(
         key: Key('dsh-workspace-session-${session.id}'),
         dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.micro),
           side: BorderSide(
@@ -866,7 +868,7 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
         ),
         selected: selected,
         selectedTileColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-        leading: const Icon(Icons.terminal_outlined, size: 18),
+        leading: const Icon(Icons.terminal_outlined, size: AppSizes.iconMd),
         title: Text(
           _dshSessionLabel(session),
           maxLines: 1,
@@ -885,10 +887,10 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
                 label: '有新完成结果',
                 child: Padding(
                   key: Key('session-completion-badge-${session.id}'),
-                  padding: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.only(right: AppSpacing.sm),
                   child: Icon(
                     Icons.mark_chat_unread_outlined,
-                    size: 16,
+                    size: AppSizes.iconSm,
                     color: Theme.of(context).colorScheme.primary,
                   ),
                 ),
@@ -897,7 +899,7 @@ class _DSHWorkspaceSessionItem extends StatelessWidget {
               label: status.label,
               child: Icon(
                 Icons.circle,
-                size: 10,
+                size: AppSizes.indicatorDot,
                 color: _sessionStatusColor(context, status.tone),
               ),
             ),
@@ -917,7 +919,7 @@ class _DSHWorkspaceEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('dsh-workspace-empty'),
-    padding: const EdgeInsets.all(16),
+    padding: const EdgeInsets.all(AppSpacing.lg),
     decoration: BoxDecoration(
       border: Border.all(color: Theme.of(context).dividerColor),
       borderRadius: BorderRadius.circular(AppRadius.card),
@@ -926,9 +928,9 @@ class _DSHWorkspaceEmptyState extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Icon(Icons.folder_off_outlined),
-        const SizedBox(height: 10),
+        const SizedBox(height: AppSpacing.sm),
         Text('尚未同步本机 DSH 项目', style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
+        const SizedBox(height: AppSpacing.xs),
         Text(
           canSync ? '选择在线终端后同步其已授权的项目。' : '当前设备只读，无法请求同步。',
           style: Theme.of(context).textTheme.bodySmall,
@@ -944,7 +946,7 @@ class _DSHWorkspaceSearchEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) => const Padding(
     key: Key('dsh-workspace-search-empty'),
-    padding: EdgeInsets.symmetric(vertical: 24),
+    padding: EdgeInsets.symmetric(vertical: AppSpacing.xxl),
     child: Center(child: Text('没有匹配的工作区或会话。')),
   );
 }
@@ -982,10 +984,10 @@ class _DSHWorkspaceNoSelectionPane extends StatelessWidget {
       children: [
         Icon(
           Icons.folder_open_outlined,
-          size: 48,
+          size: AppSizes.emptyStateIcon,
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: AppSpacing.md),
         const Text('选择一个工作区查看详情'),
       ],
     ),
@@ -1071,7 +1073,7 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
 
     return SingleChildScrollView(
       key: const Key('dsh-workspace-detail-pane'),
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.xxl, AppSpacing.xl, AppSpacing.xxl, AppSpacing.xxl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1089,7 +1091,7 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: AppSpacing.sm),
                     Text(
                       'DSH 工作区',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -1124,7 +1126,7 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: AppSpacing.xl),
           Semantics(
             button: GoRouter.maybeOf(context) != null,
             label:
@@ -1138,7 +1140,7 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                     ? null
                     : () => context.push('/terminals'),
                 child: Ink(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(AppSpacing.lg),
                   decoration: BoxDecoration(
                     color: Theme.of(context).colorScheme.surfaceContainerHigh,
                     borderRadius: BorderRadius.circular(AppRadius.card),
@@ -1146,13 +1148,13 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                   child: Row(
                     children: [
                       const Icon(Icons.computer_outlined),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: AppSpacing.md),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text('home Terminal'),
-                            const SizedBox(height: 2),
+                            const SizedBox(height: AppSpacing.micro),
                             Text(
                               terminal == null
                                   ? '未连接'
@@ -1174,10 +1176,10 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: AppSpacing.xl),
           if (createReason != null && !canCreate)
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
               child: Text(
                 createReason,
                 key: const Key('dsh-workspace-create-disabled-reason'),
@@ -1196,14 +1198,14 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
             ),
           ),
           if (error != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             _InlineError(message: error!, onRetry: onDismissError),
           ],
           if (importWaiting || importState != null) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             Container(
               key: const Key('dsh-workspace-import-status'),
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(AppSpacing.md),
               decoration: BoxDecoration(
                 border: Border.all(color: Theme.of(context).dividerColor),
                 borderRadius: BorderRadius.circular(AppRadius.card),
@@ -1212,8 +1214,8 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                 children: [
                   if (importWaiting)
                     const SizedBox(
-                      width: 16,
-                      height: 16,
+                      width: AppSpacing.lg,
+                      height: AppSpacing.lg,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   else
@@ -1222,7 +1224,7 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                           ? Icons.check_circle_outline
                           : Icons.error_outline,
                     ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: AppSpacing.sm),
                   Expanded(
                     child: Text(
                       importWaiting
@@ -1244,20 +1246,20 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
               ),
             ),
           ],
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xxl),
           Text('会话', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           if (sessions.isEmpty)
             Container(
               key: const Key('dsh-workspace-detail-empty'),
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 28),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
               child: const Column(
                 children: [
                   Icon(Icons.chat_bubble_outline),
-                  SizedBox(height: 8),
+                  SizedBox(height: AppSpacing.sm),
                   Text('尚无 DSH 会话'),
-                  SizedBox(height: 4),
+                  SizedBox(height: AppSpacing.xs),
                   Text('从上方创建会话，或在更多操作中导入历史元数据。'),
                 ],
               ),
@@ -1272,13 +1274,13 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                 ),
                 onTap: () => onOpenSession(session),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: AppSpacing.xs),
             ],
           if (!canImport &&
               importTerminalState == false &&
               importReason != null)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: AppSpacing.sm),
               child: Text(
                 importReason,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -1467,7 +1469,7 @@ class _DSHWorkspaceSyncNotice extends StatelessWidget {
         : error ?? 'DSH 工作区同步未完成。';
     return Container(
       key: const Key('dsh-workspace-sync-pending'),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: succeeded
             ? Theme.of(context).colorScheme.secondaryContainer
@@ -1479,8 +1481,8 @@ class _DSHWorkspaceSyncNotice extends StatelessWidget {
         children: [
           if (waiting)
             const SizedBox(
-              height: 16,
-              width: 16,
+              height: AppSpacing.lg,
+              width: AppSpacing.lg,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           else
@@ -1491,7 +1493,7 @@ class _DSHWorkspaceSyncNotice extends StatelessWidget {
                   ? Icons.schedule_outlined
                   : Icons.error_outline,
             ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(child: Text(message)),
           if (waiting)
             TextButton(
@@ -1568,17 +1570,17 @@ class _TerminalWorkspaceCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 6, 8),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
             child: Row(
               children: [
                 Icon(
                   terminal == null
                       ? Icons.help_outline
                       : Icons.computer_outlined,
-                  size: 18,
+                  size: AppSizes.iconMd,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
                     terminal?.hostname ?? '未归属终端',
@@ -1603,7 +1605,7 @@ class _TerminalWorkspaceCard extends StatelessWidget {
           if (group.blockedReason != null)
             Padding(
               key: Key('terminal-unsyncable-reason-${terminal?.id ?? 'orphan'}'),
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.sm),
               child: Text(
                 group.blockedReason!,
                 style: theme.textTheme.labelSmall?.copyWith(
@@ -1614,7 +1616,7 @@ class _TerminalWorkspaceCard extends StatelessWidget {
           if (terminal != null && terminalsRefreshing && group.canSync)
             const Padding(
               key: Key('terminal-sync-loading'),
-              padding: EdgeInsets.fromLTRB(14, 0, 14, 8),
+              padding: EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.sm),
               child: Row(
                 children: [
                   SizedBox(
@@ -1622,7 +1624,7 @@ class _TerminalWorkspaceCard extends StatelessWidget {
                     height: 14,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
-                  SizedBox(width: 8),
+                  SizedBox(width: AppSpacing.sm),
                   Text('正在更新终端状态…'),
                 ],
               ),
@@ -1643,7 +1645,7 @@ class _TerminalWorkspaceCard extends StatelessWidget {
               onSelectWorkspace: () => onSelectWorkspace(workspace),
               onOpenSession: onOpenSession,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
           ],
         ],
       ),
@@ -1659,8 +1661,8 @@ class _TerminalWorkspaceCard extends StatelessWidget {
       onPressed: syncBusy ? null : onSync,
       icon: syncBusy
           ? const SizedBox(
-              width: 18,
-              height: 18,
+              width: AppSpacing.lg,
+              height: AppSpacing.lg,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           : const Icon(Icons.sync),
@@ -1720,15 +1722,15 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 Text('开始一个会话', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 6),
+                const SizedBox(height: AppSpacing.sm),
                 Text(
                   '会话会绑定到已授权的工作区；实际 Provider 调度不在本地 fixture 中执行。',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: AppSpacing.xl),
                 Form(
                   key: _formKey,
                   child: Column(
@@ -1749,7 +1751,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                         },
                       ),
                       if (app.canManageDevices) ...[
-                        const SizedBox(height: 12),
+                        const SizedBox(height: AppSpacing.md),
                         TextFormField(
                           key: const Key('new-session-workspace-name-input'),
                           controller: _workspaceNameController,
@@ -1783,7 +1785,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                           label: const Text('新建工作区'),
                         ),
                         if (sessions.workspaceSettling) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: AppSpacing.sm),
                           const Align(
                             alignment: Alignment.centerLeft,
                             child: Text(
@@ -1793,7 +1795,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                           ),
                         ],
                       ],
-                      const SizedBox(height: 12),
+                      const SizedBox(height: AppSpacing.md),
                       TextFormField(
                         key: const Key('new-session-workspace-input'),
                         controller: _workspaceController,
@@ -1802,7 +1804,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                             ? null
                             : '请输入工作区 ID。',
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: AppSpacing.md),
                       SessionAgentPresetSeat(
                         options: fixtureMode
                             ? fixtureAgentPresetOptions
@@ -1812,7 +1814,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                         onSelected: (value) =>
                             setState(() => _agentPresetId = value),
                       ),
-                      if (fixtureMode) const SizedBox(height: 12),
+                      if (fixtureMode) const SizedBox(height: AppSpacing.md),
                       DropdownButtonFormField<String>(
                         key: const Key('new-session-provider-select'),
                         initialValue: _provider,
@@ -1838,9 +1840,9 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                                   setState(() => _provider = value ?? 'codex')
                             : null,
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: AppSpacing.xl),
                       if (!app.canManageDevices) const _ReadOnlyBanner(),
-                      if (!app.canManageDevices) const SizedBox(height: 12),
+                      if (!app.canManageDevices) const SizedBox(height: AppSpacing.md),
                       FilledButton.icon(
                         key: const Key('new-session-create-button'),
                         onPressed: app.canManageDevices && !sessions.isBusy
@@ -1850,7 +1852,7 @@ class _NewSessionScreenState extends ConsumerState<NewSessionScreen> {
                         label: const Text('创建会话'),
                       ),
                       if (sessions.errorMessage != null) ...[
-                        const SizedBox(height: 12),
+                        const SizedBox(height: AppSpacing.md),
                         _InlineError(
                           message: sessions.errorMessage!,
                           onRetry: sessions.clearError,
@@ -2073,13 +2075,13 @@ class _ConversationEmptyHero extends StatelessWidget {
     return Column(
       key: const Key('happy-session-empty-state'),
       children: [
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.xxl),
         Icon(
           Icons.computer_outlined,
-          size: 44,
+          size: AppSizes.emptyStateIcon,
           color: theme.colorScheme.onSurfaceVariant,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: AppSpacing.md),
         Text(
           session?.workspaceLabel ?? '绑定的工作区',
           maxLines: 1,
@@ -2088,7 +2090,7 @@ class _ConversationEmptyHero extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: AppSpacing.xs),
         Text(
           '从下方选择工作区开始会话',
           maxLines: 1,
@@ -2097,7 +2099,7 @@ class _ConversationEmptyHero extends StatelessWidget {
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: AppSpacing.lg),
         SessionWorkspacePicker(
           controller: sessions,
           selectedId: session?.workspaceId,
@@ -2121,10 +2123,10 @@ class _ConversationEmptyHero extends StatelessWidget {
           },
         ),
         if (session?.agentPresetId != null) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           SessionAgentPresetLabel(presetId: session?.agentPresetId),
         ],
-        const SizedBox(height: 18),
+        const SizedBox(height: AppSpacing.lg),
         Text(
           'No messages yet',
           style: theme.textTheme.bodyMedium?.copyWith(
@@ -2739,14 +2741,14 @@ class _SessionQuickMenu extends StatelessWidget {
       isScrollControlled: true,
       builder: (sheetContext) => SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.xxl),
           child: Column(
             key: const Key('session-details-sheet'),
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('会话详情', style: Theme.of(sheetContext).textTheme.titleMedium),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               _DetailRow(label: '会话 ID', value: session.id),
               _DetailRow(label: 'Provider', value: session.provider),
               _DetailRow(label: '工作区', value: session.workspaceLabel),
@@ -2761,7 +2763,7 @@ class _SessionQuickMenu extends StatelessWidget {
                 ),
               ),
               _DetailRow(label: '事件序号', value: '${session.lastSequence}'),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               // v0.3/P2：复制只包含白名单元数据（会话 ID/Provider/工作区），不复制密文或正文。
               Wrap(
                 spacing: 8,
@@ -2770,7 +2772,7 @@ class _SessionQuickMenu extends StatelessWidget {
                     key: const Key('session-copy-id-button'),
                     onPressed: () =>
                         Clipboard.setData(ClipboardData(text: session.id)),
-                    icon: const Icon(Icons.copy_outlined, size: 16),
+                    icon: const Icon(Icons.copy_outlined, size: AppSizes.iconSm),
                     label: const Text('复制会话 ID'),
                   ),
                   OutlinedButton.icon(
@@ -2778,12 +2780,12 @@ class _SessionQuickMenu extends StatelessWidget {
                     onPressed: () => Clipboard.setData(
                       ClipboardData(text: session.provider),
                     ),
-                    icon: const Icon(Icons.copy_outlined, size: 16),
+                    icon: const Icon(Icons.copy_outlined, size: AppSizes.iconSm),
                     label: const Text('复制 Provider'),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
               Text(
                 '展示内容仅来自 Relay 白名单元数据；消息正文与密文不会显示。',
                 style: Theme.of(sheetContext).textTheme.labelSmall,
@@ -2805,7 +2807,7 @@ class _DetailRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
+    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2848,7 +2850,7 @@ class _DelegationPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     if (controller.isLoading && controller.delegations.isEmpty) {
       return const Padding(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+        padding: EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, 0),
         child: LinearProgressIndicator(key: Key('delegation-loading')),
       );
     }
@@ -2866,8 +2868,8 @@ class _DelegationPanel extends StatelessWidget {
     return Container(
       key: const Key('delegation-panel'),
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+      margin: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: Theme.of(context).dividerColor),
@@ -2878,8 +2880,8 @@ class _DelegationPanel extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.account_tree_outlined, size: 17),
-              const SizedBox(width: 7),
+              const Icon(Icons.account_tree_outlined, size: AppSizes.iconMd),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
                   '子会话',
@@ -2894,13 +2896,13 @@ class _DelegationPanel extends StatelessWidget {
               IconButton(
                 key: const Key('delegation-propose-button'),
                 tooltip: '新建子会话',
-                iconSize: 19,
+                iconSize: AppSizes.iconMd,
                 onPressed: () => _showDelegationProposalSheet(context),
                 icon: const Icon(Icons.add_circle_outline),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: AppSpacing.sm),
           const Text('父会话只保留状态和加密摘要', key: Key('delegation-security-boundary')),
           for (final delegation in controller.delegations) ...[
             const Divider(height: 18),
@@ -2916,7 +2918,7 @@ class _DelegationPanel extends StatelessWidget {
             ),
           ],
           if (controller.message != null) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: AppSpacing.sm),
             Row(
               children: [
                 Expanded(
@@ -2931,7 +2933,7 @@ class _DelegationPanel extends StatelessWidget {
                 IconButton(
                   tooltip: '关闭提示',
                   onPressed: controller.clearMessage,
-                  icon: const Icon(Icons.close, size: 18),
+                  icon: const Icon(Icons.close, size: AppSizes.iconMd),
                 ),
               ],
             ),
@@ -3071,10 +3073,10 @@ class _DelegationProposalSheetState
     return SafeArea(
       child: SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(
-          20,
-          16,
-          20,
-          24 + MediaQuery.viewInsetsOf(context).bottom,
+          AppSpacing.xl,
+          AppSpacing.lg,
+          AppSpacing.xxl,
+          AppSpacing.xxl + MediaQuery.viewInsetsOf(context).bottom,
         ),
         child: Column(
           key: const Key('delegation-proposal-sheet'),
@@ -3082,19 +3084,19 @@ class _DelegationProposalSheetState
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text('新建子会话', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 6),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               '任务书将加密提交给已授权 Daemon；当前界面只展示状态与摘要指纹。',
               style: Theme.of(context).textTheme.labelSmall,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             if (blocked != null) ...[
               Text(
                 blocked,
                 key: const Key('delegation-propose-blocked'),
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
             ],
             DropdownButtonFormField<String>(
               key: const Key('delegation-target-provider'),
@@ -3111,7 +3113,7 @@ class _DelegationProposalSheetState
                   ? null
                   : (value) => setState(() => _targetProvider = value),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             TextField(
               key: const Key('delegation-task-summary-input'),
               controller: _summaryController,
@@ -3123,7 +3125,7 @@ class _DelegationProposalSheetState
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: AppSpacing.lg),
             FilledButton(
               key: const Key('delegation-propose-submit'),
               onPressed:
@@ -3205,8 +3207,8 @@ class _DelegationNode extends StatelessWidget {
             children: [
               const _DelegationGraphLabel(label: '父会话', detail: '当前会话'),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(Icons.arrow_forward, size: 18, color: statusColor),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+                child: Icon(Icons.arrow_forward, size: AppSizes.iconMd, color: statusColor),
               ),
               Expanded(
                 child: _DelegationGraphLabel(
@@ -3223,14 +3225,14 @@ class _DelegationNode extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             '加密摘要 ${delegation.summaryFingerprint}',
             key: Key('delegation-summary-${delegation.id}'),
             style: Theme.of(context).textTheme.labelMedium,
           ),
           if (delegation.canApproveOrReject) ...[
-            const SizedBox(height: 3),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               approveBlocked ?? '请先在父会话中确认可操作后重试。',
               key: Key('delegation-blocked-${delegation.id}'),
@@ -3263,8 +3265,8 @@ class _DelegationNode extends StatelessWidget {
                           ),
                     icon: pending
                         ? const SizedBox(
-                            width: 18,
-                            height: 18,
+                            width: AppSpacing.lg,
+                            height: AppSpacing.lg,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.check),
@@ -3274,7 +3276,7 @@ class _DelegationNode extends StatelessWidget {
             ),
           ],
           if (delegation.canCancel) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Align(
               alignment: Alignment.centerRight,
               child: IconButton(
@@ -3289,7 +3291,7 @@ class _DelegationNode extends StatelessWidget {
             ),
           ],
           if (childSessionId != null && childSessionId.isNotEmpty) ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Row(
               children: [
                 const Expanded(child: Text('子会话使用独立可操作状态')),
@@ -3297,7 +3299,7 @@ class _DelegationNode extends StatelessWidget {
                   key: Key('delegation-open-child-${delegation.id}'),
                   tooltip: '打开子会话',
                   onPressed: () => onOpenChild(childSessionId),
-                  icon: const Icon(Icons.arrow_forward_ios, size: 17),
+                  icon: const Icon(Icons.arrow_forward_ios, size: AppSizes.iconMd),
                 ),
               ],
             ),
@@ -3411,7 +3413,7 @@ class _SessionTaskControls extends StatelessWidget {
               icon: const Icon(Icons.check_circle_outline),
             ),
           ),
-          const SizedBox(height: 3),
+          const SizedBox(height: AppSpacing.xs),
           _ControlSummaryRow(
             key: const Key('session-goal-summary'),
             icon: Icons.flag_outlined,
@@ -3435,7 +3437,7 @@ class _SessionTaskControls extends StatelessWidget {
                           canWrite: canWrite,
                         )
                       : null,
-                  icon: const Icon(Icons.edit_outlined, size: 20),
+                  icon: const Icon(Icons.edit_outlined, size: AppSizes.iconLg),
                 ),
                 IconButton(
                   key: const Key('session-goal-toggle-button'),
@@ -3468,13 +3470,13 @@ class _SessionTaskControls extends StatelessWidget {
                           canWrite: canWrite,
                         )
                       : null,
-                  icon: const Icon(Icons.clear_outlined, size: 20),
+                  icon: const Icon(Icons.clear_outlined, size: AppSizes.iconLg),
                 ),
               ],
             ),
           ),
           if (skill.isNotEmpty) ...[
-            const SizedBox(height: 3),
+            const SizedBox(height: AppSpacing.xs),
             _ControlSummaryRow(
               key: const Key('session-skill-summary'),
               icon: Icons.security_outlined,
@@ -3599,8 +3601,8 @@ class _ControlSummaryRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      Icon(icon, size: 17),
-      const SizedBox(width: 8),
+      Icon(icon, size: AppSizes.iconMd),
+      const SizedBox(width: AppSpacing.sm),
       Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3643,8 +3645,8 @@ class _SkillConfirmationCard extends StatelessWidget {
     return Container(
       key: const Key('skill-confirmation-card'),
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+      margin: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: context.appColors.warning),
@@ -3654,13 +3656,13 @@ class _SkillConfirmationCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(top: 2),
+            padding: const EdgeInsets.only(top: AppSpacing.micro),
             child: Icon(
               Icons.warning_amber_outlined,
               color: context.appColors.warning,
             ),
           ),
-          const SizedBox(width: 9),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3669,14 +3671,14 @@ class _SkillConfirmationCard extends StatelessWidget {
                   confirmation.skill.title,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: AppSpacing.micro),
                 Text(
                   confirmation.skill.summary,
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 if (blocked != null)
                   Padding(
-                    padding: const EdgeInsets.only(top: 4),
+                    padding: const EdgeInsets.only(top: AppSpacing.xs),
                     child: Text(
                       blocked,
                       key: const Key('skill-confirmation-blocked-reason'),
@@ -4334,7 +4336,7 @@ class _SessionComposerState extends State<_SessionComposer> {
       top: false,
       child: Container(
         key: const Key('session-composer'),
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
         ),
@@ -4392,7 +4394,7 @@ class _SessionComposerState extends State<_SessionComposer> {
             if (widget.sessions.attachments.isNotEmpty ||
                 widget.sessions.attachmentRejections.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                 child: _AttachmentQueue(
                   sessions: widget.sessions,
                   canWrite: widget.canWrite,
@@ -4409,7 +4411,7 @@ class _SessionComposerState extends State<_SessionComposer> {
               ),
             if (blocked != null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                 child: Text(
                   blocked,
                   key: const Key('session-composer-blocked-reason'),
@@ -4418,7 +4420,7 @@ class _SessionComposerState extends State<_SessionComposer> {
               ),
             if (input.notice != null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                 child: Text(
                   input.notice!,
                   key: const Key('session-composer-machine-notice'),
@@ -4486,7 +4488,9 @@ class _SessionComposerState extends State<_SessionComposer> {
                       minLines: 1,
                       maxLines: 5,
                       textInputAction: TextInputAction.newline,
-                      scrollPadding: const EdgeInsets.only(bottom: 120),
+                      scrollPadding: const EdgeInsets.only(
+                        bottom: AppLayout.keyboardScrollPadding,
+                      ),
                       onTapOutside: (_) {
                         if (_commandMenuOpen || _completionActive) {
                           setState(() {
@@ -4569,13 +4573,13 @@ class _SessionComposerState extends State<_SessionComposer> {
                 ],
               ),
             ),
-            const SizedBox(height: 5),
+            const SizedBox(height: AppSpacing.xs),
             _HappyComposerMetaRow(
               sessions: widget.sessions,
               canWrite: widget.canWrite,
               deviceId: widget.deviceId,
             ),
-            const SizedBox(height: 5),
+            const SizedBox(height: AppSpacing.xs),
             _ComposerControlStrip(
               sessions: widget.sessions,
               canWrite: widget.canWrite,
@@ -4882,7 +4886,7 @@ class _CommandLauncherMenu extends StatelessWidget {
       ('model', '切换模型'),
     ];
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: Material(
         key: const Key('session-command-launcher-menu'),
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
@@ -4896,7 +4900,7 @@ class _CommandLauncherMenu extends StatelessWidget {
             for (final command in commands)
               ListTile(
                 dense: true,
-                leading: const Icon(Icons.chevron_right, size: 18),
+                leading: const Icon(Icons.chevron_right, size: AppSizes.iconMd),
                 title: Text('/${command.$1}'),
                 subtitle: Text(command.$2),
                 onTap: () => onSelect(command.$1),
@@ -4935,7 +4939,7 @@ Future<void> _confirmDangerPermission(
                 const Text(
                   '“danger-full-access” 将授予 Host 完全访问权限。请确认你了解风险后再提交。',
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 CheckboxListTile(
                   key: const Key('session-permission-risk-checkbox'),
                   value: confirmed,
@@ -5003,7 +5007,7 @@ class _ComposerControlStrip extends StatelessWidget {
     );
     return Padding(
       key: const Key('composer-control-strip'),
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 190),
         child: DropdownButtonFormField<String>(
@@ -5082,7 +5086,7 @@ class _ComposerSuggestions extends StatelessWidget {
       constraints: const BoxConstraints(maxHeight: 240),
       child: Container(
         key: const Key('composer-suggestions'),
-        margin: const EdgeInsets.only(bottom: 6),
+        margin: const EdgeInsets.only(bottom: AppSpacing.sm),
         decoration: BoxDecoration(
           color: theme.colorScheme.surfaceContainerHigh,
           border: Border.all(color: theme.dividerColor),
@@ -5094,7 +5098,7 @@ class _ComposerSuggestions extends StatelessWidget {
           children: [
             if (loading)
               const Padding(
-                padding: EdgeInsets.all(8),
+                padding: EdgeInsets.all(AppSpacing.sm),
                 child: Row(
                   children: [
                     SizedBox(
@@ -5102,14 +5106,14 @@ class _ComposerSuggestions extends StatelessWidget {
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                    SizedBox(width: 8),
+                    SizedBox(width: AppSpacing.sm),
                     Text('正在加载建议…'),
                   ],
                 ),
               )
             else if (suggestions.isEmpty)
               Padding(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(AppSpacing.sm),
                 child: Text(
                   '没有可用的补全建议（目录不可用或查询越权）。',
                   key: const Key('composer-suggestions-empty'),
@@ -5139,7 +5143,7 @@ class _ComposerSuggestions extends StatelessWidget {
                             suggestions[index].kind == _CompletionKind.skill
                                 ? Icons.bolt_outlined
                                 : Icons.description_outlined,
-                            size: 18,
+                            size: AppSizes.iconMd,
                           ),
                           title: Text(suggestions[index].label),
                           onTap: () => onApply(suggestions[index]),
@@ -5234,7 +5238,7 @@ class _AttachmentChip extends StatelessWidget {
     return Container(
       key: Key('attachment-chip-${transfer.draft.id}'),
       constraints: const BoxConstraints(minWidth: 172, maxWidth: 218),
-      padding: const EdgeInsets.fromLTRB(8, 5, 2, 5),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.xs, AppSpacing.micro, AppSpacing.xs),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: Theme.of(context).dividerColor),
@@ -5246,9 +5250,9 @@ class _AttachmentChip extends StatelessWidget {
             transfer.draft.isImage
                 ? Icons.image_outlined
                 : Icons.article_outlined,
-            size: 18,
+            size: AppSizes.iconMd,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -5267,7 +5271,7 @@ class _AttachmentChip extends StatelessWidget {
                 ),
                 if (transfer.phase == AttachmentTransferPhase.uploading)
                   Padding(
-                    padding: const EdgeInsets.only(top: 3),
+                    padding: const EdgeInsets.only(top: AppSpacing.xs),
                     child: LinearProgressIndicator(value: transfer.progress),
                   ),
                 if (transfer.errorMessage != null)
@@ -5290,22 +5294,22 @@ class _AttachmentChip extends StatelessWidget {
             onPressed: canUpload ? onUpload : null,
             icon: pending
                 ? const SizedBox(
-                    width: 16,
-                    height: 16,
+                    width: AppSpacing.lg,
+                    height: AppSpacing.lg,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : Icon(
                     transfer.phase == AttachmentTransferPhase.failed
                         ? Icons.refresh
                         : presentation.$2,
-                    size: 18,
+                    size: AppSizes.iconMd,
                   ),
           ),
           IconButton(
             key: Key('attachment-remove-${transfer.draft.id}'),
             tooltip: '移除附件',
             onPressed: pending ? null : onRemove,
-            icon: const Icon(Icons.close, size: 18),
+            icon: const Icon(Icons.close, size: AppSizes.iconMd),
           ),
         ],
       ),
@@ -5326,7 +5330,7 @@ class _AttachmentRejectedChip extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     key: Key('attachment-rejected-${rejection.localName}'),
     constraints: const BoxConstraints(minWidth: 172, maxWidth: 228),
-    padding: const EdgeInsets.fromLTRB(8, 5, 2, 5),
+    padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.xs, AppSpacing.micro, AppSpacing.xs),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
@@ -5334,8 +5338,8 @@ class _AttachmentRejectedChip extends StatelessWidget {
     ),
     child: Row(
       children: [
-        const Icon(Icons.block_outlined, size: 18),
-        const SizedBox(width: 6),
+        const Icon(Icons.block_outlined, size: AppSizes.iconMd),
+        const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -5358,7 +5362,7 @@ class _AttachmentRejectedChip extends StatelessWidget {
         IconButton(
           tooltip: '关闭附件拒绝提示',
           onPressed: onDismiss,
-          icon: const Icon(Icons.close, size: 18),
+          icon: const Icon(Icons.close, size: AppSizes.iconMd),
         ),
       ],
     ),
@@ -5372,7 +5376,7 @@ class _ReadOnlyBanner extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     key: const Key('session-readonly-banner'),
     // 提示条统一 note 档 padding=12。
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.all(AppSpacing.md),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.surfaceContainerHigh,
       border: Border.all(color: Theme.of(context).dividerColor),
@@ -5380,8 +5384,8 @@ class _ReadOnlyBanner extends StatelessWidget {
     ),
     child: const Row(
       children: [
-        Icon(Icons.visibility_outlined, size: 18),
-        SizedBox(width: 8),
+        Icon(Icons.visibility_outlined, size: AppSizes.iconMd),
+        SizedBox(width: AppSpacing.sm),
         Expanded(child: Text('当前设备为只读状态，仍可查看会话。')),
       ],
     ),
@@ -5444,7 +5448,7 @@ class _SessionStatusStrip extends StatelessWidget {
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
         child: Row(
           children: [
             Container(
@@ -5455,7 +5459,7 @@ class _SessionStatusStrip extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
             ),
-            const SizedBox(width: 7),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
                 status.label,
@@ -5471,7 +5475,7 @@ class _SessionStatusStrip extends StatelessWidget {
                 child: Container(
                   key: const Key('session-provider-version-chip'),
                   constraints: const BoxConstraints(maxWidth: 142),
-                  margin: const EdgeInsets.only(right: 6),
+                  margin: const EdgeInsets.only(right: AppSpacing.sm),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 7,
                     vertical: 4,
@@ -5499,8 +5503,8 @@ class _SessionStatusStrip extends StatelessWidget {
               fit: FlexFit.loose,
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 108),
-                margin: const EdgeInsets.only(right: 2),
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                margin: const EdgeInsets.only(right: AppSpacing.micro),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
                 decoration: BoxDecoration(
                   color: hasLease
                       ? context.appColors.success.withValues(alpha: 0.14)
@@ -5530,7 +5534,7 @@ class _SessionStatusStrip extends StatelessWidget {
                     : canWrite
                     ? Icons.autorenew
                     : Icons.lock_outline,
-                size: 18,
+                size: AppSizes.iconMd,
                 color: hasLease
                     ? context.appColors.success
                     : Theme.of(context).colorScheme.outline,
@@ -5564,8 +5568,8 @@ class _SessionRecoveryStrip extends StatelessWidget {
     return Container(
       key: const Key('session-recovery-banner'),
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+      margin: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
       decoration: BoxDecoration(
         color: presentation.color.withValues(alpha: 0.1),
         border: Border.all(color: presentation.color.withValues(alpha: 0.45)),
@@ -5573,8 +5577,8 @@ class _SessionRecoveryStrip extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(presentation.icon, size: 18, color: presentation.color),
-          const SizedBox(width: 8),
+          Icon(presentation.icon, size: AppSizes.iconMd, color: presentation.color),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -5608,14 +5612,14 @@ class _SessionRecoveryStrip extends StatelessWidget {
               onPressed: controller.isRecovering
                   ? null
                   : () => controller.retryRecovery(),
-              icon: const Icon(Icons.refresh, size: 18),
+              icon: const Icon(Icons.refresh, size: AppSizes.iconMd),
             ),
           if (isCurrentNotice)
             IconButton(
               key: const Key('session-recovery-notice-dismiss'),
               tooltip: '关闭通知',
               onPressed: () => controller.dismissNotice(notice!.id),
-              icon: const Icon(Icons.close, size: 18),
+              icon: const Icon(Icons.close, size: AppSizes.iconMd),
             ),
         ],
       ),
@@ -5679,7 +5683,7 @@ class _InlineError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
@@ -5688,7 +5692,7 @@ class _InlineError extends StatelessWidget {
     child: Row(
       children: [
         const Icon(Icons.error_outline),
-        const SizedBox(width: 12),
+        const SizedBox(width: AppSpacing.md),
         Expanded(child: Text(message)),
         IconButton(
           tooltip: '关闭提示',
@@ -5720,7 +5724,7 @@ class _SessionHeaderTitle extends StatelessWidget {
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: AppSpacing.sm),
         Container(
           key: const Key('mobile-header-status'),
           width: AppSizes.statusDot,
@@ -5760,7 +5764,7 @@ class _HappySessionHeaderTitle extends StatelessWidget {
               parentSessionId: session?.parentSessionId,
               onOpenParent: onOpenParent!,
             ),
-            const SizedBox(width: 4),
+            const SizedBox(width: AppSpacing.xs),
           ],
           Flexible(
             child: Text(
@@ -5817,7 +5821,7 @@ class _HappyProviderAvatar extends StatelessWidget {
       ),
       child: Icon(
         icon,
-        size: 18,
+        size: AppSizes.iconMd,
         color: Theme.of(context).colorScheme.onSecondaryContainer,
       ),
     );

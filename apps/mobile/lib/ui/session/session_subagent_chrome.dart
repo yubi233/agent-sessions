@@ -143,9 +143,9 @@ class _SessionSubagentCatalogSheetState
           key: Key('session-subagent-branch-loading-$parentId'),
           // 与 delegation 行同缩进公式：12 + (level-1)*24，避免树形锯齿。
           padding: EdgeInsets.only(
-            left: 12.0 + (level - 1) * 24,
-            top: 8,
-            bottom: 8,
+            left: AppSpacing.md + (level - 1) * AppSpacing.xxl,
+            top: AppSpacing.sm,
+            bottom: AppSpacing.sm,
           ),
           child: const LinearProgressIndicator(),
         ),
@@ -157,8 +157,8 @@ class _SessionSubagentCatalogSheetState
           key: Key('session-subagent-branch-error-$parentId'),
           // 与 delegation 行同缩进公式：12 + (level-1)*24，避免树形锯齿。
           contentPadding: EdgeInsets.only(
-            left: 12.0 + (level - 1) * 24,
-            right: 12,
+            left: AppSpacing.md + (level - 1) * AppSpacing.xxl,
+            right: AppSpacing.md,
           ),
           leading: const Icon(Icons.error_outline),
           title: Text(message ?? '子树不可用'),
@@ -177,11 +177,11 @@ class _SessionSubagentCatalogSheetState
           key: Key('session-subagent-branch-empty-$parentId'),
           // 与 delegation 行同缩进公式：12 + (level-1)*24，避免树形锯齿。
           contentPadding: EdgeInsets.only(
-            left: 12.0 + (level - 1) * 24,
-            right: 12,
+            left: AppSpacing.md + (level - 1) * AppSpacing.xxl,
+            right: AppSpacing.md,
           ),
           dense: true,
-          leading: const Icon(Icons.horizontal_rule, size: 16),
+          leading: const Icon(Icons.horizontal_rule, size: AppSizes.iconSm),
           title: const Text('没有更深层子会话'),
         ),
       ];
@@ -335,8 +335,8 @@ class _CatalogDelegationRow extends StatelessWidget {
           key: Key('session-subagent-entry-${delegation.id}'),
           enabled: enabled,
           contentPadding: EdgeInsets.only(
-            left: 12 + (level - 1) * 24,
-            right: 8,
+            left: AppSpacing.md + (level - 1) * AppSpacing.xxl,
+            right: AppSpacing.sm,
           ),
           leading: Icon(
             delegation.status == DelegationStatus.running
@@ -392,10 +392,10 @@ class SessionSubagentBreadcrumb extends StatelessWidget {
         // 小控件圆角对齐全局 6 档（原为孤例 4）。
         borderRadius: BorderRadius.circular(AppRadius.small),
         child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          padding: EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: AppSpacing.micro),
           child: Row(
             mainAxisSize: MainAxisSize.min,
-            children: [Icon(Icons.chevron_left, size: 15), Text('父会话 / 子会话')],
+            children: [Icon(Icons.chevron_left, size: AppSizes.iconSm), Text('父会话 / 子会话')],
           ),
         ),
       ),
@@ -417,7 +417,7 @@ class SessionSubagentReadOnlyComposer extends StatelessWidget {
       child: Container(
         key: const Key('session-subagent-readonly'),
         width: double.infinity,
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(AppSpacing.lg),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
@@ -430,7 +430,7 @@ class SessionSubagentReadOnlyComposer extends StatelessWidget {
               oneShot ? '一次性子会话' : '子会话暂时只读',
               style: Theme.of(context).textTheme.labelLarge,
             ),
-            const SizedBox(height: 3),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               oneShot ? '此子会话由父会话寻址，不能直接发送人工输入。' : '父会话当前不可用，恢复后再继续控制。',
               key: const Key('session-composer-blocked-reason'),

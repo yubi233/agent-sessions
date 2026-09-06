@@ -115,7 +115,7 @@ class _RecentSessionsBody extends StatelessWidget {
     final sessions = controller.sessions;
     return ListView(
       key: const Key('recent-sessions-list'),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.xxl),
       children: [
         SegmentedButton<RecentSessionsView>(
           key: const Key('recent-sessions-view-toggle'),
@@ -123,7 +123,7 @@ class _RecentSessionsBody extends StatelessWidget {
             ButtonSegment(value: RecentSessionsView.recent, label: Text('最近')),
             ButtonSegment(
               value: RecentSessionsView.archived,
-              icon: Icon(Icons.archive_outlined, size: 18),
+              icon: Icon(Icons.archive_outlined, size: AppSizes.iconMd),
               label: Text('已归档'),
             ),
           ],
@@ -132,15 +132,15 @@ class _RecentSessionsBody extends StatelessWidget {
           onSelectionChanged: (selection) =>
               unawaited(controller.switchView(selection.first)),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.sm),
         _RecentHeader(archived: controller.isArchivedView),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.sm),
         if (controller.errorMessage != null) ...[
           _RecentInlineError(
             message: controller.errorMessage!,
             onRetry: controller.refresh,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
         ],
         if (sessions.isEmpty)
           _RecentEmptyState(archived: controller.isArchivedView)
@@ -196,8 +196,8 @@ class _ArchivedSessionTile extends StatelessWidget {
     final presentation = _statusPresentation(context, session.status);
     return ListTile(
       key: Key('recent-session-${session.id}'),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-      leading: CircleAvatar(radius: 18, child: Icon(presentation.icon, size: 20)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+      leading: CircleAvatar(radius: 18, child: Icon(presentation.icon, size: AppSizes.iconLg)),
       title: Text(
         session.title,
         maxLines: 1,
@@ -260,10 +260,10 @@ class _RecentSessionTile extends StatelessWidget {
     final presentation = _statusPresentation(context, session.status);
     return ListTile(
       key: Key('recent-session-${session.id}'),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
       leading: CircleAvatar(
         radius: 18,
-        child: Icon(presentation.icon, size: 20),
+        child: Icon(presentation.icon, size: AppSizes.iconLg),
       ),
       title: Text(
         session.title,
@@ -283,10 +283,10 @@ class _RecentSessionTile extends StatelessWidget {
               label: '有新完成结果',
               child: Padding(
                 key: Key('session-completion-badge-${session.id}'),
-                padding: const EdgeInsets.only(right: 4),
+                padding: const EdgeInsets.only(right: AppSpacing.xs),
                 child: Icon(
                   Icons.mark_chat_unread_outlined,
-                  size: 16,
+                  size: AppSizes.iconSm,
                   color: Theme.of(context).colorScheme.primary,
                 ),
               ),
@@ -372,17 +372,17 @@ class _RecentEmptyState extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('recent-sessions-empty'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 56),
+      padding: const EdgeInsets.symmetric(vertical: AppLayout.emptyStateInset),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(archived ? Icons.archive_outlined : Icons.history, size: 32),
-          const SizedBox(height: 12),
+          Icon(archived ? Icons.archive_outlined : Icons.history, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text(
             archived ? '暂无已归档会话' : '还没有会话',
             style: Theme.of(context).textTheme.titleMedium,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: AppSpacing.xs),
           Text(
             archived ? '归档的会话会显示在这里，可随时恢复。' : '创建会话后，最近会话会显示在这里。',
             textAlign: TextAlign.center,
@@ -403,7 +403,7 @@ class _RecentInlineError extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('recent-sessions-inline-error'),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
@@ -412,7 +412,7 @@ class _RecentInlineError extends StatelessWidget {
     child: Row(
       children: [
         const Icon(Icons.error_outline),
-        const SizedBox(width: 8),
+        const SizedBox(width: AppSpacing.sm),
         Expanded(child: Text(message)),
         IconButton(
           tooltip: '重试读取最近会话',
@@ -434,14 +434,14 @@ class _RecentErrorState extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('recent-sessions-error'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.cloud_off_outlined, size: 32),
-          const SizedBox(height: 12),
+          const Icon(Icons.cloud_off_outlined, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           IconButton(
             tooltip: '重试读取最近会话',
             onPressed: onRetry,

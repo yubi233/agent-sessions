@@ -88,21 +88,21 @@ class _UsageBody extends StatelessWidget {
     }
     return ListView(
       key: const Key('usage-list'),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         _UsageWindowSelector(
           selectedDays: controller.days,
           onSelected: (days) => unawaited(controller.refresh(days)),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.lg),
         if (controller.hasData) ...[
           _UsageTotalCard(
             summary: controller.summary,
             isToday: controller.days == 1,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           _UsageProviderChart(summary: controller.summary),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             '统计按 UTC 日桶聚合，仅包含白名单整数计数（ADR-010）。',
             key: const Key('usage-utc-note'),
@@ -148,7 +148,7 @@ class _UsageTotalCard extends StatelessWidget {
     final (input, output) = summary.totals;
     return Container(
       key: const Key('usage-total-card'),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
@@ -196,7 +196,7 @@ class _TotalItem extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     children: [
       Text(label, style: Theme.of(context).textTheme.labelMedium),
-      const SizedBox(height: 4),
+      const SizedBox(height: AppSpacing.xs),
       Text(
         value,
         key: Key('usage-total-$label'),
@@ -223,15 +223,15 @@ class _UsageProviderChart extends StatelessWidget {
     if (providers.isEmpty) {
       // 不再静默消失：图表区块为空时给出可见说明，避免"区块凭空蒸发"。
       return Padding(
-        padding: const EdgeInsets.only(top: 4),
+        padding: const EdgeInsets.only(top: AppSpacing.xs),
         child: Row(
           children: [
             Icon(
               Icons.info_outline,
-              size: 18,
+              size: AppSizes.iconMd,
               color: Theme.of(context).textTheme.bodySmall?.color,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
                 '本期暂无 Provider 用量数据。',
@@ -245,7 +245,7 @@ class _UsageProviderChart extends StatelessWidget {
     final maxValue = providers.values.reduce((a, b) => a > b ? a : b);
     return Container(
       key: const Key('usage-provider-chart'),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
@@ -255,7 +255,7 @@ class _UsageProviderChart extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Provider 用量', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           SizedBox(
             // 120 恰好等于"数值行+4+柱80+4+名称行"，零冗余：textScale>1 即溢出。
             // 放宽到 136 留出余量，并约束两行文本 ellipsis 防换行撑爆。
@@ -274,7 +274,7 @@ class _UsageProviderChart extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.labelSmall,
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: AppSpacing.xs),
                         Container(
                           key: Key('usage-bar-${entry.key}'),
                           height: maxValue == 0
@@ -287,7 +287,7 @@ class _UsageProviderChart extends StatelessWidget {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: AppSpacing.xs),
                         Text(
                           entry.key,
                           maxLines: 1,
@@ -313,7 +313,7 @@ class _UsageNoDataState extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('usage-no-data'),
-    padding: const EdgeInsets.all(14),
+    padding: const EdgeInsets.all(AppSpacing.lg),
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
@@ -323,7 +323,7 @@ class _UsageNoDataState extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(Icons.info_outline),
-        SizedBox(width: 10),
+        SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(
             '无可用统计。它需要 Daemon 上报白名单计数并经 Relay 聚合后才会计入，当前不会显示估算值。',
@@ -344,14 +344,14 @@ class _UsageError extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('usage-error'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.cloud_off_outlined, size: 32),
-          const SizedBox(height: 12),
+          const Icon(Icons.cloud_off_outlined, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           IconButton(
             key: const Key('usage-retry-button'),
             tooltip: '重试读取用量',

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../state/session_view_controller.dart';
+import '../app_theme.dart';
 
 /// 会话详情页内部 header：替代 AppBar + 零散状态条，提供固定 chrome 边界。
 class SessionHeader extends StatelessWidget {
@@ -145,7 +146,7 @@ class _SessionViewTab extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
               // tab 标签挂 labelLarge 角色（15/w600），不再继承环境正文字号。
               child: Text(
                 label,

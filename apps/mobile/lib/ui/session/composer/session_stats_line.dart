@@ -61,7 +61,7 @@ class SessionStatsLine extends StatelessWidget {
     if (items.isEmpty) {
       return Padding(
         key: const Key('session-stats-line'),
-        padding: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
         child: Text(
           '统计不可用',
           style: theme.textTheme.labelSmall?.copyWith(
@@ -73,7 +73,7 @@ class SessionStatsLine extends StatelessWidget {
 
     return Padding(
       key: const Key('session-stats-line'),
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: Wrap(spacing: 8, runSpacing: 4, children: items),
     );
   }
@@ -88,7 +88,7 @@ class _StatsChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(AppRadius.large),

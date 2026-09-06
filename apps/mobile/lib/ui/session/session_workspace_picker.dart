@@ -200,7 +200,7 @@ class _SessionWorkspacePickerState extends State<SessionWorkspacePicker> {
                           suffixIcon: pendingId != null || _flowBusy
                               ? const Padding(
                                   key: Key('session-workspace-pending'),
-                                  padding: EdgeInsets.all(14),
+                                  padding: EdgeInsets.all(AppSpacing.lg),
                                   child: SizedBox.square(
                                     dimension: 18,
                                     child: CircularProgressIndicator(
@@ -219,7 +219,7 @@ class _SessionWorkspacePickerState extends State<SessionWorkspacePicker> {
                           suffixIcon: pendingId != null || _flowBusy
                               ? const Padding(
                                   key: Key('session-workspace-pending'),
-                                  padding: EdgeInsets.all(14),
+                                  padding: EdgeInsets.all(AppSpacing.lg),
                                   child: SizedBox.square(
                                     dimension: 18,
                                     child: CircularProgressIndicator(
@@ -286,7 +286,7 @@ class _SessionWorkspacePickerState extends State<SessionWorkspacePicker> {
             onPressed: _busy ? null : () => unawaited(_pick(workspace.id)),
             leadingIcon: const Icon(Icons.folder_outlined),
             trailingIcon: workspace.id == widget.selectedId
-                ? const Icon(Icons.check, size: 18)
+                ? const Icon(Icons.check, size: AppSizes.iconMd)
                 : null,
             child: Text(workspace.label),
           ),

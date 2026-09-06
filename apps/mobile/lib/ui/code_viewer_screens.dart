@@ -132,16 +132,16 @@ class _CodeViewerScreenState extends ConsumerState<CodeViewerScreen> {
     if (content == null) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 56),
+          padding: const EdgeInsets.symmetric(vertical: AppLayout.emptyStateInset),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 Icons.code_off_outlined,
-                size: 32,
+                size: AppSizes.iconEmpty,
                 color: context.appColors.textSecondary,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               Text(
                 '暂无可显示的内容。',
                 style: Theme.of(context).textTheme.bodyMedium,
@@ -191,10 +191,10 @@ class _CodeViewerScreenState extends ConsumerState<CodeViewerScreen> {
       isScrollControlled: true,
       builder: (sheetContext) => Padding(
         padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 16,
-          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+          left: AppSpacing.lg,
+          right: AppSpacing.lg,
+          top: AppSpacing.lg,
+          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + AppSpacing.sm,
         ),
         child: TextField(
           key: const Key('code-viewer-search-input'),
@@ -271,7 +271,7 @@ class _CodeLineNumbers extends StatelessWidget {
     return Container(
       key: const Key('code-viewer-line-numbers'),
       width: 44,
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       decoration: BoxDecoration(
         color: colors.surfaceRaised,
         border: Border(
@@ -284,7 +284,7 @@ class _CodeLineNumbers extends StatelessWidget {
           for (var line = 1; line <= lineCount; line += 1)
             Container(
               height: 20,
-              padding: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.only(right: AppSpacing.sm),
               color: matchSet.contains(line)
                   ? colors.warning.withValues(alpha: 0.18)
                   : null,
@@ -337,7 +337,7 @@ class _CodeTextColumn extends StatelessWidget {
         for (var index = 0; index < lines.length; index += 1)
           Container(
             height: 20,
-            padding: const EdgeInsets.only(left: 8, right: 16),
+            padding: const EdgeInsets.only(left: AppSpacing.sm, right: AppSpacing.lg),
             // 行宽自适应内容：不再固定 960 制造"滚动虚空"，
             // 横向滚动范围收敛到最长行；高亮带随文本长度而非画布宽度。
             color: index + 1 == activeMatchLine
@@ -381,7 +381,7 @@ class _CodeSearchBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('code-viewer-search-bar'),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
     color: Theme.of(context).colorScheme.surfaceContainerHigh,
     child: Row(
       children: [
@@ -389,7 +389,7 @@ class _CodeSearchBar extends StatelessWidget {
           key: const Key('code-viewer-search-close'),
           tooltip: '关闭搜索',
           onPressed: () => controller.search(''),
-          icon: const Icon(Icons.close, size: 18),
+          icon: const Icon(Icons.close, size: AppSizes.iconMd),
         ),
         Expanded(
           child: Text(
@@ -435,12 +435,12 @@ class _CodeLimitedView extends StatelessWidget {
     return Center(
       key: const Key('code-viewer-limited'),
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(AppSpacing.xxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.visibility_off_outlined, size: 32),
-            const SizedBox(height: 12),
+            const Icon(Icons.visibility_off_outlined, size: AppSizes.iconEmpty),
+            const SizedBox(height: AppSpacing.md),
             Text(label, textAlign: TextAlign.center),
           ],
         ),
@@ -459,14 +459,14 @@ class _CodeViewerError extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('code-viewer-error'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.error_outline, size: 32),
-          const SizedBox(height: 12),
+          const Icon(Icons.error_outline, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           IconButton(
             tooltip: '重试读取代码',
             onPressed: onRetry,

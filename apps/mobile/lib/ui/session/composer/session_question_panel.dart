@@ -82,7 +82,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
     if (_locallyCancelled && !resolved) {
       return Container(
         key: Key('question-card-${question.requestId}'),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
@@ -92,7 +92,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
           key: Key('question-local-cancelled-${question.requestId}'),
           children: [
             const Icon(Icons.close),
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
                 '已在本机关闭此问题，未向 Host 发送取消命令。',
@@ -111,7 +111,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
     if (_minimized) {
       return Container(
         key: Key('question-card-${question.requestId}'),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
@@ -121,7 +121,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
           key: Key('question-minimized-${question.requestId}'),
           children: [
             const Icon(Icons.help_outline),
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
                 currentStep.prompt,
@@ -140,7 +140,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
     }
     return Container(
       key: Key('question-card-${question.requestId}'),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: Theme.of(context).dividerColor),
@@ -152,7 +152,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
           Row(
             children: [
               const Icon(Icons.help_outline),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -193,11 +193,11 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
             ],
           ),
           if (currentStep.detail != null) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Text(currentStep.detail!),
           ],
           if (currentStep.options.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             if (currentStep.multiSelect)
               Column(
                 key: Key('question-options-$stepKey'),
@@ -264,7 +264,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
               ),
           ],
           if (currentStep.allowsFreeform || currentStep.options.isEmpty) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             TextField(
               key: Key('question-freeform-$stepKey'),
               controller: controller,
@@ -285,7 +285,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
             ),
           ],
           if (_validationError != null) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               _validationError!,
               key: Key('question-validation-${question.requestId}'),
@@ -295,7 +295,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
             ),
           ],
           if (_submissionError != null) ...[
-            const SizedBox(height: 6),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               _submissionError!,
               key: Key('question-submit-error-${question.requestId}'),
@@ -304,7 +304,7 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
               ),
             ),
           ],
-          const SizedBox(height: 4),
+          const SizedBox(height: AppSpacing.xs),
           Align(
             alignment: Alignment.centerRight,
             child: Wrap(
@@ -350,8 +350,8 @@ class SessionQuestionPanelState extends State<SessionQuestionPanel> {
                       : null,
                   icon: pending
                       ? const SizedBox(
-                          width: 18,
-                          height: 18,
+                          width: AppSpacing.lg,
+                          height: AppSpacing.lg,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.send),
@@ -609,7 +609,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
     if (_locallyDismissed && !resolved) {
       return Container(
         key: Key('plan-review-card-${question.requestId}'),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).dividerColor),
@@ -619,7 +619,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
           key: Key('plan-review-dismissed-${question.requestId}'),
           children: [
             const Icon(Icons.chat_bubble_outline),
-            const SizedBox(width: 8),
+            const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
                 '已在本地关闭计划评审，可继续输入讨论。',
@@ -637,7 +637,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
     }
     return Container(
       key: Key('plan-review-card-${question.requestId}'),
-      margin: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+      margin: const EdgeInsets.fromLTRB(AppSpacing.xs, AppSpacing.xs, AppSpacing.xs, 0),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: Theme.of(context).dividerColor),
@@ -650,7 +650,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
           Container(
             key: Key('plan-review-strip-${question.requestId}'),
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.primaryContainer,
               borderRadius: const BorderRadius.vertical(
@@ -661,10 +661,10 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
               children: [
                 Icon(
                   Icons.rule,
-                  size: 16,
+                  size: AppSizes.iconSm,
                   color: Theme.of(context).colorScheme.onPrimaryContainer,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Text(
                   '计划评审',
                   key: Key('plan-review-header-${question.requestId}'),
@@ -674,7 +674,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
             child: Text(
               _review.prompt,
               key: Key('plan-review-question-${question.requestId}'),
@@ -683,9 +683,9 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
           ),
           // plan markdown 在卡内独立滚动（cap 120），按钮始终常驻可达。
           if (plan != null) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
               child: Container(
                 key: Key('plan-review-scroll-${question.requestId}'),
                 constraints: const BoxConstraints(maxHeight: 120),
@@ -702,10 +702,10 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
               ),
             ),
           ],
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           if (_submissionError != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
               child: Text(
                 _submissionError!,
                 key: Key('plan-review-error-${question.requestId}'),
@@ -716,7 +716,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
             ),
           // 动作区：discuss / decline(可选) / approve。按钮常驻可达。
           Padding(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 10),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.xs, AppSpacing.sm, AppSpacing.sm),
             child: Align(
               alignment: Alignment.centerRight,
               child: Wrap(
@@ -735,7 +735,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
                     child: const Text('讨论'),
                   ),
                   if (_decline != null) ...[
-                    const SizedBox(width: 4),
+                    const SizedBox(width: AppSpacing.xs),
                     Tooltip(
                       message: _decline!.description ?? '',
                       child: TextButton(
@@ -748,7 +748,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
                     ),
                   ],
                   if (approve != null) ...[
-                    const SizedBox(width: 4),
+                    const SizedBox(width: AppSpacing.xs),
                     Tooltip(
                       message: approve.description ?? '',
                       child: FilledButton(
@@ -758,8 +758,8 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
                             : null,
                         child: _busy
                             ? const SizedBox(
-                                width: 16,
-                                height: 16,
+                                width: AppSpacing.lg,
+                                height: AppSpacing.lg,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                 ),
@@ -774,7 +774,7 @@ class SessionPlanReviewPanelState extends State<SessionPlanReviewPanel> {
           ),
           if (resolved)
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.md, 0, AppSpacing.md, AppSpacing.sm),
               child: Text(
                 '已评审',
                 key: Key('plan-review-resolved-${question.requestId}'),

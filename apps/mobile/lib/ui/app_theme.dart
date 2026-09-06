@@ -120,6 +120,35 @@ abstract final class AppSizes {
   static const double iconMd = 18;
   static const double iconLg = 20;
   static const double iconXl = 24;
+
+  /// B6 核实裁决：空态大图标统一 32 档（原 32/36 散布收口，最近会话/文件/
+  /// 终端/用量等空态与遮罩图标共用）。
+  static const double iconEmpty = 32;
+
+  /// 空态主图标（空态卡片中央的引导图标，比 iconEmpty 更大一级）。
+  static const double emptyStateIcon = 48;
+
+  /// 会话状态点（列表项圆形色点直径）。
+  static const double indicatorDot = 10;
+
+  /// 配对二维码固定边长。
+  static const double qrImage = 104;
+}
+
+/// 具名布局常量（规范 §2.2）：超出通用间距表的布局约束，不冒充通用间距、
+/// 不压缩为不等价 token。新增前必须先登记用途。
+abstract final class AppLayout {
+  /// 空态插画/图标的垂直留白（列表空态、错误态的呼吸空间）。
+  static const double emptyStateInset = 56;
+
+  /// 键盘弹出时输入框的滚动安全预留（TextField scrollPadding）。
+  static const double keyboardScrollPadding = 120;
+
+  /// DSH 工作区卡片头部的布局缩进（与终端图标列对齐，非通用间距语义）。
+  static const double workspaceHeaderIndent = 52;
+
+  /// 模型选择器固定行高（下拉列表紧凑行，非通用间距语义）。
+  static const double modelSelectorRow = 36;
 }
 
 /// 等宽字档（规范 §4.1）：代码、diff、路径、终端输出共用，业务代码禁止
@@ -330,8 +359,8 @@ abstract final class AppTheme {
         labelStyle: TextStyle(color: secondaryText),
         hintStyle: TextStyle(color: secondaryText),
         contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 16,
+          horizontal: AppSpacing.lg,
+          vertical: AppSpacing.lg,
         ),
         border: OutlineInputBorder(
           borderRadius: const BorderRadius.all(Radius.circular(8)),
@@ -394,7 +423,7 @@ abstract final class AppTheme {
       listTileTheme: ListTileThemeData(
         iconColor: secondaryText,
         textColor: primaryText,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 4),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: AppSpacing.xs),
         minVerticalPadding: 10,
         minLeadingWidth: 32,
         horizontalTitleGap: 12,

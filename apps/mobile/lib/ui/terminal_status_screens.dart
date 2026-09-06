@@ -63,7 +63,7 @@ class _TerminalStatusScreenState extends ConsumerState<TerminalStatusScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 480),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.xxl),
               child: _TerminalStatusBody(controller: controller),
             ),
           ),
@@ -98,13 +98,13 @@ class _TerminalStatusBody extends StatelessWidget {
       key: const Key('terminal-status-list'),
       children: [
         const _TerminalPageHeader(),
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.lg),
         if (controller.errorMessage != null) ...[
           _TerminalInlineError(
             message: controller.errorMessage!,
             onRetry: controller.refresh,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
         ],
         if (terminals.isEmpty)
           const _TerminalEmptyState()
@@ -115,9 +115,9 @@ class _TerminalStatusBody extends StatelessWidget {
               availability: controller.availabilityFor(terminals[index]),
               index: index,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
           ],
-        const SizedBox(height: 16),
+        const SizedBox(height: AppSpacing.lg),
         const _TerminalBoundaryNote(),
       ],
     );
@@ -132,7 +132,7 @@ class _TerminalPageHeader extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text('连接的终端', style: Theme.of(context).textTheme.headlineSmall),
-      const SizedBox(height: 4),
+      const SizedBox(height: AppSpacing.xs),
       Text(
         '显示 Relay 已确认的在线状态和版本。',
         style: Theme.of(context).textTheme.bodyMedium,
@@ -160,7 +160,7 @@ class _TerminalTile extends StatelessWidget {
       label: '${terminal.hostname}，${presentation.label}，${terminal.platform}',
       child: Container(
         key: Key('terminal-status-tile-$index'),
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(AppSpacing.lg),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border.all(color: context.appColors.border),
@@ -172,7 +172,7 @@ class _TerminalTile extends StatelessWidget {
             Row(
               children: [
                 Icon(presentation.icon, color: presentation.color),
-                const SizedBox(width: 10),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
                     terminal.hostname,
@@ -181,7 +181,7 @@ class _TerminalTile extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Text(
                   presentation.label,
                   key: Key('terminal-status-label-$index'),
@@ -191,19 +191,19 @@ class _TerminalTile extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               '${terminal.platform} · Daemon $daemonVersion',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               _lastSeenLabel(terminal.lastSeen),
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xs),
             Text(
               '协议 v${terminal.protocolVersion}',
               style: Theme.of(context).textTheme.bodySmall,
@@ -222,14 +222,14 @@ class _TerminalEmptyState extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('terminal-status-empty'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 56),
+      padding: const EdgeInsets.symmetric(vertical: AppLayout.emptyStateInset),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.terminal_outlined, size: 32),
-          const SizedBox(height: 12),
+          const Icon(Icons.terminal_outlined, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text('还没有已确认的终端', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 4),
+          const SizedBox(height: AppSpacing.xs),
           Text(
             '完成终端配对并启动 Daemon 后，状态会显示在这里。',
             textAlign: TextAlign.center,
@@ -251,14 +251,14 @@ class _TerminalFailureState extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('terminal-status-error'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.cloud_off_outlined, size: 32),
-          const SizedBox(height: 12),
+          const Icon(Icons.cloud_off_outlined, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           IconButton(
             key: const Key('terminal-status-retry-button'),
             tooltip: '重试读取终端状态',
@@ -280,7 +280,7 @@ class _TerminalInlineError extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('terminal-status-inline-error'),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       border: Border.all(color: Theme.of(context).colorScheme.error),
@@ -289,7 +289,7 @@ class _TerminalInlineError extends StatelessWidget {
     child: Row(
       children: [
         const Icon(Icons.error_outline),
-        const SizedBox(width: 8),
+        const SizedBox(width: AppSpacing.sm),
         Expanded(child: Text(message)),
         IconButton(
           tooltip: '重试读取终端状态',
@@ -309,7 +309,7 @@ class _TerminalBoundaryNote extends StatelessWidget {
     container: true,
     child: Container(
       key: const Key('terminal-status-unavailable-note'),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: context.appColors.surfaceRaised,
         border: Border.all(color: context.appColors.border),
@@ -319,7 +319,7 @@ class _TerminalBoundaryNote extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Icon(Icons.info_outline),
-          const SizedBox(width: 10),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
               '此页面仅供查看。终端重启、工作区关联和活跃会话详情需要后续受控 Daemon 契约，当前不可用。',

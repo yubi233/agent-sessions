@@ -67,7 +67,7 @@ class _SessionContextMeterState extends State<SessionContextMeter> {
                         '窗口 ${SessionUsageSummary.compactForDisplay(widget.meter.windowTokens!)}'
                         '（${(ratio * 100).toStringAsFixed(0)}%）',
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             if (widget.meter.usedTokens != null &&
                 widget.meter.windowTokens != null)
               LinearProgressIndicator(
@@ -101,7 +101,7 @@ class _SessionContextMeterState extends State<SessionContextMeter> {
     }
     return Padding(
       key: const Key('session-context-meter'),
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: Semantics(
         button: true,
         label: '上下文占用 ${(ratio * 100).toStringAsFixed(0)}%，打开详情',
@@ -122,15 +122,15 @@ class _SessionContextMeterState extends State<SessionContextMeter> {
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               Text(
                 '上下文 ${(ratio * 100).toStringAsFixed(0)}% · '
                 '${SessionUsageSummary.compactForDisplay(used)} / '
                 '${SessionUsageSummary.compactForDisplay(window)}',
                 style: theme.textTheme.labelSmall,
               ),
-              const SizedBox(width: 2),
-              const Icon(Icons.info_outline, size: 16),
+              const SizedBox(width: AppSpacing.micro),
+              const Icon(Icons.info_outline, size: AppSizes.iconSm),
             ],
           ),
         ),

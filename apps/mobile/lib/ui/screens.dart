@@ -48,16 +48,16 @@ class _ConnectDeviceScreenState extends ConsumerState<ConnectDeviceScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const _AuthMark(),
-              const SizedBox(height: 28),
+              const SizedBox(height: AppSpacing.xxl),
               Text(
                 '连接此 Android 控制端',
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               const Text(
                 '无需账号登录。此设备会在本机安全存储中生成设备身份，并向 Relay 注册为首个 owner 或通过恢复码接管。',
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: AppSpacing.xl),
               TextField(
                 key: const Key('device-display-name'),
                 controller: _displayNameController,
@@ -65,7 +65,7 @@ class _ConnectDeviceScreenState extends ConsumerState<ConnectDeviceScreen> {
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _connect(app),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: AppSpacing.xl),
               FilledButton.icon(
                 key: const Key('device-connect-submit'),
                 onPressed: app.isBusy ? null : () => _connect(app),
@@ -129,20 +129,20 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const _AuthMark(),
-                const SizedBox(height: 28),
+                const SizedBox(height: AppSpacing.xxl),
                 Text(
                   '恢复此 Android 控制端',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: AppSpacing.md),
                 const Text('输入 owner 设备生成的一次性恢复码。这里不需要账号、邮箱或密码。'),
-                const SizedBox(height: 20),
+                const SizedBox(height: AppSpacing.xl),
                 TextFormField(
                   key: const Key('recovery-display-name'),
                   controller: _displayNameController,
                   decoration: const InputDecoration(labelText: '设备名称'),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: AppSpacing.md),
                 TextFormField(
                   key: const Key('recovery-code'),
                   controller: _codeController,
@@ -153,7 +153,7 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
                       : '请输入恢复码。',
                   onFieldSubmitted: (_) => _recover(app),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: AppSpacing.xl),
                 FilledButton.icon(
                   key: const Key('recovery-submit'),
                   onPressed: app.isBusy ? null : () => _recover(app),
@@ -349,7 +349,7 @@ class RecoveryCodeScreen extends ConsumerWidget {
                       label: '一次性恢复码',
                       child: Container(
                         key: const Key('recovery-code-value'),
-                        padding: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(AppSpacing.lg),
                         color: Theme.of(context).colorScheme.secondaryContainer,
                         child: SelectableText(
                           code,
@@ -358,7 +358,7 @@ class RecoveryCodeScreen extends ConsumerWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.lg),
                     FilledButton(
                       key: const Key('recovery-code-dismiss-button'),
                       onPressed: () {
@@ -411,23 +411,23 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
             icon: const Icon(Icons.photo_camera_back_outlined),
             label: const Text('打开相机扫码'),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           TextField(
             key: const Key('pairing-request-id'),
             controller: _requestIdController,
             decoration: const InputDecoration(labelText: '扫描结果或配对请求 ID'),
             onSubmitted: (_) => _load(app),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           FilledButton.icon(
             key: const Key('pairing-load-button'),
             onPressed: app.isBusy ? null : () => _load(app),
             icon: const Icon(Icons.qr_code_scanner),
             label: const Text('读取配对请求'),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xxl),
           Text('待处理请求', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           if (app.pairings.isEmpty) const _EmptyState(text: '尚未读取配对请求。'),
           for (final request in app.pairings)
             _PairingRequestTile(request: request, app: app),
@@ -462,8 +462,8 @@ class _PairingRequestTile extends StatelessWidget {
     final payload = PairingPayload.encode(request.id);
     return Container(
       key: Key('pairing-request-${request.id}'),
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(bottom: AppSpacing.md),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: Theme.of(context).dividerColor),
@@ -475,7 +475,7 @@ class _PairingRequestTile extends StatelessWidget {
           Row(
             children: [
               const Icon(Icons.qr_code_2),
-              const SizedBox(width: 12),
+              const SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -484,7 +484,7 @@ class _PairingRequestTile extends StatelessWidget {
                       request.displayName,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: AppSpacing.micro),
                     Text(
                       '${request.role.wireValue} · ${request.status.wireValue}',
                       style: Theme.of(context).textTheme.bodyMedium,
@@ -494,17 +494,17 @@ class _PairingRequestTile extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // QR 与可复制 payload 绑定同一请求 ID；手动输入是无相机设备的等价路径。
               QrImageView(
                 data: payload,
-                size: 104,
+                size: AppSizes.qrImage,
                 key: Key('pairing-qr-image-${request.id}'),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: AppSpacing.lg),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -514,7 +514,7 @@ class _PairingRequestTile extends StatelessWidget {
                       key: Key('pairing-short-code-${request.id}'),
                       style: Theme.of(context).textTheme.bodyLarge,
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     SelectableText(
                       payload,
                       key: Key('pairing-qr-payload-${request.id}'),
@@ -526,9 +526,9 @@ class _PairingRequestTile extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           const Divider(height: 1),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           Row(
             children: [
               Expanded(
@@ -541,7 +541,7 @@ class _PairingRequestTile extends StatelessWidget {
                   label: const Text('取消'),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: FilledButton.icon(
                   key: Key('pairing-approve-${request.id}'),
@@ -649,7 +649,7 @@ class _StatusScaffold extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 480),
           child: Padding(
             key: const Key('mobile-content-rail'),
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.lg),
             child: Column(
               children: [
                 if (errorMessage != null)
@@ -658,11 +658,11 @@ class _StatusScaffold extends StatelessWidget {
                     child: Container(
                       key: const Key('app-error-message'),
                       width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 12),
+                      margin: const EdgeInsets.only(bottom: AppSpacing.md),
                       // 与内联错误横幅同款节奏：图标 24 + h12/v8。
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
+                        horizontal: AppSpacing.md,
+                        vertical: AppSpacing.sm,
                       ),
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.errorContainer,
@@ -675,10 +675,10 @@ class _StatusScaffold extends StatelessWidget {
                         children: [
                           Icon(
                             Icons.error_outline,
-                            size: 24,
+                            size: AppSizes.iconXl,
                             color: Theme.of(context).colorScheme.error,
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: AppSpacing.md),
                           Expanded(child: Text(errorMessage!)),
                         ],
                       ),
@@ -716,7 +716,7 @@ class _MobileHeaderTitle extends StatelessWidget {
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: AppSpacing.sm),
         Container(
           key: const Key('mobile-header-status'),
           width: AppSizes.statusDot,
@@ -738,7 +738,7 @@ class _MobileSectionHeading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 12, bottom: 6),
+    padding: const EdgeInsets.only(top: AppSpacing.md, bottom: AppSpacing.sm),
     child: Align(
       alignment: Alignment.centerLeft,
       child: Text(text, style: Theme.of(context).textTheme.labelMedium),
@@ -754,7 +754,7 @@ class _ScrollableCenter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SingleChildScrollView(
-    padding: const EdgeInsets.symmetric(vertical: 24),
+    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
     child: Center(child: child),
   );
 }
@@ -776,7 +776,7 @@ class _AuthMark extends StatelessWidget {
         ),
         child: const Icon(Icons.hub_outlined),
       ),
-      const SizedBox(height: 18),
+      const SizedBox(height: AppSpacing.lg),
       Text('Agent Sessions', style: Theme.of(context).textTheme.titleLarge),
     ],
   );
@@ -789,7 +789,7 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 24),
+    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
     // 与全局空状态同节奏：icon32 + caption，替代裸文本。
     child: Center(
       child: Column(
@@ -797,10 +797,10 @@ class _EmptyState extends StatelessWidget {
         children: [
           Icon(
             Icons.inbox_outlined,
-            size: 32,
+            size: AppSizes.iconEmpty,
             color: context.appColors.textSecondary,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           Text(text, style: Theme.of(context).textTheme.bodyMedium),
         ],
       ),

@@ -168,13 +168,13 @@ class _WorkspaceSearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+    padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.xs),
     child: TextField(
       key: const Key('workspace-files-search-input'),
       controller: searchController,
       decoration: InputDecoration(
         hintText: '搜索当前目录',
-        prefixIcon: const Icon(Icons.search, size: 20),
+        prefixIcon: const Icon(Icons.search, size: AppSizes.iconLg),
         suffixIcon: controller.isSearching
             ? IconButton(
                 tooltip: '清除搜索',
@@ -182,7 +182,7 @@ class _WorkspaceSearchField extends StatelessWidget {
                   searchController.clear();
                   controller.search('');
                 },
-                icon: const Icon(Icons.close, size: 18),
+                icon: const Icon(Icons.close, size: AppSizes.iconMd),
               )
             : null,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.card)),
@@ -205,9 +205,9 @@ class _WorkspaceRejectionBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('workspace-files-rejection-banner'),
-    margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+    margin: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.xs),
     // 与其余内联错误横幅同款：errorContainer + error 描边 + h12/v8 + 图标 24。
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.errorContainer,
       borderRadius: BorderRadius.circular(AppRadius.card),
@@ -215,13 +215,13 @@ class _WorkspaceRejectionBanner extends StatelessWidget {
     ),
     child: Row(
       children: [
-        const Icon(Icons.shield_outlined, size: 24),
-        const SizedBox(width: 12),
+        const Icon(Icons.shield_outlined, size: AppSizes.iconXl),
+        const SizedBox(width: AppSpacing.md),
         Expanded(child: Text(message)),
         IconButton(
           tooltip: '关闭',
           onPressed: onDismiss,
-          icon: const Icon(Icons.close, size: 18),
+          icon: const Icon(Icons.close, size: AppSizes.iconMd),
         ),
       ],
     ),
@@ -240,13 +240,13 @@ class _WorkspaceEntryList extends StatelessWidget {
     final entries = controller.entries;
     return ListView(
       key: const Key('workspace-files-list'),
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.md),
       children: [
         if (path.isNotEmpty)
           ListTile(
             key: const Key('workspace-files-up-button'),
             dense: true,
-            leading: const Icon(Icons.arrow_upward_outlined, size: 20),
+            leading: const Icon(Icons.arrow_upward_outlined, size: AppSizes.iconLg),
             title: const Text('上一级目录'),
             onTap: () {
               final parent = path.contains('/')
@@ -263,30 +263,30 @@ class _WorkspaceEntryList extends StatelessWidget {
               entry.isDirectory
                   ? Icons.folder_outlined
                   : Icons.description_outlined,
-              size: 20,
+              size: AppSizes.iconLg,
             ),
             title: Text(entry.name),
             subtitle: entry.isDirectory
                 ? null
                 : Text(_formatBytes(entry.byteSize)),
             trailing: entry.isDirectory
-                ? const Icon(Icons.chevron_right, size: 18)
+                ? const Icon(Icons.chevron_right, size: AppSizes.iconMd)
                 : null,
             onTap: () => onOpen(entry),
           ),
         if (entries.isEmpty)
           Padding(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(AppSpacing.xxl),
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
                     Icons.folder_open_outlined,
-                    size: 32,
+                    size: AppSizes.iconEmpty,
                     color: context.appColors.textSecondary,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   Text(
                     '此目录没有可浏览的文件。',
                     key: const Key('workspace-files-empty'),
@@ -315,7 +315,7 @@ class _WorkspaceSearchResults extends StatelessWidget {
     final results = controller.searchResults;
     return ListView(
       key: const Key('workspace-files-search-results'),
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xs, AppSpacing.lg, AppSpacing.md),
       children: [
         for (final entry in results)
           ListTile(
@@ -325,24 +325,24 @@ class _WorkspaceSearchResults extends StatelessWidget {
               entry.isDirectory
                   ? Icons.folder_outlined
                   : Icons.description_outlined,
-              size: 20,
+              size: AppSizes.iconLg,
             ),
             title: Text(entry.name),
             onTap: () => onOpen(entry),
           ),
         if (results.isEmpty)
           Padding(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(AppSpacing.xxl),
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
                     Icons.search_off_outlined,
-                    size: 32,
+                    size: AppSizes.iconEmpty,
                     color: context.appColors.textSecondary,
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpacing.md),
                   Text(
                     '没有匹配的文件。',
                     style: Theme.of(context).textTheme.bodyMedium,
@@ -368,7 +368,7 @@ class _WorkspacePreviewPanel extends StatelessWidget {
     return Container(
       key: const Key('workspace-files-preview-panel'),
       height: 220,
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      margin: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHigh,
         border: Border.all(color: context.appColors.border),
@@ -378,7 +378,7 @@ class _WorkspacePreviewPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.xs, AppSpacing.sm),
             child: Row(
               children: [
                 Expanded(
@@ -392,7 +392,7 @@ class _WorkspacePreviewPanel extends StatelessWidget {
                   key: const Key('workspace-files-preview-close'),
                   tooltip: '关闭预览',
                   onPressed: onClose,
-                  icon: const Icon(Icons.close, size: 18),
+                  icon: const Icon(Icons.close, size: AppSizes.iconMd),
                 ),
               ],
             ),
@@ -402,7 +402,7 @@ class _WorkspacePreviewPanel extends StatelessWidget {
             child: limited
                 ? _WorkspaceLimitedPreview(content: content)
                 : SingleChildScrollView(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(AppSpacing.md),
                     child: Text(
                       content.text,
                       key: const Key('workspace-files-preview-text'),
@@ -430,12 +430,12 @@ class _WorkspaceLimitedPreview extends StatelessWidget {
       WorkspaceFileLimitedKind.none => '',
     };
     return Padding(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       child: Row(
         key: const Key('workspace-files-limited-preview'),
         children: [
-          const Icon(Icons.visibility_off_outlined, size: 18),
-          const SizedBox(width: 8),
+          const Icon(Icons.visibility_off_outlined, size: AppSizes.iconMd),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
               '$label 大小：${_formatBytes(content.byteSize)}',
@@ -457,15 +457,15 @@ class _WorkspaceFilesFailure extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Center(
     child: Padding(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(AppSpacing.xxl),
       child: Column(
         key: const Key('workspace-files-error'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.folder_off_outlined, size: 36),
-          const SizedBox(height: 10),
+          const Icon(Icons.folder_off_outlined, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.sm),
           Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           OutlinedButton(onPressed: onRetry, child: const Text('重试')),
         ],
       ),

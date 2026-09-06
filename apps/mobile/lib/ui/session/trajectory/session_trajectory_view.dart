@@ -355,7 +355,7 @@ class _SessionTrajectoryViewState extends State<SessionTrajectoryView> {
       child: ListView.builder(
         key: const Key('session-trajectory-ledger'),
         controller: _ledgerController,
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xxl),
         itemCount: itemCount,
         itemBuilder: (context, index) {
           if (index < headers.length) return headers[index];
@@ -409,7 +409,7 @@ class _TrajectoryToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xs),
       child: Column(
         children: [
           TextField(
@@ -417,11 +417,11 @@ class _TrajectoryToolbar extends StatelessWidget {
             decoration: const InputDecoration(
               labelText: '搜索轨迹',
               isDense: true,
-              prefixIcon: Icon(Icons.search, size: 18),
+              prefixIcon: Icon(Icons.search, size: AppSizes.iconMd),
             ),
             onChanged: onQueryChanged,
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: AppSpacing.sm),
           // 窄屏下筛选项允许换行，避免三个 FilterChip 把轨迹工具栏撑出屏幕；
           // 轨迹行本身仍使用原有单行标题并由 Flexible 负责省略。
           Wrap(
@@ -486,7 +486,7 @@ class _TrajectoryRow extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppRadius.card),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs, horizontal: AppSpacing.xs),
         decoration: selected
             ? BoxDecoration(
                 color: theme.colorScheme.primaryContainer.withValues(
@@ -507,10 +507,10 @@ class _TrajectoryRow extends StatelessWidget {
             ),
             // v0.5/P6：duration/equal-width 切换只改展示条，不触碰 Chat projection。
             if (equalWidth)
-              const SizedBox(width: 2)
+              const SizedBox(width: AppSpacing.micro)
             else
               Padding(
-                padding: const EdgeInsets.only(right: 6, top: 2),
+                padding: const EdgeInsets.only(right: AppSpacing.sm, top: AppSpacing.micro),
                 child: Container(
                   width: 3,
                   height: 30,
@@ -533,21 +533,21 @@ class _TrajectoryRow extends StatelessWidget {
                         ),
                       ),
                       if (record.isStreaming) ...[
-                        const SizedBox(width: 6),
+                        const SizedBox(width: AppSpacing.sm),
                         Icon(
                           Icons.sync,
-                          size: 12,
+                          size: AppSizes.iconSm,
                           color: theme.colorScheme.primary,
                         ),
                       ],
                     ],
                   ),
                   if (record.status?.isNotEmpty == true) ...[
-                    const SizedBox(height: 2),
+                    const SizedBox(height: AppSpacing.micro),
                     Text(record.status!, style: theme.textTheme.bodySmall),
                   ],
                   if (record.summary?.trim().isNotEmpty == true) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: AppSpacing.xs),
                     Text(record.summary!),
                   ],
                 ],
@@ -585,7 +585,7 @@ class _TrajectoryTurnHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     key: Key('trajectory-turn-header-${turnId ?? 'none'}'),
-    padding: const EdgeInsets.only(top: 8, bottom: 2),
+    padding: const EdgeInsets.only(top: AppSpacing.sm, bottom: AppSpacing.micro),
     child: Text(
       turnId == null ? '未分组' : '轮次 ${turnId!.replaceFirst('turn-', '#')}',
       style: Theme.of(
@@ -690,7 +690,7 @@ class _TrajectoryTimelineState extends State<_TrajectoryTimeline> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.micro, AppSpacing.md, AppSpacing.xs),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -712,7 +712,7 @@ class _TrajectoryTimelineState extends State<_TrajectoryTimeline> {
                 ),
             ],
           ),
-          const SizedBox(height: 2),
+          const SizedBox(height: AppSpacing.micro),
           LayoutBuilder(
             builder: (context, constraints) {
               final width = constraints.maxWidth;
@@ -824,7 +824,7 @@ class _TrajectoryInspectorDialog extends StatelessWidget {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420),
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.lg),
           child: Column(
             key: const Key('session-trajectory-inspector'),
             mainAxisSize: MainAxisSize.min,
@@ -839,29 +839,29 @@ class _TrajectoryInspectorDialog extends StatelessWidget {
                     key: const Key('session-trajectory-inspector-close'),
                     tooltip: '关闭记录检查器',
                     onPressed: onClose,
-                    icon: const Icon(Icons.close, size: 18),
+                    icon: const Icon(Icons.close, size: AppSizes.iconMd),
                   ),
                 ],
               ),
               Text('序列 ${record.sequence} · ${record.label}'),
               if (record.status?.isNotEmpty == true) ...[
-                const SizedBox(height: 2),
+                const SizedBox(height: AppSpacing.micro),
                 Text('状态：${record.status}'),
               ],
               if (record.summary?.trim().isNotEmpty == true) ...[
-                const SizedBox(height: 2),
+                const SizedBox(height: AppSpacing.micro),
                 Text('摘要：${record.summary}'),
               ],
               if (record.turnId != null) ...[
-                const SizedBox(height: 2),
+                const SizedBox(height: AppSpacing.micro),
                 Text('轮次：${record.turnId}'),
               ],
               if (record.createdAt != null) ...[
-                const SizedBox(height: 2),
+                const SizedBox(height: AppSpacing.micro),
                 Text('时间：${record.createdAt!.toIso8601String()}'),
               ],
               if (record.inspectTarget != null) ...[
-                const SizedBox(height: 2),
+                const SizedBox(height: AppSpacing.micro),
                 Text('Inspect：${record.inspectTarget}'),
               ],
             ],
@@ -880,7 +880,7 @@ class _TrajectoryInspectBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const Key('session-trajectory-inspect-target'),
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.all(AppSpacing.md),
     decoration: BoxDecoration(
       color: Theme.of(context).colorScheme.primaryContainer,
       borderRadius: BorderRadius.circular(AppRadius.card),
@@ -888,7 +888,7 @@ class _TrajectoryInspectBanner extends StatelessWidget {
     child: Row(
       children: [
         const Icon(Icons.manage_search_outlined),
-        const SizedBox(width: 8),
+        const SizedBox(width: AppSpacing.sm),
         Expanded(child: Text('Inspect target: $target')),
       ],
     ),

@@ -36,7 +36,7 @@ class SettingsScreen extends ConsumerWidget {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 480),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+              padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.xxl),
               child: _SettingsBody(controller: settings),
             ),
           ),
@@ -155,7 +155,7 @@ class _SettingsSectionTile extends StatelessWidget {
     button: true,
     label: title,
     child: ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       minVerticalPadding: 12,
       leading: Icon(icon),
       title: Text(title),
@@ -176,14 +176,14 @@ class _SettingsError extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     key: const Key('settings-error'),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.cloud_off_outlined, size: 32),
-          const SizedBox(height: 12),
+          const Icon(Icons.cloud_off_outlined, size: AppSizes.iconEmpty),
+          const SizedBox(height: AppSpacing.md),
           Text(message, textAlign: TextAlign.center),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           IconButton(
             key: const Key('settings-retry-button'),
             tooltip: '重试读取设置',
@@ -222,10 +222,10 @@ class SettingsAccountScreen extends ConsumerWidget {
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
               key: const Key('settings-account-list'),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 Text('本机设备', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 if (devices.isEmpty)
                   const _SettingsEmptyHint(
                     key: Key('settings-account-empty'),
@@ -244,7 +244,7 @@ class SettingsAccountScreen extends ConsumerWidget {
                       title: Text(device.displayName),
                       subtitle: Text(device.isOwner ? 'owner 设备' : '已确认设备'),
                     ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 const _SettingsBoundaryNote(
                   key: Key('settings-account-note'),
                   message: '恢复码与 token 不会在此页面显示。设备撤销请在认证页操作。',
@@ -282,17 +282,17 @@ class SettingsAppearanceScreen extends ConsumerWidget {
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
               key: const Key('settings-appearance-list'),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 // 分组标题统一走 titleSmall 文本角色（16/w600），不再 ad-hoc。
                 Text('主题模式', style: Theme.of(context).textTheme.titleSmall),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 const _AppearanceModeSelector(),
-                const SizedBox(height: 24),
+                const SizedBox(height: AppSpacing.xxl),
                 Text('强调色', style: Theme.of(context).textTheme.titleSmall),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 const _AppearanceAccentSelector(),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 const _SettingsBoundaryNote(
                   key: Key('settings-appearance-note'),
                   message: '外观偏好只保存在本机，不会上传到 Relay。',
@@ -372,16 +372,16 @@ class SettingsComposerScreen extends ConsumerWidget {
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
               key: const Key('settings-composer-list'),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 // 分组标题统一走 titleSmall 文本角色（16/w600），不再 ad-hoc。
                 Text(
                   'busy Enter 行为',
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 const _ComposerEnterBehaviorSelector(),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 const _SettingsBoundaryNote(
                   key: Key('settings-composer-note'),
                   message:
@@ -441,7 +441,7 @@ class SettingsAgentsScreen extends ConsumerWidget {
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
               key: const Key('settings-agents-list'),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 if (providers.isEmpty)
                   const _SettingsEmptyHint(
@@ -451,7 +451,7 @@ class SettingsAgentsScreen extends ConsumerWidget {
                 else
                   for (final profile in providers)
                     _ProviderCapabilityCard(profile: profile),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 const _SettingsBoundaryNote(
                   key: Key('settings-agents-note'),
                   message: '能力状态来自 Relay 声明，未声明或探测失败的能力一律按不可用处理。',
@@ -475,8 +475,8 @@ class _ProviderCapabilityCard extends StatelessWidget {
     final availability = profile.available ? '可用' : '不可用';
     return Container(
       key: Key('settings-agents-provider-${profile.kind}'),
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: AppSpacing.md),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border.all(color: context.appColors.border),
@@ -506,13 +506,13 @@ class _ProviderCapabilityCard extends StatelessWidget {
           ),
           if (profile.version.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: AppSpacing.xs),
               child: Text(
                 '版本 ${profile.version}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Wrap(
             spacing: 6,
             runSpacing: 6,
@@ -524,12 +524,12 @@ class _ProviderCapabilityCard extends StatelessWidget {
                     key: Key(
                       'settings-capability-${profile.kind}-${entry.name}',
                     ),
-                    avatar: Icon(_capabilityIcon(entry), size: 16),
+                    avatar: Icon(_capabilityIcon(entry), size: AppSizes.iconSm),
                     label: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(entry.name),
-                        const SizedBox(width: 4),
+                        const SizedBox(width: AppSpacing.xs),
                         Text(_capabilityLabel(entry)),
                       ],
                     ),
@@ -603,11 +603,11 @@ class SettingsUsageScreen extends ConsumerWidget {
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
               key: const Key('settings-usage-list'),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 Container(
                   key: const Key('settings-usage-unavailable'),
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(AppSpacing.lg),
                   decoration: BoxDecoration(
                     color: context.appColors.surfaceRaised,
                     border: Border.all(color: context.appColors.border),
@@ -617,7 +617,7 @@ class SettingsUsageScreen extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(Icons.info_outline),
-                      SizedBox(width: 10),
+                      SizedBox(width: AppSpacing.sm),
                       Expanded(
                         child: Text(
                           '用量统计暂不可用。它需要 Daemon 上报白名单计数并经 Relay 聚合（ADR-010）后才会展示，当前不会显示估算值。',
@@ -661,10 +661,10 @@ class SettingsConnectScreen extends ConsumerWidget {
             constraints: const BoxConstraints(maxWidth: 480),
             child: ListView(
               key: const Key('settings-connect-list'),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               children: [
                 Text('已确认终端', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 if (terminals.isEmpty)
                   const _SettingsEmptyHint(
                     key: Key('settings-connect-empty'),
@@ -681,14 +681,14 @@ class SettingsConnectScreen extends ConsumerWidget {
                         '${terminals[index].platform} · Daemon ${terminals[index].daemonVersion ?? '版本未知'}',
                       ),
                     ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 OutlinedButton.icon(
                   key: const Key('settings-connect-pairing-button'),
                   onPressed: () => context.push('/pairing'),
                   icon: const Icon(Icons.qr_code_scanner_outlined),
                   label: const Text('配对新终端'),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpacing.sm),
                 const _SettingsBoundaryNote(
                   key: Key('settings-connect-note'),
                   message: '终端重启与工作区关联需要后续受控 Daemon 契约，当前不可用。',
@@ -709,7 +709,7 @@ class _SettingsEmptyHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 24),
+    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
     child: Center(
       // 与全局空状态同节奏：icon32 + caption，保留原 message 文案。
       child: Column(
@@ -717,10 +717,10 @@ class _SettingsEmptyHint extends StatelessWidget {
         children: [
           Icon(
             Icons.inbox_outlined,
-            size: 32,
+            size: AppSizes.iconEmpty,
             color: context.appColors.textSecondary,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
           Text(
             message,
             style: Theme.of(context).textTheme.bodyMedium,
@@ -739,7 +739,7 @@ class _SettingsBoundaryNote extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.all(AppSpacing.md),
     decoration: BoxDecoration(
       color: context.appColors.surfaceRaised,
       border: Border.all(color: context.appColors.border),
@@ -748,8 +748,8 @@ class _SettingsBoundaryNote extends StatelessWidget {
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.info_outline, size: 18),
-        const SizedBox(width: 10),
+        const Icon(Icons.info_outline, size: AppSizes.iconMd),
+        const SizedBox(width: AppSpacing.sm),
         Expanded(
           child: Text(message, style: Theme.of(context).textTheme.bodySmall),
         ),
