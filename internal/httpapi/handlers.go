@@ -112,6 +112,10 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 
 		// SSE 账号级事件读取，支持 Last-Event-ID / after_seq 恢复。
 		auth.GET("/events", a.handleSSE(presence, logger))
+		// v0.9.0 C5：会话级 SSE（只读失效通知）。cursor 是 session-local event_seq，
+		// 与账号级 /v1/events 的 account cursor 严格分离；杀开关
+		// AGENT_SESSIONS_SESSION_SSE_ENABLED=0 时返回 501/CAPABILITY_UNSUPPORTED。
+		auth.GET("/sessions/:id/events", a.handleSessionSSE(presence, logger))
 
 		// Daemon 使用独立的 Terminal 范围 REST + SSE，绝不复用账号级 /events。
 		daemon := v1.Group("/daemon")

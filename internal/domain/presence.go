@@ -67,6 +67,14 @@ func (h *PresenceHub) Subscribe(sessionID string) (chan store.SessionEventRow, f
 	return ch, cancel
 }
 
+// SessionSubscribers 返回指定会话的当前订阅数（脱敏诊断计数，测试用）。
+// session SSE 契约用它断言「断开即释放订阅」。
+func (h *PresenceHub) SessionSubscribers(sessionID string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.subscriptions[sessionID])
+}
+
 // Publish 把事件广播给会话订阅者（非阻塞）。
 func (h *PresenceHub) Publish(sessionID string, ev store.SessionEventRow) {
 	h.mu.RLock()

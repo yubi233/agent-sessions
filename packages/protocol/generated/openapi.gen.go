@@ -1919,6 +1919,15 @@ type GetSessionDaemonObservationParams struct {
 	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
 }
 
+// StreamSessionEventsParams defines parameters for StreamSessionEvents.
+type StreamSessionEventsParams struct {
+	// AfterSeq Last-Event-ID 缺失时使用的 session event_seq（排他）；名称为兼容保留。
+	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
+
+	// LastEventID 上次已消费的 session event_seq（排他）；值必须是非负整数。
+	LastEventID *string `json:"Last-Event-ID,omitempty"`
+}
+
 // GetSessionSnapshotParams defines parameters for GetSessionSnapshot.
 type GetSessionSnapshotParams struct {
 	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
@@ -2299,6 +2308,9 @@ type ServerInterface interface {
 
 	// (POST /v1/sessions/{id}/delegations)
 	CreateSessionDelegation(c *gin.Context, id string)
+
+	// (GET /v1/sessions/{id}/events)
+	StreamSessionEvents(c *gin.Context, id string, params StreamSessionEventsParams)
 
 	// (POST /v1/sessions/{id}/lease)
 	AcquireSessionLease(c *gin.Context, id string)
@@ -3382,6 +3394,63 @@ func (siw *ServerInterfaceWrapper) CreateSessionDelegation(c *gin.Context) {
 	siw.Handler.CreateSessionDelegation(c, id)
 }
 
+// StreamSessionEvents operation middleware
+func (siw *ServerInterfaceWrapper) StreamSessionEvents(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamSessionEventsParams
+
+	// ------------- Optional query parameter "after_seq" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after_seq", c.Request.URL.Query(), &params.AfterSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after_seq: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	headers := c.Request.Header
+
+	// ------------- Optional header parameter "Last-Event-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
+		var LastEventID string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandler(c, fmt.Errorf("Expected one value for Last-Event-ID, got %d", n), http.StatusBadRequest)
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter Last-Event-ID: %w", err), http.StatusBadRequest)
+			return
+		}
+
+		params.LastEventID = &LastEventID
+
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.StreamSessionEvents(c, id, params)
+}
+
 // AcquireSessionLease operation middleware
 func (siw *ServerInterfaceWrapper) AcquireSessionLease(c *gin.Context) {
 
@@ -3704,6 +3773,7 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/attachments/:id/complete", wrapper.CompleteAttachment)
 	router.GET(options.BaseURL+"/v1/capabilities", wrapper.GetCapabilities)
 	router.GET(options.BaseURL+"/v1/events", wrapper.StreamEvents)
+	router.GET(options.BaseURL+"/v1/sessions/:id/events", wrapper.StreamSessionEvents)
 	router.GET(options.BaseURL+"/v1/daemon/challenge", wrapper.DaemonChallenge)
 	router.POST(options.BaseURL+"/v1/daemon/hello", wrapper.DaemonHello)
 	router.POST(options.BaseURL+"/v1/daemon/heartbeat", wrapper.DaemonHeartbeat)

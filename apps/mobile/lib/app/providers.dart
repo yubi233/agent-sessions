@@ -184,6 +184,12 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
           _sessionContentKeyFromStore(relay, identity, sessionId),
     ),
     modelEffortMemory: ref.read(modelEffortPreferenceStoreProvider),
+    // v0.9.0 C6：session SSE 传输（仅真实 Relay 存在；fixture 模式无传输，
+    // 仍由 L1/L3/手动刷新完整承载）。poll_only 构建开关在 controller 内消费。
+    sessionEventSourceFactory:
+        relay is HttpRelayRepository ? relay.sessionEventStreamSource : null,
+    sessionAuthRefresh:
+        relay is HttpRelayRepository ? relay.refreshTokenOnce : null,
   );
   unawaited(controller.initialize());
   // v0.9.0 C7：App 认证状态与会话运行期的显式协调。注销/设备失效/账号切换

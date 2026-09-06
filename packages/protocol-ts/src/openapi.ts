@@ -696,6 +696,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/sessions/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 会话级 SSE（v0.9.0 C5，只读失效通知）。Last-Event-ID 优先于 after_seq；两者都是该 session 的排他 event_seq，与账号级 /v1/events 的 account_event_log cursor 严格分离，不能混用。事件帧仅作失效通知（event=invalidated、data={}），canonical envelope 不经本流下发；客户端收到通知后按已合并 session cursor 拉增量 snapshot。服务端先订阅 Hub 再从 SQLite 回放并 flush 初始连接注释；Hub 丢唤醒由每个心跳从 SQLite 补缺口自愈；每个心跳先复核 bearer token 与绑定设备（fail-closed），设备撤销后最多一个心跳周期关闭连接。AGENT_SESSIONS_SESSION_SSE_ENABLED=0 杀开关时返回 501/CAPABILITY_UNSUPPORTED，不得伪装资源 404。 */
+        get: operations["streamSessionEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/daemon/challenge": {
         parameters: {
             query?: never;
@@ -2906,6 +2923,63 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    streamSessionEvents: {
+        parameters: {
+            query?: {
+                /** @description Last-Event-ID 缺失时使用的 session event_seq（排他）；名称为兼容保留。 */
+                after_seq?: number;
+            };
+            header?: {
+                /** @description 上次已消费的 session event_seq（排他）；值必须是非负整数。 */
+                "Last-Event-ID"?: string;
+            };
+            path: {
+                /** @description 目标会话 id；跨账号返回 403/SCOPE_DENIED，不存在返回 404/INVALID_REQUEST。 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE stream（id=session event_seq、event=invalidated、data={} 的失效通知帧） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description 跨账号访问或设备被撤销 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 会话不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 会话 SSE 被杀开关关闭 */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     daemonChallenge: {

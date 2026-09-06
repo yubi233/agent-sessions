@@ -10,9 +10,19 @@ import '../domain/models.dart';
 import '../domain/model_effort_preferences.dart';
 import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
+import '../relay/session_event_transport.dart';
+import '../relay/session_sse.dart';
 import '../storage/model_effort_preference_store.dart';
 import 'session_composer_controller.dart';
 import 'session_turn_runtime.dart';
+
+/// v0.9.0 C7：App 传输构建开关（默认 auto）。
+/// `SESSION_EVENT_TRANSPORT=poll_only` 构建时永不建立 session SSE，
+/// L1/L3/手动刷新完整工作——回滚只切换传输，不回滚任何事件 schema。
+const String kSessionEventTransportMode = String.fromEnvironment(
+  'SESSION_EVENT_TRANSPORT',
+  defaultValue: 'auto',
+);
 
 enum SessionListPhase { loading, ready, error }
 
@@ -28,6 +38,8 @@ class SessionController extends ChangeNotifier {
     AttachmentPicker? picker,
     ModelEffortPreferenceStore? modelEffortMemory,
     StreamingTelemetry? streamingTelemetry,
+    DioSessionEventStreamSource? Function()? sessionEventSourceFactory,
+    Future<bool> Function()? sessionAuthRefresh,
   }) => SessionController._(
     relay,
     clock: clock,
@@ -36,6 +48,8 @@ class SessionController extends ChangeNotifier {
     modelEffortMemory: modelEffortMemory,
     streamingTelemetry:
         streamingTelemetry ?? StreamingTelemetry(now: clock),
+    sessionEventSourceFactory: sessionEventSourceFactory,
+    sessionAuthRefresh: sessionAuthRefresh,
   );
 
   SessionController._(
@@ -45,7 +59,12 @@ class SessionController extends ChangeNotifier {
     this._picker,
     this._modelEffortMemory,
     StreamingTelemetry? streamingTelemetry,
-  }) : _clock = clock ?? DateTime.now,
+    // 私有字段无法作为命名参数（this._x 不可用于命名参数），显式初始化是唯一形式。
+    DioSessionEventStreamSource? Function()? sessionEventSourceFactory,
+    Future<bool> Function()? sessionAuthRefresh,
+  }) : _sessionEventSourceFactory = sessionEventSourceFactory, // ignore: prefer_initializing_formals
+       _sessionAuthRefresh = sessionAuthRefresh, // ignore: prefer_initializing_formals
+       _clock = clock ?? DateTime.now,
        _random = random ?? Random.secure(),
        streamingTelemetry = streamingTelemetry ?? StreamingTelemetry() {
     // v0.9.0 C1：默认单调时钟用进程内 Stopwatch（不受系统时间回拨影响）；
@@ -54,6 +73,11 @@ class SessionController extends ChangeNotifier {
     monotonicElapsed = () => _monotonicWatch.elapsed;
   }
   final RelayRepository _relay;
+
+  /// v0.9.0 C6：session SSE 传输（仅当前选中+surface 可见+auto 模式时存在）。
+  final DioSessionEventStreamSource? Function()? _sessionEventSourceFactory;
+  final Future<bool> Function()? _sessionAuthRefresh;
+  SessionEventTransport? _sessionEventTransport;
   final DateTime Function() _clock;
   final Random _random;
   final AttachmentPicker? _picker;
@@ -285,8 +309,96 @@ class SessionController extends ChangeNotifier {
     _sessionSurfaceVisible = visible;
     if (!visible) {
       _selectionGeneration += 1;
+      // v0.9.0 C6：离开会话页面必须取消 stream/watchdog/退避。
+      _stopSessionEventTransport();
+    } else {
+      final sessionId = _selectedSessionId;
+      if (sessionId != null) _startSessionEventTransportIfNeeded(sessionId);
     }
     _notifyListeners();
+  }
+
+  // ─── v0.9.0 C6：session SSE 传输生命周期 ──────────────────────────────
+  /// 是否应由当前传输抑制高频轮询（C6：live 时由 SSE wake 驱动增量快照，
+  /// 不再同时运行 250/500ms 在途轮询；connecting/backoff/pollFallback 轮询托底）。
+  bool _transportSuppressesPolling(String sessionId) =>
+      kSessionEventTransportMode == 'auto' &&
+      _sessionEventTransport != null &&
+      _sessionEventTransport!.sessionId == sessionId &&
+      _sessionEventTransport!.state == SessionEventTransportState.live;
+
+  /// 按 C6 前置条件建立 session SSE：仅 auto 模式、surface 可见、运行期未暂停
+  /// （前台+在线）、且存在专用 streaming source（真实 Relay）时。调用前必须已
+  /// 成功合并一次该会话快照（_loadSelectedSession 保证），消除首次从 0 回放
+  /// 全部历史的风险。
+  void _startSessionEventTransportIfNeeded(String sessionId) {
+    if (_disposed || kSessionEventTransportMode != 'auto') return;
+    if (!_sessionSurfaceVisible || !_autoLeaseEnabled) return;
+    final sourceFactory = _sessionEventSourceFactory;
+    if (sourceFactory == null) return;
+    _stopSessionEventTransport();
+    final transport = SessionEventTransport(
+      sessionId: sessionId,
+      source: sourceFactory()!,
+      pullSnapshot: ({required bool forceFull}) =>
+          _pullSnapshotForTransport(sessionId, forceFull: forceFull),
+      probeSnapshot: () => _probeSnapshotForTransport(sessionId),
+      refreshAuth: () =>
+          _sessionAuthRefresh?.call() ?? Future<bool>.value(false),
+      onState: (_) => _notifyListeners(),
+    )..start();
+    _sessionEventTransport = transport;
+  }
+
+  void _stopSessionEventTransport() {
+    _sessionEventTransport?.stop();
+    _sessionEventTransport = null;
+  }
+
+  /// SSE wake 驱动的增量快照（C6）：经单航班门与 L1/L3/手动刷新合并；
+  /// 成功合并才让 transport 提交 wake cursor。
+  Future<bool> _pullSnapshotForTransport(String sessionId,
+      {required bool forceFull}) async {
+    final authGenerationAtStart = _authGeneration;
+    var merged = false;
+    await _runSnapshotTurn(sessionId, () async {
+      try {
+        final snapshot = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: forceFull ? 0 : _cursorFor(sessionId),
+        );
+        if (_disposed || _authGeneration != authGenerationAtStart) return;
+        _mergeSnapshot(snapshot, appendTimeline: true);
+        _evaluateTurnDeadlines(sessionId);
+        merged = true;
+        _notifyListeners();
+      } catch (_) {
+        merged = false;
+      }
+    });
+    return merged;
+  }
+
+  /// 404 探测（C6）：snapshot 200 → 旧 Relay 无此路由（pollFallback）；
+  /// 404/403 → 资源级失效；网络/429/5xx → 结论未知保持退避。
+  Future<SessionSnapshotProbeResult> _probeSnapshotForTransport(
+    String sessionId,
+  ) async {
+    try {
+      await _relay.getSessionSnapshot(sessionId);
+      return SessionSnapshotProbeResult.reachable;
+    } on RelayFailure catch (failure) {
+      switch (failure.kind) {
+        case RelayFailureKind.validation:
+          return SessionSnapshotProbeResult.missing;
+        case RelayFailureKind.forbidden:
+          return SessionSnapshotProbeResult.forbidden;
+        default:
+          return SessionSnapshotProbeResult.unknown;
+      }
+    } catch (_) {
+      return SessionSnapshotProbeResult.unknown;
+    }
   }
 
   int _bumpSyncGeneration(String sessionId) {
@@ -314,6 +426,16 @@ class SessionController extends ChangeNotifier {
   void setAutoLeaseEnabled(bool enabled) {
     if (_autoLeaseEnabled == enabled) return;
     _autoLeaseEnabled = enabled;
+    // v0.9.0 C6：后台/离线（闸门关闭）必须取消 stream/watchdog/退避计时；
+    // 前台+在线恢复后为当前选中会话重建传输。
+    if (!enabled) {
+      _stopSessionEventTransport();
+    } else {
+      final sessionId = _selectedSessionId;
+      if (sessionId != null && _sessionSurfaceVisible) {
+        _startSessionEventTransportIfNeeded(sessionId);
+      }
+    }
     _notifyListeners();
   }
 
@@ -2370,6 +2492,8 @@ class SessionController extends ChangeNotifier {
     }
     final selectionGeneration = ++_selectionGeneration;
     _errorMessage = null;
+    // v0.9.0 C6：切换会话取消上一选择的 stream/watchdog/退避。
+    _stopSessionEventTransport();
     _historyErrorMessage = null;
     _historyLoading = false;
     _selectedSessionId = sessionId;
@@ -2403,6 +2527,8 @@ class SessionController extends ChangeNotifier {
       _mergeSnapshot(snapshot);
       // v0.9.0 C4：打开并成功合并该会话快照后清除完成角标。
       _unseenCompletedSessionIds.remove(sessionId);
+      // v0.9.0 C6：先成功合并一次目标会话快照，再用其 cursor 建立 SSE。
+      _startSessionEventTransportIfNeeded(sessionId);
       final controls = await _relay.getSessionControls(sessionId);
       if (_selectedSessionId == sessionId &&
           _selectionGeneration == selectionGeneration) {
@@ -2606,6 +2732,8 @@ class SessionController extends ChangeNotifier {
           // 此决定；窗口 attempts 结构与超时收敛语义不变（v0.8.6 A①）。
           await Future<void>.delayed(activePollInterval);
           if (generationsStale()) return true;
+          // v0.9.0 C6：SSE live 时由 wake 驱动快照，跳过本拍在途轮询。
+          if (_transportSuppressesPolling(sessionId)) continue;
           latest = await timedPollFetch(
             i + 1,
             afterSequence: latest.session.lastSequence,
@@ -2707,6 +2835,8 @@ class SessionController extends ChangeNotifier {
       await Future<void>.delayed(pollInterval);
       // v0.9.0 C2：休眠醒来先验代际，失配即正常取消（不发起任何新请求）。
       if (generationsStale()) return;
+      // v0.9.0 C6：SSE live 时由 wake 驱动快照，暂停在途轮询拉取。
+      if (_transportSuppressesPolling(sessionId)) continue;
       try {
         final watch = Stopwatch()..start();
         latest = await _relay.getSessionSnapshot(
@@ -2868,6 +2998,8 @@ class SessionController extends ChangeNotifier {
       }
       await Future<void>.delayed(l1PollInterval);
       if (stale()) return;
+      // v0.9.0 C6：SSE live 时由 wake 驱动快照，L1 保留但跳过拉取。
+      if (_transportSuppressesPolling(sessionId)) continue;
       try {
         final snapshot = await _relay.getSessionSnapshot(
           sessionId,
@@ -3287,6 +3419,7 @@ class SessionController extends ChangeNotifier {
     _quietReconcileActive = false;
     _quietReconcileTimer?.cancel();
     _quietReconcileTimer = null;
+    _stopSessionEventTransport();
     _clearSelection();
     _sessions = const [];
     _phase = SessionListPhase.loading;
@@ -3307,6 +3440,7 @@ class SessionController extends ChangeNotifier {
     _activeTurns.clear();
     _snapshotTurnsPending.clear();
     _snapshotTurnsInFlight.clear();
+    _stopSessionEventTransport();
     _quietReconcileTimer?.cancel();
     _quietReconcileTimer = null;
     super.dispose();

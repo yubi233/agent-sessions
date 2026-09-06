@@ -12,6 +12,7 @@ import '../domain/session_projection_models.dart';
 import '../domain/terminal_models.dart';
 import '../domain/usage_models.dart';
 import 'relay_repository.dart';
+import 'session_sse.dart';
 
 /// 真实 Relay REST 适配器。密码登录不提交角色或设备 id，只能获得 Relay 默认的只读 token。
 class HttpRelayRepository implements RelayRepository {
@@ -850,6 +851,19 @@ class HttpRelayRepository implements RelayRepository {
       receiveTimeout: receiveTimeout,
     );
   }
+
+  /// v0.9.0 C6：session SSE transport 的 401 重验入口。
+  /// 复用 [_refreshTokensOnce] 的并发 single-flight（旋转 token 立即持久化）；
+  /// 返回是否刷新成功，调用方成功后重连。
+  Future<bool> refreshTokenOnce() async => (await _refreshTokensOnce()) != null;
+
+  /// v0.9.0 C6：会话 SSE 专用 streaming client（复用同一 baseUrl 配置；
+  /// 建流时读取最新 access token，401 刷新后重连自动携带新 token）。
+  DioSessionEventStreamSource sessionEventStreamSource() =>
+      DioSessionEventStreamSource(
+        dio: _dio,
+        tokenProvider: () async => (await _readTokens())?.accessToken,
+      );
 
   /// owner access token 只有 15 分钟 TTL；App 长时间闲置后的首个请求会撞 401。
   /// 用 refresh token 换新并重放一次；刷新失败才按未授权收敛，交给会话恢复流程。

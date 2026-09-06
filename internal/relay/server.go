@@ -25,7 +25,18 @@ func NewServerWithTerminalSignatureRequired(db *sql.DB, logger *slog.Logger) *gi
 	return newServer(db, logger, true)
 }
 
+// NewServerWithPresence 与 NewServer 相同，但额外返回进程内 PresenceHub，
+// 供测试断言 session SSE「断开即释放订阅」契约（v0.9.0 V090-08）。
+func NewServerWithPresence(db *sql.DB, logger *slog.Logger) (*gin.Engine, *domain.PresenceHub) {
+	return newServerWithPresence(db, logger, false)
+}
+
 func newServer(db *sql.DB, logger *slog.Logger, signatureRequired bool) *gin.Engine {
+	router, _ := newServerWithPresence(db, logger, signatureRequired)
+	return router
+}
+
+func newServerWithPresence(db *sql.DB, logger *slog.Logger, signatureRequired bool) (*gin.Engine, *domain.PresenceHub) {
 	router := gin.New()
 	if logger == nil {
 		logger = slog.Default()
@@ -57,7 +68,7 @@ func newServer(db *sql.DB, logger *slog.Logger, signatureRequired bool) *gin.Eng
 	// 签名窗口开关在路由装配前注入，保证首个请求就按当前模式校验。
 	api.Daemons.SetTerminalSignatureRequired(signatureRequired)
 	api.RegisterRoutes(router, logger, presence)
-	return router
+	return router, presence
 }
 
 // localHealthCORS 只允许本地 P0 Web 状态页读取健康端点。
