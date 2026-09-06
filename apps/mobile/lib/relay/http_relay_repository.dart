@@ -628,7 +628,16 @@ class HttpRelayRepository implements RelayRepository {
 
   @override
   Future<CapabilityMatrix> getCapabilities() async {
-    final response = await _authenticatedSend('GET', '/v1/capabilities');
+    // 能力矩阵端点接收超时单独放宽到 60s（全局 12s 不适用）：Relay 对该端点做
+    // 实时 Provider 探测（OpenCode 健康检查 + 内嵌 DSH Adapter 的 Detect 握手），
+    // Relay DB 重建/桥冷启动时实测可达 12.01s——恰好越过全局 receiveTimeout，
+    // 被 Dio 映射为 receiveTimeout → 「Relay 暂时不可用」误报（2026-09-06 实测，
+    // 服务端实际 200 完成）。v0.8.9 收口裁决：仅放宽本端点，不动全局超时。
+    final response = await _authenticatedSend(
+      'GET',
+      '/v1/capabilities',
+      receiveTimeout: const Duration(seconds: 60),
+    );
     return CapabilityMatrix.fromRelayJson(_asMap(response.data));
   }
 
@@ -826,6 +835,7 @@ class HttpRelayRepository implements RelayRepository {
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
+    Duration? receiveTimeout,
   }) async {
     final tokens = await _readTokens();
     if (tokens == null) {
@@ -837,6 +847,7 @@ class HttpRelayRepository implements RelayRepository {
       data: data,
       queryParameters: queryParameters,
       accessToken: tokens.accessToken,
+      receiveTimeout: receiveTimeout,
     );
   }
 
@@ -875,6 +886,9 @@ class HttpRelayRepository implements RelayRepository {
     Map<String, dynamic>? queryParameters,
     String? accessToken,
     bool allowAuthRefresh = true,
+    // 单请求接收超时覆盖：null 时沿用 Dio 全局 receiveTimeout（12s）。
+    // 仅给已知慢端点（能力矩阵实时探测）放宽，避免真死连接时全 App 干等。
+    Duration? receiveTimeout,
   }) async {
     try {
       return await _dio.request<dynamic>(
@@ -886,6 +900,8 @@ class HttpRelayRepository implements RelayRepository {
           headers: {
             if (accessToken != null) 'Authorization': 'Bearer $accessToken',
           },
+          // null 时回落到 Dio BaseOptions 的全局 receiveTimeout（12s）。
+          receiveTimeout: receiveTimeout,
         ),
       );
     } on DioException catch (error) {

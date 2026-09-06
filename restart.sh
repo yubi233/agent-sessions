@@ -1365,6 +1365,11 @@ restart_flutter_action() {
   # ensure_local_owner_bootstrap 会以可操作错误失败（此时尚未触碰 Flutter 进程），
   # 用户按提示执行完整 restart 即可；这消灭了"Daemon 运行中换库"的 generation 窗口。
   RELAY_DB_RESET_ALLOWED=false
+  # --no-relay 时会跳过 localdev owner bootstrap 刷新与 dart-define 播种（重连后的
+  # App 将停在非 localdev 欢迎页、不发任何请求）。这里显式提示，防止误判为故障。
+  if [[ "$WITH_RELAY" != true && "$FLUTTER_MODE" == "mac" ]] && truthy "$LOCAL_DEV_PAIRING"; then
+    echo "restart.sh: --no-relay 下 restart-flutter 不刷新/播种 localdev owner bootstrap；App 将停在连接页。如需带账号数据重连请执行 './restart.sh restart-flutter'" >&2
+  fi
   mkdir -p "$STATE_DIR"
   if ! preflight_start; then
     return 1

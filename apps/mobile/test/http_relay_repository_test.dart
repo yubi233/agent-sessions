@@ -950,6 +950,60 @@ void main() {
       );
     });
 
+    // v0.8.9 收口回归（2026-09-06 实测）：能力矩阵端点接收超时单独放宽到 60s。
+    // Relay 对 /v1/capabilities 做实时 Provider 探测（OpenCode + DSH 桥 Detect 冷启动），
+    // Relay DB 重建后实测 12.01s——恰好越过全局 12s receiveTimeout，被映射成
+    // 「Relay 暂时不可用」误报（服务端实际 200）。本回归锁定：
+    // ① capabilities 请求携带 60s 单请求覆盖；② 普通请求不受影响（沿用全局值）。
+    test('能力矩阵请求携带 60s 接收超时覆盖，普通请求沿用全局超时', () async {
+      final capturedReceiveTimeouts = <String, Duration?>{};
+      final adapter = _FixtureHttpAdapter((options) {
+        capturedReceiveTimeouts[options.uri.path] = options.receiveTimeout;
+        if (options.uri.path == '/v1/capabilities') {
+          return _jsonResponse({
+            'providers': [
+              {
+                'kind': 'dsh',
+                'version': 'fixture-1',
+                'available': true,
+                'capabilities': [
+                  {'name': 'start', 'status': 'native'},
+                ],
+              },
+            ],
+          });
+        }
+        return _jsonResponse({
+          'terminals': [
+            {
+              'id': 'term_opaque_fixture',
+              'hostname': 'Fixture Mac',
+              'platform': 'macos',
+              'status': 'online',
+              'last_seen_unix_ms': 1786665600000,
+              'protocol_version': 1,
+              'daemon_version': '0.4.0-fixture',
+            },
+          ],
+        });
+      });
+      final repository = _authenticatedRepository(adapter);
+
+      await repository.getCapabilities();
+      await repository.listTerminals();
+
+      expect(
+        capturedReceiveTimeouts['/v1/capabilities'],
+        const Duration(seconds: 60),
+        reason: '能力矩阵实时探测可能超过全局 12s，必须放宽到 60s',
+      );
+      expect(
+        capturedReceiveTimeouts['/v1/terminals'],
+        isNot(const Duration(seconds: 60)),
+        reason: '普通请求不应被放宽（真死连接仍按全局超时快速收敛）',
+      );
+    });
+
     test('终端状态只读取账号白名单元数据，不请求或保留工作区路径', () async {
       final adapter = _FixtureHttpAdapter((options) {
         expect(options.path, '/v1/terminals');

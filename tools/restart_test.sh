@@ -117,8 +117,11 @@ test ! -e "$state_dir/flutter.pid"
 ./restart.sh restart --no-relay --no-daemon --no-flutter --no-admin --with-web --web-port "$occupied_port" --state-dir "$state_dir" --log-dir "$log_dir"
 test "$(ps -p "$occupied_pid" -o pid= 2>/dev/null | tr -d ' ')" = ""
 ./restart.sh stop --no-relay --no-daemon --no-flutter --web-port "$occupied_port" --admin-port "$admin_port" --state-dir "$state_dir"
-dry_run_flutter_restart="$(FLUTTER_BIN="$fake_flutter" ./restart.sh restart-flutter --no-relay --no-daemon --state-dir "$state_dir" --log-dir "$log_dir" --dry-run)"
+dry_run_flutter_restart="$(FLUTTER_BIN="$fake_flutter" ./restart.sh restart-flutter --no-relay --no-daemon --state-dir "$state_dir" --log-dir "$log_dir" --dry-run 2>&1)"
 grep -F 'flutter: reconnect' <<< "$dry_run_flutter_restart" >/dev/null
+# v0.8.9 收口回归：--no-relay 的 restart-flutter 必须显式提示 localdev bootstrap 未播种
+#（否则 App 停在连接页、零请求，易被误判为 Relay 故障）。
+grep -F '不刷新/播种 localdev owner bootstrap' <<< "$dry_run_flutter_restart" >/dev/null
 printf 'restart.sh regression passed (ports %s/%s)\n' "$web_port" "$admin_port"
 
 # ---------------------------------------------------------------------------
