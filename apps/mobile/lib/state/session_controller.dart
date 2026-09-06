@@ -12,6 +12,7 @@ import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
 import '../storage/model_effort_preference_store.dart';
 import 'session_composer_controller.dart';
+import 'session_turn_runtime.dart';
 
 enum SessionListPhase { loading, ready, error }
 
@@ -46,11 +47,24 @@ class SessionController extends ChangeNotifier {
     StreamingTelemetry? streamingTelemetry,
   }) : _clock = clock ?? DateTime.now,
        _random = random ?? Random.secure(),
-       streamingTelemetry = streamingTelemetry ?? StreamingTelemetry();
+       streamingTelemetry = streamingTelemetry ?? StreamingTelemetry() {
+    // v0.9.0 C1：默认单调时钟用进程内 Stopwatch（不受系统时间回拨影响）；
+    // 测试可注入步进函数（monotonicElapsed）锁定 2/60 分钟边界。
+    _monotonicWatch.start();
+    monotonicElapsed = () => _monotonicWatch.elapsed;
+  }
   final RelayRepository _relay;
   final DateTime Function() _clock;
   final Random _random;
   final AttachmentPicker? _picker;
+
+  /// v0.9.0 C1：运行期单调时钟锚点的基准表（进程内，不跨进程持久化）。
+  final Stopwatch _monotonicWatch = Stopwatch();
+
+  /// v0.9.0 C1：单调时钟读取函数。测试注入可控步进函数；
+  /// 超时锚点与等待时长的唯一来源，禁止用 attempts×interval 或服务端时间推导。
+  @visibleForTesting
+  late Duration Function() monotonicElapsed;
 
   /// v0.8.7 门禁 2：流式埋点 sink（打字机流式的唯一证据源）。只记录元数据
   /// （seq/kind/message_id/长度/时间差），正文永不入 sink（审计红线 V087-03）。
@@ -170,6 +184,72 @@ class SessionController extends ChangeNotifier {
   int _selectionGeneration = 0;
   int _runtimeLeaseGeneration = 0;
   bool _initializing = false;
+
+  // ─── v0.9.0 C2：三重代际与运行期取消契约 ───────────────────────────────
+  /// 认证代际：登录态/设备绑定变化、认证失效、注销（resetForAuthBoundary）
+  /// 与 dispose 时递增。旧代际的 Timer、轮询循环与 REST 回包全部按正常取消丢弃。
+  int _authGeneration = 0;
+
+  /// 会话同步代际（按会话）：send/steer/abort 实际提交前与 canonical 终态收口时
+  /// 推进。它是取消旧异步任务的技术代际，不等同于 Provider turn id；steer 推进
+  /// 该值但继承原业务回合起点、超时标记与 60 分钟期限。
+  final Map<String, int> _syncGenerations = {};
+
+  /// 会话页面 surface 可见性（前台且会话页面可见）。离开会话页面推进选择代际，
+  /// 旧选择的 UI 状态写入（timeline/controls/续轮）随即失效。P3/P4 的 quiet
+  /// reconcile 与 session SSE 以此决定是否运行。
+  bool _sessionSurfaceVisible = true;
+
+  /// dispose 后禁止新调度与通知：任何完成中的 Future 返回都不得再触碰
+  /// 已释放的 ChangeNotifier（C7）。
+  bool _disposed = false;
+
+  /// v0.9.0 C1：会话级活动回合运行期状态（202 受理锚点 + 2/60 分钟预算）。
+  final Map<String, SessionActiveTurn> _activeTurns = {};
+
+  /// v0.9.0 C2：每会话快照刷新单航班——同会话同时最多一个 fetch+merge 在途，
+  /// 其余请求只置 pending；当前请求结束后从已合并 cursor 再拉一轮。
+  final Map<String, Future<void>> _snapshotTurnsInFlight = {};
+  final Set<String> _snapshotTurnsPending = {};
+
+  /// 只读暴露：认证代际（测试断言用）。
+  @visibleForTesting
+  int get authGeneration => _authGeneration;
+
+  /// 只读暴露：指定会话的同步代际（测试断言用）。
+  @visibleForTesting
+  int syncGenerationFor(String sessionId) => _syncGenerations[sessionId] ?? 0;
+
+  /// 只读暴露：会话页面 surface 可见性。
+  bool get isSessionSurfaceVisible => _sessionSurfaceVisible;
+
+  /// 当前会话的活动回合运行期状态（C1）；null 表示无已锚定的活动回合。
+  SessionActiveTurn? activeTurnFor(String? sessionId) =>
+      sessionId == null ? null : _activeTurns[sessionId];
+
+  /// v0.9.0 C2：离开/进入会话页面 surface 时由路由层调用。离开时推进选择代际，
+  /// 旧选择的迟到写入不得落到当前页面。
+  void setSessionSurfaceVisible(bool visible) {
+    if (_sessionSurfaceVisible == visible) return;
+    _sessionSurfaceVisible = visible;
+    if (!visible) {
+      _selectionGeneration += 1;
+    }
+    _notifyListeners();
+  }
+
+  int _bumpSyncGeneration(String sessionId) {
+    final next = (_syncGenerations[sessionId] ?? 0) + 1;
+    _syncGenerations[sessionId] = next;
+    return next;
+  }
+
+  /// dispose 安全通知（C7）：dispose 后丢弃通知而不是让在途 Future 崩溃。
+  void _notifyListeners() {
+    if (_disposed) return;
+    // ignore: invalid_use_of_protected_member
+    notifyListeners();
+  }
   // 最近一次成功获取 lease 所用的写授权参数；前台/网络恢复后用于无参重新获取，
   // 使“从后台回来直接可写”无需用户再次点按。
   String? _lastLeaseDeviceId;
@@ -183,7 +263,7 @@ class SessionController extends ChangeNotifier {
   void setAutoLeaseEnabled(bool enabled) {
     if (_autoLeaseEnabled == enabled) return;
     _autoLeaseEnabled = enabled;
-    notifyListeners();
+    _notifyListeners();
   }
 
   SessionListPhase get phase => _phase;
@@ -270,7 +350,7 @@ class SessionController extends ChangeNotifier {
     try {
       final preferences = await store.read();
       _effortsByModel = Map<String, String>.of(preferences.effortsByModel);
-      notifyListeners();
+      _notifyListeners();
     } catch (_) {
       _effortsByModel = {};
     }
@@ -310,7 +390,7 @@ class SessionController extends ChangeNotifier {
       }
     }
     _isCapabilitiesLoading = true;
-    notifyListeners();
+    _notifyListeners();
     try {
       _capabilities = await _relay.getCapabilities();
       _capabilitiesFetchedAt = _clock();
@@ -326,14 +406,14 @@ class SessionController extends ChangeNotifier {
       }
     } finally {
       _isCapabilitiesLoading = false;
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
   Future<void> refreshSessions() async {
     _errorMessage = null;
     _phase = SessionListPhase.loading;
-    notifyListeners();
+    _notifyListeners();
     try {
       final loaded = await _relay.listSessions();
       // 按最后活动时间稳定排序（服务端同样排序，这里兜底合并/刷新路径）。
@@ -350,13 +430,13 @@ class SessionController extends ChangeNotifier {
       _phase = SessionListPhase.error;
       _errorMessage = '会话列表暂时不可用，请稍后重试。';
     }
-    notifyListeners();
+    _notifyListeners();
   }
 
   Future<void> refreshWorkspaces() async {
     _workspaceErrorMessage = null;
     _workspacePhase = WorkspaceListPhase.loading;
-    notifyListeners();
+    _notifyListeners();
     try {
       _workspaces = await _relay.listWorkspaces();
       _workspacePhase = WorkspaceListPhase.ready;
@@ -367,14 +447,14 @@ class SessionController extends ChangeNotifier {
       _workspacePhase = WorkspaceListPhase.error;
       _workspaceErrorMessage = '工作区列表暂时不可用，请稍后重试。';
     }
-    notifyListeners();
+    _notifyListeners();
   }
 
   /// 工作区操作错误只属于当前客户端提示，关闭后不影响已投递的 Daemon 命令。
   void clearWorkspaceError() {
     if (_workspaceErrorMessage == null) return;
     _workspaceErrorMessage = null;
-    notifyListeners();
+    _notifyListeners();
   }
 
   /// 显式发起 DSH 同步并有限轮询；离开页面只停止等待，不撤销已提交命令。
@@ -385,11 +465,11 @@ class SessionController extends ChangeNotifier {
     _workspaceSyncWaiting = true;
     _workspaceSyncState = null;
     _workspaceErrorMessage = null;
-    notifyListeners();
+    _notifyListeners();
     try {
       var state = await _relay.syncDSHWorkspaces(terminalId: terminalId);
       _workspaceSyncState = state;
-      notifyListeners();
+      _notifyListeners();
       final commandId = state.commandId;
       for (
         var attempt = 0;
@@ -403,7 +483,7 @@ class SessionController extends ChangeNotifier {
         if (!_workspaceSyncWaiting) break;
         state = await _relay.getDSHWorkspaceSyncState(commandId);
         _workspaceSyncState = state;
-        notifyListeners();
+        _notifyListeners();
       }
       if (state.isSucceeded && _workspaceSyncWaiting) {
         await refreshWorkspaces();
@@ -423,7 +503,7 @@ class SessionController extends ChangeNotifier {
       return _workspaceSyncState;
     } finally {
       _workspaceSyncWaiting = false;
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -431,7 +511,7 @@ class SessionController extends ChangeNotifier {
   void stopWaitingForDSHWorkspaceSync() {
     if (!_workspaceSyncWaiting) return;
     _workspaceSyncWaiting = false;
-    notifyListeners();
+    _notifyListeners();
   }
 
   /// 在工作区详情中按需导入历史会话；只轮询元数据命令，不读取消息正文。
@@ -451,21 +531,21 @@ class SessionController extends ChangeNotifier {
         .firstOrNull;
     if (workspace == null || !workspace.isDsh) {
       _workspaceErrorMessage = '只能从已同步的 DSH 工作区导入历史会话。';
-      notifyListeners();
+      _notifyListeners();
       return null;
     }
     _workspaceImportWaiting = true;
     _workspaceImportWorkspaceId = normalized;
     _workspaceImportState = null;
     _workspaceErrorMessage = null;
-    notifyListeners();
+    _notifyListeners();
     try {
       var state = await _relay.importDSHSessions(
         workspaceId: normalized,
         terminalId: terminalId,
       );
       _workspaceImportState = state;
-      notifyListeners();
+      _notifyListeners();
       final commandId = state.commandId;
       for (
         var attempt = 0;
@@ -479,7 +559,7 @@ class SessionController extends ChangeNotifier {
         if (!_workspaceImportWaiting) break;
         state = await _relay.getDSHImportState(commandId);
         _workspaceImportState = state;
-        notifyListeners();
+        _notifyListeners();
       }
       if (state.isSucceeded && _workspaceImportWaiting) {
         await refreshSessions();
@@ -495,7 +575,7 @@ class SessionController extends ChangeNotifier {
       return _workspaceImportState;
     } finally {
       _workspaceImportWaiting = false;
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -503,7 +583,7 @@ class SessionController extends ChangeNotifier {
   void stopWaitingForDSHImport() {
     if (!_workspaceImportWaiting) return;
     _workspaceImportWaiting = false;
-    notifyListeners();
+    _notifyListeners();
   }
 
   bool get selectedWorkspaceDeleted {
@@ -526,7 +606,7 @@ class SessionController extends ChangeNotifier {
     final root = canonicalRoot.trim();
     if (root.isEmpty) {
       _workspaceErrorMessage = '没有选择工作区目录。';
-      notifyListeners();
+      _notifyListeners();
       return null;
     }
     final projectId = _projectIdForRoot(root);
@@ -548,10 +628,10 @@ class SessionController extends ChangeNotifier {
       ];
       _workspacePhase = WorkspaceListPhase.ready;
       _workspaceErrorMessage = null;
-      notifyListeners();
+      _notifyListeners();
     } else {
       _workspaceErrorMessage = _errorMessage ?? '工作区创建失败，请重新选择目录。';
-      notifyListeners();
+      _notifyListeners();
     }
     return created;
   }
@@ -577,14 +657,14 @@ class SessionController extends ChangeNotifier {
       input.validate();
     } on RelayFailure catch (failure) {
       _workspaceErrorMessage = failure.message;
-      notifyListeners();
+      _notifyListeners();
       return null;
     }
     final normalizedName = name.trim();
     // workspace.create 是异步 Terminal 命令；显式暴露 settling 状态让页面禁用
     // 重复点击，并让回归测试能区分 pending 与已完成投影。
     _workspaceSettling = true;
-    notifyListeners();
+    _notifyListeners();
     try {
       final created = await _runAction<MobileWorkspace?>(
         'workspace-create-name:$normalizedName',
@@ -600,12 +680,12 @@ class SessionController extends ChangeNotifier {
             }
             _pendingWorkspaceCommandId = commandID;
             _pendingWorkspaceId = state.workspaceId;
-            notifyListeners();
+            _notifyListeners();
             // Daemon 创建目录是异步的；有限次轮询避免网络异常时永久占住 UI。
             for (var attempt = 0; attempt < 40 && state.isPending; attempt++) {
               await Future<void>.delayed(const Duration(milliseconds: 250));
               state = await _relay.getWorkspaceCreateState(commandID);
-              notifyListeners();
+              _notifyListeners();
             }
           }
           if (!state.isSucceeded) {
@@ -644,7 +724,7 @@ class SessionController extends ChangeNotifier {
       _pendingWorkspaceCommandId = null;
       _pendingWorkspaceId = null;
       _workspaceSettling = false;
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -678,7 +758,7 @@ class SessionController extends ChangeNotifier {
     _pendingWorkspaceId = normalized;
     _workspaceSettling = true;
     _workspaceErrorMessage = null;
-    notifyListeners();
+    _notifyListeners();
     try {
       MobileSession? target;
       for (final session in _sessions) {
@@ -722,13 +802,13 @@ class SessionController extends ChangeNotifier {
         _composerStates.remove(sourceSessionId);
         _composerDrafts.remove(sourceSessionId);
         _attachmentsBySession.remove(sourceSessionId);
-        notifyListeners();
+        _notifyListeners();
       }
       return target;
     } finally {
       _pendingWorkspaceId = null;
       _workspaceSettling = false;
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -748,7 +828,7 @@ class SessionController extends ChangeNotifier {
     final normalizedProvider = provider.trim();
     if (normalizedWorkspaceId.isEmpty || normalizedProvider.isEmpty) {
       _workspaceErrorMessage = '工作区或 Provider 无效，无法创建会话。';
-      notifyListeners();
+      _notifyListeners();
       return null;
     }
     if (normalizedProvider.toLowerCase() == 'dsh' &&
@@ -759,7 +839,7 @@ class SessionController extends ChangeNotifier {
       // UI 只能在 DSH Workspace detail 调用此路径。客户端提前拒绝错误归属，
       // Relay 仍会以 origin/home Terminal/capability fence 作为最终授权判断。
       _workspaceErrorMessage = 'DSH 会话必须在已同步的 DSH 工作区内创建。';
-      notifyListeners();
+      _notifyListeners();
       return null;
     }
     final actionKey = 'create:$normalizedWorkspaceId:$normalizedProvider';
@@ -853,7 +933,7 @@ class SessionController extends ChangeNotifier {
     if (hidden <= 0) return;
     _historyLoading = true;
     _historyErrorMessage = null;
-    notifyListeners();
+    _notifyListeners();
     try {
       final take = hidden > 25 ? 25 : hidden;
       final start = hidden - take;
@@ -863,7 +943,7 @@ class SessionController extends ChangeNotifier {
       _historyErrorMessage = '更早的会话记录暂时不可用，请重试。';
     } finally {
       _historyLoading = false;
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -1012,14 +1092,26 @@ class SessionController extends ChangeNotifier {
     if (_selectedLease == null && _skillConfirmation == null) return;
     _selectedLease = null;
     _skillConfirmation = null;
-    notifyListeners();
+    _notifyListeners();
   }
 
   /// 以当前已确认 cursor 拉取选中会话的增量事件。
   /// 该方法绝不调用 create/send/abort/确认/附件等写接口，生命周期恢复只能走只读路径。
+  /// v0.9.0 C2：经每会话单航班门执行，与 L1/L3/手动刷新共享同一合并节奏，
+  /// 不会与在途快照刷新并发重复请求。
   Future<SessionCursorRecovery?> recoverSelectedSessionFromCursor() async {
     final sessionId = _selectedSessionId;
     if (sessionId == null) return null;
+    SessionCursorRecovery? recovery;
+    await _runSnapshotTurn(sessionId, () async {
+      recovery = await _recoverSelectedSessionFromCursorTurn(sessionId);
+    });
+    return recovery;
+  }
+
+  Future<SessionCursorRecovery?> _recoverSelectedSessionFromCursorTurn(
+    String sessionId,
+  ) async {
     final selectionGeneration = _selectionGeneration;
     final requestedAfterSequence = _cursorFor(sessionId);
     final existingSequences = _timeline.map((event) => event.sequence).toSet();
@@ -1044,7 +1136,7 @@ class SessionController extends ChangeNotifier {
       return null;
     }
     _controls = controls;
-    notifyListeners();
+    _notifyListeners();
     return SessionCursorRecovery(
       sessionId: sessionId,
       requestedAfterSequence: requestedAfterSequence,
@@ -1067,10 +1159,15 @@ class SessionController extends ChangeNotifier {
     return startSelectedSession(deviceId: deviceId, canWrite: canWrite);
   }
 
+  /// 提交用户消息。[intent] 是本地提交意图（v0.9.0 C1）：newTurn 创建新业务
+  /// 回合（重置 2/60 分钟预算）；steer 注入当前活动回合（继承原锚点与预算，
+  /// 只推进同步代际）。UI 的 SessionSubmitMode.send/steer/queue 必须映射到
+  /// 对应意图传入，禁止 controller 反推。
   Future<void> sendMessage({
     required String message,
     required String? deviceId,
     required bool canWrite,
+    TurnSubmissionIntent intent = TurnSubmissionIntent.newTurn,
     // UI 传 false：受理（命令确认 + 首批快照）后立即返回，让 composer 把
     // 主按钮切换为"中断"；回合完成轮询转后台继续，直到终态再收敛状态行。
     bool awaitTurnCompletion = true,
@@ -1121,7 +1218,7 @@ class SessionController extends ChangeNotifier {
     final sessionModel = _controls.model ?? _controls.defaultModel ?? '';
     // 乐观回显：不等 daemon 事件回传，先在本地挂出待确认的用户气泡。
     _pendingOutgoingBySession[sessionId] = trimmed;
-    notifyListeners();
+    _notifyListeners();
     final accepted = await _submitCommand(
       sessionId: sessionId,
       operation: operation,
@@ -1139,22 +1236,22 @@ class SessionController extends ChangeNotifier {
         },
       },
       awaitTurnCompletion: awaitTurnCompletion,
+      submissionIntent: intent,
     );
     if (accepted) {
-      _turnInFlight = true;
-      // 新回合受理即清除上一轮的本地超时标记（重新计时）。
-      _turnTimedOut.remove(sessionId);
+      // v0.9.0 C1：回合在途标记与超时标记已在 Relay 202 即时受理分支内处理
+      // （_noteSendAcceptedAt202），不再等首批快照返回后才置位。
       // v0.8.5 §3.1：受理成功后清空该会话附件队列（refs 已随密文发送，
       // 保留会让同一批附件在下次发送时被重复引用）。
       if (_attachmentsBySession[sessionId]?.isNotEmpty ?? false) {
         _attachmentsBySession[sessionId] = const [];
         _attachments = const [];
       }
-      notifyListeners();
+      _notifyListeners();
     }
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
       _pendingOutgoingBySession.remove(sessionId);
-      notifyListeners();
+      _notifyListeners();
     }
     // 发送成功后清除草稿，避免页面重建时把已发送内容重新填回输入框。
     clearComposerDraft(sessionId);
@@ -1189,7 +1286,7 @@ class SessionController extends ChangeNotifier {
       _turnInFlight = false;
       _pendingOutgoingBySession.remove(sessionId);
       _errorMessage = null;
-      notifyListeners();
+      _notifyListeners();
       await _awaitAbortProjection(sessionId);
     }
   }
@@ -1479,13 +1576,13 @@ class SessionController extends ChangeNotifier {
       return;
     }
     _skillConfirmation = SkillConfirmation(skill: skill);
-    notifyListeners();
+    _notifyListeners();
   }
 
   void rejectSkillConfirmation() {
     if (_skillConfirmation == null) return;
     _skillConfirmation = null;
-    notifyListeners();
+    _notifyListeners();
   }
 
   Future<void> confirmSkill({
@@ -1679,7 +1776,7 @@ class SessionController extends ChangeNotifier {
         ),
       ];
       _errorMessage = reason;
-      notifyListeners();
+      _notifyListeners();
       return false;
     }
 
@@ -1690,7 +1787,7 @@ class SessionController extends ChangeNotifier {
         AttachmentTransfer(draft: draft, phase: AttachmentTransferPhase.queued),
     ];
     _rememberSelectedAttachments();
-    notifyListeners();
+    _notifyListeners();
     return true;
   }
 
@@ -1699,14 +1796,14 @@ class SessionController extends ChangeNotifier {
         .where((item) => item.draft.id != attachmentId)
         .toList(growable: false);
     _rememberSelectedAttachments();
-    notifyListeners();
+    _notifyListeners();
   }
 
   void dismissAttachmentRejection(String localName) {
     _attachmentRejections = _attachmentRejections
         .where((item) => item.localName != localName)
         .toList(growable: false);
-    notifyListeners();
+    _notifyListeners();
   }
 
   /// 一个 attachment 在同一 session 内顺序上传。每块和 complete 都复用稳定幂等键，失败后从已确认块继续。
@@ -1742,7 +1839,7 @@ class SessionController extends ChangeNotifier {
         clearError: true,
       ),
     );
-    notifyListeners();
+    _notifyListeners();
     try {
       var completedChunks = transfer.completedChunks;
       for (
@@ -1777,7 +1874,7 @@ class SessionController extends ChangeNotifier {
             clearError: true,
           ),
         );
-        notifyListeners();
+        _notifyListeners();
       }
       await _relay.completeAttachment(
         AttachmentCompleteInput(
@@ -1822,7 +1919,7 @@ class SessionController extends ChangeNotifier {
       _errorMessage = message;
     } finally {
       _pendingActionKeys.remove(actionKey);
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -1856,7 +1953,7 @@ class SessionController extends ChangeNotifier {
     if (_pendingActionKeys.contains(actionKey)) return false;
     _errorMessage = null;
     _pendingActionKeys.add(actionKey);
-    notifyListeners();
+    _notifyListeners();
     try {
       final draft = await picker.pickAttachment(
         sessionId: sessionId,
@@ -1872,7 +1969,7 @@ class SessionController extends ChangeNotifier {
       return false;
     } finally {
       _pendingActionKeys.remove(actionKey);
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -2050,7 +2147,7 @@ class SessionController extends ChangeNotifier {
   void clearError() {
     if (_errorMessage == null) return;
     _errorMessage = null;
-    notifyListeners();
+    _notifyListeners();
   }
 
   /// 打开模型 seat 时重新读取当前会话目录；失败只返回 notice，不清空旧目录。
@@ -2066,7 +2163,7 @@ class SessionController extends ChangeNotifier {
     if (refreshed == null) return _errorMessage ?? '模型目录暂时不可用，请重试。';
     if (_selectedSessionId != sessionId) return '会话已切换，请重新打开模型目录。';
     _controls = refreshed;
-    notifyListeners();
+    _notifyListeners();
     return null;
   }
 
@@ -2135,7 +2232,7 @@ class SessionController extends ChangeNotifier {
         draft: '',
         references: const [],
       );
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -2191,7 +2288,7 @@ class SessionController extends ChangeNotifier {
     _attachmentRejections = const [];
     _controls = const SessionControlState.empty();
     _isDetailLoading = true;
-    notifyListeners();
+    _notifyListeners();
     try {
       // 会话 DEK 可用性只影响附件选文件入口；异步读取不阻塞快照。
       unawaited(_loadContentKeyAvailability(sessionId, selectionGeneration));
@@ -2227,7 +2324,7 @@ class SessionController extends ChangeNotifier {
       if (_selectedSessionId == sessionId &&
           _selectionGeneration == selectionGeneration) {
         _isDetailLoading = false;
-        notifyListeners();
+        _notifyListeners();
       }
     }
   }
@@ -2272,6 +2369,9 @@ class SessionController extends ChangeNotifier {
     Map<String, dynamic>? ciphertext,
     VoidCallback? onAccepted,
     bool awaitTurnCompletion = true,
+    // v0.9.0 C1：send 的本地提交意图（newTurn/steer），在 202 受理分支用于
+    // 决定回合锚点是重置还是继承。
+    TurnSubmissionIntent submissionIntent = TurnSubmissionIntent.newTurn,
   }) async {
     // 写命令统一在这里自动确保 lease：调用方可能刚从前台/断网恢复，
     // 本地 lease 已作废，此刻静默补获取一次，避免把“暂不可操作”抛给用户。
@@ -2282,6 +2382,12 @@ class SessionController extends ChangeNotifier {
     )) {
       return false;
     }
+    // v0.9.0 C2：回合状态可能被本命令改变的 kind 在实际提交前推进同步代际，
+    // 使提交前发出的旧快照/旧回包在返回后按代际失配被丢弃（正常取消，不报错）。
+    if (kind == SessionCommandKind.send ||
+        kind == SessionCommandKind.abort) {
+      _bumpSyncGeneration(sessionId);
+    }
     final accepted = await _runAction<bool>(operation, () async {
       final lease = _selectedLease;
       if (lease == null || lease.sessionId != sessionId || lease.epoch <= 0) {
@@ -2290,6 +2396,8 @@ class SessionController extends ChangeNotifier {
           '会话可操作状态已变化，请重试。',
         );
       }
+      // v0.9.0 C2：本命令后续异步链携带的同步代际（提交前已推进）。
+      final syncGeneration = _syncGenerations[sessionId] ?? 0;
       final command = SessionCommandInput(
         kind: kind,
         idempotencyKey: _idempotencyKeyFor(operation),
@@ -2299,9 +2407,18 @@ class SessionController extends ChangeNotifier {
       );
       final receipt = await _relay.submitSessionCommand(sessionId, command);
       if (kind == SessionCommandKind.send) {
+        // v0.9.0 C1：202 即时受理分支——与命令终态/快照等待解耦。回合锚点
+        // （acceptedAt + 2/60 分钟预算 + 意图）必须在这里原子记录，禁止等
+        // _awaitCommandReceipt 或首批快照返回后才起算。相同幂等命令重试复用
+        // 已有锚点（活动回合仍在时不重置），不得重复续期。
+        _noteSendAcceptedAt202(sessionId, submissionIntent);
         // v0.8.7 门禁 2：send 受理即新回合埋点基线——首字延迟起点，同时清掉
         // 上一回合未对账的帧状态，避免跨回合长度串账。
         streamingTelemetry.observeSendAccepted();
+      }
+      if (_syncGenerations[sessionId] != syncGeneration) {
+        // 提交等待期间代际已被推进（如并发 abort）：本链按正常取消收敛。
+        return true;
       }
       if (onAccepted != null) {
         // 执行端异步收口命令：受理（202）不代表成功。带乐观更新面的命令必须等
@@ -2322,6 +2439,9 @@ class SessionController extends ChangeNotifier {
         // 快照轮询耗尽后无限停留在生成中。终态查询不可用（null）时保持旧的
         // 快照轮询语义，不放大确认链路抖动。
         final terminal = await _awaitCommandReceipt(receipt.id);
+        if (_syncGenerations[sessionId] != syncGeneration) {
+          return true;
+        }
         if (terminal != null && terminal.status != 'succeeded') {
           // 执行端可能已经把会话收口为 idle，但失败回执本身不包含 session
           // 投影；先补拉一次快照，避免旧的 streaming 状态继续留在 UI。
@@ -2359,10 +2479,22 @@ class SessionController extends ChangeNotifier {
         return snapshot;
       }
 
+      // v0.9.0 C2：代际守卫。每次 await 后校验认证/同步代际与会话归属；
+      // 失配属于正常取消（steer/中止/新回合/认证切换已接管），静默退出。
+      // 会话切换不在此处硬取消：本任务跟随会话（C3——切走时跳过合并，
+      // 切回同一会话后继续恢复合并），页面级隔离由 selectionGeneration
+      // 在 _loadSelectedSession 等选择路径上执行。
+      final authGenerationAtSubmit = _authGeneration;
+      bool generationsStale() =>
+          _authGeneration != authGenerationAtSubmit ||
+          _syncGenerations[sessionId] != syncGeneration ||
+          (_selectedSessionId != null && _selectedSessionId != sessionId);
+
       // 提交后模型需要数秒才产出事件；首次拉取时 message.completed 多半尚未落库。
       // 每一批都合并，直到明确的 completed_turn 或非 streaming 状态到达，
       // 否则只合并第一批会把回复显示出来却遗留“生成中”状态。
       var latest = await timedPollFetch(0);
+      if (generationsStale()) return true;
       if (_selectedSessionId == sessionId) _mergeSnapshot(latest);
       var completed = _snapshotCompletesTurn(latest);
       if (kind == SessionCommandKind.send && !completed && awaitTurnCompletion) {
@@ -2373,17 +2505,19 @@ class SessionController extends ChangeNotifier {
           // v0.8.7：在途窗口使用收紧档（250ms）——打字机渲染的到达粒度由
           // 此决定；窗口 attempts 结构与超时收敛语义不变（v0.8.6 A①）。
           await Future<void>.delayed(activePollInterval);
+          if (generationsStale()) return true;
           latest = await timedPollFetch(
             i + 1,
             afterSequence: latest.session.lastSequence,
           );
           // 即使本批没有新事件，也要合并 session.status。事件可能已在前一批
           // 被消费，而执行端随后才把 streaming 收口为 idle。
+          if (generationsStale()) return true;
           if (_selectedSessionId == sessionId) {
             _mergeSnapshot(latest, appendTimeline: true);
             // v0.8.7 打字机流式的核心一环：在途批次合并后必须通知 UI，气泡
             // 文本才随 delta 逐步生长；否则时间线只在回合终态一次性出现。
-            notifyListeners();
+            _notifyListeners();
           }
           completed = _snapshotCompletesTurn(latest);
           if (completed) break;
@@ -2393,7 +2527,9 @@ class SessionController extends ChangeNotifier {
         _turnInFlight = false;
         await _refreshControlsAfterTurn(sessionId);
       }
-      if (kind == SessionCommandKind.send && !completed) {
+      if (kind == SessionCommandKind.send &&
+          !completed &&
+          !generationsStale()) {
         // ignore: avoid_print
         // v0.8.6 A①：前台窗口（60s）结束仍无终态时，必须继续后台轮询直到
         // 有界总窗口（再 60s）。原实现只覆盖 awaitTurnCompletion=false 的
@@ -2405,19 +2541,70 @@ class SessionController extends ChangeNotifier {
     return accepted == true;
   }
 
+  /// v0.9.0 C1：Relay 202 即时受理分支。send 的回合运行期锚点在这里原子记录：
+  /// - newTurn：新建活动回合状态（acceptedAt=当前单调时刻，2/60 分钟预算起算，
+  ///   清除上一轮本地超时标记）。相同幂等命令重试到达时活动回合仍在——复用已有
+  ///   锚点，不重复续期。
+  /// - steer：不创建新业务回合、不清超时、不重置续轮期限，完全继承原锚点；
+  ///   本机无锚点（进程重启恢复/他端发起的活动回合）时以本次受理观察的单调
+  ///   时刻建立运行期锚点（observedAt 口径）。
+  /// 同时把回合在途标记置位——composer 主按钮在 202 即切换为"中断"，
+  /// 不等首批快照。
+  void _noteSendAcceptedAt202(String sessionId, TurnSubmissionIntent intent) {
+    final nowMs = monotonicElapsed().inMilliseconds;
+    final existing = _activeTurns[sessionId];
+    if (intent == TurnSubmissionIntent.steer) {
+      if (existing != null) {
+        // 继承原业务回合起点、超时标记与期限；不重置预算。
+        return;
+      }
+      _activeTurns[sessionId] = SessionActiveTurn(
+        sessionId: sessionId,
+        intent: intent,
+        monotonicAnchorMs: nowMs,
+      );
+    } else {
+      if (existing != null) {
+        // 上一回合尚未终态时收到的 newTurn 受理（同 command 幂等重试）：
+        // 复用已有锚点，禁止重复续期。
+        return;
+      }
+      _activeTurns[sessionId] = SessionActiveTurn(
+        sessionId: sessionId,
+        intent: intent,
+        monotonicAnchorMs: nowMs,
+      );
+      // 新回合受理即清除上一轮的本地超时标记（重新计时）。
+      _turnTimedOut.remove(sessionId);
+    }
+    _turnInFlight = true;
+    _notifyListeners();
+  }
+
   /// 回合完成后台轮询：继续按 500ms 合并快照直到终态，并在终态后刷新
-  /// controls。带会话守卫，切换会话后自动停止合并。
+  /// controls。带会话守卫与 v0.9.0 三重代际守卫，切换会话/认证切换/新同步
+  /// 代际后自动停止（正常取消，不显示错误）。
   Future<void> _pollTurnCompletionInBackground(
     String sessionId,
     SessionSnapshot latest,
   ) async {
     final attempts = backgroundPollAttempts;
     // ignore: avoid_print
+    // v0.9.0 C2：捕获本任务的认证/同步代际；任何失配即退出（正常取消）。
+    // 选择代际不在此处校验：切换会话由下方的会话归属检查终止本任务（C3），
+    // 同会话页面重挂载后由重新加载路径接管。
+    final authGenerationAtStart = _authGeneration;
+    final syncGenerationAtStart = _syncGenerations[sessionId] ?? 0;
+    bool generationsStale() =>
+        _authGeneration != authGenerationAtStart ||
+        _syncGenerations[sessionId] != syncGenerationAtStart;
     var completed = _snapshotCompletesTurn(latest);
     // v0.8.7 门禁 2：后台轮询批次同样采样；attempt 从前台窗口之后续号。
     const foregroundAttemptBaseline = 121;
     for (var i = 0; i < attempts && !completed; i++) {
       await Future<void>.delayed(pollInterval);
+      // v0.9.0 C2：休眠醒来先验代际，失配即正常取消（不发起任何新请求）。
+      if (generationsStale()) return;
       try {
         final watch = Stopwatch()..start();
         latest = await _relay.getSessionSnapshot(
@@ -2436,11 +2623,16 @@ class SessionController extends ChangeNotifier {
         continue;
       }
       if (_selectedSessionId != sessionId) return;
+      // v0.9.0 C2：代际失配即正常取消——新回合/steer 已接管该会话的同步。
+      if (generationsStale()) return;
       _mergeSnapshot(latest, appendTimeline: true);
       // v0.8.7：后台续轮同样通知 UI，保证非本端可见窗口的流式生长。
-      notifyListeners();
+      _notifyListeners();
       completed = _snapshotCompletesTurn(latest);
     }
+    // v0.9.0 C2：窗口结束后的终态写入同样要过代际守卫；失配时不得改写
+    // 当前回合的任何状态（包括超时标记与在途标记）。
+    if (generationsStale()) return;
     if (completed) {
       _turnInFlight = false;
       _turnTimedOut.remove(sessionId);
@@ -2454,7 +2646,7 @@ class SessionController extends ChangeNotifier {
       _turnTimedOut.add(sessionId);
       _pendingOutgoingBySession.remove(sessionId);
       // ignore: avoid_print
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -2463,7 +2655,7 @@ class SessionController extends ChangeNotifier {
       final controls = await _relay.getSessionControls(sessionId);
       if (_selectedSessionId == sessionId) {
         _controls = controls;
-        notifyListeners();
+        _notifyListeners();
       }
     } catch (_) {
       // A usage projection can lag the event upload. The next snapshot/recovery
@@ -2473,19 +2665,22 @@ class SessionController extends ChangeNotifier {
 
   /// 发送命令已在执行端失败时，补拉一次只读快照收口 session.status 和事件。
   /// 刷新失败不能覆盖原始发送错误，也不能把失败变成成功。
+  /// v0.9.0 C2：经每会话单航班门执行，避免与其它快照来源并发重复。
   Future<void> _bestEffortRefreshAfterCommandFailure(String sessionId) async {
     if (_selectedSessionId != sessionId) return;
-    try {
-      final snapshot = await _relay.getSessionSnapshot(
-        sessionId,
-        afterSequence: _cursorFor(sessionId),
-      );
-      if (_selectedSessionId == sessionId) {
-        _mergeSnapshot(snapshot, appendTimeline: true);
+    await _runSnapshotTurn(sessionId, () async {
+      try {
+        final snapshot = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: _cursorFor(sessionId),
+        );
+        if (_selectedSessionId == sessionId) {
+          _mergeSnapshot(snapshot, appendTimeline: true);
+        }
+      } catch (_) {
+        // Keep the command failure as the user-visible error when recovery is unavailable.
       }
-    } catch (_) {
-      // Keep the command failure as the user-visible error when recovery is unavailable.
-    }
+    });
   }
 
   bool _snapshotCompletesTurn(SessionSnapshot snapshot) {
@@ -2580,6 +2775,19 @@ class SessionController extends ChangeNotifier {
             snapshot.session.status != MobileSessionStatus.streaming)) {
       _turnTimedOut.remove(snapshot.session.id);
     }
+    // v0.9.0 C1：canonical 终态收口——活动回合事实只由服务端事实解除
+    // （终态事件，或会话进入 idle/stopped/errored），本地 UX 超时永远不伪装
+    // 终态。收口时移除运行期状态并推进同步代际，使旧异步任务按代际正常取消。
+    const canonicalTerminalStatuses = {
+      MobileSessionStatus.idle,
+      MobileSessionStatus.stopped,
+      MobileSessionStatus.errored,
+    };
+    if (incoming.any((event) => event.completedTurn) ||
+        canonicalTerminalStatuses.contains(snapshot.session.status)) {
+      _activeTurns.remove(snapshot.session.id);
+      _bumpSyncGeneration(snapshot.session.id);
+    }
     final priorCursor = _cursorFor(snapshot.session.id);
     final highestIncoming = incoming.fold<int>(
       priorCursor,
@@ -2655,7 +2863,7 @@ class SessionController extends ChangeNotifier {
       return;
     }
     _contentKeyAvailable = available;
-    notifyListeners();
+    _notifyListeners();
   }
 
   AttachmentTransfer? _attachmentByID(String attachmentId) {
@@ -2735,7 +2943,7 @@ class SessionController extends ChangeNotifier {
     if (_pendingActionKeys.contains(actionKey)) return null;
     _errorMessage = null;
     _pendingActionKeys.add(actionKey);
-    notifyListeners();
+    _notifyListeners();
     try {
       return await action();
     } on RelayFailure catch (failure) {
@@ -2746,7 +2954,7 @@ class SessionController extends ChangeNotifier {
       return null;
     } finally {
       _pendingActionKeys.remove(actionKey);
-      notifyListeners();
+      _notifyListeners();
     }
   }
 
@@ -2762,8 +2970,92 @@ class SessionController extends ChangeNotifier {
     _attachmentRejections = const [];
   }
 
+  /// v0.9.0 C2：每会话快照刷新单航班入口。同会话已有在途刷新时只置 pending
+  /// 并返回当前在途 Future；在途请求结束后从最新已合并 cursor 再补一轮，
+  /// 不排队重复请求。SSE 唤醒（P4）、L1（P2）、L3（P3）、手动刷新与 lifecycle
+  /// recovery 都必须进入该入口，保证每会话最多一个 snapshot refresh in-flight。
+  Future<void> _runSnapshotTurn(
+    String sessionId,
+    Future<void> Function() turn,
+  ) {
+    final existing = _snapshotTurnsInFlight[sessionId];
+    if (existing != null) {
+      _snapshotTurnsPending.add(sessionId);
+      return existing;
+    }
+    // 用 async 函数而非 Future(...) 构造：async 函数体同步执行到首个 await，
+    // 整条链保持在微任务语义（FakeAsync/widget 测试无需额外 pump 即可收敛）；
+    // Future(...) 走 Timer.run 宏任务，会破坏既有测试的时序契约。
+    final gate = _executeSnapshotTurn(sessionId, turn);
+    _snapshotTurnsInFlight[sessionId] = gate;
+    return gate;
+  }
+
+  Future<void> _executeSnapshotTurn(
+    String sessionId,
+    Future<void> Function() turn,
+  ) async {
+    try {
+      await turn();
+      // 新唤醒只置 pending：这里串行补齐合并期间积压的唤醒（每轮都从
+      // 已合并 cursor 增量拉取，不会重复回放已确认事件）。
+      while (_snapshotTurnsPending.remove(sessionId)) {
+        if (_disposed) return;
+        await turn();
+      }
+    } finally {
+      _snapshotTurnsInFlight.remove(sessionId);
+    }
+  }
+
+  /// v0.9.0 C7：认证边界收口。注销/恢复换设备/账号切换/本机设备被撤销前，
+  /// 由认证协调方（providers 的 App 认证状态监听）调用：
+  /// - 递增认证代际：旧代际的轮询循环、快照回包在下一次代际校验处按正常取消
+  ///   丢弃，不显示错误；
+  /// - 清空会话运行期状态（活动回合、超时标记、cursor、乐观回显、草稿、附件
+  ///   暂存），账号切换不得串任何运行期数据；
+  /// - 会话列表回到 loading，重新认证后由 initialize 重新拉取；
+  /// - 不清理 token 与密文缓存（调用方负责）。
+  void resetForAuthBoundary() {
+    if (_disposed) return;
+    _authGeneration += 1;
+    _activeTurns.clear();
+    _turnTimedOut.clear();
+    _pendingOutgoingBySession.clear();
+    _sessionCursors.clear();
+    _timelineWindows.clear();
+    _composerDrafts.clear();
+    _composerStates.clear();
+    _attachmentsBySession.clear();
+    _syncGenerations.clear();
+    _snapshotTurnsPending.clear();
+    _effortsByModel = {};
+    _turnInFlight = false;
+    _clearSelection();
+    _sessions = const [];
+    _phase = SessionListPhase.loading;
+    _workspaces = const [];
+    _workspacePhase = WorkspaceListPhase.loading;
+    _capabilities = CapabilityMatrix.empty;
+    _capabilitiesFetchedAt = null;
+    _notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    // v0.9.0 C7：dispose 同步阻止新调度、递增认证代际并清空运行期状态；
+    // 轮询循环靠代际自终止，任何完成中的 Future 返回后经 _notifyListeners
+    // 丢弃通知，不再触碰已释放的 ChangeNotifier。
+    _disposed = true;
+    _authGeneration += 1;
+    _activeTurns.clear();
+    _snapshotTurnsPending.clear();
+    _snapshotTurnsInFlight.clear();
+    super.dispose();
+  }
+
   void _setError(String message) {
     _errorMessage = message;
-    notifyListeners();
+    _notifyListeners();
   }
 }

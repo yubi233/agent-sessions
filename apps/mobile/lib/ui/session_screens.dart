@@ -19,6 +19,7 @@ import '../state/delegation_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_composer_controller.dart';
 import '../state/session_controller.dart';
+import '../state/session_turn_runtime.dart';
 import '../state/session_message_feedback_controller.dart';
 import '../state/session_projection_controller.dart';
 import '../state/session_view_controller.dart';
@@ -4662,10 +4663,12 @@ class _SessionComposerState extends State<_SessionComposer> {
         }
         // 受理即返回（awaitTurnCompletion=false）：命令确认 + 首批快照后
         // 立刻清空输入框并把主按钮切换为"中断"；回合完成由后台轮询收敛。
+        // v0.9.0 C1：显式提交意图——send 模式是 newTurn。
         await widget.sessions.sendMessage(
           message: message,
           deviceId: widget.deviceId,
           canWrite: widget.canWrite,
+          intent: TurnSubmissionIntent.newTurn,
           awaitTurnCompletion: false,
         );
         if (!mounted) return;
@@ -4709,10 +4712,12 @@ class _SessionComposerState extends State<_SessionComposer> {
           return;
         }
         setState(() {});
+        // v0.9.0 C1：显式提交意图——steer 模式注入当前活动回合，不重置超时预算。
         await widget.sessions.sendMessage(
           message: message,
           deviceId: widget.deviceId,
           canWrite: widget.canWrite,
+          intent: TurnSubmissionIntent.steer,
         );
         if (!mounted) return;
         final error = widget.sessions.errorMessage;
@@ -4766,10 +4771,12 @@ class _SessionComposerState extends State<_SessionComposer> {
     if (queued.isEmpty) return;
     for (final item in queued) {
       if (widget.sessions.isStreaming) break;
+      // v0.9.0 C1：队列清空逐条发起的是新回合（排队语义），不是 steer。
       await widget.sessions.sendMessage(
         message: item.text,
         deviceId: widget.deviceId,
         canWrite: widget.canWrite,
+        intent: TurnSubmissionIntent.newTurn,
       );
       if (!mounted) return;
       if (widget.sessions.errorMessage != null) break;
@@ -4789,10 +4796,12 @@ class _SessionComposerState extends State<_SessionComposer> {
     );
     final item = queued.where((entry) => entry.id == id).firstOrNull;
     if (item == null || !item.steerable) return;
+    // v0.9.0 C1：逐条 strict steer 是显式 steer 意图（继承活动回合预算）。
     await widget.sessions.sendMessage(
       message: item.text,
       deviceId: widget.deviceId,
       canWrite: widget.canWrite,
+      intent: TurnSubmissionIntent.steer,
     );
     if (!mounted) return;
     final error = widget.sessions.errorMessage;

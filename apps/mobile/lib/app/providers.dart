@@ -186,6 +186,23 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
     modelEffortMemory: ref.read(modelEffortPreferenceStoreProvider),
   );
   unawaited(controller.initialize());
+  // v0.9.0 C7：App 认证状态与会话运行期的显式协调。注销/设备失效/账号切换
+  // （认证相位回到 signedOut）时先 resetForAuthBoundary——递增认证代际丢弃
+  // 旧代际回包并清空运行期状态——再由 AppController 清 token/cache；重新认证
+  // （回到 authenticated）后重建会话运行期（重新拉列表/能力矩阵）。
+  ref.listen(appControllerProvider, (previous, next) {
+    final previousPhase = previous?.phase;
+    final nextPhase = next.phase;
+    if (previousPhase == nextPhase) return;
+    switch (nextPhase) {
+      case AppAuthPhase.signedOut:
+        controller.resetForAuthBoundary();
+      case AppAuthPhase.authenticated:
+        unawaited(controller.initialize());
+      case AppAuthPhase.booting:
+        break;
+    }
+  });
   return controller;
 });
 
