@@ -584,18 +584,65 @@ void main() {
       canWrite: true,
     );
 
-    // completed_turn 空标记也属 assistantMessage，但投影层不渲染；只统计真实气泡。
+    // completed_turn 空标记会并入上一条真实气泡；只统计有正文的气泡。
     final assistantNodes = controller.timeline
         .where(
           (event) =>
               event.kind == SessionTimelineKind.assistantMessage &&
-              !event.completedTurn,
+              event.text?.trim().isNotEmpty == true,
         )
         .toList();
     // 三条流式增量被全文 completed 替换，最终只剩单一完整节点。
     expect(assistantNodes.length, 1);
     expect(assistantNodes.single.text, '完整回复文本');
     expect(assistantNodes.single.isStreaming, isFalse);
+    expect(assistantNodes.single.completedTurn, isTrue);
+  });
+
+  test('MOBILE-V07 空终态与迟到 streaming 帧乱序时不残留运行中尾标', () async {
+    for (final terminalBeforeLateFrame in [false, true]) {
+      final relay = _LateStreamingAfterCompletedRelay(
+        clock: () => _now,
+        terminalBeforeLateFrame: terminalBeforeLateFrame,
+      );
+      await _prepareOwner(relay);
+      final controller = SessionController(
+        relay: relay,
+        clock: () => _now,
+        random: _DeterministicRandom(),
+      );
+      await controller.initialize();
+      await controller.createSession(
+        workspaceId: 'fixture-workspace',
+        provider: 'opencode',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+        autoStart: true,
+      );
+
+      await controller.sendMessage(
+        message: '这是什么项目',
+        deviceId: _ownerDeviceId,
+        canWrite: true,
+      );
+
+      final assistantNodes = controller.timeline
+          .where(
+            (event) =>
+                event.kind == SessionTimelineKind.assistantMessage &&
+                event.text?.trim().isNotEmpty == true,
+          )
+          .toList();
+      expect(
+        assistantNodes.length,
+        1,
+        reason: 'terminalBeforeLateFrame=$terminalBeforeLateFrame',
+      );
+      expect(assistantNodes.single.text, '完整回复文本');
+      expect(assistantNodes.single.isStreaming, isFalse);
+      expect(assistantNodes.single.completedTurn, isTrue);
+      expect(controller.isStreaming, isFalse);
+    }
   });
 
   test('MOBILE-V07 快照合并去重且按 sequence 排序', () async {
@@ -1191,6 +1238,93 @@ class _StreamingTurnRelay extends FixtureRelayRepository {
       session: snapshot.session.copyWith(
         status: MobileSessionStatus.idle,
         lastSequence: base + 5,
+      ),
+      events: events,
+    );
+  }
+}
+
+/// DSH 实机曾出现 completed 全文后又到达一条同正文 streaming 快照，
+/// 再由空 turn.completed 收口；UI 不应因此保留“运行中”尾标。
+class _LateStreamingAfterCompletedRelay extends FixtureRelayRepository {
+  _LateStreamingAfterCompletedRelay({
+    required super.clock,
+    required this.terminalBeforeLateFrame,
+  });
+
+  final bool terminalBeforeLateFrame;
+
+  @override
+  Future<SessionSnapshot> getSessionSnapshot(
+    String sessionId, {
+    int afterSequence = 0,
+  }) async {
+    final snapshot = await super.getSessionSnapshot(
+      sessionId,
+      afterSequence: afterSequence,
+    );
+    RelaySessionEvent message(int seq, String text, bool streaming) =>
+        RelaySessionEvent(
+          sequence: seq,
+          eventType: streaming ? 'message.delta' : 'message.completed',
+          envelope: {
+            'fixture_payload': {
+              'kind': 'assistant_message',
+              'label': 'Assistant',
+              'text': text,
+              'streaming': streaming,
+              if (!streaming) 'copy_text': text,
+            },
+          },
+        );
+    RelaySessionEvent phase(int seq, String phase, int revision) =>
+        RelaySessionEvent(
+          sequence: seq,
+          eventType: 'turn.phase',
+          envelope: {
+            'fixture_payload': {
+              'kind': 'turn_phase',
+              'phase': phase,
+              'revision': revision,
+            },
+          },
+        );
+    RelaySessionEvent terminal(int seq) => RelaySessionEvent(
+      sequence: seq,
+      eventType: 'turn.completed',
+      envelope: const {
+        'fixture_payload': {
+          'kind': 'assistant_message',
+          'label': 'Assistant',
+          'completed_turn': true,
+        },
+      },
+    );
+
+    final base = snapshot.session.lastSequence;
+    final events = terminalBeforeLateFrame
+        ? [
+            message(base + 1, '完整', true),
+            message(base + 2, '完整回复', true),
+            message(base + 3, '完整回复文本', false),
+            terminal(base + 4),
+            phase(base + 5, 'finishing', 3),
+            message(base + 6, '完整回复文本', true),
+            phase(base + 7, 'completed', 4),
+          ]
+        : [
+            message(base + 1, '完整', true),
+            message(base + 2, '完整回复', true),
+            message(base + 3, '完整回复文本', false),
+            message(base + 4, '完整回复文本', true),
+            phase(base + 5, 'finishing', 3),
+            phase(base + 6, 'completed', 4),
+            terminal(base + 7),
+          ];
+    return SessionSnapshot(
+      session: snapshot.session.copyWith(
+        status: MobileSessionStatus.idle,
+        lastSequence: events.last.sequence,
       ),
       events: events,
     );

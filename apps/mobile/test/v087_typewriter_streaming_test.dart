@@ -127,12 +127,13 @@ void main() {
         .where(
           (event) =>
               event.kind == SessionTimelineKind.assistantMessage &&
-              !event.completedTurn,
+              event.text?.trim().isNotEmpty == true,
         )
         .toList();
     expect(assistantNodes.length, 1);
     expect(assistantNodes.single.text, '你好，世界！');
     expect(assistantNodes.single.isStreaming, isFalse);
+    expect(assistantNodes.single.completedTurn, isTrue);
 
     // 终态对账一致。
     final reconcile = controller.streamingTelemetry.events

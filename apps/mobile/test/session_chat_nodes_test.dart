@@ -70,6 +70,37 @@ void main() {
       expect(find.textContaining('permission'), findsNothing);
       expect(find.textContaining('question'), findsNothing);
     });
+
+    testWidgets('assistant 完成态尾标不再显示运行中', (tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 320,
+              child: SessionChatView(
+                running: false,
+                nodes: [
+                  ConversationNode(
+                    key: 'assistant-completed',
+                    kind: ConversationNodeKind.assistant,
+                    sequence: 5,
+                    label: 'Assistant',
+                    text: '回复已经完成',
+                    completedTurn: true,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 220));
+
+      expect(find.text('已完成'), findsOneWidget);
+      expect(find.text('运行中'), findsNothing);
+    });
+
     testWidgets('notice 节点展示上游结构化错误码徽标', (tester) async {
       await tester.pumpWidget(
         MaterialApp(

@@ -3070,7 +3070,7 @@ class SessionController extends ChangeNotifier {
 
   /// 流式合并：连续的 assistant 流式增量坍缩为单个生长节点（打字机）；非流式的
   /// message.completed 全文替换其前的流式节点，避免"生长气泡 + 完整气泡"并排。
-  /// completed_turn 终态标记不参与替换（投影层本就不渲染空文本标记）。
+  /// 空 completed_turn 终态标记并入上一条真实消息，避免尾标残留为“运行中”。
   ///
   /// v0.8.4（ADR-015 §5）：thought 通道按同种类独立折叠——localdev 编码器对
   /// 每条 thought 增量回发全量已收文本，同一身份的连续流式帧坍缩为一个生长
@@ -3080,19 +3080,44 @@ class SessionController extends ChangeNotifier {
   ) {
     final out = <SessionTimelineEvent>[];
     for (final event in events) {
+      if (_isCoalescibleStreamMessage(event) &&
+          event.completedTurn &&
+          event.text?.trim().isNotEmpty != true) {
+        final index = _findLastTurnMessageIndex(out, event);
+        if (index != null) {
+          out[index] = _settleTurnMessage(out[index], event);
+          continue;
+        }
+      }
+
       final last = out.isEmpty ? null : out.last;
+      final lastMessageIndex =
+          _isCoalescibleStreamMessage(event) && event.isStreaming
+          ? _findLastTurnMessageIndex(out, event)
+          : null;
+      final lastMessage = lastMessageIndex == null
+          ? null
+          : out[lastMessageIndex];
+      final duplicateLateStreamingFrame =
+          lastMessage != null &&
+          _isCoalescibleStreamMessage(event) &&
+          event.isStreaming &&
+          !lastMessage.isStreaming &&
+          _sameStreamMessageIdentity(lastMessage, event) &&
+          _sameNonEmptyText(lastMessage, event);
+      if (duplicateLateStreamingFrame) {
+        continue;
+      }
+
       // 同类（answer/thought 各自独立）且上一帧仍在流式：增量帧与同一身份的
       // completed 帧都整体替换上一帧；身份变化（新消息）另起新节点。
       final replacesStreaming =
           last != null &&
-          last.kind == event.kind &&
+          _isCoalescibleStreamMessage(last) &&
+          _isCoalescibleStreamMessage(event) &&
           last.isStreaming &&
-          !event.completedTurn &&
-          (event.kind == SessionTimelineKind.assistantMessage ||
-              event.kind == SessionTimelineKind.assistantThought) &&
-          (event.messageId == null ||
-              last.messageId == null ||
-              event.messageId == last.messageId);
+          (event.text?.trim().isNotEmpty == true || !event.completedTurn) &&
+          _sameStreamMessageIdentity(last, event);
       if (replacesStreaming) {
         out[out.length - 1] = event;
         continue;
@@ -3100,6 +3125,96 @@ class SessionController extends ChangeNotifier {
       out.add(event);
     }
     return out;
+  }
+
+  bool _isCoalescibleStreamMessage(SessionTimelineEvent event) =>
+      event.kind == SessionTimelineKind.assistantMessage ||
+      event.kind == SessionTimelineKind.assistantThought;
+
+  bool _sameStreamMessageIdentity(
+    SessionTimelineEvent left,
+    SessionTimelineEvent right,
+  ) {
+    if (left.kind != right.kind) return false;
+    final leftId = left.messageId?.trim() ?? '';
+    final rightId = right.messageId?.trim() ?? '';
+    return leftId.isEmpty || rightId.isEmpty || leftId == rightId;
+  }
+
+  bool _sameNonEmptyText(
+    SessionTimelineEvent left,
+    SessionTimelineEvent right,
+  ) {
+    final leftText = left.text?.trim();
+    final rightText = right.text?.trim();
+    return leftText != null &&
+        leftText.isNotEmpty &&
+        rightText != null &&
+        rightText.isNotEmpty &&
+        leftText == rightText;
+  }
+
+  int? _findLastTurnMessageIndex(
+    List<SessionTimelineEvent> events,
+    SessionTimelineEvent terminalEvent,
+  ) {
+    for (var index = events.length - 1; index >= 0; index -= 1) {
+      final candidate = events[index];
+      if (candidate.kind == SessionTimelineKind.userMessage) return null;
+      if (!_isCoalescibleStreamMessage(candidate)) continue;
+      if (_sameStreamMessageIdentity(candidate, terminalEvent)) return index;
+    }
+    return null;
+  }
+
+  SessionTimelineEvent _settleTurnMessage(
+    SessionTimelineEvent message,
+    SessionTimelineEvent terminalEvent,
+  ) {
+    final terminalText = terminalEvent.text?.trim().isNotEmpty == true
+        ? terminalEvent.text
+        : null;
+    final text = terminalText ?? message.text;
+    final copyText = terminalEvent.copyText ?? message.copyText ?? text;
+    return SessionTimelineEvent(
+      sequence: message.sequence,
+      kind: message.kind,
+      label: message.label,
+      text: text,
+      errorCode: terminalEvent.errorCode ?? message.errorCode,
+      httpStatus: terminalEvent.httpStatus != 0
+          ? terminalEvent.httpStatus
+          : message.httpStatus,
+      isStreaming: false,
+      toolStatus: terminalEvent.toolStatus ?? message.toolStatus,
+      permission: terminalEvent.permission ?? message.permission,
+      question: terminalEvent.question ?? message.question,
+      messageId: terminalEvent.messageId ?? message.messageId,
+      createdAt: terminalEvent.createdAt ?? message.createdAt,
+      copyText: copyText,
+      completedTurn: true,
+      forkAvailable: terminalEvent.forkAvailable || message.forkAvailable,
+      pendingSteering: terminalEvent.pendingSteering || message.pendingSteering,
+      referenceLabels: terminalEvent.referenceLabels.isNotEmpty
+          ? terminalEvent.referenceLabels
+          : message.referenceLabels,
+      filePath: terminalEvent.filePath ?? message.filePath,
+      toolInput: terminalEvent.toolInput ?? message.toolInput,
+      toolOutput: terminalEvent.toolOutput ?? message.toolOutput,
+      inspectTarget: terminalEvent.inspectTarget ?? message.inspectTarget,
+      producedFilePaths: terminalEvent.producedFilePaths.isNotEmpty
+          ? terminalEvent.producedFilePaths
+          : message.producedFilePaths,
+      toolSubcalls: terminalEvent.toolSubcalls.isNotEmpty
+          ? terminalEvent.toolSubcalls
+          : message.toolSubcalls,
+      phase: terminalEvent.phase ?? message.phase,
+      phaseReason: terminalEvent.phaseReason ?? message.phaseReason,
+      phaseRevision: max(terminalEvent.phaseRevision, message.phaseRevision),
+      thoughtVisibility:
+          terminalEvent.thoughtVisibility ?? message.thoughtVisibility,
+      thoughtSummary: terminalEvent.thoughtSummary || message.thoughtSummary,
+    );
   }
 
   void _mergeSnapshot(SessionSnapshot snapshot, {bool appendTimeline = false}) {
