@@ -1165,6 +1165,40 @@
       "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "拥有 V090-01..14：A 线事件流可靠性（超时解耦/三重代际/quiet reconcile/会话级 SSE/full gate）与 B 线样式一致性（token/守卫/可见验收）。账号级 /v1/events 既有 ID 归属原 suite，本 suite 不得重定义。"
+    },
+    {
+      "plan_id": "V091",
+      "suite_path": "docs/test/29-v091-terminal-presence.json",
+      "owner": "Mobile/Relay",
+      "id_prefix": [
+        "V091-"
+      ],
+      "owned_ids": [
+        "V091-01",
+        "V091-02",
+        "V091-03",
+        "V091-04",
+        "V091-05",
+        "V091-06",
+        "V091-07",
+        "V091-08",
+        "V091-09",
+        "V091-10",
+        "V091-11",
+        "V091-12",
+        "V091-13",
+        "V091-14"
+      ],
+      "consumed_ids": [],
+      "dependencies": [
+        "V090",
+        "V089",
+        "V086",
+        "V085"
+      ],
+      "status": "planned",
+      "allow_real_upstream": false,
+      "uniqueness_rule": "拥有 V091-01..14：Terminal Presence 权威 heartbeat freshness、过期投影、Workspace/DSH 命令安全门、presence invalidation/reaper、Flutter 前台生命周期自动刷新、single-flight/代际隔离、统一 UI 状态、restart 首 heartbeat gate 与 macOS headed 可见验收。账号级 /v1/events 和会话事件流只做回归，不在本 suite 重定义其既有 ID；本轮不调用真实模型、真实上游或 Android 实机。"
     }
   ]
 }
