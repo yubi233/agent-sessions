@@ -590,16 +590,23 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
       for (final key in order)
         () {
           final terminal = key.isEmpty ? null : terminals[key];
-          final online = terminal != null &&
-              terminalStatus.availabilityFor(terminal) ==
-                  TerminalAvailability.online;
+          // v0.9.1 C4：availability 只取一次（Relay 投影），标题/门控/原因共用；
+          // unknown 表示事实不可确认，不向用户报告成执行端离线（裁决 T5）。
+          final availability = terminal == null
+              ? TerminalAvailability.unknown
+              : terminalStatus.availabilityFor(terminal);
+          final online = availability == TerminalAvailability.online;
           final capable =
               terminal?.hasCapability('dsh_workspace_sync') ?? false;
           String? blockedReason;
           if (terminal == null) {
             blockedReason = '工作区未归属已知终端（终端离线或已更换设备）。';
           } else if (!online) {
-            blockedReason = '终端离线，无法请求同步。';
+            blockedReason = switch (availability) {
+              TerminalAvailability.offline => '终端离线，无法请求同步。',
+              TerminalAvailability.unsupported => '终端协议不兼容，无法请求同步。',
+              _ => '终端状态未确认，稍后自动重试。',
+            };
           } else if (!capable) {
             blockedReason = '终端未声明 DSH 工作区同步能力。';
           } else if (!widget.app.canManageDevices) {
@@ -607,6 +614,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
           }
           return _TerminalGroup(
             terminal: terminal,
+            availability: availability,
             canSync: blockedReason == null,
             blockedReason: blockedReason,
             workspaces: buckets[key] ?? const [],
@@ -1513,6 +1521,7 @@ class _DSHWorkspaceSyncNotice extends StatelessWidget {
 class _TerminalGroup {
   const _TerminalGroup({
     required this.terminal,
+    required this.availability,
     required this.canSync,
     required this.blockedReason,
     required this.workspaces,
@@ -1520,6 +1529,10 @@ class _TerminalGroup {
 
   /// null 表示"未归属"组（terminalId 为空或终端不在已知列表）。
   final TerminalSummary? terminal;
+  /// v0.9.1 G5/C4：组内唯一在线态事实（Relay availability 投影）。
+  /// 标题、正文、按钮门控与禁用原因全部由本字段派生，杜绝"标题在线、
+  /// 正文离线"的多事实源矛盾卡片。
+  final TerminalAvailability availability;
   final bool canSync;
   final String? blockedReason;
   final List<MobileWorkspace> workspaces;
@@ -1591,10 +1604,12 @@ class _TerminalWorkspaceCard extends StatelessWidget {
                     style: theme.textTheme.titleSmall,
                   ),
                 ),
+                // v0.9.1 G5：标题在线态与正文/按钮门控消费同一 availability，
+                // 不再硬编码「在线」。
                 Text(
                   terminal == null
                       ? '${group.workspaces.length} 个工作区'
-                      : '${terminal.platform} · 在线',
+                      : '${terminal.platform} · ${_terminalAvailabilityLabel(terminal, group.availability)}',
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
