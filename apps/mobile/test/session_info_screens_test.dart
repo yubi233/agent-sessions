@@ -421,7 +421,12 @@ Future<TerminalStatusController> _terminalController(
   DateTime now,
 ) async {
   final controller = TerminalStatusController(relay: relay, clock: () => now);
+  // v0.9.1：控制器需先建立同步资格（认证+前台+surface）才会发起同步；
+  // 预取后立即 detach，surface 交由被 pump 的页面管理，避免 timer 泄漏。
+  controller.reportAuthBoundary(authenticated: true);
+  controller.attachSurface();
   await controller.initialize();
+  controller.detachSurface();
   return controller;
 }
 

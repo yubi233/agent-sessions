@@ -8,6 +8,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// 让微任务队列（single-flight whenComplete 补拍链）完全结算。
+Future<void> _settle() async {
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+}
+
 void main() {
   final now = DateTime.utc(2026, 8, 16, 12);
 
@@ -49,10 +56,13 @@ void main() {
           lastSeen: now.subtract(const Duration(seconds: 10)),
         ),
       ]);
+      // v0.9.1：控制器需先建立同步资格（认证+前台+在线+surface）才会发起同步。
       final controller = TerminalStatusController(
         relay: relay,
         clock: () => now,
       );
+      controller.reportAuthBoundary(authenticated: true);
+      controller.attachSurface();
 
       await controller.initialize();
 
@@ -66,14 +76,33 @@ void main() {
         controller.availabilityFor(controller.terminals[1]),
         TerminalAvailability.offline,
       );
+      // v0.9.1 事故回归：旧实现按本机墙钟 - lastSeen(90s) 把在线终端判成 stale；
+      // 现在客户端不再做墙钟二次裁决，legacy DTO 按 status/protocol 派生为 online。
       expect(
         controller.availabilityFor(controller.terminals[2]),
-        TerminalAvailability.stale,
+        TerminalAvailability.online,
       );
       expect(
         controller.availabilityFor(controller.terminals[3]),
         TerminalAvailability.unsupported,
       );
+    });
+
+    test('新 Relay availability 投影原样透传（online/unknown/offline/unsupported）', () {
+      final projected = TerminalSummary.fromRelayJson({
+        'id': 'term_projected',
+        'hostname': 'Projected Mac',
+        'platform': 'macos',
+        'status': 'online',
+        'protocol_version': 1,
+        'availability': 'unknown',
+        'presence_revision': 7,
+        'last_heartbeat_unix_ms': 1700000000000,
+        'next_check_unix_ms': 1700000060000,
+      });
+      expect(projected.availability, TerminalAvailability.unknown);
+      expect(projected.presenceRevision, 7);
+      expect(projected.nextCheck, isNotNull);
     });
 
     test('Relay 不可达时保留最后一份状态，并在首屏给出可重试错误', () async {
@@ -92,10 +121,14 @@ void main() {
         relay: relay,
         clock: () => now,
       );
+      controller.reportAuthBoundary(authenticated: true);
+      controller.attachSurface();
 
       await controller.initialize();
       relay.setNetworkAvailable(false);
       await controller.refresh();
+      // v0.9.1 single-flight 补拍是异步尾随的：断言前让事件循环结算。
+      await _settle();
 
       expect(controller.phase, TerminalListPhase.ready);
       expect(controller.terminals.single.hostname, 'Retained Terminal');
@@ -107,7 +140,11 @@ void main() {
         relay: unavailableRelay,
         clock: () => now,
       );
+      firstLoad.reportAuthBoundary(authenticated: true);
+      firstLoad.attachSurface();
       await firstLoad.initialize();
+      // v0.9.1 single-flight 补拍是异步尾随的：断言前让事件循环结算。
+      await _settle();
 
       expect(firstLoad.phase, TerminalListPhase.error);
       expect(firstLoad.terminals, isEmpty);
@@ -121,7 +158,7 @@ void main() {
         'platform': 'unknown',
         'status': 'future_state',
       });
-      expect(unknown.availabilityAt(now), TerminalAvailability.unknown);
+      expect(unknown.availability, TerminalAvailability.unknown);
       expect(
         () => TerminalSummary.fromRelayJson({
           'id': 'term_bad_protocol',
@@ -221,6 +258,8 @@ void main() {
         relay: relay,
         clock: () => now,
       );
+      controller.reportAuthBoundary(authenticated: true);
+      controller.attachSurface();
       await controller.initialize();
 
       await tester.pumpWidget(
@@ -238,10 +277,12 @@ void main() {
       expect(find.byKey(const Key('terminal-status-list')), findsOneWidget);
       expect(find.byKey(const Key('terminal-status-tile-0')), findsOneWidget);
       expect(find.text('Build Mac'), findsOneWidget);
-      expect(find.text('在线'), findsOneWidget);
+      // v0.9.1：客户端不再产出「状态过期」——Stale Linux（status=online、legacy
+      // DTO）与 Build Mac 一样按 Relay 投影渲染为在线。
+      expect(find.text('在线'), findsNWidgets(2));
       expect(find.text('离线'), findsOneWidget);
-      expect(find.text('状态过期'), findsOneWidget);
       expect(find.text('协议不支持'), findsOneWidget);
+      expect(find.text('状态过期'), findsNothing);
       await tester.scrollUntilVisible(
         find.text('状态未确认'),
         160,
@@ -283,12 +324,12 @@ void main() {
       expect(find.byKey(const Key('terminal-status-loading')), findsOneWidget);
     });
 
-    // 遗留 2026-09-02 #3 收口回归（2026-09-06 用户实测）：App 长时间挂机后进入
-    // 终端状态页，此前只渲染启动时拉取的旧快照——lastSeen 落到 90s 新鲜度窗口外，
-    // 实际在线的终端被误渲染为「状态过期」（daemon 每 15s 心跳一直正常）。
-    // 修复=页面进入后下一帧 refresh() 重拉。本用例把 fixture 时钟前推 5 分钟并
-    // 更新终端 lastSeen（模拟 daemon 持续心跳），断言进入页面后展示「在线」。
-    testWidgets('长时间挂机后进入页面触发刷新，旧快照的「状态过期」纠正为「在线」', (tester) async {
+    // v0.9.1 V091-12 控制器层回归：App 长时间挂机后进入终端状态页，页面挂载
+    // （attachSurface）触发去重首拍重拉 Relay 权威投影；客户端不再做墙钟 stale
+    // 判定，挂机期间快照中的在线终端也绝不会被误渲染为「状态过期」。
+    // 本用例把 fixture 时钟前推 5 分钟并更新终端 lastSeen（模拟 daemon 持续
+    // 心跳），断言进入页面后展示「在线」。
+    testWidgets('长时间挂机后进入页面触发去重首拍，旧快照纠正为最新在线态', (tester) async {
       var current = now;
       final relay = FixtureRelayRepository(clock: () => current);
       relay.replaceTerminals([
@@ -306,6 +347,8 @@ void main() {
         relay: relay,
         clock: () => current,
       );
+      controller.reportAuthBoundary(authenticated: true);
+      controller.attachSurface();
       await controller.initialize();
 
       // App 挂机 5 分钟：fixture 时钟前推，daemon 心跳持续（lastSeen 同步前推），
@@ -346,6 +389,8 @@ void main() {
         relay: emptyRelay,
         clock: () => now,
       );
+      emptyController.reportAuthBoundary(authenticated: true);
+      emptyController.attachSurface();
       await emptyController.initialize();
       await tester.pumpWidget(
         ProviderScope(
@@ -368,6 +413,8 @@ void main() {
         relay: unavailableRelay,
         clock: () => now,
       );
+      unavailableController.reportAuthBoundary(authenticated: true);
+      unavailableController.attachSurface();
       await unavailableController.initialize();
       await tester.pumpWidget(
         ProviderScope(

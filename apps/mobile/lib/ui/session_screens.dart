@@ -134,17 +134,19 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
   @override
   void initState() {
     super.initState();
-    // v0.8.6 C：主页打开即刷新终端在线态/能力（卡片同步可用性依赖它）。
-    // 同时收口遗留问题 2026-09-02 #3（终端状态只在 App 启动/同步弹窗刷新）。
+    // v0.9.1 P2：主页是终端同步的活跃 surface。挂载即递增 surface 代际并按资格
+    // 触发去重首拍（认证+前台+在线），后台/离线/注销/dispose 后不再发起新请求；
+    // 周期保活由控制器内部 45-60s jitter safety reconcile 承担。
     // postFrame：避免在 widget 构建期改动 Riverpod provider（会抛
     // "modify a provider while the widget tree was building"）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(widget.terminalStatus.refresh());
+      if (mounted) widget.terminalStatus.attachSurface();
     });
   }
 
   @override
   void dispose() {
+    widget.terminalStatus.detachSurface();
     _searchController.dispose();
     super.dispose();
   }

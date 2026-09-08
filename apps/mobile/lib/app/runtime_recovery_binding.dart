@@ -64,6 +64,11 @@ class _RuntimeRecoveryBindingState extends ConsumerState<RuntimeRecoveryBinding>
           .read(sessionRecoveryControllerProvider)
           .reportAppVisibility(visibility),
     );
+    // v0.9.1 P2：同一份生命周期事实转发给终端无感同步——后台立即停止终端
+    // 列表新请求，回前台由控制器触发去重首拍。
+    ref
+        .read(terminalStatusControllerProvider)
+        .reportAppVisibility(visibility);
   }
 
   bool _isForeground(AppLifecycleState state) {
@@ -110,13 +115,19 @@ class _RuntimeRecoveryBindingState extends ConsumerState<RuntimeRecoveryBinding>
     }
   }
 
-  Future<void> _publishConnectivity(ConnectivityResult result) => ref
-      .read(sessionRecoveryControllerProvider)
-      .reportNetworkAvailability(
-        result == ConnectivityResult.none
-            ? MobileNetworkAvailability.offline
-            : MobileNetworkAvailability.online,
-      );
+  Future<void> _publishConnectivity(ConnectivityResult result) {
+    // v0.9.1 P2：网络变化同样驱动终端无感同步；offline 停止新请求，
+    // offline->恢复的去重首拍在控制器内完成。
+    final availability = result == ConnectivityResult.none
+        ? MobileNetworkAvailability.offline
+        : MobileNetworkAvailability.online;
+    ref
+        .read(terminalStatusControllerProvider)
+        .reportNetworkAvailability(availability);
+    return ref
+        .read(sessionRecoveryControllerProvider)
+        .reportNetworkAvailability(availability);
+  }
 
   @override
   Widget build(BuildContext context) => widget.child;

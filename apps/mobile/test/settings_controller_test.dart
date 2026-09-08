@@ -108,7 +108,7 @@ void main() {
       expect(firstLoad.errorMessage, isNull);
     });
 
-    test('availabilityFor 复用终端白名单推导 online/stale', () async {
+    test('availabilityFor 复用终端白名单推导 online/offline（不再做客户端 stale 判定）', () async {
       final relay = FixtureRelayRepository(clock: () => now);
       relay.replaceTerminals([
         _terminal(
@@ -135,9 +135,10 @@ void main() {
         controller.availabilityFor(controller.terminals[0]),
         TerminalAvailability.online,
       );
+      // v0.9.1：lastSeen 过期不再由客户端墙钟改判 stale，仍按 Relay 投影/legacy 派生。
       expect(
         controller.availabilityFor(controller.terminals[1]),
-        TerminalAvailability.stale,
+        TerminalAvailability.online,
       );
       expect(
         controller.availabilityFor(controller.terminals[2]),

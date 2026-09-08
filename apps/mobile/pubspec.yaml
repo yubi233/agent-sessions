@@ -55,6 +55,9 @@ dev_dependencies:
   integration_test:
     sdk: flutter
 
+  # v0.9.1 P2：终端无感同步控制器用虚拟时钟驱动 safety reconcile 周期回归。
+  fake_async: ^1.3.1
+
   # v0.9.0 B3：样式守卫测试用 Dart AST 扫描 lib/**（规范 §8），
   # 显式锁定版本避免解析行为随传递依赖漂移。
   analyzer: ^13.3.0

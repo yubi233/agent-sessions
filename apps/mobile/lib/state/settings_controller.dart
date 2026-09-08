@@ -16,6 +16,8 @@ enum SettingsSectionPhase { loading, ready, error }
 class SettingsController extends ChangeNotifier {
   SettingsController({
     required RelayRepository relay,
+    // v0.9.1 起 availability 不再使用本地时钟；该参数仅为诊断展示与既有
+    // 测试构造兼容保留，绝不参与在线态裁决（裁决 T2）。
     DateTime Function()? clock,
   }) : this._(relay, clock: clock);
 
@@ -24,6 +26,10 @@ class SettingsController extends ChangeNotifier {
 
   final RelayRepository _relay;
   final DateTime Function() _clock;
+
+  /// 诊断用本地时间（仅日志/调试口径；在线态投影一律来自 Relay）。
+  @visibleForTesting
+  DateTime get diagnosticsNow => _clock();
 
   SettingsSectionPhase _phase = SettingsSectionPhase.loading;
   List<Device> _devices = const [];
@@ -51,7 +57,7 @@ class SettingsController extends ChangeNotifier {
 
   /// 终端状态只用于「连接」分区展示，不携带路径、日志或命令 payload。
   TerminalAvailability availabilityFor(TerminalSummary terminal) =>
-      terminal.availabilityAt(_clock());
+      terminal.availability;
 
   Future<void> initialize() => refresh();
 

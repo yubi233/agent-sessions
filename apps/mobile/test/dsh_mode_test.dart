@@ -477,7 +477,13 @@ Future<_OwnerContext> _ownerContext(FixtureRelayRepository relay) async {
     relay: relay,
     clock: relay.fixtureNow,
   );
+  // v0.9.1：控制器需先建立同步资格（认证+前台+surface）才会发起同步。
+  // 预取完成后立即 detach（surface 由被 pump 的页面负责挂载/卸载），
+  // 避免 surface 计数泄漏让 safety timer 在测试结束时仍挂起。
+  terminals.reportAuthBoundary(authenticated: true);
+  terminals.attachSurface();
   await terminals.initialize();
+  terminals.detachSurface();
   return _OwnerContext(app: app, terminals: terminals);
 }
 

@@ -18,19 +18,29 @@ class TerminalStatusScreen extends ConsumerStatefulWidget {
 }
 
 class _TerminalStatusScreenState extends ConsumerState<TerminalStatusScreen> {
+  // dispose 阶段不能再使用 ref；挂载时缓存控制器实例供卸载时 detach。
+  TerminalStatusController? _controller;
+
   @override
   void initState() {
     super.initState();
-    // 遗留 2026-09-02 #3 收口：controller 只在 App 启动时 initialize 一次，
-    // 本页此前进入时直接渲染旧快照——长时间挂机后 lastSeen 落到 90s 新鲜度
-    // 窗口之外，会把实际在线的终端渲染成「状态过期」。与主页终端卡片
-    // v0.8.6 同口径：每次进入页面后下一帧刷新一次；controller.refresh()
-    // 自带并发去重，AppBar 手动刷新按钮语义不变。
+    // v0.9.1 P2：本页与主页同为终端同步 surface。挂载即按资格触发去重首拍
+    // （替代 v0.8.6 的无条件 refresh：长时间挂机后由 Relay 权威投影 + safety
+    // reconcile 保证在线态正确，不再依赖页面进入时的手动补拍）；
+    // AppBar 手动刷新按钮语义不变。
+    _controller = ref.read(terminalStatusControllerProvider);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
-        ref.read(terminalStatusControllerProvider).refresh();
+        _controller?.attachSurface();
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _controller?.detachSurface();
+    _controller = null;
+    super.dispose();
   }
 
   @override

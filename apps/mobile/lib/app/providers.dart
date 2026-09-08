@@ -335,7 +335,10 @@ final messageDeepLinkControllerProvider =
       );
     });
 
-/// P3 机器状态只消费现有 Relay 白名单字段；不接入 Daemon command stream 或本机路径。
+/// P3 机器状态只消费 Relay 白名单字段；v0.9.1 P2 升级为生命周期感知同步：
+/// 认证边界（注销/重认证/换账号）由 AppController 相位变化转发（递增认证代际），
+/// 前后台/网络由 RuntimeRecoveryBinding 转发，页面挂载由各 surface 显式 attach。
+/// controller 自身承担 single-flight、quiet refresh 与 45-60s jitter safety reconcile。
 final terminalStatusControllerProvider =
     ChangeNotifierProvider<TerminalStatusController>((ref) {
       final relay = ref.read(relayRepositoryProvider);
@@ -343,7 +346,16 @@ final terminalStatusControllerProvider =
         relay: relay,
         clock: relay is FixtureRelayRepository ? relay.fixtureNow : null,
       );
-      unawaited(controller.initialize());
+      ref.listen(appControllerProvider, (previous, next) {
+        final previousPhase = previous?.phase;
+        final nextPhase = next.phase;
+        if (previousPhase == nextPhase) return;
+        // 认证相位与同步资格的显式协调：signedOut 递增认证代际并清空旧账号
+        // 投影；authenticated 重建资格并触发去重首拍（与 SessionController 同口径）。
+        controller.reportAuthBoundary(
+          authenticated: nextPhase == AppAuthPhase.authenticated,
+        );
+      });
       return controller;
     });
 
@@ -352,10 +364,8 @@ final terminalStatusControllerProvider =
 final settingsControllerProvider = ChangeNotifierProvider<SettingsController>((
   ref,
 ) {
-  final relay = ref.read(relayRepositoryProvider);
   final controller = SettingsController(
-    relay: relay,
-    clock: relay is FixtureRelayRepository ? relay.fixtureNow : null,
+    relay: ref.read(relayRepositoryProvider),
   );
   unawaited(controller.initialize());
   return controller;
