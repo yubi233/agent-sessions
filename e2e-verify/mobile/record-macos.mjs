@@ -132,6 +132,19 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-39"]),
     requiredTestIds: Object.freeze([]),
   }),
+  // v0.9.1：Terminal presence 四态录屏范围。
+  // 内容先定（Taskfile record:v091，2026-09-08）：
+  //   A) VISUAL-MOBILE-40（terminal-presence-v091）：四态终端卡片主页连续帧——
+  //      1) online 卡（macos · 在线 + 同步按钮可用 + 工作区分组）；
+  //      2) offline 卡（macos · 离线 + 「终端离线，无法请求同步。」原因行）；
+  //      3) unknown 卡（macos · 状态未知 + 「终端状态未确认，稍后自动重试。」）；
+  //      4) unsupported 卡（macos · 协议不兼容 + 禁用原因行）。
+  //   5fps 连续帧；仅作通过后的展示证据，不作为功能回归替代；前置 gate 报告
+  //   必须 passed 且包含该场景的严格 5fps 证据。
+  v091: Object.freeze({
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-40"]),
+    requiredTestIds: Object.freeze([]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {

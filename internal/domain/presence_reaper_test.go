@@ -93,6 +93,23 @@ func TestV091PresenceReaperTransitionsBoundedAndIsolated(t *testing.T) {
 			}
 		}
 	}
+	// Hub 发布与转发 goroutine 是异步的：断言前轮询等待期望数量的通知，
+	// 避免转发时序造成的偶发失败（通知本身仍按发布顺序去重）。
+	waitForNotifications := func(want int) []PresenceInvalidation {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			got := drainInvalidations()
+			if len(got) >= want || time.Now().After(deadline) {
+				return got
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	// 静默断言前先给转发 goroutine 一个结算窗口。
+	settleNotifications := func() {
+		time.Sleep(50 * time.Millisecond)
+		drainInvalidations()
+	}
 
 	// 阶段一：alpha 进入 unknown 观察窗（50s），beta 以 15s 节拍保持心跳
 	//（心跳间隔 < 40s，prev 投影恒为 online，不制造恢复转换）。
@@ -122,7 +139,7 @@ func TestV091PresenceReaperTransitionsBoundedAndIsolated(t *testing.T) {
 	if beta.PresenceProjectedState != "online" || beta.PresenceRevision != 0 {
 		t.Fatalf("fresh beta must be untouched, got (%q,%d)", beta.PresenceProjectedState, beta.PresenceRevision)
 	}
-	notifications := drainInvalidations()
+	notifications := waitForNotifications(1)
 	if len(notifications) != 1 || notifications[0].Availability != "unknown" || notifications[0].TerminalID != alpha.ID {
 		t.Fatalf("unknown notifications=%+v", notifications)
 	}
@@ -141,7 +158,7 @@ func TestV091PresenceReaperTransitionsBoundedAndIsolated(t *testing.T) {
 		t.Fatalf("alpha offline projection=(%q,%d,%q), want (offline,2,offline)",
 			alpha.PresenceProjectedState, alpha.PresenceRevision, alpha.Status)
 	}
-	notifications = drainInvalidations()
+	notifications = waitForNotifications(1)
 	if len(notifications) != 1 || notifications[0].Availability != "offline" || notifications[0].PresenceRevision != 2 {
 		t.Fatalf("offline notifications=%+v", notifications)
 	}
@@ -151,6 +168,7 @@ func TestV091PresenceReaperTransitionsBoundedAndIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotent sweep: %v", err)
 	}
+	settleNotifications()
 	if summary.Transitioned != 0 || len(drainInvalidations()) != 0 {
 		t.Fatalf("idempotent sweep must be quiet: summary=%+v", summary)
 	}

@@ -272,6 +272,14 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     localVisualScenario: "dsh-v087-typewriter-streaming",
     streamingGate: true,
   }),
+  // v0.9.1 Terminal presence 四态可见场景（V091-14）：主页四张终端卡片
+  // （online/offline/unknown/unsupported）的标题/禁用原因/按钮门控全部来自
+  // Relay availability 投影；headed 可见验收见 run-macos-v091.mjs。
+  Object.freeze({
+    id: "VISUAL-MOBILE-40",
+    directory: "visual-mobile-40-terminal-presence-v091",
+    localVisualScenario: "terminal-presence-v091",
+  }),
 ]);
 
 function wait(milliseconds) {

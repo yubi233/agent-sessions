@@ -217,6 +217,8 @@ test("P2/P3/P4/P5/V081 截图场景在 runner 中固定登记，避免录制前�
       "VISUAL-MOBILE-38",
       // v0.8.7 打字机流式场景（V087-08/09 / VISUAL-MOBILE-39，双门禁）。
       "VISUAL-MOBILE-39",
+      // v0.9.1 Terminal presence 四态场景（V091-14 / VISUAL-MOBILE-40）。
+      "VISUAL-MOBILE-40",
     ],
   );
 });

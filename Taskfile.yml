@@ -430,6 +430,42 @@ tasks:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
       - node e2e-verify/mobile/run-macos-v090.mjs
 
+  test:v091:local:
+    desc: v0.9.1 Terminal Presence 本地 full gate（V091 唯一聚合入口：文档、生成物、Go V091 presence 契约/门控/失效通知/reaper + 既有账号 SSE 回归 + v0.8.9 生命周期回归 + 全仓、restart、全量 Flutter、Web SSE 回归；不调用真实模型、不运行 Android 实机；任何子项失败即 gate failed）
+    cmds:
+      - task: docs:verify
+      - task: check
+      # V091-01..05（domain/relay/store 契约与门控）+ V091-06/07（失效通知/reaper）。
+      - go test ./internal/domain ./internal/relay ./internal/store ./internal/httpapi -run 'TestV091' -count=1
+      # v0.8.9 生命周期根因回归（generation 契约不得回退）。
+      - go test ./internal/store ./internal/relay ./internal/daemon -run 'TestV089' -count=1
+      # 既有账号级 /v1/events cursor/frame/授权契约不变（V091-06 兼容口径）。
+      - go test ./internal/httpapi ./internal/relay ./internal/store -run 'TestP4AccountSSE' -count=1
+      - go test ./... -count=1
+      - task: test:restart
+      # 全量 Flutter（单 worker，规避 macOS listener 清理竞态）；V091-08..12 含内。
+      - cmd: cd apps/mobile && flutter analyze && flutter test --machine --concurrency=1
+      # Web SSE 回归（账号级 /v1/events 消费语义未被 presence 帧改坏）。
+      - pnpm --filter @agent-sessions/web test
+      - git diff --check
+
+  record:v091:
+    desc: v0.9.1 Terminal presence 录屏（录屏内容先定（2026-09-08）：VISUAL-MOBILE-40 terminal-presence-v091 四态终端卡片主页连续帧——online（macos·在线+同步按钮）、offline（macos·离线+「终端离线，无法请求同步。」）、unknown（macos·状态未知+「终端状态未确认，稍后自动重试。」）、unsupported（macos·协议不兼容+禁用原因）；5fps 连续帧；不作为功能回归替代；record-macos scope v091 随 P4 注册，前置 gate 报告必须 passed）
+    cmds:
+      - |
+        if [[ -z "${V091_FLUTTER_GATE_REPORT:-}" || ! -f "$V091_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v091 blocked: set V091_FLUTTER_GATE_REPORT to a passed v0.9.1 macOS gate report first" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v091 --gate-report "$V091_FLUTTER_GATE_REPORT"
+
+  test:v091:flutter:
+    desc: v0.9.1 可见 Flutter gate（V091-14：真实 macOS Flutter 窗口 headless=false；场景 terminal-presence-v091 四态 presence 卡片；亮/暗 × 430x932 + 1280x800 桌面 + 200% 文本 + 95 秒在线停留 soak 双帧；结构化报告与截图必需；本地 fixture 口径，不做 Android 实机；需先关闭用户正在使用的 Agent Sessions 窗口）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos-v091.mjs
+
   test:v085:real:
     desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度。默认 grok-4.6 @ api.aabsv.sbs；可切 gpt-5.6-terra @ api.paktf.sbs：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra）
     cmds:

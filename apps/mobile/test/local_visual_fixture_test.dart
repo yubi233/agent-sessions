@@ -402,10 +402,8 @@ void main() {
       final terminals = await fixture.relay.listTerminals();
       expect(terminals, hasLength(2));
       expect(terminals.first.hostname, 'MacBook Fixture');
-      expect(
-        terminals.first.availabilityAt(DateTime.utc(2026, 8, 14, 12)),
-        TerminalAvailability.online,
-      );
+      // v0.9.1：availability 只消费 Relay 投影（旧 Relay 降级为 status/protocol 派生）。
+      expect(terminals.first.availability, TerminalAvailability.online);
     });
 
     test('v0.4 P2-F Daemon 观察场景只预置安全投影，不模拟执行或密钥交付', () async {

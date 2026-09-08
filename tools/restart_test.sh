@@ -174,3 +174,87 @@ rm -rf "$v089_lib_state"
 grep -F "RELAY_DB_RESET_ALLOWED=false" restart.sh >/dev/null
 grep -F "AGENT_SESSIONS_RESTART_LIB_ONLY" restart.sh >/dev/null
 printf 'restart.sh v0.8.9 reset lifecycle regression passed\n'
+
+# ---------------------------------------------------------------------------
+# v0.9.1（V091-13）：首 heartbeat 就绪门与脱敏 presence 诊断回归。
+# 以 LIB_ONLY 模式加载 restart.sh，stub 掉 curl/is_running/sleep 后断言：
+#   1) 新 heartbeat 落库且 Relay 权威投影 online -> ready；
+#   2) availability 非 online（如 unknown）-> 不得 ready（只进程存活不算）；
+#   3) heartbeat 回退（不高于 baseline）-> 不得 ready，最终 readiness timeout；
+#   4) Daemon 进程退出 -> exited before first heartbeat；
+#   5) 诊断输出只含 presence bucket/计数，绝不含 device_id/token/hostname。
+v091_lib_state="$(mktemp -d /tmp/agent-sessions-v091-presence.XXXXXX)"
+AGENT_SESSIONS_RESTART_LIB_ONLY=1 bash -c '
+  set -euo pipefail
+  source "$1/restart.sh"
+
+  STATE_DIR="'"$v091_lib_state"'/state"
+  LOG_DIR="'"$v091_lib_state"'/logs"
+  mkdir -p "$STATE_DIR" "$LOG_DIR"
+  : > "$(component_log daemon)"
+  printf "level=WARN daemon relay reconnect deferred\nlevel=INFO ok\n" >> "$(component_log daemon)"
+
+  LOCAL_OWNER_ACCESS_TOKEN="stub-owner-token"
+  LOCAL_DEV_TERMINAL_DEVICE_ID="stub-device-id"
+  WITH_RELAY=true
+  LOCAL_DEV_PAIRING=true
+  RELAY_ADDR="127.0.0.1:1"
+  DAEMON_HEARTBEAT_BASELINE=1000
+
+  sleep() { return 0; }
+  # 场景 1-3：Daemon 进程视为存活；场景 4 再覆盖为退出。
+  is_running() { return 0; }
+
+  # stub curl：按场景返回受控 presence 投影（返回 1 表示 Relay 不可达）。
+  CannedBody=""
+  curl() {
+    if [[ -n "$CannedBody" ]]; then printf '%s' "$CannedBody"; return 0; fi
+    return 7
+  }
+
+  # --- 场景 1：新 heartbeat + availability=online -> ready。
+  NOW_MS="$(($(date +%s) * 1000))"
+  CannedBody="{\"terminals\":[{\"device_id\":\"stub-device-id\",\"availability\":\"online\",\"last_seen_unix_ms\":$NOW_MS}]}"
+  DAEMON_HEARTBEAT_BASELINE=$((NOW_MS - 60000))
+  out="$(wait_for_daemon 12345)"
+  grep -F "first heartbeat confirmed" <<< "$out" >/dev/null || { echo "v091: fresh online heartbeat must be ready: $out" >&2; exit 1; }
+  grep -F "availability=online" <<< "$out" >/dev/null || { echo "v091: ready line must carry projection: $out" >&2; exit 1; }
+
+  # --- 场景 2：heartbeat 新但投影 unknown（观察窗）-> 不得 ready，超时。
+  CannedBody="{\"terminals\":[{\"device_id\":\"stub-device-id\",\"availability\":\"unknown\",\"last_seen_unix_ms\":$NOW_MS}]}"
+  out="$(wait_for_daemon 12345 2>&1 || true)"
+  grep -F "readiness timeout" <<< "$out" >/dev/null || { echo "v091: unknown projection must not be ready: $out" >&2; exit 1; }
+
+  # --- 场景 3：heartbeat 回退（等于 baseline，视为历史值）-> 不得 ready。
+  CannedBody="{\"terminals\":[{\"device_id\":\"stub-device-id\",\"availability\":\"online\",\"last_seen_unix_ms\":1000}]}"
+  DAEMON_HEARTBEAT_BASELINE=1000
+  out="$(wait_for_daemon 12345 2>&1 || true)"
+  grep -F "readiness timeout" <<< "$out" >/dev/null || { echo "v091: regressed heartbeat must not be ready: $out" >&2; exit 1; }
+
+  # --- 场景 4：Daemon 进程退出 -> exited before first heartbeat。
+  CannedBody=""
+  is_running() { return 1; }
+  out="$(wait_for_daemon 12345 2>&1 || true)"
+  grep -F "exited before first heartbeat" <<< "$out" >/dev/null || { echo "v091: dead daemon must fail fast: $out" >&2; exit 1; }
+  is_running() { return 0; }
+
+  # --- 场景 5：status 诊断脱敏 —— 只输出 bucket/计数；无 device_id/token/hostname。
+  NOW_MS="$(($(date +%s) * 1000))"
+  CannedBody="{\"terminals\":[{\"device_id\":\"stub-device-id\",\"hostname\":\"secret-host\",\"availability\":\"online\",\"last_seen_unix_ms\":$NOW_MS}]}"
+  diag="$(daemon_presence_diagnostics)"
+  grep -F "presence=online" <<< "$diag" >/dev/null || { echo "v091: diag must carry presence: $diag" >&2; exit 1; }
+  grep -F "hb_age_bucket=<15s" <<< "$diag" >/dev/null || { echo "v091: diag must carry fresh bucket: $diag" >&2; exit 1; }
+  grep -F "reconnect_attempts=1" <<< "$diag" >/dev/null || { echo "v091: diag must count reconnects: $diag" >&2; exit 1; }
+  grep -F "error_lines=0" <<< "$diag" >/dev/null || { echo "v091: diag must count error lines: $diag" >&2; exit 1; }
+  if grep -qE "stub-device-id|stub-owner-token|secret-host" <<< "$diag"; then
+    echo "v091: diagnostics leaked identifiers: $diag" >&2
+    exit 1
+  fi
+
+  # --- 场景 6：Relay 不可达 -> presence=unknown（不伪造在线/离线）。
+  CannedBody=""
+  diag="$(daemon_presence_diagnostics)"
+  grep -F "presence=unknown" <<< "$diag" >/dev/null || { echo "v091: unreachable relay must report unknown: $diag" >&2; exit 1; }
+' _ "$ROOT_DIR"
+rm -rf "$v091_lib_state"
+printf 'restart.sh v0.9.1 presence gate regression passed\n'

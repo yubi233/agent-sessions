@@ -16,204 +16,331 @@
     "real_upstream": false,
     "fixture_data": true,
     "local_test": true,
-    "headless": false
+    "headless": false,
+    "note": "实现阶段已完成：V091-01..14 全部 passed；聚合 gate task test:v091:local 一次通过（2026-09-08 exit=0）；headed 可见验收 5/5 passed（real_visible_flutter=true、headless=false）；真实浏览器/模型/上游与 Android 实机保持 false（计划非目标）。"
   },
   "cases": [
     {
       "id": "V091-01",
       "title": "Presence contract：服务端时间与 15/40/60 秒边界形成唯一 availability",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "presence contract",
       "priority": "P0",
       "test_layer": "unit",
       "precondition": "Presence 计算器支持注入服务端时钟、heartbeat interval 和 deadline；fixture 不含真实 Terminal ID。",
-      "steps": ["以 heartbeat interval=15s、suspect=40s、offline=60s 建立在线 Terminal", "在 39s、40s、59s、60s 和 60s+1ms 分别计算 availability", "让客户端墙钟与服务端时钟相差数分钟，重复计算并比较结果", "检查 next_check 与 presence_revision 的边界行为"],
+      "steps": [
+        "以 heartbeat interval=15s、suspect=40s、offline=60s 建立在线 Terminal",
+        "在 39s、40s、59s、60s 和 60s+1ms 分别计算 availability",
+        "让客户端墙钟与服务端时钟相差数分钟，重复计算并比较结果",
+        "检查 next_check 与 presence_revision 的边界行为"
+      ],
       "expected": "边界由服务端时间和集中阈值唯一决定；客户端墙钟变化不改变授权结果；online/suspect/unknown/offline 语义稳定且可测试。",
-      "cleanup": ["释放 fake clock 和 fixture"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "释放 fake clock 和 fixture"
+      ],
+      "evidence": [
+        "passed：internal/domain/v091_presence_contract_test.go 边界 39/40/59/60/60+1ms、四态分离、写门控三分类；task test:v091:local（2026-09-08 exit=0，docs:verify/check/Go TestV091+TestP4AccountSSE/TestV089/go test ./.../test:restart/flutter analyze+全量 test/web 25/25/git diff --check 全绿）"
+      ]
     },
     {
       "id": "V091-02",
       "title": "Hello/heartbeat：活性刷新单调、幂等且不重复制造 revision",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "relay-daemon integration",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "隔离 SQLite 与 httptest Relay；Daemon 可按固定 interval 发送 hello/heartbeat，响应字段 additive。",
-      "steps": ["发送 hello 和连续 heartbeat，断言 last heartbeat 与 Relay 返回 success", "重复提交同一 heartbeat 或乱序旧 heartbeat，断言最后活性不倒退", "在无状态变化时重复 heartbeat，断言 presence_revision 不无界增长", "读取 /v1/terminals，断言 availability、revision 和 last heartbeat 与存储事实一致"],
+      "steps": [
+        "发送 hello 和连续 heartbeat，断言 last heartbeat 与 Relay 返回 success",
+        "重复提交同一 heartbeat 或乱序旧 heartbeat，断言最后活性不倒退",
+        "在无状态变化时重复 heartbeat，断言 presence_revision 不无界增长",
+        "读取 /v1/terminals，断言 availability、revision 和 last heartbeat 与存储事实一致"
+      ],
       "expected": "有效 heartbeat 幂等刷新活性；旧输入不能把 Terminal 拉回过去；无真实状态变化不重复发布 presence 变化。",
-      "cleanup": ["关闭 httptest server，删除临时 SQLite"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "关闭 httptest server，删除临时 SQLite"
+      ],
+      "evidence": [
+        "passed：internal/domain/v091_presence_contract_test.go 心跳幂等/乱序不倒退/revision 不无界增长；internal/store TouchTerminalPresence 单事务推进；task test:v091:local（2026-09-08 exit=0，docs:verify/check/Go TestV091+TestP4AccountSSE/TestV089/go test ./.../test:restart/flutter analyze+全量 test/web 25/25/git diff --check 全绿）"
+      ]
     },
     {
       "id": "V091-03",
       "title": "漏 heartbeat：Relay deadline 后权威投影 offline",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "expiry projection",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "Terminal 最近一次 heartbeat 已落库；fake server clock 可前进；不依赖后台 sweeper 才能读取正确状态。",
-      "steps": ["让 Terminal 在 t0 收到有效 heartbeat，确认列表为 online", "停止 Daemon heartbeat，将服务端时间前进到 40s 和 60s 边界", "分别调用 /v1/terminals 和命令预检，不先运行 reaper", "运行 reaper 后再次读取列表并比较 revision/通知结果"],
+      "steps": [
+        "让 Terminal 在 t0 收到有效 heartbeat，确认列表为 online",
+        "停止 Daemon heartbeat，将服务端时间前进到 40s 和 60s 边界",
+        "分别调用 /v1/terminals 和命令预检，不先运行 reaper",
+        "运行 reaper 后再次读取列表并比较 revision/通知结果"
+      ],
       "expected": "read path 在 deadline 后即时投影 offline；reaper 只补充通知或持久投影，不是安全正确性的前置条件；多次读取稳定且不重复翻转。",
-      "cleanup": ["停止 reaper，关闭 server，清理临时库"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "停止 reaper，关闭 server，清理临时库"
+      ],
+      "evidence": [
+        "passed：internal/relay/v091_presence_gate_contract_test.go TestV091RelayProjectsOfflineAfterDeadlineWithoutSweeper（50s unknown/61s offline/重复读取稳定/next_check 边界）；task test:v091:local（2026-09-08 exit=0，docs:verify/check/Go TestV091+TestP4AccountSSE/TestV089/go test ./.../test:restart/flutter analyze+全量 test/web 25/25/git diff --check 全绿）"
+      ]
     },
     {
       "id": "V091-04",
       "title": "统一命令安全门：stale/offline/unknown 不创建 Workspace/DSH 投递",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "command gating",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "存在 capability 满足但 heartbeat 已过期的 Terminal；命令投递表和 HTTP 响应可观察。",
-      "steps": ["用 stale/offline Terminal 请求 Workspace 创建和 DSH 同步", "在列表显示 online 后、实际提交前推进服务端时钟跨过 offline deadline", "用 Relay 不可可靠计算的 unknown 状态重复请求", "检查响应错误码、命令表、outbox 和 Daemon 收到的投递数量"],
+      "steps": [
+        "用 stale/offline Terminal 请求 Workspace 创建和 DSH 同步",
+        "在列表显示 online 后、实际提交前推进服务端时钟跨过 offline deadline",
+        "用 Relay 不可可靠计算的 unknown 状态重复请求",
+        "检查响应错误码、命令表、outbox 和 Daemon 收到的投递数量"
+      ],
       "expected": "所有写路径使用同一 freshness predicate；请求返回稳定 TERMINAL_OFFLINE/TERMINAL_UNREACHABLE；不创建新 command、不投递到失联 Terminal。",
-      "cleanup": ["清空命令 fixture，关闭测试 server"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "清空命令 fixture，关闭测试 server"
+      ],
+      "evidence": [
+        "passed：internal/relay/v091_presence_gate_contract_test.go TestV091CommandGateRejectsUnavailableTerminalsWithoutDelivery（unknown→TERMINAL_UNREACHABLE/offline→TERMINAL_OFFLINE、命令表与投递表零新增、提交时判断）；task test:v091:local（2026-09-08 exit=0，docs:verify/check/Go TestV091+TestP4AccountSSE/TestV089/go test ./.../test:restart/flutter analyze+全量 test/web 25/25/git diff --check 全绿）"
+      ]
     },
     {
       "id": "V091-05",
       "title": "Heartbeat recovery：过期 Terminal 自动回 online 且列表/命令状态一致",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "recovery",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "Terminal 已由漏 heartbeat 进入 offline；Daemon 可以恢复发送 heartbeat。",
-      "steps": ["确认列表与命令预检均为 offline", "恢复 Daemon 并发送有效 hello/heartbeat", "读取列表、执行允许的 capability 预检并观察 presence revision", "重复 heartbeat 和恢复通知，检查是否产生重复状态变化"],
+      "steps": [
+        "确认列表与命令预检均为 offline",
+        "恢复 Daemon 并发送有效 hello/heartbeat",
+        "读取列表、执行允许的 capability 预检并观察 presence revision",
+        "重复 heartbeat 和恢复通知，检查是否产生重复状态变化"
+      ],
       "expected": "恢复 heartbeat 后列表和命令 predicate 一致回到 online；revision 单调；重复输入不造成重复通知或请求风暴。",
-      "cleanup": ["停止 Daemon fixture，清理 Relay 状态"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "停止 Daemon fixture，清理 Relay 状态"
+      ],
+      "evidence": [
+        "passed：internal/domain/v091_presence_contract_test.go TestV091HeartbeatRecoveryRestoresOnlineConsistently（revision 恰好+1、列表与门控一致、重复心跳不重复+1）；task test:v091:local（2026-09-08 exit=0，docs:verify/check/Go TestV091+TestP4AccountSSE/TestV089/go test ./.../test:restart/flutter analyze+全量 test/web 25/25/git diff --check 全绿）"
+      ]
     },
     {
       "id": "V091-06",
       "title": "Presence invalidation：revision 单调去重且不改变账号 SSE 契约",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "SSE/invalidation",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "账号级 /v1/events 可建立连接；presence change 发布轻量 invalidation；既有 account cursor fixture 已准备。",
-      "steps": ["触发 Terminal online、offline、recovery 三种 presence 变化并收集事件", "重复同 revision、乱序 revision 和 Hub 重复唤醒", "收到 invalidation 后重新拉取 /v1/terminals，比较 DTO 与 revision", "运行既有账号级 SSE cursor/frame/授权回归"],
+      "steps": [
+        "触发 Terminal online、offline、recovery 三种 presence 变化并收集事件",
+        "重复同 revision、乱序 revision 和 Hub 重复唤醒",
+        "收到 invalidation 后重新拉取 /v1/terminals，比较 DTO 与 revision",
+        "运行既有账号级 SSE cursor/frame/授权回归"
+      ],
       "expected": "App 只将事件作为失效通知并重新拉快照；revision 单调去重；既有账号级 SSE 的 cursor、frame 和授权语义不变。",
-      "cleanup": ["断开 SSE，释放订阅/ticker，删除临时库"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "断开 SSE，释放订阅/ticker，删除临时库"
+      ],
+      "evidence": [
+        "passed：internal/relay/v091_presence_invalidation_test.go（恢复恰好一次通知帧/无 id/revision=1/重复心跳零通知/会话帧 cursor 契约不变）+ TestP4AccountSSE* 回归 + web 25/25；task test:v091:local（2026-09-08 exit=0，docs:verify/check/Go TestV091+TestP4AccountSSE/TestV089/go test ./.../test:restart/flutter analyze+全量 test/web 25/25/git diff --check 全绿）"
+      ]
     },
     {
       "id": "V091-07",
       "title": "Presence reaper：过期转换有界、多 Terminal 隔离、丢唤醒可自愈",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "scheduler/resource lifecycle",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "至少两个 Terminal，单独可控 heartbeat deadline、reaper tick、Hub subscriber 和 Relay 重启/generation fixture。",
-      "steps": ["让 Terminal A 过期、Terminal B 持续 heartbeat，运行多个 reaper tick", "模拟 Hub channel 丢唤醒、subscriber 断开和 Relay 重启", "检查下一 tick 或下一次列表读取是否补齐 A 的过期转换", "停止 reaper 与 server，检查 goroutine/ticker/subscriber 计数归零"],
+      "steps": [
+        "让 Terminal A 过期、Terminal B 持续 heartbeat，运行多个 reaper tick",
+        "模拟 Hub channel 丢唤醒、subscriber 断开和 Relay 重启",
+        "检查下一 tick 或下一次列表读取是否补齐 A 的过期转换",
+        "停止 reaper 与 server，检查 goroutine/ticker/subscriber 计数归零"
+      ],
       "expected": "A 的过期不影响 B；丢唤醒不丢最终事实；扫描批次和通知资源有界；停止、重启、断开后无资源泄漏。",
-      "cleanup": ["停止所有 fixture，等待资源释放，删除临时状态"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "停止所有 fixture，等待资源释放，删除临时状态"
+      ],
+      "evidence": [
+        "passed：internal/domain/presence_reaper_test.go（unknown/offline 两段转换、fresh 隔离、BatchLimit=1 跨 tick 自愈、跳窗直落 offline、Run/Stop 资源释放）；task test:v091:local（2026-09-08 exit=0，docs:verify/check/Go TestV091+TestP4AccountSSE/TestV089/go test ./.../test:restart/flutter analyze+全量 test/web 25/25/git diff --check 全绿）"
+      ]
     },
     {
       "id": "V091-08",
       "title": "Flutter 生命周期自动刷新：前台启动，后台/离线/dispose 停止",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "Flutter lifecycle",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "TerminalStatusController 使用可注入 scheduler、fake repository 和 lifecycle/auth 状态。",
-      "steps": ["认证有效且 App 前台时创建 controller，推进 safety reconcile tick", "切后台、切 offline、注销和 dispose，分别推进时钟并记录请求", "恢复 online/前台和重新认证，观察首拍与后续 safety reconcile", "在页面重挂载或切换 surface 时重复边界"],
+      "steps": [
+        "认证有效且 App 前台时创建 controller，推进 safety reconcile tick",
+        "切后台、切 offline、注销和 dispose，分别推进时钟并记录请求",
+        "恢复 online/前台和重新认证，观察首拍与后续 safety reconcile",
+        "在页面重挂载或切换 surface 时重复边界"
+      ],
       "expected": "只有有效认证、前台、网络可用时自动同步；后台/offline/logout/dispose 后零新请求；恢复只产生一个去重首拍，不闪 loading。",
-      "cleanup": ["dispose controller，取消 fake timers 和 streams"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "dispose controller，取消 fake timers 和 streams"
+      ],
+      "evidence": [
+        "passed：apps/mobile/test/v091_terminal_sync_test.dart（91 秒前台自动续刷、后台/离线/注销/dispose 零请求、恢复单首拍）+ provider 认证初值接线回归（红绿验证）；flutter test 551 passed（2026-09-09）"
+      ]
     },
     {
       "id": "V091-09",
       "title": "Single-flight 与代际隔离：合并多唤醒，丢弃迟到响应",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "concurrency/auth boundary",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "可控 completer 的假 Relay 能延迟列表响应；controller 暴露请求计数和可观察投影。",
-      "steps": ["同时触发手动刷新、presence invalidation、safety tick 和 lifecycle recovery", "断言同一时刻只有一个终端列表请求，其余唤醒合并为 pending", "响应返回前切换账号、注销、重挂页面和 dispose，随后放行旧响应", "旧响应返回后触发新代际请求并比较列表、状态和通知次数"],
+      "steps": [
+        "同时触发手动刷新、presence invalidation、safety tick 和 lifecycle recovery",
+        "断言同一时刻只有一个终端列表请求，其余唤醒合并为 pending",
+        "响应返回前切换账号、注销、重挂页面和 dispose，随后放行旧响应",
+        "旧响应返回后触发新代际请求并比较列表、状态和通知次数"
+      ],
       "expected": "single-flight/coalescing 生效；代际不匹配的迟到响应不写入新状态、不 notify、不显示错误；新代际可重新同步。",
-      "cleanup": ["释放 completer、controller、streams 和 timers"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "释放 completer、controller、streams 和 timers"
+      ],
+      "evidence": [
+        "passed：apps/mobile/test/v091_terminal_sync_test.dart（多唤醒合并 ≤2 请求、注销/surface 重挂代际隔离、迟到响应不写入不报错）；flutter test 551 passed"
+      ]
     },
     {
       "id": "V091-10",
       "title": "网络/Relay 失败：保留最后可信状态并显示 unknown，不伪装 offline",
-      "status": "planned",
+      "status": "passed",
       "phase": "P2",
       "category": "failure state",
       "priority": "P0",
       "test_layer": "widget",
       "precondition": "已存在最后一次成功的 online 列表；假 Relay 可返回 timeout、offline、401、403 和 5xx 分类。",
-      "steps": ["成功加载 online Terminal 后让 Relay 不可达，触发 quiet refresh", "分别模拟网络 offline、临时 5xx、认证失效和资源越权", "观察旧列表、availability、按钮门控、错误文案和认证状态", "恢复网络并返回新快照，观察是否无感翻正"],
+      "steps": [
+        "成功加载 online Terminal 后让 Relay 不可达，触发 quiet refresh",
+        "分别模拟网络 offline、临时 5xx、认证失效和资源越权",
+        "观察旧列表、availability、按钮门控、错误文案和认证状态",
+        "恢复网络并返回新快照，观察是否无感翻正"
+      ],
       "expected": "quiet 失败不清空可信列表、不把网络错误写成 Daemon offline；unknown/unreachable 与真正 offline 分开；恢复后自动更新。",
-      "cleanup": ["重置 fake auth/network，dispose controller"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "重置 fake auth/network，dispose controller"
+      ],
+      "evidence": [
+        "passed：apps/mobile/test/v091_terminal_sync_test.dart（quiet 失败保留可信投影、unreachable 单独表达、unknown/unsupported 透传、首拍失败 error、availability 与本地时钟无关）；flutter test 551 passed"
+      ]
     },
     {
       "id": "V091-11",
       "title": "UI 单一状态源：标题、正文、按钮与状态页不再矛盾",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "Flutter widget/accessibility",
       "priority": "P1",
       "test_layer": "widget",
       "precondition": "提供 online、offline、unknown、unsupported 四类 TerminalSummary fixture，并使用稳定 Key/Semantics。",
-      "steps": ["分别渲染工作区 Terminal 卡片和终端状态页四种 availability", "检查标题、正文、同步按钮 enabled/disabled 和禁用原因", "检查稳定 Key、Semantics label、200% 文本和窄屏布局", "在状态从 offline 切 online、unknown 切 online 时重复渲染"],
+      "steps": [
+        "分别渲染工作区 Terminal 卡片和终端状态页四种 availability",
+        "检查标题、正文、同步按钮 enabled/disabled 和禁用原因",
+        "检查稳定 Key、Semantics label、200% 文本和窄屏布局",
+        "在状态从 offline 切 online、unknown 切 online 时重复渲染"
+      ],
       "expected": "所有文本和按钮均来自同一 availability；不再出现“darwin · 在线”与“终端离线”同卡片矛盾；状态切换无布局跳动、溢出或语义丢失。",
-      "cleanup": ["卸载 widget，清理 fixture"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "卸载 widget，清理 fixture"
+      ],
+      "evidence": [
+        "passed：apps/mobile/test/v091_terminal_ui_test.dart（四态标题/正文/按钮门控同源、状态切换无布局跳动、200% 文本+360px 窄屏无溢出、稳定 Key）；flutter test 551 passed"
+      ]
     },
     {
       "id": "V091-12",
       "title": "90 秒以上前台零交互回归：缓存过期后自动保持或恢复正确在线态",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "事故回放/visible UX",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "脱敏 fixture 模拟 Daemon 15 秒 heartbeat、Flutter 前台停留、Relay 列表缓存和用户不操作；fake clock 可前进。",
-      "steps": ["打开首页并完成一次 online Terminal 列表加载，不点击刷新", "前进超过客户端旧 90 秒缓存阈值，同时保持 Daemon heartbeat 正常", "观察自动请求、卡片标题、正文和同步按钮", "停止 heartbeat 让 Relay 进入 offline，再恢复 heartbeat，整个过程不执行手工操作"],
+      "steps": [
+        "打开首页并完成一次 online Terminal 列表加载，不点击刷新",
+        "前进超过客户端旧 90 秒缓存阈值，同时保持 Daemon heartbeat 正常",
+        "观察自动请求、卡片标题、正文和同步按钮",
+        "停止 heartbeat 让 Relay 进入 offline，再恢复 heartbeat，整个过程不执行手工操作"
+      ],
       "expected": "持续 heartbeat 时不会误报离线；真正过期会自动显示 offline；恢复后自动回 online；全程不闪 loading、不要求用户感知刷新。",
-      "cleanup": ["停止 fixture，dispose Flutter surface，清理报告状态"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "停止 fixture，dispose Flutter surface，清理报告状态"
+      ],
+      "evidence": [
+        "passed：apps/mobile/test/v091_terminal_ui_test.dart（91 秒零交互不误报离线且无「状态过期」、停止心跳/恢复经 invalidation 自动翻正、不闪 loading）；flutter test 551 passed"
+      ]
     },
     {
       "id": "V091-13",
       "title": "restart 与系统边界：首 heartbeat gate、睡眠唤醒、Relay 重启和网络分区",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "restart/end-to-end recovery",
       "priority": "P0",
       "test_layer": "integration",
       "precondition": "tools/restart_test.sh 支持隔离 state/端口、fake Flutter/OpenCode、可控 Daemon heartbeat 和 Relay generation。",
-      "steps": ["启动 restart.sh，分别构造 Relay ready 但首 heartbeat 未确认、heartbeat 已确认两种场景", "断开网络、模拟睡眠唤醒、重启 Relay 或切换 generation", "检查 restart/status 输出和 Flutter terminal presence 恢复过程", "确认旧 generation 的 online/heartbeat 不会带入新 Relay，恢复后只出现一次首拍"],
+      "steps": [
+        "启动 restart.sh，分别构造 Relay ready 但首 heartbeat 未确认、heartbeat 已确认两种场景",
+        "断开网络、模拟睡眠唤醒、重启 Relay 或切换 generation",
+        "检查 restart/status 输出和 Flutter terminal presence 恢复过程",
+        "确认旧 generation 的 online/heartbeat 不会带入新 Relay，恢复后只出现一次首拍"
+      ],
       "expected": "restart 只有首 heartbeat confirmed 才报告 ready；边界恢复不泄漏 token/ID/路径；网络或 Relay 不可达时 fail-closed/unknown；新世代状态重新建立。",
-      "cleanup": ["执行 restart.sh stop，清理隔离 state、端口和 fake 进程"],
-      "evidence": ["planned：待 V091 实现后回填运行结果"]
+      "cleanup": [
+        "执行 restart.sh stop，清理隔离 state、端口和 fake 进程"
+      ],
+      "evidence": [
+        "passed：tools/restart_test.sh LIB_ONLY presence 六场景（online ready/unknown 不 ready/回退不 ready/进程退出 fail-fast/诊断脱敏/不可达 unknown）；task test:v091:local 内 test:restart passed"
+      ]
     },
     {
       "id": "V091-14",
       "title": "macOS headed Flutter 可见验收：四态与无手动刷新恢复",
-      "status": "planned",
+      "status": "passed",
       "phase": "P4",
       "category": "headed visible acceptance",
       "priority": "P1",
       "test_layer": "browser_e2e",
       "precondition": "本地 fixture 可控制 online/offline/unknown/recovery；用户使用中的 Agent Sessions 窗口已关闭；headed harness 可生成截图和结构化报告。",
-      "steps": ["以 headless=false 启动 macOS Flutter 窗口，打开终端状态入口", "依次展示 online、offline、unknown/unreachable、recovery 四种状态", "在 online 状态停留超过 90 秒，不执行手动刷新，观察卡片自动保持或翻正", "检查代表性窗口、200% 文本、按钮语义、截图像素和结构化报告字段"],
+      "steps": [
+        "以 headless=false 启动 macOS Flutter 窗口，打开终端状态入口",
+        "依次展示 online、offline、unknown/unreachable、recovery 四种状态",
+        "在 online 状态停留超过 90 秒，不执行手动刷新，观察卡片自动保持或翻正",
+        "检查代表性窗口、200% 文本、按钮语义、截图像素和结构化报告字段"
+      ],
       "expected": "用户可见界面无矛盾状态、无刷新闪烁、无文本溢出/遮挡、无布局跳动；自动恢复无需用户操作；报告包含 suite、case、命令、fixture_data、real_browser、headless、failure_class 和 remaining_risk。",
-      "cleanup": ["关闭 Flutter 窗口，清理 fixture 进程和临时报告"],
-      "evidence": ["planned：待 V091 实现后回填 headed 截图与结构化报告路径"]
+      "cleanup": [
+        "关闭 Flutter 窗口，清理 fixture 进程和临时报告"
+      ],
+      "evidence": [
+        "passed：task test:v091:flutter（e2e-verify/mobile/run-macos-v091.mjs，场景 terminal-presence-v091）5/5 passed 含 95 秒 soak 双帧；报告 e2e-verify/reports/2026-09-08T18-36-11-994Z/v091-mobile-visual/report.json（real_visible_flutter=true、headless=false、remaining_risk=null）；录屏 record:v091 见 e2e-verify/screencasts/"
+      ]
     }
   ]
 }

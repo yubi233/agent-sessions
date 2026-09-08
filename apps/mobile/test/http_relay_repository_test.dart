@@ -1038,10 +1038,8 @@ void main() {
       expect(terminals.single.platform, 'macos');
       expect(terminals.single.protocolVersion, 1);
       expect(terminals.single.daemonVersion, '0.4.0-fixture');
-      expect(
-        terminals.single.availabilityAt(DateTime.utc(2026, 8, 14)),
-        TerminalAvailability.online,
-      );
+      // v0.9.1：legacy DTO（无 availability 字段）按 status/protocol 派生，不用墙钟。
+      expect(terminals.single.availability, TerminalAvailability.online);
     });
 
     test('Delegation 图只读取安全摘要，任务书字段必须被客户端拒绝', () async {

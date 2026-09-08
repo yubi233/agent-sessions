@@ -614,6 +614,27 @@ raise SystemExit(1)
 '
 }
 
+# v0.9.1（V091-13）：读取本地配对 Terminal 的脱敏 presence 投影。
+# 输出两列："last_seen_unix_ms availability"。availability 是 Relay 以服务端
+# 时间即时投影的权威在线态；输出绝不含 Terminal ID、hostname、token 或路径。
+local_dev_terminal_presence() {
+  local body
+  [[ -n "$LOCAL_OWNER_ACCESS_TOKEN" && -n "$LOCAL_DEV_TERMINAL_DEVICE_ID" ]] || return 1
+  body="$(curl --fail --silent --show-error --max-time 1 \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    "http://$RELAY_ADDR/v1/terminals" 2>/dev/null)" || return 1
+  printf '%s' "$body" | LOCAL_DEV_TERMINAL_DEVICE_ID="$LOCAL_DEV_TERMINAL_DEVICE_ID" python3 -c '
+import json, os, sys
+doc = json.load(sys.stdin)
+device_id = os.environ["LOCAL_DEV_TERMINAL_DEVICE_ID"]
+for item in doc.get("terminals", []):
+    if isinstance(item, dict) and item.get("device_id") == device_id:
+        print(int(item.get("last_seen_unix_ms") or 0), item.get("availability") or "unknown")
+        raise SystemExit(0)
+raise SystemExit(1)
+'
+}
+
 # `go run` can stay alive while compiling even if the resulting Daemon exits
 # immediately. For the default local stack, require Relay to observe a newer
 # heartbeat before reporting readiness or starting Flutter.
@@ -641,9 +662,14 @@ wait_for_daemon() {
       echo "daemon: exited before first heartbeat; inspect $(component_log daemon)" >&2
       return 1
     fi
-    last_seen="$(local_dev_terminal_last_seen 2>/dev/null || true)"
-    if [[ "$last_seen" =~ ^[0-9]+$ ]] && (( last_seen > DAEMON_HEARTBEAT_BASELINE )); then
-      echo "daemon: ready (first heartbeat confirmed)"
+    # v0.9.1（V091-13）：就绪门升级为「新 heartbeat 落库 + Relay 权威投影 online」。
+    # 只进程存活或 last_seen 前进（可能是历史值）都不算 ready。
+    presence="$(local_dev_terminal_presence 2>/dev/null || true)"
+    last_seen="${presence%% *}"
+    availability="${presence#* }"
+    if [[ "$last_seen" =~ ^[0-9]+$ ]] && (( last_seen > DAEMON_HEARTBEAT_BASELINE )) &&
+      [[ "$availability" == "online" ]]; then
+      echo "daemon: ready (first heartbeat confirmed; availability=online)"
       return 0
     fi
     sleep 0.2
@@ -1460,6 +1486,7 @@ status_action() {
   status_relay
   echo "daemon selected: $WITH_DAEMON"
   status_process daemon
+  echo "daemon presence: $(daemon_presence_diagnostics)"
   echo "opencode selected: $WITH_OPENCODE ($OPENCODE_URL)"
   status_process opencode
   echo "flutter selected: $WITH_FLUTTER (mode=$FLUTTER_MODE target=${FLUTTER_DEVICE:-${FLUTTER_TARGET:-macos}})"
@@ -1468,6 +1495,42 @@ status_action() {
   status_process web
   echo "admin selected: $WITH_ADMIN"
   status_process admin
+}
+
+# v0.9.1（V091-13）：daemon presence 脱敏诊断。只输出进程存活（由 status_process
+# 单独输出）、heartbeat age bucket、presence result、重连次数与失败行计数；
+# 绝不输出 token、Terminal ID、hostname、路径、命令正文或密钥。
+daemon_presence_diagnostics() {
+  local presence last_seen availability bucket log_file reconnects failures
+  availability="unknown"
+  bucket="unknown"
+  presence="$(local_dev_terminal_presence 2>/dev/null || true)"
+  if [[ -n "$presence" ]]; then
+    last_seen="${presence%% *}"
+    availability="${presence#* }"
+    if [[ "$last_seen" =~ ^[0-9]+$ ]] && (( last_seen > 0 )); then
+      local age
+      age=$(( ($(date +%s) * 1000 - last_seen) / 1000 ))
+      (( age < 0 )) && age=0
+      if (( age < 15 )); then
+        bucket="<15s"
+      elif (( age < 40 )); then
+        bucket="<40s"
+      elif (( age < 60 )); then
+        bucket="<60s"
+      else
+        bucket=">=60s"
+      fi
+    fi
+  fi
+  log_file="$(component_log daemon 2>/dev/null || true)"
+  reconnects=0
+  failures=0
+  if [[ -n "$log_file" && -f "$log_file" ]]; then
+    reconnects="$(grep -c 'relay reconnect' "$log_file" 2>/dev/null || true)"
+    failures="$(grep -c 'level=ERROR' "$log_file" 2>/dev/null || true)"
+  fi
+  echo "presence=$availability hb_age_bucket=$bucket reconnect_attempts=${reconnects:-0} error_lines=${failures:-0}"
 }
 
 status_relay() {

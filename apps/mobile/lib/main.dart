@@ -412,7 +412,9 @@ class _LocalVisualScenarioCoordinatorState
     super.initState();
     if (widget.scenario == LocalVisualScenario.pairingPending) {
       _openPairingWhenOwnerReady();
-    } else if (widget.scenario == LocalVisualScenario.dshWorkspaceHome) {
+    } else if (widget.scenario == LocalVisualScenario.dshWorkspaceHome ||
+        widget.scenario == LocalVisualScenario.terminalPresenceV091) {
+      // v0.9.1（V091-14）：四态 presence 场景与 DSH 主页共用入口与布局。
       _openDshWorkspaceHomeWhenReady();
     } else if (widget.scenario == LocalVisualScenario.terminalStatus) {
       _openTerminalsWhenReady();

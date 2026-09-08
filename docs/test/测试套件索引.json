@@ -1196,7 +1196,7 @@
         "V086",
         "V085"
       ],
-      "status": "planned",
+      "status": "delivered",
       "allow_real_upstream": false,
       "uniqueness_rule": "拥有 V091-01..14：Terminal Presence 权威 heartbeat freshness、过期投影、Workspace/DSH 命令安全门、presence invalidation/reaper、Flutter 前台生命周期自动刷新、single-flight/代际隔离、统一 UI 状态、restart 首 heartbeat gate 与 macOS headed 可见验收。账号级 /v1/events 和会话事件流只做回归，不在本 suite 重定义其既有 ID；本轮不调用真实模型、真实上游或 Android 实机。"
     }

@@ -33,6 +33,9 @@ enum LocalVisualScenario {
   // v0.8.7：打字机式流式传输可见场景（时间释放脚本真实时钟驱动，气泡文本
   // 逐步生长；双门禁证据由场景宿主采样写入 streaming-gate 文件）。
   dshV087TypewriterStreaming,
+  // v0.9.1（V091-14）：Terminal presence 四态可见场景（online/offline/unknown/
+  // unsupported 来自 Relay availability 投影；headed gate 专用，见 run-macos-v091.mjs）。
+  terminalPresenceV091,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -75,6 +78,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
 ) => switch (value) {
   'owner-ready' => LocalVisualScenario.ownerReady,
   'dsh-workspace-home' => LocalVisualScenario.dshWorkspaceHome,
+  'terminal-presence-v091' => LocalVisualScenario.terminalPresenceV091,
   'dsh-session-tool-timeline' => LocalVisualScenario.dshSessionToolTimeline,
   'dsh-capability-gates' => LocalVisualScenario.dshCapabilityGates,
   'dsh-streaming-turn-phase' =>
@@ -299,6 +303,52 @@ class LocalVisualFixture {
 
     // v0.8.1/v0.8.2：DSH 可见场景共用的安全预置（工作区只含 display name 与
     // opaque 元数据，不注入任何路径/JSONL 位置/正文）。
+    if (scenario == LocalVisualScenario.terminalPresenceV091) {
+      // v0.9.1（V091-14）：四态 presence 投影 fixture。availability /
+      // presence_revision 是 Relay additive 权威字段；fixtures 不含真实
+      // Terminal ID、路径或正文（脱敏口径与 docs/test/29 环境声明一致）。
+      TerminalSummary v091Terminal(
+        String id,
+        String availability, {
+        int revision = 1,
+        List<String> capabilities = const ['dsh_workspace_sync', 'start'],
+      }) => TerminalSummary.fromRelayJson({
+        'id': 'term-v091-$id',
+        'hostname': 'V091 $id',
+        'platform': 'macos',
+        'status': availability == 'offline' ? 'offline' : 'online',
+        'protocol_version': availability == 'unsupported' ? 2 : 1,
+        'availability': availability,
+        'presence_revision': revision,
+        'last_heartbeat_unix_ms':
+            DateTime.utc(2026, 9, 8, 12).millisecondsSinceEpoch,
+        'capabilities': capabilities,
+      });
+      relay.replaceTerminals([
+        v091Terminal('online', 'online'),
+        v091Terminal('offline', 'offline'),
+        v091Terminal('unknown', 'unknown'),
+        v091Terminal('unsupported', 'unsupported'),
+      ]);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-v091-online',
+          projectId: 'v091-online',
+          terminalId: 'term-v091-online',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'agent-sessions',
+          status: 'active',
+        ),
+        MobileWorkspace(
+          id: 'ws-v091-offline',
+          projectId: 'v091-offline',
+          terminalId: 'term-v091-offline',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: '离线终端工作区',
+          status: 'active',
+        ),
+      ]);
+    }
     final isDshScenario = scenario == LocalVisualScenario.dshWorkspaceHome ||
         scenario == LocalVisualScenario.dshSessionToolTimeline ||
         scenario == LocalVisualScenario.dshCapabilityGates ||
