@@ -154,11 +154,18 @@ type DaemonService struct {
 	// signatureRequired 是 ADR-012 N/N-1 兼容窗口开关：
 	// false 为 optional（bearer + 签名双轨），true 为 required（bearer 一律 UPGRADE_REQUIRED）。
 	signatureRequired bool
+	// Presence 是 hello/heartbeat 活性投影的阈值来源（v0.9.1 C1）。
+	// /v1/terminals 的 availability 视图也从该字段读取，保证投影与阈值单源。
+	Presence PresencePolicy
 }
 
 func NewDaemonService(repo store.Repository) *DaemonService {
-	return &DaemonService{repo: repo, now: time.Now}
+	return &DaemonService{repo: repo, now: time.Now, Presence: DefaultPresencePolicy()}
 }
+
+// Now 暴露服务端时钟给传输层只读投影（如 /v1/terminals availability）。
+// 服务端时钟是唯一授权口径；客户端墙钟只用于展示。
+func (s *DaemonService) Now() time.Time { return s.now() }
 
 // Hello 登记或恢复同一 device_id 的 Terminal。device bearer 已由 HTTP 中间件校验活动状态；
 // 此处再次锁定 role/account，防止把 Web/Admin token 当作 Daemon 身份使用。
@@ -182,10 +189,25 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return DaemonHelloResult{}, err
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	// presence 投影变化检测（v0.9.1 C1）：hello 是恢复/首拍路径。
+	// prev 取「本 hello 到达前状态」的服务端时间投影（用旧 lastHeartbeat/旧 status
+	// 计算），与 Heartbeat 同口径；首次登记的 Terminal 无先前事实（prev 为空），
+	// 从 online/revision=0 起步，不算一次「变化」。offline/unknown -> online 的
+	// 恢复转换 revision 单调 +1，供 invalidation 单次发布（计划 §3.3）。
+	prevProjected := ""
+	presenceRevision := int64(0)
+	isNewTerminal := errors.Is(err, sql.ErrNoRows)
+	if isNewTerminal {
 		terminal = store.TerminalRow{ID: id.New("term"), DeviceID: in.DeviceID, AccountID: in.AccountID}
-	} else if terminal.AccountID != in.AccountID {
-		return DaemonHelloResult{}, ErrScopeDenied
+	} else {
+		if terminal.AccountID != in.AccountID {
+			return DaemonHelloResult{}, ErrScopeDenied
+		}
+		prevProjected = string(s.Presence.Project(terminal, now))
+		presenceRevision = terminal.PresenceRevision
+		if prevProjected != string(PresenceOnline) {
+			presenceRevision++
+		}
 	}
 	terminal.Hostname = strings.TrimSpace(in.Hostname)
 	terminal.Platform = strings.TrimSpace(in.Platform)
@@ -195,6 +217,8 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 	terminal.DaemonVersion = strings.TrimSpace(in.DaemonVersion)
 	terminal.CapabilitiesJSON = string(capabilities)
 	terminal.LastHeartbeatUnixMS = now
+	terminal.PresenceRevision = presenceRevision
+	terminal.PresenceProjectedState = string(PresenceOnline)
 	if err := s.repo.UpsertDaemonTerminal(ctx, terminal); err != nil {
 		return DaemonHelloResult{}, err
 	}
@@ -230,7 +254,13 @@ func (s *DaemonService) Heartbeat(ctx context.Context, accountID, deviceID, role
 		return DaemonHeartbeatResult{}, err
 	}
 	now := s.now().UnixMilli()
-	if err := s.repo.TouchTerminal(ctx, terminal.ID, now); err != nil {
+	// v0.9.1 C1：heartbeat 是活性唯一输入。prev 取本心跳到达前状态的服务端时间
+	// 投影（用旧 lastHeartbeat/旧 status 计算）。TouchTerminalPresence 幂等推进
+	// last_heartbeat（不倒退）、按投影变化单调维护 presence_revision：online 期间
+	// 的重复心跳不制造 revision（V091-02），恢复转换（offline/unknown -> online）
+	// 恰好 +1 一次（V091-05）。协议已通过 validateDaemonProtocol，next 恒为 online。
+	prevAvailability := s.Presence.Project(terminal, now)
+	if _, _, err := s.repo.TouchTerminalPresence(ctx, terminal.ID, now, string(prevAvailability), string(PresenceOnline)); err != nil {
 		return DaemonHeartbeatResult{}, err
 	}
 	if err := s.repo.TouchDeviceLastSeen(ctx, deviceID, now); err != nil {

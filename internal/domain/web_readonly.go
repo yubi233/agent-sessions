@@ -185,7 +185,15 @@ func (s *SessionService) webReadTargetWithRepo(ctx context.Context, repo store.R
 		}
 		return store.TerminalRow{}, "", err
 	}
-	if terminal.AccountID != accountID || terminal.Status != "online" || !terminalAllowsWebRead(terminal.CapabilitiesJSON) {
+	if terminal.AccountID != accountID {
+		return store.TerminalRow{}, "", ErrScopeDenied
+	}
+	// v0.9.1 C2：web 只读目标与写命令消费同一 freshness 语义；unknown 报
+	// unreachable，不把「事实不可确认」伪装成执行端离线。
+	if err := s.Presence.RefreshGate(terminal, s.now().UnixMilli()); err != nil {
+		return store.TerminalRow{}, "", err
+	}
+	if !terminalAllowsWebRead(terminal.CapabilitiesJSON) {
 		return store.TerminalRow{}, "", ErrTerminalOffline
 	}
 	device, err := repo.DeviceByID(ctx, terminal.DeviceID)

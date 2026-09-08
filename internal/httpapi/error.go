@@ -47,6 +47,10 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "terminal device required")
 	case errors.Is(err, domain.ErrTerminalOffline):
 		return http.StatusConflict, protocol.NewError(protocol.ErrTerminalOffline, "terminal offline or does not support requested capability")
+	case errors.Is(err, domain.ErrTerminalUnreachable):
+		// v0.9.1 C2：unknown 目标拒绝写命令但与权威离线分开；409 语义为
+		// 「当前状态无法安全投递」，客户端可稍后重试。
+		return http.StatusConflict, protocol.NewError(protocol.ErrTerminalUnreachable, "terminal availability cannot be confirmed")
 	case errors.Is(err, domain.ErrProtocolUpgradeRequired):
 		return http.StatusUpgradeRequired, protocol.NewError(protocol.ErrUpgradeRequired, "daemon protocol upgrade required")
 	case errors.Is(err, domain.ErrProtocolUnsupported):

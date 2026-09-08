@@ -83,11 +83,14 @@ type DaemonCommandObservation struct {
 type SessionService struct {
 	repo store.Repository
 	now  func() time.Time
+	// Presence 是写命令 freshness 门控的阈值来源（v0.9.1 C2）。与 DaemonService、
+	// WorkspaceService 共用同一份 PresencePolicy，保证列表展示与命令门控同源。
+	Presence PresencePolicy
 }
 
 // NewSessionService 构造会话服务。
 func NewSessionService(repo store.Repository) *SessionService {
-	return &SessionService{repo: repo, now: time.Now}
+	return &SessionService{repo: repo, now: time.Now, Presence: DefaultPresencePolicy()}
 }
 
 // CreateSession 创建逻辑会话并写初始事件。
@@ -124,8 +127,9 @@ func (s *SessionService) CreateSession(ctx context.Context, accountID, workspace
 		if terminal.AccountID != accountID {
 			return store.SessionRow{}, ErrScopeDenied
 		}
-		if !terminalCanStartDSH(terminal) {
-			return store.SessionRow{}, ErrTerminalOffline
+		// v0.9.1 C2：DSH 建会话目标必须通过统一 freshness + start capability 门控。
+		if err := s.Presence.TerminalWriteGate(terminal, s.now().UnixMilli(), "start"); err != nil {
+			return store.SessionRow{}, err
 		}
 	}
 	sess := store.SessionRow{
@@ -151,23 +155,6 @@ func (s *SessionService) CreateSession(ctx context.Context, accountID, workspace
 	}
 	sess.LastSeq = initialSeq
 	return sess, nil
-}
-
-// terminalCanStartDSH 复用 Daemon hello 声明的白名单能力；解析失败一律按不可用处理。
-func terminalCanStartDSH(terminal store.TerminalRow) bool {
-	if terminal.Status != "online" {
-		return false
-	}
-	var capabilities []string
-	if json.Unmarshal([]byte(terminal.CapabilitiesJSON), &capabilities) != nil {
-		return false
-	}
-	for _, capability := range capabilities {
-		if strings.TrimSpace(capability) == "start" {
-			return true
-		}
-	}
-	return false
 }
 
 // ForkSession 创建一个真实持久化 child Session，并在 parent/child 流中记录白名单 fork 事件。
@@ -654,6 +641,12 @@ func (s *SessionService) SubmitCommand(ctx context.Context, in CommandInput) (st
 				}
 				if terminal.AccountID != in.AccountID {
 					return ErrScopeDenied
+				}
+				// v0.9.1 C2：所有投递到 Terminal 的写命令共用 freshness 门控。
+				// 过期/不可确认目标在提交时 fail-closed，不创建可投递 command
+				//（列表显示 online 后到提交之间再次过期，以 Relay 提交时判断为准）。
+				if gateErr := s.Presence.RefreshGate(terminal, s.now().UnixMilli()); gateErr != nil {
+					return gateErr
 				}
 				cmd.TargetTerminalID = terminal.ID
 			}

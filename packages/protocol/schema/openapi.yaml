@@ -1807,6 +1807,26 @@ components:
         last_seen_unix_ms:
           type: integer
           format: int64
+        availability:
+          type: string
+          enum: [online, unknown, offline, unsupported]
+          description: |
+            v0.9.1 C1：Relay 以服务端时间 + last_heartbeat + 集中阈值（15/40/60s）
+            即时投影的权威在线态；客户端只消费该值，不得用本地墙钟二次裁决。
+            unknown 表示事实不可确认（观察窗内/无心跳），不等于执行端离线。
+        presence_revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: availability 投影的单调版本号，只在投影真实变化时 +1；供失效通知去重。
+        last_heartbeat_unix_ms:
+          type: integer
+          format: int64
+          description: 最后一次有效 hello/heartbeat 的服务端接收时间。
+        next_check_unix_ms:
+          type: integer
+          format: int64
+          description: 下一个投影边界（online->unknown / unknown->offline）；无边界时省略。
     TerminalList:
       type: object
       required: [terminals]

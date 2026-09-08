@@ -78,19 +78,19 @@ func (e AttachmentReceiptStatus) Valid() bool {
 
 // Defines values for CapabilityItemStatus.
 const (
-	Emulated    CapabilityItemStatus = "emulated"
-	Native      CapabilityItemStatus = "native"
-	Unsupported CapabilityItemStatus = "unsupported"
+	CapabilityItemStatusEmulated    CapabilityItemStatus = "emulated"
+	CapabilityItemStatusNative      CapabilityItemStatus = "native"
+	CapabilityItemStatusUnsupported CapabilityItemStatus = "unsupported"
 )
 
 // Valid indicates whether the value is a known member of the CapabilityItemStatus enum.
 func (e CapabilityItemStatus) Valid() bool {
 	switch e {
-	case Emulated:
+	case CapabilityItemStatusEmulated:
 		return true
-	case Native:
+	case CapabilityItemStatusNative:
 		return true
-	case Unsupported:
+	case CapabilityItemStatusUnsupported:
 		return true
 	default:
 		return false
@@ -706,6 +706,30 @@ func (e PairingRequestStatus) Valid() bool {
 	case PairingRequestStatusExpired:
 		return true
 	case PairingRequestStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TerminalAvailability.
+const (
+	TerminalAvailabilityOffline     TerminalAvailability = "offline"
+	TerminalAvailabilityOnline      TerminalAvailability = "online"
+	TerminalAvailabilityUnknown     TerminalAvailability = "unknown"
+	TerminalAvailabilityUnsupported TerminalAvailability = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the TerminalAvailability enum.
+func (e TerminalAvailability) Valid() bool {
+	switch e {
+	case TerminalAvailabilityOffline:
+		return true
+	case TerminalAvailabilityOnline:
+		return true
+	case TerminalAvailabilityUnknown:
+		return true
+	case TerminalAvailabilityUnsupported:
 		return true
 	default:
 		return false
@@ -1638,17 +1662,36 @@ type SubmitCommandRequest struct {
 
 // Terminal defines model for Terminal.
 type Terminal struct {
+	// Availability v0.9.1 C1：Relay 以服务端时间 + last_heartbeat + 集中阈值（15/40/60s）
+	// 即时投影的权威在线态；客户端只消费该值，不得用本地墙钟二次裁决。
+	// unknown 表示事实不可确认（观察窗内/无心跳），不等于执行端离线。
+	Availability *TerminalAvailability `json:"availability,omitempty"`
+
 	// Capabilities 公开的能力名称白名单；不包含路径、命令正文或日志。
-	Capabilities    *[]string `json:"capabilities,omitempty"`
-	DaemonVersion   *string   `json:"daemon_version,omitempty"`
-	DeviceId        string    `json:"device_id"`
-	Hostname        *string   `json:"hostname,omitempty"`
-	Id              string    `json:"id"`
-	LastSeenUnixMs  *int64    `json:"last_seen_unix_ms,omitempty"`
-	Platform        *string   `json:"platform,omitempty"`
-	ProtocolVersion *int      `json:"protocol_version,omitempty"`
-	Status          string    `json:"status"`
+	Capabilities  *[]string `json:"capabilities,omitempty"`
+	DaemonVersion *string   `json:"daemon_version,omitempty"`
+	DeviceId      string    `json:"device_id"`
+	Hostname      *string   `json:"hostname,omitempty"`
+	Id            string    `json:"id"`
+
+	// LastHeartbeatUnixMs 最后一次有效 hello/heartbeat 的服务端接收时间。
+	LastHeartbeatUnixMs *int64 `json:"last_heartbeat_unix_ms,omitempty"`
+	LastSeenUnixMs      *int64 `json:"last_seen_unix_ms,omitempty"`
+
+	// NextCheckUnixMs 下一个投影边界（online->unknown / unknown->offline）；无边界时省略。
+	NextCheckUnixMs *int64  `json:"next_check_unix_ms,omitempty"`
+	Platform        *string `json:"platform,omitempty"`
+
+	// PresenceRevision availability 投影的单调版本号，只在投影真实变化时 +1；供失效通知去重。
+	PresenceRevision *int64 `json:"presence_revision,omitempty"`
+	ProtocolVersion  *int   `json:"protocol_version,omitempty"`
+	Status           string `json:"status"`
 }
+
+// TerminalAvailability v0.9.1 C1：Relay 以服务端时间 + last_heartbeat + 集中阈值（15/40/60s）
+// 即时投影的权威在线态；客户端只消费该值，不得用本地墙钟二次裁决。
+// unknown 表示事实不可确认（观察窗内/无心跳），不等于执行端离线。
+type TerminalAvailability string
 
 // TerminalIdentityKeyList defines model for TerminalIdentityKeyList.
 type TerminalIdentityKeyList struct {

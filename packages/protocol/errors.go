@@ -23,17 +23,20 @@ const (
 	ErrSnapshotStale           = "SNAPSHOT_STALE"
 	ErrContentUnavailable      = "CONTENT_UNAVAILABLE"
 	ErrTerminalOffline         = "TERMINAL_OFFLINE"
-	ErrLocalStateMissing       = "LOCAL_STATE_MISSING"
-	ErrDaemonRestartRecovery   = "DAEMON_RESTART_RECOVERY"
-	ErrDaemonExecutionFailed   = "DAEMON_EXECUTION_FAILED"
-	ErrPayloadTooLarge         = "PAYLOAD_TOO_LARGE"
-	ErrDeadlineExceeded        = "DEADLINE_EXCEEDED"
-	ErrInvalidRequest          = "INVALID_REQUEST"
-	ErrSignatureRequired       = "SIGNATURE_REQUIRED"
-	ErrSignatureInvalid        = "SIGNATURE_INVALID"
-	ErrNonceReused             = "NONCE_REUSED"
-	ErrTimestampExpired        = "TIMESTAMP_EXPIRED"
-	ErrKeyUnknownOrRevoked     = "KEY_UNKNOWN_OR_REVOKED"
+	// ErrTerminalUnreachable（v0.9.1 C2）：目标 presence 为 unknown（事实不可确认）。
+	// 与 TERMINAL_OFFLINE 分开，客户端据此区分「执行端离线」与「暂时无法确认」（裁决 T5）。
+	ErrTerminalUnreachable   = "TERMINAL_UNREACHABLE"
+	ErrLocalStateMissing     = "LOCAL_STATE_MISSING"
+	ErrDaemonRestartRecovery = "DAEMON_RESTART_RECOVERY"
+	ErrDaemonExecutionFailed = "DAEMON_EXECUTION_FAILED"
+	ErrPayloadTooLarge       = "PAYLOAD_TOO_LARGE"
+	ErrDeadlineExceeded      = "DEADLINE_EXCEEDED"
+	ErrInvalidRequest        = "INVALID_REQUEST"
+	ErrSignatureRequired     = "SIGNATURE_REQUIRED"
+	ErrSignatureInvalid      = "SIGNATURE_INVALID"
+	ErrNonceReused           = "NONCE_REUSED"
+	ErrTimestampExpired      = "TIMESTAMP_EXPIRED"
+	ErrKeyUnknownOrRevoked   = "KEY_UNKNOWN_OR_REVOKED"
 )
 
 // APIError 是 REST/WS/SSE 共用的错误体。

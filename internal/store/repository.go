@@ -68,6 +68,14 @@ type Repository interface {
 	TerminalByDeviceID(ctx context.Context, deviceID string) (TerminalRow, error)
 	ListTerminals(ctx context.Context, accountID string) ([]TerminalRow, error)
 	TouchTerminal(ctx context.Context, id string, unixMS int64) error
+	// TouchTerminalPresence 幂等推进 Terminal 活性（v0.9.1 C1）：
+	//   - last_heartbeat 只前进不倒退（乱序/重复心跳不能把活性拉回过去）；
+	//   - prevAvailability（调用方用服务端时钟对本心跳到达前状态的时间投影）与
+	//     nextState 不同时，presence_revision 单调 +1，同时把 status 置回 online
+	//     （legacy 列保持既有语义）并把持久投影推进到 nextState。
+	// 返回最新 revision 与「本次调用是否发生投影变化」，供 presence invalidation
+	// 按 revision 去重、单次发布（计划 §3.3）。
+	TouchTerminalPresence(ctx context.Context, terminalID string, nowUnixMS int64, prevAvailability string, nextState string) (revision int64, changed bool, err error)
 	// UpsertDaemonTerminal 只更新 Daemon 声明的白名单元数据；工作区绝对路径和 Provider 正文不允许写入 Relay。
 	UpsertDaemonTerminal(ctx context.Context, t TerminalRow) error
 
@@ -362,6 +370,12 @@ type TerminalRow struct {
 	DaemonVersion       string
 	CapabilitiesJSON    string
 	LastHeartbeatUnixMS int64
+	// PresenceRevision 是 availability 投影的单调版本号（v0.9.1 C1，additive）。
+	// 只在投影真实变化时 +1；客户端与 SSE invalidation 以它做去重与丢帧补偿。
+	PresenceRevision int64
+	// PresenceProjectedState 是最近一次持久化的 availability 投影（空串表示
+	// 升级前的存量行，首次投影时按 legacy status 列初始化）。
+	PresenceProjectedState string
 }
 
 // ProjectRow 是 projects 表的行投影。

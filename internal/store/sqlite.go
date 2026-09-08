@@ -407,25 +407,29 @@ func (r *sqliteRepo) CreateTerminal(ctx context.Context, t TerminalRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO terminals(
 			id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
-			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms,
+			presence_revision,presence_projected_state
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.DeviceID, t.AccountID, t.Hostname, t.Platform, t.Status, t.LastSeenUnixMS,
-		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS)
+		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS,
+		t.PresenceRevision, t.PresenceProjectedState)
 	return err
 }
 
+// terminalColumns 是 Terminal 行读取的统一列清单；新增 additive 列时必须同步
+// scanTerminal 与 ListTerminals 的扫描顺序。
+const terminalColumns = `id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms,
+			presence_revision,presence_projected_state`
+
 func (r *sqliteRepo) TerminalByID(ctx context.Context, id string) (TerminalRow, error) {
 	return scanTerminal(r.db.QueryRowContext(ctx,
-		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
-			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
-		 FROM terminals WHERE id=?`, id))
+		`SELECT `+terminalColumns+` FROM terminals WHERE id=?`, id))
 }
 
 func (r *sqliteRepo) TerminalByDeviceID(ctx context.Context, deviceID string) (TerminalRow, error) {
 	return scanTerminal(r.db.QueryRowContext(ctx,
-		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
-			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
-		 FROM terminals WHERE device_id=?`, deviceID))
+		`SELECT `+terminalColumns+` FROM terminals WHERE device_id=?`, deviceID))
 }
 
 func scanTerminal(row *sql.Row) (TerminalRow, error) {
@@ -433,6 +437,7 @@ func scanTerminal(row *sql.Row) (TerminalRow, error) {
 	if err := row.Scan(
 		&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
 		&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
+		&t.PresenceRevision, &t.PresenceProjectedState,
 	); err != nil {
 		return TerminalRow{}, err
 	}
@@ -441,9 +446,7 @@ func scanTerminal(row *sql.Row) (TerminalRow, error) {
 
 func (r *sqliteRepo) ListTerminals(ctx context.Context, accountID string) ([]TerminalRow, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
-			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
-		 FROM terminals WHERE account_id=? ORDER BY last_seen_unix_ms DESC`, accountID)
+		`SELECT `+terminalColumns+` FROM terminals WHERE account_id=? ORDER BY last_seen_unix_ms DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -454,6 +457,7 @@ func (r *sqliteRepo) ListTerminals(ctx context.Context, accountID string) ([]Ter
 		if err := rows.Scan(
 			&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
 			&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
+			&t.PresenceRevision, &t.PresenceProjectedState,
 		); err != nil {
 			return nil, err
 		}
@@ -469,14 +473,61 @@ func (r *sqliteRepo) TouchTerminal(ctx context.Context, id string, unixMS int64)
 	return err
 }
 
+// TouchTerminalPresence 幂等推进 Terminal 活性（v0.9.1 C1/V091-02）。单事务内
+// 「读旧值 -> 比较 -> 条件更新」，避免并发心跳互相覆盖 revision：
+//   - last_heartbeat_unix_ms 只前进不倒退（乱序/更旧的心跳不能把活性拉回过去）；
+//   - prevAvailability 是调用方（领域层）以服务端时钟对「本心跳到达前状态」的
+//     时间投影：与 nextState 不同即为一次真实 presence 转换（如恢复回 online），
+//     presence_revision 单调 +1 并返回 changed=true；无真实状态变化的重复
+//     heartbeat 不制造 revision（V091-02）。prev 为空串视为与 nextState 相同
+//     （hello 首拍/无先前事实），不制造变化。
+//   - status 列保持 legacy 语义：有效活性一律置回 online；reaper 的持久 offline
+//     由恢复路径的自然覆盖翻转。
+//
+// 返回最新 revision 与是否发生投影变化，供 presence invalidation 按 revision
+// 去重、单次发布（计划 §3.3）。
+func (r *sqliteRepo) TouchTerminalPresence(ctx context.Context, terminalID string, nowUnixMS int64, prevAvailability string, nextState string) (int64, bool, error) {
+	var revision int64
+	var changed bool
+	err := r.WithTx(ctx, func(ctx context.Context, tx Repository) error {
+		row, err := tx.TerminalByID(ctx, terminalID)
+		if err != nil {
+			return err
+		}
+		changed = prevAvailability != "" && prevAvailability != nextState
+		revision = row.PresenceRevision
+		if changed {
+			revision++
+		}
+		lastHeartbeat := row.LastHeartbeatUnixMS
+		if nowUnixMS > lastHeartbeat {
+			lastHeartbeat = nowUnixMS
+		}
+		// WithTx 在本包内只构造 *sqliteRepo（见 WithTx），此处断言取回事务级执行器。
+		exec, ok := tx.(*sqliteRepo)
+		if !ok {
+			return errors.New("terminal presence touch: transaction repository type mismatch")
+		}
+		_, err = exec.db.ExecContext(ctx,
+			`UPDATE terminals SET status='online', last_seen_unix_ms=?, last_heartbeat_unix_ms=?,
+			 presence_revision=?, presence_projected_state=? WHERE id=?`,
+			nowUnixMS, lastHeartbeat, revision, nextState, terminalID)
+		return err
+	})
+	return revision, changed, err
+}
+
 // UpsertDaemonTerminal 以 device_id 作为 Terminal 身份锚点。Daemon 只能声明自身版本、
 // capabilities 与脱敏主机信息，不能借此覆盖账号、设备或 Workspace 归属。
+// presence_revision / presence_projected_state 由调用方（Hello 投影变化检测）给出，
+// 本语句不自行计算，保证 revision 语义集中在领域层。
 func (r *sqliteRepo) UpsertDaemonTerminal(ctx context.Context, t TerminalRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO terminals(
 			id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
-			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms,
+			presence_revision,presence_projected_state
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(device_id) DO UPDATE SET
 			hostname=excluded.hostname,
 			platform=excluded.platform,
@@ -485,9 +536,12 @@ func (r *sqliteRepo) UpsertDaemonTerminal(ctx context.Context, t TerminalRow) er
 			protocol_version=excluded.protocol_version,
 			daemon_version=excluded.daemon_version,
 			capabilities_json=excluded.capabilities_json,
-			last_heartbeat_unix_ms=excluded.last_heartbeat_unix_ms`,
+			last_heartbeat_unix_ms=excluded.last_heartbeat_unix_ms,
+			presence_revision=excluded.presence_revision,
+			presence_projected_state=excluded.presence_projected_state`,
 		t.ID, t.DeviceID, t.AccountID, t.Hostname, t.Platform, t.Status, t.LastSeenUnixMS,
-		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS)
+		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS,
+		t.PresenceRevision, t.PresenceProjectedState)
 	return err
 }
 

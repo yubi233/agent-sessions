@@ -570,15 +570,20 @@ func (a *API) handleListAudit(c *gin.Context) {
 }
 
 // handleListTerminals 只返回当前账号的 Terminal 白名单元数据。
+// v0.9.1 C1：availability 由 Relay 以服务端时间即时投影（不依赖后台 sweeper），
+// 客户端只消费投影结果，不得用本地墙钟二次裁决。
 func (a *API) handleListTerminals(c *gin.Context) {
 	rows, err := a.Repo.ListTerminals(c.Request.Context(), subject(c).AccountID)
 	if err != nil {
 		writeError(c, err)
 		return
 	}
+	// 投影阈值取自 DaemonService.Presence，保证列表展示与命令门控消费同一份契约。
+	nowMS := a.Daemons.Now().UnixMilli()
+	policy := a.Daemons.Presence
 	views := make([]terminalView, 0, len(rows))
 	for _, row := range rows {
-		views = append(views, newTerminalView(row))
+		views = append(views, newTerminalView(row, policy, nowMS))
 	}
 	writeOK(c, gin.H{"terminals": views})
 }
@@ -1653,9 +1658,16 @@ type terminalView struct {
 	ProtocolVersion int      `json:"protocol_version,omitempty"`
 	DaemonVersion   string   `json:"daemon_version,omitempty"`
 	Capabilities    []string `json:"capabilities,omitempty"`
+	// v0.9.1 C1 additive presence 投影字段。旧客户端可安全忽略；
+	// availability 是本请求时刻的服务端权威投影，presence_revision 供客户端
+	// 做变化检测与 SSE invalidation 去重，next_check 是下一个投影边界（0=无）。
+	Availability        string `json:"availability"`
+	PresenceRevision    int64  `json:"presence_revision"`
+	LastHeartbeatUnixMS int64  `json:"last_heartbeat_unix_ms,omitempty"`
+	NextCheckUnixMS     int64  `json:"next_check_unix_ms,omitempty"`
 }
 
-func newTerminalView(terminal store.TerminalRow) terminalView {
+func newTerminalView(terminal store.TerminalRow, policy domain.PresencePolicy, nowUnixMS int64) terminalView {
 	var capabilities []string
 	if err := json.Unmarshal([]byte(terminal.CapabilitiesJSON), &capabilities); err != nil {
 		capabilities = nil
@@ -1667,6 +1679,11 @@ func newTerminalView(terminal store.TerminalRow) terminalView {
 		Platform: terminal.Platform, Status: terminal.Status, LastSeenUnixMS: terminal.LastSeenUnixMS,
 		ProtocolVersion: terminal.ProtocolVersion, DaemonVersion: terminal.DaemonVersion,
 		Capabilities: capabilities,
+		// 服务端时间口径即时投影（v0.9.1 C1）：读路径不写库、不依赖 reaper。
+		Availability:        string(policy.Project(terminal, nowUnixMS)),
+		PresenceRevision:    terminal.PresenceRevision,
+		LastHeartbeatUnixMS: terminal.LastHeartbeatUnixMS,
+		NextCheckUnixMS:     policy.NextCheckUnixMS(terminal, nowUnixMS),
 	}
 }
 

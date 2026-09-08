@@ -400,6 +400,14 @@ var migrations = []string{
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	);`,
+	// v0.9.1 P0（V091 契约 C1）：Terminal presence additive 投影列。
+	//   - presence_revision：availability 投影单调版本号，只在投影真实变化时 +1，
+	//     供 SSE invalidation 去重与客户端丢帧补偿；
+	//   - presence_projected_state：最近一次持久化投影（空串=存量行，首拍按 legacy
+	//     status 列初始化）。last_heartbeat_unix_ms / last_seen_unix_ms 保留不动，
+	//     旧 Relay/旧客户端兼容策略见迭代计划 §4 P0。
+	`ALTER TABLE terminals ADD COLUMN presence_revision INTEGER NOT NULL DEFAULT 0;`,
+	`ALTER TABLE terminals ADD COLUMN presence_projected_state TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

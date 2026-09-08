@@ -1063,6 +1063,28 @@ export interface components {
             capabilities?: string[];
             /** Format: int64 */
             last_seen_unix_ms?: number;
+            /**
+             * @description v0.9.1 C1：Relay 以服务端时间 + last_heartbeat + 集中阈值（15/40/60s）
+             *     即时投影的权威在线态；客户端只消费该值，不得用本地墙钟二次裁决。
+             *     unknown 表示事实不可确认（观察窗内/无心跳），不等于执行端离线。
+             * @enum {string}
+             */
+            availability?: "online" | "unknown" | "offline" | "unsupported";
+            /**
+             * Format: int64
+             * @description availability 投影的单调版本号，只在投影真实变化时 +1；供失效通知去重。
+             */
+            presence_revision?: number;
+            /**
+             * Format: int64
+             * @description 最后一次有效 hello/heartbeat 的服务端接收时间。
+             */
+            last_heartbeat_unix_ms?: number;
+            /**
+             * Format: int64
+             * @description 下一个投影边界（online->unknown / unknown->offline）；无边界时省略。
+             */
+            next_check_unix_ms?: number;
         };
         TerminalList: {
             terminals: components["schemas"]["Terminal"][];

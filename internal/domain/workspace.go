@@ -77,10 +77,13 @@ type WorkspaceImportDSHState struct {
 type WorkspaceService struct {
 	repo store.Repository
 	now  func() time.Time
+	// Presence 是 Workspace/DSH 写命令 freshness 门控的阈值来源（v0.9.1 C2）。
+	// 与 DaemonService、SessionService 共用同一份 PresencePolicy。
+	Presence PresencePolicy
 }
 
 func NewWorkspaceService(repo store.Repository) *WorkspaceService {
-	return &WorkspaceService{repo: repo, now: time.Now}
+	return &WorkspaceService{repo: repo, now: time.Now, Presence: DefaultPresencePolicy()}
 }
 
 // CreateWithFolder 创建 workspace.create command，或返回同名已有命令/Workspace。
@@ -132,7 +135,7 @@ func (s *WorkspaceService) CreateWithFolder(ctx context.Context, in WorkspaceCre
 			return lookupErr
 		}
 
-		terminal, err := selectWorkspaceTerminal(ctx, tx, in.AccountID, in.TerminalID)
+		terminal, err := s.selectWorkspaceTerminal(ctx, tx, in.AccountID, in.TerminalID)
 		if err != nil {
 			return err
 		}
@@ -223,7 +226,7 @@ func (s *WorkspaceService) SyncDSHWorkspaces(ctx context.Context, in WorkspaceSy
 		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
 			return lookupErr
 		}
-		terminal, err := selectDSHSyncTerminal(ctx, tx, in.AccountID, in.TerminalID)
+		terminal, err := s.selectDSHSyncTerminal(ctx, tx, in.AccountID, in.TerminalID)
 		if err != nil {
 			return err
 		}
@@ -320,8 +323,13 @@ func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceIm
 		if err != nil {
 			return ErrTerminalOffline
 		}
-		if terminal.AccountID != in.AccountID || terminal.Status != "online" {
-			return ErrTerminalOffline
+		if terminal.AccountID != in.AccountID {
+			return ErrScopeDenied
+		}
+		// v0.9.1 C2：导入目标必须通过统一 freshness 门控；unknown 报 unreachable，
+		// offline/协议不安全报 offline，均不创建投递。
+		if err := s.Presence.RefreshGate(terminal, s.now().UnixMilli()); err != nil {
+			return err
 		}
 		payload, err := json.Marshal(struct {
 			WorkspaceID string `json:"workspace_id"`
@@ -416,7 +424,12 @@ func releasedWorkspaceCommandIdempotencyKey(baseKey, commandID string) string {
 	return baseKey + ":resolved:" + commandID
 }
 
-func selectDSHSyncTerminal(ctx context.Context, repo store.Repository, accountID, requestedID string) (store.TerminalRow, error) {
+// selectDSHSyncTerminal 为 workspace.sync_dsh 选择目标 Terminal（v0.9.1 C2 统一门控）。
+// 显式 requestedID 与自动选择都走同一 Presence freshness predicate：
+// 只有 availability == online 且具备 dsh_workspace_sync 能力的目标可新建投递；
+// unknown 目标返回 ErrTerminalUnreachable，offline/不支持目标返回 ErrTerminalOffline。
+func (s *WorkspaceService) selectDSHSyncTerminal(ctx context.Context, repo store.Repository, accountID, requestedID string) (store.TerminalRow, error) {
+	nowMS := s.now().UnixMilli()
 	if requestedID != "" {
 		terminal, err := repo.TerminalByID(ctx, requestedID)
 		if err != nil {
@@ -428,8 +441,8 @@ func selectDSHSyncTerminal(ctx context.Context, repo store.Repository, accountID
 		if terminal.AccountID != accountID {
 			return store.TerminalRow{}, ErrScopeDenied
 		}
-		if !terminalCanSyncDSH(terminal) {
-			return store.TerminalRow{}, ErrTerminalOffline
+		if err := s.Presence.TerminalWriteGate(terminal, nowMS, "dsh_workspace_sync"); err != nil {
+			return store.TerminalRow{}, err
 		}
 		return terminal, nil
 	}
@@ -437,28 +450,30 @@ func selectDSHSyncTerminal(ctx context.Context, repo store.Repository, accountID
 	if err != nil {
 		return store.TerminalRow{}, err
 	}
-	for _, terminal := range terminals {
-		if terminalCanSyncDSH(terminal) {
-			return terminal, nil
-		}
-	}
-	return store.TerminalRow{}, ErrTerminalOffline
+	// 自动选择：first-fit 命中即返回；全部不可用时按最接近可用的失败分类上报
+	// （存在 offline 候选时优先报 offline，只有 unknown 候选时报 unreachable）。
+	return selectEligibleTerminal(terminals, nowMS, s.Presence, "dsh_workspace_sync")
 }
 
-func terminalCanSyncDSH(terminal store.TerminalRow) bool {
-	if terminal.Status != "online" {
-		return false
-	}
-	var capabilities []string
-	if json.Unmarshal([]byte(terminal.CapabilitiesJSON), &capabilities) != nil {
-		return false
-	}
-	for _, capability := range capabilities {
-		if strings.TrimSpace(capability) == "dsh_workspace_sync" {
-			return true
+// selectEligibleTerminal 在候选列表中 first-fit 选择通过统一写门控的 Terminal。
+// 全部不可用时按最接近可用的失败分类上报：存在 offline/unsupported 候选时报
+// ErrTerminalOffline，只有 unknown 候选时报 ErrTerminalUnreachable；
+// 空列表等价于没有可投递目标，报 ErrTerminalOffline。
+func selectEligibleTerminal(terminals []store.TerminalRow, nowMS int64, policy PresencePolicy, capability string) (store.TerminalRow, error) {
+	onlyUnreachable := true
+	for _, terminal := range terminals {
+		err := policy.TerminalWriteGate(terminal, nowMS, capability)
+		switch {
+		case err == nil:
+			return terminal, nil
+		case errors.Is(err, ErrTerminalOffline):
+			onlyUnreachable = false
 		}
 	}
-	return false
+	if len(terminals) > 0 && onlyUnreachable {
+		return store.TerminalRow{}, ErrTerminalUnreachable
+	}
+	return store.TerminalRow{}, ErrTerminalOffline
 }
 
 func workspaceStateFromCommand(ctx context.Context, repo store.Repository, command store.CommandRow, workspaceID string) WorkspaceCreateState {
@@ -478,7 +493,11 @@ func workspaceStateFromCommand(ctx context.Context, repo store.Repository, comma
 	return state
 }
 
-func selectWorkspaceTerminal(ctx context.Context, repo store.Repository, accountID, requestedID string) (store.TerminalRow, error) {
+// selectWorkspaceTerminal 为 workspace.create 选择目标 Terminal（v0.9.1 C2 统一门控）。
+// 显式 requestedID 与自动选择都走同一 Presence freshness predicate：
+// 只有 availability == online 且具备 workspace_create 能力的目标可新建投递。
+func (s *WorkspaceService) selectWorkspaceTerminal(ctx context.Context, repo store.Repository, accountID, requestedID string) (store.TerminalRow, error) {
+	nowMS := s.now().UnixMilli()
 	if requestedID != "" {
 		terminal, err := repo.TerminalByID(ctx, requestedID)
 		if err != nil {
@@ -490,8 +509,8 @@ func selectWorkspaceTerminal(ctx context.Context, repo store.Repository, account
 		if terminal.AccountID != accountID {
 			return store.TerminalRow{}, ErrScopeDenied
 		}
-		if !terminalCanCreateWorkspace(terminal) {
-			return store.TerminalRow{}, ErrTerminalOffline
+		if err := s.Presence.TerminalWriteGate(terminal, nowMS, "workspace_create"); err != nil {
+			return store.TerminalRow{}, err
 		}
 		return terminal, nil
 	}
@@ -499,28 +518,7 @@ func selectWorkspaceTerminal(ctx context.Context, repo store.Repository, account
 	if err != nil {
 		return store.TerminalRow{}, err
 	}
-	for _, terminal := range terminals {
-		if terminalCanCreateWorkspace(terminal) {
-			return terminal, nil
-		}
-	}
-	return store.TerminalRow{}, ErrTerminalOffline
-}
-
-func terminalCanCreateWorkspace(terminal store.TerminalRow) bool {
-	if terminal.Status != "online" {
-		return false
-	}
-	var capabilities []string
-	if json.Unmarshal([]byte(terminal.CapabilitiesJSON), &capabilities) != nil {
-		return false
-	}
-	for _, capability := range capabilities {
-		if strings.TrimSpace(capability) == "workspace_create" {
-			return true
-		}
-	}
-	return false
+	return selectEligibleTerminal(terminals, nowMS, s.Presence, "workspace_create")
 }
 
 func stableWorkspaceIDs(accountID, name string) (workspaceID, projectID string) {
