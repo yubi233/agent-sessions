@@ -17,6 +17,14 @@ import (
 )
 
 // handleSSE 处理 /v1/events（账号级 SSE，支持 Last-Event-ID / after_seq 恢复）。
+// v0.9.1 C3：除既有会话事件帧外，本流还会下发轻量 presence invalidation 帧
+// （event: terminal.presence.changed）。该帧：
+//   - 不携带 id —— 不进入账号 cursor 空间，Last-Event-ID/断线回放语义完全不变，
+//     既有 cursor/frame/授权回归（TestP4AccountSSE*）不受影响；
+//   - 只携带 opaque terminal id + availability + presence_revision，不含完整 DTO，
+//     客户端收到后重新拉 /v1/terminals；
+//   - 允许丢失（慢订阅者/断线）：客户端有前台 45-60s jitter safety reconcile 兜底，
+//     快照始终是 DTO 事实（裁决 T4）。
 func (a *API) handleSSE(presence *domain.PresenceHub, logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		subj := subject(c)
@@ -29,6 +37,8 @@ func (a *API) handleSSE(presence *domain.PresenceHub, logger *slog.Logger) gin.H
 		// 先订阅，再读取 SQLite 回放，避免两步之间新提交的事件形成不可恢复缺口。
 		ch, cancel := presence.SubscribeAccount(subj.AccountID)
 		defer cancel()
+		presenceCh, cancelPresence := presence.SubscribeAccountPresence(subj.AccountID)
+		defer cancelPresence()
 		events, err := a.Repo.ListAccountEventsAfter(c.Request.Context(), subj.AccountID, afterCursor)
 		if err != nil {
 			logger.Error("sse account event replay", "error", err)
@@ -80,6 +90,10 @@ func (a *API) handleSSE(presence *domain.PresenceHub, logger *slog.Logger) gin.H
 					logger.Error("sse account event live replay", "error", replayErr)
 					return
 				}
+			case invalidation := <-presenceCh:
+				// 轻量失效通知帧：无 id（不占用 cursor 空间）、不触发 cursor 回放；
+				// 发布端已按 revision 单调去重，慢订阅者丢弃由安全对账兜底。
+				writeSSEData(c, "terminal.presence.changed", invalidation.EnvelopeJSON())
 			}
 		}
 	}
@@ -106,6 +120,14 @@ func writeSSE(c *gin.Context, seq int64, eventType, data string) {
 		_, _ = c.Writer.Write([]byte("event: " + eventType + "\n"))
 	}
 	_, _ = c.Writer.Write([]byte("data: " + data + "\n\n"))
+	c.Writer.Flush()
+}
+
+// writeSSEData 发送不带 id 的事件帧：不改变 EventSource 的 Last-Event-ID，
+// 供「不进入 cursor 空间」的轻量失效通知（terminal.presence.changed）使用。
+func writeSSEData(c *gin.Context, eventType, data string) {
+	_, _ = c.Writer.Write([]byte("event: " + eventType + "\n" +
+		"data: " + data + "\n\n"))
 	c.Writer.Flush()
 }
 

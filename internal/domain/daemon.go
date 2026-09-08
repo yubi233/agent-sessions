@@ -157,6 +157,9 @@ type DaemonService struct {
 	// Presence 是 hello/heartbeat 活性投影的阈值来源（v0.9.1 C1）。
 	// /v1/terminals 的 availability 视图也从该字段读取，保证投影与阈值单源。
 	Presence PresencePolicy
+	// Hub 是 presence invalidation 的发布通道（v0.9.1 C3，可选）。
+	// nil 时不发布（旧装配/单测兼容）：失效通知只是加速路径，不是正确性前提（裁决 T4）。
+	Hub *PresenceHub
 }
 
 func NewDaemonService(repo store.Repository) *DaemonService {
@@ -196,6 +199,7 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 	// 恢复转换 revision 单调 +1，供 invalidation 单次发布（计划 §3.3）。
 	prevProjected := ""
 	presenceRevision := int64(0)
+	helloRecovered := false
 	isNewTerminal := errors.Is(err, sql.ErrNoRows)
 	if isNewTerminal {
 		terminal = store.TerminalRow{ID: id.New("term"), DeviceID: in.DeviceID, AccountID: in.AccountID}
@@ -207,6 +211,7 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 		presenceRevision = terminal.PresenceRevision
 		if prevProjected != string(PresenceOnline) {
 			presenceRevision++
+			helloRecovered = true
 		}
 	}
 	terminal.Hostname = strings.TrimSpace(in.Hostname)
@@ -221,6 +226,13 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 	terminal.PresenceProjectedState = string(PresenceOnline)
 	if err := s.repo.UpsertDaemonTerminal(ctx, terminal); err != nil {
 		return DaemonHelloResult{}, err
+	}
+	if s.Hub != nil && helloRecovered {
+		// hello 恢复转换（offline/unknown -> online）恰好发布一次失效通知；
+		// 无状态变化的 hello 不发布（V091-06 revision 单调去重）。
+		s.Hub.PublishPresenceInvalidation(in.AccountID, PresenceInvalidation{
+			TerminalID: terminal.ID, Availability: string(PresenceOnline), PresenceRevision: presenceRevision,
+		})
 	}
 	if err := s.repo.TouchDeviceLastSeen(ctx, in.DeviceID, now); err != nil {
 		return DaemonHelloResult{}, err
@@ -260,8 +272,16 @@ func (s *DaemonService) Heartbeat(ctx context.Context, accountID, deviceID, role
 	// 的重复心跳不制造 revision（V091-02），恢复转换（offline/unknown -> online）
 	// 恰好 +1 一次（V091-05）。协议已通过 validateDaemonProtocol，next 恒为 online。
 	prevAvailability := s.Presence.Project(terminal, now)
-	if _, _, err := s.repo.TouchTerminalPresence(ctx, terminal.ID, now, string(prevAvailability), string(PresenceOnline)); err != nil {
+	revision, changed, err := s.repo.TouchTerminalPresence(ctx, terminal.ID, now, string(prevAvailability), string(PresenceOnline))
+	if err != nil {
 		return DaemonHeartbeatResult{}, err
+	}
+	if s.Hub != nil && changed {
+		// 恢复转换（offline/unknown -> online）恰好发布一次失效通知；
+		// online 期间的重复心跳 changed=false，不发布（revision 单调去重）。
+		s.Hub.PublishPresenceInvalidation(accountID, PresenceInvalidation{
+			TerminalID: terminal.ID, Availability: string(PresenceOnline), PresenceRevision: revision,
+		})
 	}
 	if err := s.repo.TouchDeviceLastSeen(ctx, deviceID, now); err != nil {
 		return DaemonHeartbeatResult{}, err

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yubi233/agent-sessions/internal/config"
+	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/logging"
 	"github.com/yubi233/agent-sessions/internal/relay"
 	"github.com/yubi233/agent-sessions/internal/store"
@@ -40,11 +41,23 @@ func main() {
 
 	logger.Info("relay listening", "address", *address, "database", *databasePath,
 		"terminal_signature_mode", signatureMode)
+	// v0.9.1 P1：使用运行时构造器拿到有界 presence reaper。reaper 只负责过期
+	// 转换的通知与持久投影，不是 read/command 正确性的前置条件（V091-03）；
+	// AGENT_SESSIONS_PRESENCE_REAPER=0 可作为通知路径的回滚开关（保留 poll-only）。
 	var engine *gin.Engine
+	var reaper *domain.PresenceReaper
 	if signatureMode == config.TerminalSignatureModeRequired {
-		engine = relay.NewServerWithTerminalSignatureRequired(db, logger)
+		engine, _, reaper = relay.NewServerWithRuntime(db, logger, true)
 	} else {
-		engine = relay.NewServer(db, logger)
+		engine, _, reaper = relay.NewServerWithRuntime(db, logger, false)
+	}
+	if os.Getenv("AGENT_SESSIONS_PRESENCE_REAPER") == "0" {
+		reaper = nil
+		logger.Info("presence reaper disabled by AGENT_SESSIONS_PRESENCE_REAPER=0 (poll-only rollback)")
+	}
+	if reaper != nil {
+		go reaper.Run()
+		defer reaper.Stop()
 	}
 	if err := engine.Run(*address); err != nil {
 		logger.Error("relay stopped", "error", err)

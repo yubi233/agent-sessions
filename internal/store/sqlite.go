@@ -517,6 +517,96 @@ func (r *sqliteRepo) TouchTerminalPresence(ctx context.Context, terminalID strin
 	return revision, changed, err
 }
 
+// ListPresenceSweepCandidates 列出「需要过期投影转换」的 Terminal（v0.9.1 P1 reaper）。
+// 只返回会发生真实转换的行，避免已转换行反复占用有界批次饿死其他 Terminal：
+//   - 持久投影为 online（空串按 legacy status 初始化）且心跳已退出 suspect 窗
+//     （last_heartbeat < suspectBeforeUnixMS）-> 需要 online -> unknown/offline；
+//   - 持久投影为 unknown 且心跳已过 offline deadline（last_heartbeat <
+//     deadlineBeforeUnixMS）-> 需要 unknown -> offline。
+//
+// 按 last_heartbeat 升序返回最多 limit 条；超出部分留给下一 tick 自愈
+// （计划 §3.3：丢唤醒只损失延迟，不损失事实）。
+func (r *sqliteRepo) ListPresenceSweepCandidates(ctx context.Context, suspectBeforeUnixMS, deadlineBeforeUnixMS int64, limit int) ([]TerminalRow, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	effectiveProjection := `COALESCE(NULLIF(presence_projected_state,''), CASE WHEN status='online' THEN 'online' ELSE 'unknown' END)`
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT `+terminalColumns+` FROM terminals
+		 WHERE last_heartbeat_unix_ms > 0 AND (
+		   (`+effectiveProjection+` = 'online' AND last_heartbeat_unix_ms < ?)
+		OR (`+effectiveProjection+` = 'unknown' AND last_heartbeat_unix_ms < ?)
+		 )
+		 ORDER BY last_heartbeat_unix_ms ASC LIMIT ?`,
+		suspectBeforeUnixMS, deadlineBeforeUnixMS, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TerminalRow
+	for rows.Next() {
+		var t TerminalRow
+		if err := rows.Scan(
+			&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
+			&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
+			&t.PresenceRevision, &t.PresenceProjectedState,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// PersistPresenceProjection 原子推进持久投影（v0.9.1 P1 reaper 专用）。
+// 与 TouchTerminalPresence 的区别：不推进 last_heartbeat、不把 status 置回 online——
+// reaper 没有「新活性事实」，只把过期投影落库。
+//   - current 持久投影为空串（升级前存量行）时按 legacy status 列初始化；
+//   - 与 nextState 相同则为 no-op（changed=false），不重复制造 revision；
+//   - setStatus 非空时同步 legacy status 列（offline 持久化写 'offline'；
+//     unknown 不降级 legacy status，避免旧客户端把「事实不可确认」误读为离线）。
+func (r *sqliteRepo) PersistPresenceProjection(ctx context.Context, terminalID string, nextState string, setStatus string) (int64, bool, error) {
+	var revision int64
+	var changed bool
+	err := r.WithTx(ctx, func(ctx context.Context, tx Repository) error {
+		row, err := tx.TerminalByID(ctx, terminalID)
+		if err != nil {
+			return err
+		}
+		current := row.PresenceProjectedState
+		if current == "" {
+			if strings.EqualFold(row.Status, "online") {
+				current = "online"
+			} else {
+				current = "unknown"
+			}
+		}
+		changed = current != nextState
+		revision = row.PresenceRevision
+		if !changed {
+			return nil
+		}
+		revision++
+		// WithTx 在本包内只构造 *sqliteRepo（见 WithTx），此处断言取回事务级执行器。
+		exec, ok := tx.(*sqliteRepo)
+		if !ok {
+			return errors.New("persist presence projection: transaction repository type mismatch")
+		}
+		_, err = exec.db.ExecContext(ctx,
+			`UPDATE terminals SET presence_revision=?, presence_projected_state=? WHERE id=?`,
+			revision, nextState, terminalID)
+		if err != nil {
+			return err
+		}
+		if setStatus != "" {
+			_, err = exec.db.ExecContext(ctx,
+				`UPDATE terminals SET status=? WHERE id=?`, setStatus, terminalID)
+		}
+		return err
+	})
+	return revision, changed, err
+}
+
 // UpsertDaemonTerminal 以 device_id 作为 Terminal 身份锚点。Daemon 只能声明自身版本、
 // capabilities 与脱敏主机信息，不能借此覆盖账号、设备或 Workspace 归属。
 // presence_revision / presence_projected_state 由调用方（Hello 投影变化检测）给出，

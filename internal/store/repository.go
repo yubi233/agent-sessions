@@ -76,6 +76,14 @@ type Repository interface {
 	// 返回最新 revision 与「本次调用是否发生投影变化」，供 presence invalidation
 	// 按 revision 去重、单次发布（计划 §3.3）。
 	TouchTerminalPresence(ctx context.Context, terminalID string, nowUnixMS int64, prevAvailability string, nextState string) (revision int64, changed bool, err error)
+	// ListPresenceSweepCandidates 列出「需要过期投影转换」的 Terminal（只返回会
+	// 发生真实转换的行，避免已转换行饿死有界批次）：持久投影 online 且退出 suspect
+	// 窗，或持久投影 unknown 且过了 offline deadline。按 last_heartbeat 升序、
+	// 最多 limit 条（v0.9.1 P1）。
+	ListPresenceSweepCandidates(ctx context.Context, suspectBeforeUnixMS, deadlineBeforeUnixMS int64, limit int) ([]TerminalRow, error)
+	// PersistPresenceProjection 原子推进持久投影（不推进活性、不改 last_heartbeat）；
+	// setStatus 非空时同步 legacy status 列（offline 写 'offline'，unknown 保持不动）。
+	PersistPresenceProjection(ctx context.Context, terminalID string, nextState string, setStatus string) (revision int64, changed bool, err error)
 	// UpsertDaemonTerminal 只更新 Daemon 声明的白名单元数据；工作区绝对路径和 Provider 正文不允许写入 Relay。
 	UpsertDaemonTerminal(ctx context.Context, t TerminalRow) error
 

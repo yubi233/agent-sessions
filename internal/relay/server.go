@@ -31,6 +31,16 @@ func NewServerWithPresence(db *sql.DB, logger *slog.Logger) (*gin.Engine, *domai
 	return newServerWithPresence(db, logger, false)
 }
 
+// NewServerWithRuntime 创建 Relay 并额外返回进程内运行时组件：PresenceHub 与
+// 有界 presence reaper（v0.9.1 P1）。调用方负责 `go reaper.Run()` 并在进程关闭时
+// `reaper.Stop()`；测试/不需要过期通知的装配可继续使用 NewServer（不启动 reaper，
+// read/command 路径不依赖它，见 V091-03）。
+func NewServerWithRuntime(db *sql.DB, logger *slog.Logger, signatureRequired bool) (*gin.Engine, *domain.PresenceHub, *domain.PresenceReaper) {
+	router, presence := newServerWithPresence(db, logger, signatureRequired)
+	reaper := domain.NewPresenceReaper(store.NewRepository(db), presence, logger)
+	return router, presence, reaper
+}
+
 func newServer(db *sql.DB, logger *slog.Logger, signatureRequired bool) *gin.Engine {
 	router, _ := newServerWithPresence(db, logger, signatureRequired)
 	return router
@@ -67,6 +77,9 @@ func newServerWithPresence(db *sql.DB, logger *slog.Logger, signatureRequired bo
 	api := httpapi.New(auth, pairing, sessions, delegations, repo)
 	// 签名窗口开关在路由装配前注入，保证首个请求就按当前模式校验。
 	api.Daemons.SetTerminalSignatureRequired(signatureRequired)
+	// v0.9.1 C3：hello/heartbeat 的 presence invalidation 经同一 Hub 发布给
+	// 账号级 SSE 订阅者；nil 时服务不发布（仅失去加速，不失去正确性）。
+	api.Daemons.Hub = presence
 	api.RegisterRoutes(router, logger, presence)
 	return router, presence
 }
