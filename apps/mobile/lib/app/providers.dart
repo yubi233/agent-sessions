@@ -346,6 +346,17 @@ final terminalStatusControllerProvider =
         relay: relay,
         clock: relay is FixtureRelayRepository ? relay.fixtureNow : null,
       );
+      // v0.9.1 事故回归修正：ref.listen 只在「相位变化」时触发。若本 provider
+      // 创建时 App 已处于 authenticated（本地 fixture 启动、恢复已登录会话等
+      // 启动顺序），监听器永远不会为初值触发，终端同步资格会一直为 false，
+      // 终端列表一次都不拉、所有工作区落进「未归属终端」灰态组。因此创建时
+      // 必须先读一次当前相位作为初值，再监听后续变化。
+      controller.reportAuthBoundary(
+        authenticated:
+            ref.read(appControllerProvider).phase ==
+            AppAuthPhase.authenticated,
+      );
+
       ref.listen(appControllerProvider, (previous, next) {
         final previousPhase = previous?.phase;
         final nextPhase = next.phase;

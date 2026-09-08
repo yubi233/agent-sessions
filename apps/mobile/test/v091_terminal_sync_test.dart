@@ -5,9 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:agent_sessions_mobile/domain/models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
+import 'package:agent_sessions_mobile/app/providers.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
+import 'package:agent_sessions_mobile/state/app_controller.dart';
 import 'package:agent_sessions_mobile/state/lifecycle_recovery_controller.dart';
 import 'package:agent_sessions_mobile/state/terminal_status_controller.dart';
+import 'package:agent_sessions_mobile/storage/encrypted_cache.dart';
+import 'package:agent_sessions_mobile/storage/secure_token_store.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'support/fixture_owner.dart';
 
 // v0.9.1 P2（迭代计划 §4 P2）：Flutter 生命周期感知同步的控制器级回归。
 // 覆盖 V091-08（生命周期边界）、V091-09（single-flight/代际隔离）、
@@ -351,6 +358,46 @@ void main() {
         );
         controller.dispose();
       });
+    });
+  });
+
+  group('V091-08 provider 接线初值（用户可见事故回归 2026-09-09）', () {
+    test('provider 创建时 App 已认证：attach surface 后立即首拍，终端列表非空', () async {
+      final relay = FixtureRelayRepository(clock: () => DateTime.now())
+        ..replaceTerminals([_onlineTerminal()]);
+      final tokens = InMemorySecureTokenStore();
+      final identities = InMemoryDeviceIdentityStore();
+      await bootstrapFixtureOwner(relay, tokens: tokens, identities: identities);
+      final app = AppController(
+        relay: relay,
+        tokenStore: tokens,
+        identityStore: identities,
+        encryptedCache: InMemoryEncryptedCacheStore(),
+      );
+      await app.initialize();
+      expect(app.phase, AppAuthPhase.authenticated,
+          reason: 'fixture 启动完成即已认证（本用例的启动顺序前提）');
+
+      final container = ProviderContainer(
+        overrides: [
+          relayRepositoryProvider.overrideWithValue(relay),
+          appControllerProvider.overrideWith((_) => app),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      // 修复前：ref.listen 不为初值触发 → reportAuthBoundary 从未被调用 →
+      // 终端同步资格永远 false → attach 后的自动首拍一次都不发 → 终端列表为空、
+      // 工作区全部落入「未归属终端」。注意不能用手动 refresh 断言（手动刷新
+      // 不受资格门控，会掩盖缺陷）；只验证 attach 触发的自动首拍。
+      final terminals = container.read(terminalStatusControllerProvider);
+      terminals.attachSurface();
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(terminals.terminals, isNotEmpty,
+          reason: 'provider 创建即已认证时，attach 后自动首拍必须拉到终端列表');
+      expect(terminals.terminals.single.availability, TerminalAvailability.online);
+      terminals.detachSurface();
     });
   });
 
