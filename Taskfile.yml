@@ -751,6 +751,11 @@ tasks:
       - task: test:deploy
       - git diff --check
 
+  test:acc:cloud:
+    desc: 云端 Relay smoke（CLOUD-ANDROID-ACCEPTANCE 阶段 3 / ACC-01：真实公网 HTTPS + 自签证书指纹钉扎；register、配对、撤销 fail-closed、账号级 SSE 心跳、Relay 重启持久化；前置=阶段 2 部署完成）
+    cmds:
+      - node e2e-verify/real/cloud-relay-smoke.mjs --endpoint https://39.106.135.11 --tls-fingerprint 7fbaab5b1a92fa157c9b75b04faae85d5a22374345c9e9cadcbbb0c53dad003f --restart-check
+
   deploy:backup:
     desc: 备份 SQLite 权威库
     cmds:
