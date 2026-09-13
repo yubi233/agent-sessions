@@ -28,7 +28,9 @@ var dynamicBearerSource = regexp.MustCompile(`Bearer\s+(?:\$\{|\$[A-Za-z_]|["']\
 // 已审阅的允许路径：其命中是合法的协议契约字段或鉴权边界，不是明文泄漏。
 // 任何新增命中都必须在此显式登记并说明理由。
 var allowlisted = map[string]string{
-	"internal/httpapi/api.go":       "RequireAuth 解析 Bearer 头是鉴权边界，不输出 token",
+	"internal/httpapi/api.go": "RequireAuth 解析 Bearer 头是鉴权边界，不输出 token",
+	// v0.9.1 账号级 SSE 心跳重验（sse.go）同样在鉴权边界解析 Bearer 头，token 仅服务端校验，不输出。
+	"internal/httpapi/sse.go":       "SSE 心跳重验解析 Bearer 头是鉴权边界，token 仅用于服务端校验，不输出",
 	"internal/httpapi/handlers.go":  "refresh_token 为服务端已哈希的 opaque 令牌 DTO 字段（api contract）",
 	"internal/securityscan/scan.go": "扫描器自身的标记定义，非泄漏",
 	// v0.6 P1：openapi 生成的 auth_modes 枚举常量名 `Bearer ... = "bearer"` 命中

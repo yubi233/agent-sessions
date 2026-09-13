@@ -736,6 +736,21 @@ tasks:
       - go run ./apps/deployctl scan -root .
       - go run ./apps/deployctl integrity -db ./data/relay.db
 
+  test:acc:local:
+    desc: 阿里云部署与Android真机验收的本地发布候选 gate（CLOUD-ANDROID-ACCEPTANCE 唯一聚合入口：文档门禁、静态/生成物、Go 全量、relay E2E、Flutter 分析与全量、deploy 脚本回归、diff 空检查；不触云端、不调真实模型、不跑真机；任何子项失败即 gate failed）
+    cmds:
+      - task: docs:verify
+      - task: check
+      # ACC 套件的本地根因层（协议/加密/Relay/Daemon/工作区测试），ACC-01..06 的回归基线。
+      - task: test
+      # 账号级 SSE / cursor / 重连契约的浏览器 E2E（ACC-03 的本地根因层）。
+      - task: test:e2e:relay
+      # Flutter 分析与全量 widget 测试（ACC-02..05 的客户端根因层）。
+      - task: test:android
+      # 备份/恢复/完整性/明文泄漏扫描（阶段 6 DEPLOY-02/03 的本地脚本根因层）。
+      - task: test:deploy
+      - git diff --check
+
   deploy:backup:
     desc: 备份 SQLite 权威库
     cmds:

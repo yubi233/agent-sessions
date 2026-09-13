@@ -1,0 +1,96 @@
+{
+  "suite": "cloud-android-acceptance",
+  "plan_id": "CLOUD-ANDROID-ACCEPTANCE",
+  "description": "阿里云真实部署与 Android 真机验收套件：公网 HTTPS（自签证书+指纹放行）下的真机全链路、备份恢复与授权 Provider 场景。来源：docs/zh/迭代计划/阿里云真实部署与Android真机测试计划-2026-09-11.md。验证口径：凡标记 real_device/real_browser/real_upstream 的用例不得用 AVD、headless、fixture 或本地 fixture Relay 替代；报告落 e2e-verify/reports/<ts>/CLOUD-ANDROID-ACCEPTANCE/。",
+  "environment": {
+    "relay": "https://39.106.135.11（自签证书，指纹见 deploy/acceptance.env AGENT_SESSIONS_ACC_TLS_FINGERPRINT）",
+    "device": "USB 真机 d723617（23113RKC6C，Android 15 / API 35）",
+    "test_pc": "macOS 测试机（承载 ADB、headed 浏览器与受控 Daemon）"
+  },
+  "cases": [
+    {
+      "id": "ACC-01",
+      "title": "公网自签 TLS 链路：按指纹放行，错误指纹拒绝",
+      "phase": "Phase 2/3",
+      "category": "安全与传输",
+      "priority": "P0",
+      "precondition": "ECS 已部署 Relay + TLS 入口，自签证书 SHA-256 指纹已回填 deploy/acceptance.env；客户端持有指纹配置。",
+      "steps": [
+        "从测试 PC 外部网络以正确指纹发起 HTTPS 请求（healthz）",
+        "Android 端 acceptance 构建以指纹放行建立 TLS 会话",
+        "将客户端指纹改为错误值后重试"
+      ],
+      "expected": "正确指纹时 TLS 握手成功、healthz 200；错误指纹时握手被客户端拒绝且无明文回退；全程无 HTTP 明文。"
+    },
+    {
+      "id": "ACC-02",
+      "title": "Android 真机公网登录/配对/撤销 fail-closed",
+      "phase": "Phase 5",
+      "category": "真机用户旅程",
+      "priority": "P0",
+      "precondition": "real_device=true（adb 仅 d723617，ro.kernel.qemu 为空）；云端 endpoint 已配置；测试账号可用。",
+      "steps": [
+        "真机安装候选 APK，打开云端 HTTPS 地址完成 owner bootstrap/登录",
+        "完成设备配对并在服务端设备列表可见",
+        "服务端撤销该设备",
+        "真机等待一个心跳/请求周期后继续操作"
+      ],
+      "expected": "配对后设备列表即时可见；撤销后真机 fail-closed（请求被拒、回到未配对态）；重新配对后恢复。对应 E2E-ANDROID-02 的云端环境实例，环境与链路不同故新增独立 ID。"
+    },
+    {
+      "id": "ACC-03",
+      "title": "Android 真机账号级 SSE 与断线 cursor 恢复（公网）",
+      "phase": "Phase 5",
+      "category": "实时同步",
+      "priority": "P0",
+      "precondition": "ACC-02 已配对；真机在 Wi-Fi，可切换移动网络/飞行模式。",
+      "steps": [
+        "建立账号级 SSE，接收初始 snapshot 与后续事件",
+        "断开 Wi-Fi 切移动网络（或短暂飞行模式）再恢复",
+        "观察 SSE 重连与 Last-Event-ID/after_seq 回放"
+      ],
+      "expected": "重连后按 cursor 补齐事件，不丢不重；草稿与命令状态跨断网保持；无重复投影。"
+    },
+    {
+      "id": "ACC-04",
+      "title": "Android 真机命令提交到终态投影与幂等",
+      "phase": "Phase 5",
+      "category": "命令链路",
+      "priority": "P1",
+      "precondition": "ACC-03 会话在线；存在允许执行的受控命令。",
+      "steps": [
+        "提交允许的控制命令，观察 pending → ack/result → canonical event → 终态投影",
+        "快速重复点击同一命令",
+        "在服务端查询该 command_id 的执行记录"
+      ],
+      "expected": "终态投影与服务端 canonical event 一致；重复点击不产生重复执行（command_id 幂等）。"
+    },
+    {
+      "id": "ACC-05",
+      "title": "真机最小缓存仅密文 envelope/cursor",
+      "phase": "Phase 5",
+      "category": "隐私与安全",
+      "priority": "P1",
+      "precondition": "真机已积累会话数据并可刷新/重启进程。",
+      "steps": [
+        "刷新页面、杀进程重启、重新登录",
+        "导出/检查应用本地缓存与日志（脱敏方式）"
+      ],
+      "expected": "本地仅保留密文 envelope 与 cursor；不出现 token、私钥、会话正文或 diff 明文。"
+    },
+    {
+      "id": "ACC-06",
+      "title": "真实 Provider 授权场景 full gate：vue hello world → 计算器",
+      "phase": "Phase 7",
+      "category": "真实模型",
+      "priority": "P1",
+      "precondition": "用户已授权（2026-09-14）：DSH/openai 渠道/gpt-5.6-terra，不限量；DSH 零凭据注入；云端或本地链路就绪；隔离 Workspace。",
+      "steps": [
+        "经 DSH 链路全量生成并运行一个完整 Vue hello world",
+        "确认生成物真实可运行（构建/预览通过）",
+        "再经 DSH 将其改造为计算器应用并运行验证"
+      ],
+      "expected": "两个场景均真实完成且可运行；报告记录 provider/model、request ID、用量计数与脱敏证据；不得用 fixture 或录制响应替代。"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "registry_version": 12,
+  "registry_version": 13,
   "status": "in_progress",
   "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
   "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
@@ -1199,6 +1199,57 @@
       "status": "delivered",
       "allow_real_upstream": false,
       "uniqueness_rule": "拥有 V091-01..14：Terminal Presence 权威 heartbeat freshness、过期投影、Workspace/DSH 命令安全门、presence invalidation/reaper、Flutter 前台生命周期自动刷新、single-flight/代际隔离、统一 UI 状态、restart 首 heartbeat gate 与 macOS headed 可见验收。账号级 /v1/events 和会话事件流只做回归，不在本 suite 重定义其既有 ID；本轮不调用真实模型、真实上游或 Android 实机。"
+    },
+    {
+      "plan_id": "CLOUD-ANDROID-ACCEPTANCE",
+      "suite_path": "docs/test/30-云端部署与真机验收.json",
+      "owner": "Release/Relay/Android",
+      "id_prefix": [
+        "ACC-"
+      ],
+      "owned_ids": [
+        "ACC-01",
+        "ACC-02",
+        "ACC-03",
+        "ACC-04",
+        "ACC-05",
+        "ACC-06"
+      ],
+      "consumed_ids": [
+        "P0-DEPLOY-01",
+        "DEPLOY-01",
+        "DEPLOY-02",
+        "DEPLOY-03",
+        "SYNC-04",
+        "E2E-RELAY-01",
+        "E2E-ANDROID-02",
+        "MOBILE-01",
+        "PAIR-01",
+        "PAIR-02",
+        "PAIR-03",
+        "WEB-01",
+        "WEB-02",
+        "WEB-03",
+        "WEB-04",
+        "WEB-05",
+        "WEB-06",
+        "WEB-07",
+        "ADMIN-01",
+        "ADMIN-02",
+        "ADMIN-03",
+        "ADMIN-04",
+        "ADMIN-05",
+        "ADMIN-06",
+        "ADPT-DSH-04"
+      ],
+      "dependencies": [
+        "RELIABILITY-RELEASE",
+        "FOUNDATION-ACCEPTANCE"
+      ],
+      "status": "in_progress",
+      "allow_real_upstream": true,
+      "uniqueness_rule": "拥有 ACC-01..06：公网自签 TLS 指纹放行、真机公网登录/配对/撤销 fail-closed、真机账号级 SSE 与断线 cursor 恢复、真机命令幂等终态、真机最小密文缓存、真实 Provider 授权场景（vue hello world→计算器）。DEPLOY/SYNC/E2E-RELAY/E2E-ANDROID/PAIR/MOBILE/WEB/ADMIN/ADPT-DSH 既有 ID 仅消费不重定义；云端环境不新增平行 ID。",
+      "note": "来源计划 docs/zh/迭代计划/阿里云真实部署与Android真机测试计划-2026-09-11.md；报告目录 e2e-verify/reports/<ts>/CLOUD-ANDROID-ACCEPTANCE/；TLS=裸IP自签+客户端按指纹放行（2026-09-14 用户决策），DSH Provider 零凭据注入。"
     }
   ]
 }
