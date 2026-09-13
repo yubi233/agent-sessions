@@ -17,18 +17,23 @@ HOST="$(echo "$ENDPOINT" | sed -E 's#https?://([^/:]+).*#\1#')"
 
 fail=0
 
-echo "== 1. TLS 证书指纹校验（$HOST）=="
-SERVER_FP="$(echo | openssl s_client -connect "$HOST:443" -servername "$HOST" 2>/dev/null \
-  | openssl x509 -outform der 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+echo "== 1. TLS 证书指纹校验（${HOST}）=="
+TMPDIR_SMOKE="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_SMOKE"' EXIT
+# 指纹钉扎：先取服务端证书、校验 SHA-256，通过后将其作为受信锚用于后续请求。
+echo | openssl s_client -connect "$HOST:443" -servername "$HOST" 2>/dev/null \
+  | openssl x509 -outform der 2>/dev/null > "$TMPDIR_SMOKE/relay.der"
+SERVER_FP="$(shasum -a 256 < "$TMPDIR_SMOKE/relay.der" | awk '{print $1}')"
 if [ "$SERVER_FP" = "$(echo "$FINGERPRINT" | tr 'A-Z' 'a-z' | tr -d ':')" ]; then
+  openssl x509 -inform der -in "$TMPDIR_SMOKE/relay.der" -out "$TMPDIR_SMOKE/relay.pem"
   echo "PASS: 服务端证书指纹一致 $SERVER_FP"
 else
   echo "FAIL: 指纹不一致 server=$SERVER_FP expected=$FINGERPRINT"; fail=1
 fi
 
-echo "== 2. healthz / readyz =="
+echo "== 2. healthz / readyz（以指纹钉扎的证书为受信锚）=="
 for path in healthz readyz; do
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://$HOST/$path")"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --cacert "$TMPDIR_SMOKE/relay.pem" "https://$HOST/$path" 2>/dev/null)"
   if [ "$code" = "200" ]; then echo "PASS: /$path -> 200"; else echo "FAIL: /$path -> $code"; fail=1; fi
 done
 
@@ -41,12 +46,14 @@ fi
 
 echo "== 4. 容器重启持久化（可选，--restart-check）=="
 if [ "$RESTART_CHECK" = "--restart-check" ]; then
-  # 在服务器本地重启 relay 容器，随后检查回环 healthz 与数据卷内 SQLite 文件仍在。
+  # relay 是 scratch 镜像（容器内无 shell/ls），数据卷检查从宿主机侧进行：
+  # 重启容器 → 回环 healthz → 从 Mounts 找到 /data 对应的宿主机卷路径并确认 relay.db 存在。
   result="$(ssh -o BatchMode=yes root@"$HOST" '
     docker restart agent-sessions-relay >/dev/null 2>&1 && sleep 5
     code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 http://127.0.0.1:8787/healthz)
-    if docker exec agent-sessions-relay ls /data/relay.db >/dev/null 2>&1; then db=1; else db=0; fi
-    echo "restart healthz=$code db_file_present=$db"
+    src=$(docker inspect agent-sessions-relay --format "{{range .Mounts}}{{if eq .Destination \"/data\"}}{{.Source}}{{end}}{{end}}")
+    if [ -n "$src" ] && [ -f "$src/relay.db" ]; then db=1; else db=0; fi
+    echo "restart healthz=$code db_file_present=$db volume=$src"
   ' 2>/dev/null)"
   echo "$result"
   if echo "$result" | grep -q "restart healthz=200 db_file_present=1"; then

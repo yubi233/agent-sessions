@@ -6,7 +6,7 @@
 # 4) 镜像以锁定 commit 构建的 tag 固定，digest 记录于验收报告与 deploy/acceptance.env。
 services:
   relay:
-    image: agent-sessions/relay:acc-f9ade4e
+    image: agent-sessions/relay:acc-48b6413
     container_name: agent-sessions-relay
     restart: unless-stopped
     environment:
