@@ -12,6 +12,7 @@ import '../crypto/box.dart';
 import '../domain/models.dart';
 import '../relay/fixture_relay_repository.dart';
 import '../relay/relay_repository.dart';
+import '../relay/acceptance_tls.dart';
 import '../relay/http_relay_repository.dart';
 import '../git/git_diff_repository.dart';
 import '../git/readonly_command_gateway.dart';
@@ -88,12 +89,16 @@ final relayRepositoryProvider = Provider<RelayRepository>((ref) {
     return FixtureRelayRepository();
   }
   return HttpRelayRepository(
-    dio: Dio(
-      BaseOptions(
-        baseUrl: relayBaseUrl,
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 12),
-        sendTimeout: const Duration(seconds: 12),
+    // 验收环境自签证书指纹放行（计划 §1/§4.4）：未构建期注入 ACC_TLS_FINGERPRINT 时
+    // 是空操作，默认构建走系统信任链不受影响。
+    dio: applyAcceptanceTls(
+      Dio(
+        BaseOptions(
+          baseUrl: relayBaseUrl,
+          connectTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 12),
+          sendTimeout: const Duration(seconds: 12),
+        ),
       ),
     ),
     readTokens: () => ref.read(secureTokenStoreProvider).read(),

@@ -31,6 +31,8 @@ environment:
 # versions available, run `flutter pub outdated`.
 dependencies:
   connectivity_plus: ^5.0.2
+  # 验收 TLS 指纹通道使用其同步 sha256（badCertificateCallback 为同步回调，见 lib/relay/acceptance_tls.dart）。
+  crypto: ^3.0.3
   cryptography: ^2.9.0
   dio: ^5.9.0
   drift: ^2.32.0

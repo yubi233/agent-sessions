@@ -66,6 +66,11 @@ export function parseDeviceArgs(argv, env = process.env) {
       "ANDROID_DEVICE_E2E_TEST_TIMEOUT_MS",
     ),
     diagnostic: false,
+    // 云端验收 endpoint（计划 §2「不把 fixture 结果称为真实云端闭环」）：
+    // 提供后 integration_test 以 --dart-define 注入 RELAY_BASE_URL 与可选自签指纹，
+    // 报告如实标记 real_upstream=true / fixture_data=false。
+    endpoint: env.ACC_RELAY_ENDPOINT || "",
+    tlsFingerprint: env.ACC_TLS_FINGERPRINT || "",
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -74,6 +79,22 @@ export function parseDeviceArgs(argv, env = process.env) {
       args.deviceId = argv[++index] || "";
       if (!args.deviceId) {
         throw new GateError("--device-id 必须带值", {
+          status: "failed",
+          failureClass: "test_harness_defect",
+        });
+      }
+    } else if (arg === "--endpoint") {
+      args.endpoint = argv[++index] || "";
+      if (!args.endpoint) {
+        throw new GateError("--endpoint 必须带值（例如 https://39.106.135.11）", {
+          status: "failed",
+          failureClass: "test_harness_defect",
+        });
+      }
+    } else if (arg === "--tls-fingerprint") {
+      args.tlsFingerprint = argv[++index] || "";
+      if (!args.tlsFingerprint) {
+        throw new GateError("--tls-fingerprint 必须带值（证书 DER 的 SHA-256）", {
           status: "failed",
           failureClass: "test_harness_defect",
         });
@@ -167,9 +188,18 @@ export function selectPhysicalDevice(devices, requestedId = "") {
   return physical[0];
 }
 
-export function physicalFlutterIntegrationArgs(tests, serial) {
+export function physicalFlutterIntegrationArgs(tests, serial, cloud = null) {
   // 不传 --no-uninstall，让 Flutter 在物理设备 gate 后清理测试 APK。
-  return ["test", ...tests, "-d", serial, "--machine"];
+  // cloud（云端验收模式）：endpoint 必填，指纹可选——经 --dart-define 编译期注入，
+  // 与 apps/mobile/lib/relay/acceptance_tls.dart 的放行通道一一对应。
+  const defines = [];
+  if (cloud?.endpoint) {
+    defines.push(`--dart-define=RELAY_BASE_URL=${cloud.endpoint}`);
+    if (cloud.tlsFingerprint) {
+      defines.push(`--dart-define=ACC_TLS_FINGERPRINT=${cloud.tlsFingerprint}`);
+    }
+  }
+  return ["test", ...defines, ...tests, "-d", serial, "--machine"];
 }
 
 export function classifyPhysicalFlutterResult(result, testSummary) {
@@ -226,6 +256,9 @@ function usage() {
     "  --device-id <adb-serial>    指定已授权的物理设备；仅连接一台时可省略",
     "  --test <relative-path>      指定 apps/mobile 下的 integration_test 文件，可重复",
     "  --case <stable-id>          报告中的稳定测试 ID，可重复",
+    "  --endpoint <url>            云端验收模式：Relay HTTPS 地址（如 https://39.106.135.11），",
+    "                              报告标记 real_upstream=true/fixture_data=false",
+    "  --tls-fingerprint <sha256>  云端自签证书 DER SHA-256；经 --dart-define 注入客户端放行通道",
     "  --diagnostic                仅在当前终端输出 Flutter 原始诊断，不写入报告",
     "  --device-timeout-ms <ms>    物理设备 online/启动完成等待上限",
     "  --test-timeout-ms <ms>      Flutter integration_test 等待上限",
@@ -376,6 +409,11 @@ async function main() {
       process.stdout.write(`${usage()}\n`);
       return;
     }
+    // 云端验收模式（计划 ACC-02..05）：提供 --endpoint/ACC_RELAY_ENDPOINT 即视为
+    // 真实云端链路验证；报告与 dart-define 均按该口径切换。
+    const cloud = args.endpoint
+      ? { endpoint: args.endpoint, tlsFingerprint: args.tlsFingerprint }
+      : null;
 
     ({ adbPath } = findAndroidAdb());
     flutter = await verifyFlutter();
@@ -412,7 +450,7 @@ async function main() {
 
     const result = await runCommand(
       flutter,
-      physicalFlutterIntegrationArgs(tests, selected.serial),
+      physicalFlutterIntegrationArgs(tests, selected.serial, cloud),
       { cwd: MOBILE_ROOT, timeoutMs: args.testTimeoutMs },
     );
     if (args.diagnostic) {
@@ -450,9 +488,10 @@ async function main() {
       status,
       real_browser: false,
       real_model: false,
-      real_upstream: false,
-      fixture_data: true,
-      local_test: true,
+      // 云端 endpoint 模式 = 真实上游链路；fixture 模式保持 false（计划 §2 不得混淆口径）。
+      real_upstream: Boolean(cloud?.endpoint),
+      fixture_data: !cloud?.endpoint,
+      local_test: !cloud?.endpoint,
       headless: false,
       browser: "n/a",
       command,
@@ -478,7 +517,16 @@ async function main() {
         network_switch_tested: false,
         test_ids: args?.cases || DEFAULT_CASES,
         integration_tests: tests,
-        fixture_revision: "local-deterministic-fixture",
+        // fixture 口径仅在本地模式登记；云端模式记录 endpoint 与指纹启用情况。
+        fixture_revision: cloud?.endpoint ? null : "local-deterministic-fixture",
+        cloud: cloud?.endpoint
+          ? {
+              provider: "aliyun",
+              endpoint: cloud.endpoint,
+              tls_fingerprint_applied: Boolean(cloud.tlsFingerprint),
+              tls_mode: "self-signed-fingerprint-pinning",
+            }
+          : null,
         device,
         diagnostic_mode: Boolean(args?.diagnostic),
         cleanup: {

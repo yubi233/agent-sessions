@@ -1,0 +1,12 @@
+# 阶段 2 的 ECS 轻量镜像构建：本地交叉编译（CGO_ENABLED=0 GOOS=linux GOARCH=amd64，
+# 从锁定 commit 的 git archive 树构建）后，将静态二进制传入 ECS 组装镜像。
+# 避免 1.6GB 内存的小规格 ECS 上运行 Go 工具链导致内存颠簸（2026-09-14 实测 OOM）。
+# 用法（测试机）：
+#   git archive <commit> | tar -x -C /tmp/acc-src
+#   cd /tmp/acc-src && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o relay-linux-amd64 ./apps/relay
+#   scp relay-linux-amd64 root@<ecs>:/opt/agent-sessions/stage/
+#   ssh root@<ecs> "cd /opt/agent-sessions/stage && docker build -f Dockerfile.staged -t agent-sessions/relay:acc-<commit> ."
+FROM scratch
+COPY relay-linux-amd64 /relay
+EXPOSE 8787
+ENTRYPOINT ["/relay"]
