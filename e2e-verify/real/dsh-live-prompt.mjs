@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 // 真实模型 prompt 往返冒烟（经 DSH ACP 桥）。
 // 口径：real_model=true（消耗真实 token）、real_upstream=true；凭据只经
-// DEEPSEEK_API_KEY / OPENCODE_GO_API_KEY 环境变量或 DSH 侧自身 .env 注入，本脚本不读取其值。
+// DEEPSEEK_API_KEY / OPENCODE_GO_API_KEY / OPENAI_API_KEY 环境变量或 DSH 根 .env 注入，
+// 本脚本不读取、不打印其值，只按键名透传。
 // 每个模型执行一次初始请求，最多额外重试五次；可识别的 Zen 额度错误按约定通过。
 // 用法：node e2e-verify/real/dsh-live-prompt.mjs --model nemotron-3-ultra-free --config cordis.yml
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { classifyDshLiveFailure, dshZenTestModels } from "./dsh-live-result.mjs";
 
-const MAX_RETRIES = 5;
+const MAX_RETRIES = Number(process.env.DSH_LIVE_MAX_RETRIES ?? 5);
 const RETRYABLE_FAILURES = new Set([
   "provider_http_error",
   "provider_timeout",
@@ -24,9 +25,28 @@ const argOf = (flag) => {
   return index >= 0 ? args[index + 1] : undefined;
 };
 const dshRoot = process.env.AGENT_SESSIONS_DSH_ROOT ?? "/Users/yubi/code/deepseek-harness";
+// 与 Go 桥 loadEnv 同一口径：LLM key 由 DSH 根 .env 承载。只透传已知 key 名，
+// 进程环境变量优先于 .env；找不到 .env 时为空，不报错。
+const dshEnvAllowlist = ["DEEPSEEK_API_KEY", "OPENCODE_GO_API_KEY", "OPENAI_API_KEY"];
+const dshEnvFromFile = {};
+try {
+  for (const line of readFileSync(join(dshRoot, ".env"), "utf8").split("\n")) {
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (m && dshEnvAllowlist.includes(m[1])) {
+      dshEnvFromFile[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+    }
+  }
+} catch {}
+const childCredentialEnv = {
+  DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ?? dshEnvFromFile.DEEPSEEK_API_KEY,
+  OPENCODE_GO_API_KEY: process.env.OPENCODE_GO_API_KEY ?? dshEnvFromFile.OPENCODE_GO_API_KEY,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? dshEnvFromFile.OPENAI_API_KEY,
+};
 const bin = process.env.AGENT_SESSIONS_DSH_BIN ?? join(dshRoot, "packages/examples/acp-demo/lib/bin.js");
 const configArgument = argOf("--config");
-const cfg = process.env.AGENT_SESSIONS_DSH_CONFIG ?? configArgument ?? resolve("cordis.yml");
+// 子进程 cwd 是 dshRoot，相对路径会在那边解析失败（表现为 initialize 挂起超时）；
+// 统一在此处按调用方 cwd 转绝对路径。
+const cfg = resolve(process.env.AGENT_SESSIONS_DSH_CONFIG ?? configArgument ?? "cordis.yml");
 const configSource = process.env.AGENT_SESSIONS_DSH_CONFIG
   ? "env:AGENT_SESSIONS_DSH_CONFIG"
   : configArgument
@@ -44,7 +64,7 @@ const report = {
   failure_class: null, real_browser: false, real_model: true, real_upstream: true,
   fixture_data: false, local_test: false, headless: false, browser: "n/a",
   model, provider,
-  credential_source: "env:OPENCODE_GO_API_KEY|dsh-env",
+  credential_source: "dsh-root-.env|process-env(allowlist)",
   config_source: configSource,
   command: `node e2e-verify/real/dsh-live-prompt.mjs --model ${model} --provider ${provider} --config <redacted>`,
   max_retries: MAX_RETRIES,
@@ -89,8 +109,7 @@ async function runAttempt() {
       cwd: dshRoot,
       env: {
         PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
-        ...(process.env.DEEPSEEK_API_KEY ? { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY } : {}),
-        ...(process.env.OPENCODE_GO_API_KEY ? { OPENCODE_GO_API_KEY: process.env.OPENCODE_GO_API_KEY } : {}),
+        ...Object.fromEntries(Object.entries(childCredentialEnv).filter(([, v]) => v)),
         DSH_SNAPSHOT_SESSIONS_ROOT: snapshotRoot,
       },
       stdio: ["pipe", "pipe", "pipe"],
@@ -188,7 +207,8 @@ async function runAttempt() {
   } catch (error) {
     const message = String(error?.message ?? error);
     const result = classifyDshLiveFailure({ model, provider, message, stderr: stderr.join("") });
-    return { ...result, assistantTextLength, stopReason };
+    // 诊断用：子进程 stderr 尾部随失败结果带出（不入正式报告字段，仅诊断与日志）。
+    return { ...result, assistantTextLength, stopReason, stderrTail: stderr.join("").slice(-400) };
   } finally {
     if (child) {
       try { child.stdin.end(); } catch {}
@@ -211,7 +231,9 @@ for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt += 1) {
     attempt,
     failure_class: result.failureClass,
     diagnostic_code: result.diagnosticCode ?? null,
+    ...(result.stderrTail ? { stderr_tail: result.stderrTail.slice(-200) } : {}),
   });
+  console.error(`[dsh-live-prompt] attempt ${attempt} stderr 尾部: ${(result.stderrTail ?? "").slice(-300)}`);
   await delay(Math.min(2_000, 250 * attempt));
 }
 

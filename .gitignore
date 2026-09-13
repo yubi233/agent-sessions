@@ -14,6 +14,8 @@
 # 本地数据与密钥，禁止入库
 .env
 .env.local
+# 阿里云验收环境真实输入（模板为 deploy/acceptance.env.example，可入库）
+deploy/acceptance.env
 *.db
 *.db-wal
 *.db-shm
