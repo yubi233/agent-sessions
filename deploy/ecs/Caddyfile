@@ -1,0 +1,18 @@
+# Caddy TLS 终结配置（自签证书口径，计划 §1 TLS 降级决策）。
+# 证书为 openssl 生成的自签叶子证书（SAN=39.106.135.11，10 年），
+# 客户端按 SHA-256 指纹显式放行；auto_https off 禁用 Caddy 自动签发，
+# 防止 ACME/内部 CA 产物导致指纹漂移。
+{
+	auto_https off
+	admin off
+}
+
+# 80 端口仅做 HTTPS 重定向（计划 §2：HTTP 只用于重定向）。
+:80 {
+	redir https://39.106.135.11{uri} permanent
+}
+
+:443 {
+	tls /etc/agent-sessions/certs/relay.crt /etc/agent-sessions/certs/relay.key
+	reverse_proxy relay:8787
+}

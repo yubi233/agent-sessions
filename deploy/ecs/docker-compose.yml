@@ -1,0 +1,55 @@
+# ECS 验收环境编排（CLOUD-ANDROID-ACCEPTANCE 阶段 2）。
+# 与本地 deploy/docker-compose.yml 的差异：
+# 1) 8787 只绑定宿主机回环，公网入口唯一为 Caddy 443（TLS 终结）；
+# 2) 自签证书 + 客户端按指纹放行（TLS 降级口径，见计划 §1 决策注记）；
+# 3) json-file 日志轮转 + unless-stopped 重启策略；
+# 4) 镜像以锁定 commit 构建的 tag 固定，digest 记录于验收报告与 deploy/acceptance.env。
+services:
+  relay:
+    image: agent-sessions/relay:acc-f9ade4e
+    container_name: agent-sessions-relay
+    restart: unless-stopped
+    environment:
+      AGENT_SESSIONS_RELAY_ADDR: 0.0.0.0:8787
+      AGENT_SESSIONS_SQLITE_PATH: /data/relay.db
+      AGENT_SESSIONS_LOG_LEVEL: info
+    ports:
+      # 只绑定宿主机回环：公网不可直达 8787（计划 §2 安全边界）。
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - relay-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  caddy:
+    image: caddy:2-alpine
+    container_name: agent-sessions-caddy
+    restart: unless-stopped
+    depends_on:
+      - relay
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/agent-sessions/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # relay 为 scratch 镜像（无 shell/wget），健康探测从 caddy 容器侧经内网发起。
+      test: ["CMD", "wget", "-qO-", "http://relay:8787/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:
