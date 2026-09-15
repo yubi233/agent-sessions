@@ -13,6 +13,9 @@ services:
       AGENT_SESSIONS_RELAY_ADDR: 0.0.0.0:8787
       AGENT_SESSIONS_SQLITE_PATH: /data/relay.db
       AGENT_SESSIONS_LOG_LEVEL: info
+      # 受信任代理网段：默认 loopback+私网已覆盖 Caddy 容器反代；
+      # 需要收敛为仅 Caddy 或完全禁用 XFF 信任时放开并按 CIDR 填写（"none"=全不信任）。
+      # AGENT_SESSIONS_TRUSTED_PROXIES: 172.16.0.0/12
     ports:
       # 只绑定宿主机回环：公网不可直达 8787（计划 §2 安全边界）。
       - "127.0.0.1:8787:8787"
@@ -35,6 +38,8 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./certs:/etc/agent-sessions/certs:ro
+      # 阶段 8：Web/Admin 静态入口（vite --base 构建产物，同源 /v1 反代）。
+      - ./srv:/srv:ro
       - caddy-data:/data
       - caddy-config:/config
     logging:
