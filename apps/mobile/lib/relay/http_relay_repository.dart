@@ -8,6 +8,7 @@ import '../domain/daemon_observation_models.dart';
 import '../domain/delegation_models.dart';
 import '../domain/models.dart';
 import '../domain/session_models.dart';
+import 'acceptance_tls.dart';
 import '../domain/session_projection_models.dart';
 import '../domain/terminal_models.dart';
 import '../domain/usage_models.dart';
@@ -904,8 +905,14 @@ class HttpRelayRepository implements RelayRepository {
     // 仅给已知慢端点（能力矩阵实时探测）放宽，避免真死连接时全 App 干等。
     Duration? receiveTimeout,
   }) async {
+    // 验收诊断（仅 ACC_TLS_FINGERPRINT 注入的验收构建输出）：方法/路径/是否携带
+    // token 与响应状态码；不输出 token 值、请求体或响应正文。
+    if (acceptanceTlsEnabled) {
+      // ignore: avoid_print
+      print('[acc-relay] $method $path token=${accessToken != null}');
+    }
     try {
-      return await _dio.request<dynamic>(
+      final response = await _dio.request<dynamic>(
         path,
         data: data,
         queryParameters: queryParameters,
@@ -918,6 +925,11 @@ class HttpRelayRepository implements RelayRepository {
           receiveTimeout: receiveTimeout,
         ),
       );
+      if (acceptanceTlsEnabled) {
+        // ignore: avoid_print
+        print('[acc-relay] $method $path -> ${response.statusCode}');
+      }
+      return response;
     } on DioException catch (error) {
       final status = error.response?.statusCode;
       if (error.type == DioExceptionType.connectionTimeout ||

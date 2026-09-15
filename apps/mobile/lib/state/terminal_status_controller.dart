@@ -122,8 +122,15 @@ class TerminalStatusController extends ChangeNotifier {
 
   /// 认证边界（注销/设备失效/换账号/重新认证）。递增认证代际：在飞响应按代际
   /// 丢弃，旧账号数据不得污染新账号（V091-09）。
+  ///
+  /// 2026-09-15 P1 修正：provider 对 appController 的每次通知（busy 翻转、
+  /// devices 重载等）都会调用本方法；若每次都递增认证代际，认证完成后
+  /// appController 的任意后续通知都会把在飞的终端列表响应判为「旧代际」丢弃——
+  /// 终端列表永远停留在 loading 空态（真机恢复码接管后实测复现）。
+  /// 认证边界只在 authenticated 标志实际翻转时成立；重复同值通知直接忽略。
   void reportAuthBoundary({required bool authenticated}) {
     if (_disposed) return;
+    if (authenticated == _authenticated) return;
     _authGeneration++;
     _authenticated = authenticated;
     if (!authenticated) {

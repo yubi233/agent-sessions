@@ -399,6 +399,54 @@ void main() {
       expect(terminals.terminals.single.availability, TerminalAvailability.online);
       terminals.detachSurface();
     });
+
+    test('恢复码接管/重启序列：provider 创建于未认证、attach 后相位才变 authenticated——相位变化必须触发首拍（2026-09-15 P1 回归）',
+        () async {
+      final relay = FixtureRelayRepository(clock: () => DateTime.now())
+        ..replaceTerminals([_onlineTerminal()]);
+      final tokens = InMemorySecureTokenStore();
+      final identities = InMemoryDeviceIdentityStore();
+      await bootstrapFixtureOwner(relay, tokens: tokens, identities: identities);
+      final app = AppController(
+        relay: relay,
+        tokenStore: tokens,
+        identityStore: identities,
+        encryptedCache: InMemoryEncryptedCacheStore(),
+      );
+      // 复刻真机恢复接管顺序：不先 initialize——provider 创建（首页构建）时相位
+      // 仍是 booting，认证恢复在 provider 创建之后才完成。
+      final container = ProviderContainer(
+        overrides: [
+          relayRepositoryProvider.overrideWithValue(relay),
+          appControllerProvider.overrideWith((_) => app),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      // 真实 App 中首页 ref.watch 本 provider（活跃监听）；测试用 container.listen 等价模拟。
+      container.listen(terminalStatusControllerProvider, (_, _) {});
+      final terminals = container.read(terminalStatusControllerProvider);
+      terminals.attachSurface(); // 首页挂载；此刻仍未认证 → 资格门控跳过属预期
+      await Future<void>.delayed(Duration.zero);
+
+      // 模拟恢复码接管/启动完成：相位变为 authenticated
+      await app.initialize();
+      // 充分泵送异步链（fixture listTerminals 为真异步，微任务+短延时轮转）
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(app.phase, AppAuthPhase.authenticated);
+      // 诊断：定位终端列表为空的层次
+      // ignore: avoid_print
+      print('[p1-regression] phase=${terminals.phase} errorMessage=${terminals.errorMessage} '
+          'isRefreshing=${terminals.isRefreshing} isUnreachable=${terminals.isUnreachable}');
+      expect(terminals.terminals, isNotEmpty,
+          reason:
+              'P1（2026-09-15）：恢复码接管后相位在 provider 创建后才变为 authenticated，'
+              '相位变化必须触发终端列表首拍——否则终端列表永远不拉取，'
+              '工作区页停留在空态、无法进入 DSH 会话');
+      terminals.detachSurface();
+    });
   });
 
   test('availability 不受客户端墙钟影响：停留 90 秒以上仍是 Relay 投影', () {

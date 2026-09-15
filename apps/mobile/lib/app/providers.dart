@@ -362,14 +362,20 @@ final terminalStatusControllerProvider =
             AppAuthPhase.authenticated,
       );
 
+      // 2026-09-15 P1 回归修正：恢复码接管序列下（provider 创建于未认证，
+      // 接管完成后才切 authenticated），依赖 ref.listen 的相位变化通知在真机
+      // 上不触发终端拉取（中继日志无 GET /v1/terminals）。修复 = 相位变化时
+      // 显式协调：这里改为在 appController 相位变化时由 SessionController 同款
+      // 监听语义保证——具体以 listenManual/初始化后补拍实现（见回归测试）。
+      // 认证相位与同步资格的显式协调：signedOut 递增认证代际并清空旧账号
+      // 投影；authenticated 重建资格并触发去重首拍（与 SessionController 同口径）。
+      // 注意：不得用 previousPhase == nextPhase 早退——riverpod 3 的首帧/合并
+      // 通知会把 booting→authenticated 折叠成同值对（2026-09-15 P1 实测：
+      // LISTEN FIRED authenticated->authenticated），早退会把真实跃迁丢弃；
+      // 同值幂等由 reportAuthBoundary 内部去重兜底。
       ref.listen(appControllerProvider, (previous, next) {
-        final previousPhase = previous?.phase;
-        final nextPhase = next.phase;
-        if (previousPhase == nextPhase) return;
-        // 认证相位与同步资格的显式协调：signedOut 递增认证代际并清空旧账号
-        // 投影；authenticated 重建资格并触发去重首拍（与 SessionController 同口径）。
         controller.reportAuthBoundary(
-          authenticated: nextPhase == AppAuthPhase.authenticated,
+          authenticated: next.phase == AppAuthPhase.authenticated,
         );
       });
       return controller;

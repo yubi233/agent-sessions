@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
+import 'package:flutter/foundation.dart';
 
 /// 编译期注入的验收自签证书 SHA-256 指纹（十六进制，允许带冒号/大小写，比对前统一归一）。
 // ignore: do_not_use_environment
@@ -42,10 +43,23 @@ bool isAcceptedAcceptanceCertificate(List<int> der, String expectedFingerprint) 
 /// 未启用时是空操作（返回原 dio，默认构建的证书校验零影响）；
 /// 启用时替换为 IOHttpClientAdapter，badCertificateCallback 只在系统校验失败
 /// （自签/未知 CA）时进入：按指纹严格比对，命中才放行，其余一律拒绝。
+/// 同时挂验收诊断日志：只记录方法/路径/状态码/耗时，绝不记录 token、
+/// Authorization、请求体或响应正文（验收排障用，默认构建不挂）。
 Dio applyAcceptanceTls(Dio dio) {
   if (!acceptanceTlsEnabled) {
     return dio;
   }
+  dio.interceptors.add(
+    LogInterceptor(
+      request: true,
+      requestHeader: false,
+      requestBody: false,
+      responseHeader: false,
+      responseBody: false,
+      error: true,
+      logPrint: (message) => debugPrint('[acc-relay] $message'),
+    ),
+  );
   final expected = acceptanceTlsFingerprint;
   dio.httpClientAdapter = IOHttpClientAdapter(
     createHttpClient: () {
