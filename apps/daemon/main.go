@@ -7,10 +7,15 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -219,6 +224,34 @@ func cmdDoctor() error {
 
 // cmdRun 启动真实 Relay REST+SSE 循环。凭据只从显式 flag、当前环境变量或 Daemon 本机 state 读取，
 // 不读取浏览器/其他 CLI 登录态；生产 event DEK 只从 Daemon 环境读取，未配置时会 fail-closed 地扣留事件。
+// pinnedTLSClientFromEnv 按环境变量 AGENT_SESSIONS_RELAY_TLS_FINGERPRINT 构造指纹
+// 钉扎的 HTTP 客户端（验收环境自签证书通道）。未设置指纹时返回 nil——RelayClient
+// 会回退到默认客户端（系统信任链），本地/受信 CA 部署完全不受影响。
+// 校验口径：InsecureSkipVerify 跳过 CA 链后，在 VerifyPeerCertificate 中对叶证书
+// DER 求 SHA-256 并与登记指纹严格比对；不匹配即拒绝连接，不存在「信任所有证书」。
+func pinnedTLSClientFromEnv(getenv func(string) string) *http.Client {
+	expected := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(getenv("AGENT_SESSIONS_RELAY_TLS_FINGERPRINT")), ":", ""))
+	if expected == "" {
+		return nil
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // 以指纹钉扎取代 CA 链校验（见上）
+				VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+					for _, raw := range rawCerts {
+						sum := sha256.Sum256(raw)
+						if hex.EncodeToString(sum[:]) == expected {
+							return nil
+						}
+					}
+					return fmt.Errorf("relay TLS 证书指纹与 AGENT_SESSIONS_RELAY_TLS_FINGERPRINT 不匹配，拒绝连接")
+				},
+			},
+		},
+	}
+}
+
 func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, requeueFailedEvents bool) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if requeueFailedEvents {
@@ -299,7 +332,12 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, 
 	if err != nil {
 		return fmt.Errorf("加载 Terminal 签名私钥: %w", err)
 	}
-	loop := daemon.NewRelayLoop(st, &daemon.RelayClient{BaseURL: relayBase, AccessToken: accessToken, Signer: signer}, runner, encoder, logger)
+	// 验收环境 TLS 指纹钉扎（计划 §1 TLS 降级决策：裸 IP 自签证书 + 客户端按指纹放行）。
+	// 仅当构建/运行环境显式设置 AGENT_SESSIONS_RELAY_TLS_FINGERPRINT 时启用；未设置时
+	// 走系统信任链（本地/受信 CA 部署零影响）。判据 = 对端证书 DER SHA-256 与登记值
+	// 严格一致（与 deploy/acceptance.env 的 AGENT_SESSIONS_ACC_TLS_FINGERPRINT 同口径）。
+	pinned := pinnedTLSClientFromEnv(os.Getenv)
+	loop := daemon.NewRelayLoop(st, &daemon.RelayClient{BaseURL: relayBase, AccessToken: accessToken, Signer: signer, HTTPClient: pinned, StreamHTTPClient: pinned}, runner, encoder, logger)
 	loop.DaemonVersion = "agent-sessions-daemon-p2"
 	loop.Hostname = hostname
 	loop.Platform = runtime.GOOS
