@@ -504,6 +504,67 @@ func (c *RelayClient) UploadUsage(ctx context.Context, usage RelayUsage) error {
 	return c.postJSON(ctx, "/v1/daemon/usage/events", body, &struct{}{})
 }
 
+// commandPayloadJSON 把 Relay 下行的命令投递成 runner 可解析的 payload。
+//
+// 缺陷背景（v0.9.2 P2/P3 真机与集成实测暴露，两处同源契约错位）：
+//  1. Relay 把 session_id / workspace_id 作为命令**顶层**字段下发，而 runner 的
+//     parseEnvelope 从 payload 顶层读它 → 除 session.send（客户端把 session_id
+//     放进了 fixture_payload）以外的全部会话命令都以「缺少 session_id」失败；
+//  2. Relay 下发的 ciphertext 是命令的**子对象**（{"fixture_payload":{...}}），
+//     而 parseEnvelope 期望完整 envelope（ciphertext.fixture_payload） → 即使
+//     session_id 到位，model/effort 等 fixture 载荷字段仍然读不到。
+//
+// 修复方式（在 Daemon 侧收口，不改 Relay 下行契约、不要求各业务分支各自兜底）：
+//
+//	a. 补 envelope 层：payload 没有 ciphertext 键时把原始 ciphertext 包进去；
+//	   已有该键的输入原样使用（幂等，重复投递安全）。
+//	b. 注入顶层 session_id/workspace_id，且**不覆盖** payload 已有值（客户端显式
+//	   提供的值优先，保持既有语义不变）。字段级兜底另见 Command.SessionID 与
+//	   sessionIDFrom（relay.go / runner.go），两处共同保证命令可被正确路由。
+//
+// payload 为空或非 JSON 对象时原样返回，交由既有解析路径报错，不在这里吞掉。
+func commandPayloadJSON(command RelayCommandWire) string {
+	raw := strings.TrimSpace(string(command.Ciphertext))
+	if raw == "" {
+		return raw
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return raw
+	}
+	if _, hasEnvelope := payload["ciphertext"]; !hasEnvelope {
+		wrapped, err := json.Marshal(map[string]json.RawMessage{"ciphertext": json.RawMessage(raw)})
+		if err != nil {
+			return raw
+		}
+		var redecoded map[string]json.RawMessage
+		if err := json.Unmarshal(wrapped, &redecoded); err != nil {
+			return raw
+		}
+		payload = redecoded
+	}
+	inject := func(key, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		if _, exists := payload[key]; exists {
+			return
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return
+		}
+		payload[key] = encoded
+	}
+	inject("session_id", command.SessionID)
+	inject("workspace_id", command.WorkspaceID)
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return string(merged)
+}
+
 // Stream 从终端自己的 delivery_seq 重放，再持续接收推送。SSE 数据由 Relay 生成且只包含目标
 // Terminal 的密文命令；客户端不能自己指定 terminal_id。
 func (c *RelayClient) Stream(ctx context.Context, afterDeliverySeq int64, consume func(context.Context, RelayDelivery) error) error {
@@ -544,7 +605,8 @@ func (c *RelayClient) Stream(ctx context.Context, afterDeliverySeq int64, consum
 					CommandID: wire.Command.ID, SessionID: wire.Command.SessionID, WorkspaceID: wire.Command.WorkspaceID,
 					Kind:       wire.Command.Kind,
 					LeaseEpoch: wire.Command.LeaseEpoch, TargetInstanceID: wire.Command.TargetInstanceID,
-					TargetTerminalID: wire.Command.TargetTerminalID, PayloadJSON: string(wire.Command.Ciphertext),
+					TargetTerminalID: wire.Command.TargetTerminalID,
+					PayloadJSON:      commandPayloadJSON(wire.Command),
 				}}
 				if err := consume(ctx, delivery); err != nil {
 					return err
@@ -1667,6 +1729,9 @@ func (l *RelayLoop) executeAndResolve(ctx context.Context, command RelayCommand)
 		err = l.Runner.ConsumeCommand(ctx, Command{
 			RequestID: command.CommandID, Kind: command.Kind, PayloadJSON: command.PayloadJSON,
 			WorkspaceID: command.WorkspaceID,
+			// SessionID 必须随命令一起交给 runner：payload 里可能没有它
+			// （Relay 把它作为命令顶层字段下发，见 store.Command.SessionID 注释）。
+			SessionID: command.SessionID,
 		})
 	}
 	status, errorCode := "succeeded", ""

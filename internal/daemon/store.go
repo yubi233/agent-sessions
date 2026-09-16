@@ -428,8 +428,17 @@ func (s *Store) MarkDelivered(id int64) error {
 
 // Command 是本地 outbox 中的一条命令。
 type Command struct {
-	ID          int64
-	RequestID   string
+	ID        int64
+	RequestID string
+	// SessionID 是 Relay 下行命令的会话归属（顶层字段）。
+	//
+	// v0.9.2 P2/P3 缺陷修复：此前该字段缺失，Relay 顶层下发的 session_id 在
+	// 投递路径上被丢弃，而 runner 的 parseEnvelope 也从 payload 里找不到它，
+	// 于是 session.resume / session.start / session.abort / session.kill /
+	// session.model_select 等命令在 daemon 侧一律以「缺少 session_id」失败；
+	// 只有 session.send 因为客户端把 session_id 放进了 fixture_payload 才可用。
+	// 真机表现为「会话恢复未成功，请先手动恢复会话再发送」。
+	SessionID   string
 	WorkspaceID string
 	Kind        string
 	PayloadJSON string

@@ -349,7 +349,7 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.start 缺少 session_id")
 	}
@@ -476,7 +476,7 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.send 缺少 session_id")
 	}
@@ -678,7 +678,7 @@ func (r *SessionRunner) abortSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.abort 缺少 session_id")
 	}
@@ -719,7 +719,7 @@ func (r *SessionRunner) killSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.kill 缺少 session_id")
 	}
@@ -771,7 +771,7 @@ func (r *SessionRunner) resumeSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.resume 缺少 session_id")
 	}
@@ -1551,6 +1551,18 @@ func parseEnvelope(raw string) (*commandEnvelope, error) {
 func (e *commandEnvelope) kind() string      { return strings.TrimSpace(e.Kind) }
 func (e *commandEnvelope) sessionID() string { return strings.TrimSpace(e.SessionID) }
 
+// sessionIDFrom 解析命令的会话归属：payload 优先，缺失时回退到 Relay 命令的
+// 顶层 session_id（Command.SessionID）。v0.9.2 修复：Relay 只在命令顶层给出
+// session_id，payload 里不一定有——只读 payload 会让所有非 send 命令失败。
+func sessionIDFrom(cmd Command, env *commandEnvelope) string {
+	if env != nil {
+		if id := env.sessionID(); id != "" {
+			return id
+		}
+	}
+	return strings.TrimSpace(cmd.SessionID)
+}
+
 // fixtureMessage 从密文 envelope 取 fixture 消息文本；真实密文不可解时返回错误。
 func (e *commandEnvelope) fixtureMessage() (string, error) {
 	if e.Ciphertext == nil || e.Ciphertext.FixturePayload == nil {
@@ -1599,7 +1611,7 @@ func (r *SessionRunner) selectModel(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.model_select 缺少 session_id")
 	}
@@ -1622,7 +1634,7 @@ func (r *SessionRunner) selectEffort(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.effort_select 缺少 session_id")
 	}
@@ -1645,7 +1657,7 @@ func (r *SessionRunner) setMode(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("mode.set 缺少 session_id")
 	}
@@ -1682,7 +1694,7 @@ func (r *SessionRunner) answerQuestion(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("question.answer 缺少 session_id")
 	}
@@ -1721,7 +1733,7 @@ func (r *SessionRunner) extensionAction(ctx context.Context, cmd Command) error 
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return fmt.Errorf("%s 缺少 session_id", cmd.Kind)
 	}
@@ -1792,7 +1804,7 @@ func (r *SessionRunner) stopSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.stop 缺少 session_id")
 	}
@@ -1822,7 +1834,7 @@ func (r *SessionRunner) deleteSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.delete 缺少 session_id")
 	}
@@ -1858,7 +1870,7 @@ func (r *SessionRunner) forkSession(ctx context.Context, cmd Command) error {
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("session.fork 缺少 session_id")
 	}
@@ -1926,7 +1938,7 @@ func (r *SessionRunner) respondPermission(ctx context.Context, cmd Command) erro
 	if err != nil {
 		return err
 	}
-	sessionID := env.sessionID()
+	sessionID := sessionIDFrom(cmd, env)
 	if sessionID == "" {
 		return errors.New("permission 命令缺少 session_id")
 	}
