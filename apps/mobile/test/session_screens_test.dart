@@ -441,8 +441,9 @@ void main() {
     await _waitForGone(tester, find.byKey(const Key('session-queue-dock')));
     final sentSnapshot = await harness.relay.getSessionSnapshot(sessionId);
     expect(_snapshotContainsText(sentSnapshot, queuedText), isTrue);
-    // 计数口径：send(1)+stop(1)+自动 start(1)+send-all(1)=4。停止后发送会
-    // 自动补 session.start（恢复本机实例），与真实 daemon resume 语义一致。
+    // 计数口径：send(1)+stop(1)+自动恢复(1)+send-all(1)=4。v0.9.2 P2 起"发送前
+    // 自动恢复"在存在实例映射时走 session.resume（续接原实例，不新建），
+    // start 只保留给确实没有本机实例的新会话语义。
     expect(harness.relay.submittedCommandCount, 4);
   });
 

@@ -6,7 +6,8 @@
 // 本阶段约束：
 //   - permission/question/plan/goal/skill 等 kind 未实现，返回 ErrUnsupportedCommand；
 //   - 真实密文 envelope 不可解（无 fixture_payload）时返回错误，保持 fail-closed；
-//   - 无本地 instance 映射的 send/resume 返回 ErrSessionInstanceMissing（local_state_missing 语义）；
+//   - 无本地 instance 映射、或 resume 自报成功但未交出可用句柄的 send/resume，
+//     统一返回 ErrSessionInstanceMissing（local_state_missing 语义，v0.9.2 P2）；
 //   - 唤醒结果只写 adapter 返回的六态之一，runner 禁止伪造 resumed。
 package daemon
 
@@ -897,14 +898,22 @@ func (r *SessionRunner) resumeSession(ctx context.Context, cmd Command) error {
 	if res.Result == adapter.WakeResumed {
 		// 流式恢复必须在 RPC 返回前交出新句柄；否则结果看似成功，后续 send
 		// 却只能落到不存在的本机实例。旧式 Adapter 则至少必须保留可用旧句柄。
+		//
+		// v0.9.2 P2（V092-07 / G4）：这两种"结果自报成功但没有可用实例"的形态
+		// 都属于**本机实例不可用**，必须与"实例映射不存在"归为同一类可重试错误
+		// （ErrSessionInstanceMissing → 协议码 LOCAL_STATE_MISSING），客户端才能
+		// 稳定区分"需要重建本机实例"与"真实的执行失败/能力不可用"。
+		// 具体原因保留在诊断文案里，不进入公共协议正文。
 		if isStreaming && registered == nil {
 			r.resetReplayStateAfterFailure(sessionID, replay)
-			return fmt.Errorf("adapter resume 成功但未交接句柄，保持 fail-closed")
+			return fmt.Errorf("%w: adapter resume 自报成功但未交出本机句柄（session=%s，保持 fail-closed）",
+				ErrSessionInstanceMissing, sessionID)
 		}
 		if !isStreaming {
 			if _, lookupErr := r.lookupSession(sessionID); lookupErr != nil {
 				r.resetReplayStateAfterFailure(sessionID, replay)
-				return fmt.Errorf("adapter resume 成功但本机没有可用句柄，保持 fail-closed: %w", lookupErr)
+				return fmt.Errorf("%w: adapter resume 自报成功但本机没有可用句柄（session=%s，保持 fail-closed）",
+					ErrSessionInstanceMissing, sessionID)
 			}
 		}
 	}

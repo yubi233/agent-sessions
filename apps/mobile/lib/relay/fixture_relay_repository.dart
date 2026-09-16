@@ -815,10 +815,21 @@ class FixtureRelayRepository implements RelayRepository {
       case SessionCommandKind.kill:
         _appendKill(state);
       case SessionCommandKind.resume:
-        // v0.2/P2：resume 只更新会话状态并追加一条系统通知；不伪造 Provider 唤醒结果，
-        // 真实结果只能来自 Daemon 的 Adapter 三态映射。
+        // v0.2/P2：resume 不伪造 Provider 唤醒结果，真实三态只能来自 Daemon 的
+        // Adapter 映射。v0.9.2 P2（T3 裁决）：resume 是"发送前自动恢复"的正确语义
+        // （续接原 instance，不新建），真实 daemon 恢复成功后会把会话投影推进为
+        // idle；fixture 必须跟随这一行为，否则恢复判定链路无法端到端验证。
         state.resumeCount += 1;
-        _appendSystemNotice(state, '已提交恢复请求（第 ${state.resumeCount} 次）');
+        state.append(
+          eventType: 'session.resumed',
+          payload: const {
+            'kind': 'system_notice',
+            'label': '会话已恢复',
+            'text': '本地 deterministic fixture 已恢复会话执行状态（保留原实例）。',
+          },
+          now: _clock(),
+        );
+        state.updateSession(status: MobileSessionStatus.idle, now: _clock());
       case SessionCommandKind.permissionApprove:
       case SessionCommandKind.permissionReject:
         _appendPermissionDecision(state, input);
@@ -1591,8 +1602,9 @@ class FixtureRelayRepository implements RelayRepository {
 
   void _appendStart(_FixtureSessionState state) {
     final now = _clock();
-    // 与真实 daemon 语义对齐：stopped 会话允许 start（resume 重建本机实例），
-    // 客户端"发送前自动恢复"依赖这一行为（ADR-013/ADR-015 恢复路径）。
+    // 与真实 daemon 语义对齐：start 走 session/new。v0.9.2 P2 起"发送前自动恢复"
+    // 在存在实例映射时改走 resume（见 session_controller._ensureSessionRunnableForSend），
+    // start 只保留给确实没有本机实例的新会话语义。
     state.append(
       eventType: 'session.started',
       payload: const {

@@ -20,7 +20,7 @@
     "fixture_data": true,
     "local_test": true,
     "headless": false,
-    "note": "P0 已完成并提交（commit 8d87210）：V092-01（云端只读探针，real_upstream=true）、V092-02（归因矩阵 10/10 passed）。P1 已完成：V092-03/04/05 passed（执行侧事实源经 hello/heartbeat 上报并在 /v1/capabilities 合并；受控重探测落地）。V092-06..10 随 P2/P3 推进；真实模型与真机项保持独立标注，未运行项不得记 passed。"
+    "note": "P0 已完成并提交（8d87210）：V092-01（云端只读探针，real_upstream=true）、V092-02（归因矩阵 10/10 passed）。P1 已完成并提交（09fc1c8）：V092-03/04/05 passed。P2 已完成：V092-06/07/08 passed（发送前恢复改 resume、失败四类可区分、幂等与异常终态）。V092-09/10（云端真机）随 P3 推进，依赖 T6 终端凭据恢复；未运行项不得记 passed。"
   },
   "cases": [
     {
@@ -147,7 +147,7 @@
     {
       "id": "V092-06",
       "title": "Daemon 重启后发送前自动恢复 = resume，保留原 instance",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "会话生命周期",
       "priority": "P0",
@@ -163,12 +163,16 @@
       "cleanup": [
         "关闭 runner 与临时 SQLite"
       ],
-      "evidence": []
+      "evidence": [
+        "passed：internal/daemon/v092_lifecycle_contract_test.go（TestV092ResumeFailureClassesAreDistinguishable 无映射分支；TestV092ResumeConcurrentIsSerialized 并发恢复保留原 instance-1 且恢复后 send 立即可用；TestV092AttribRestartResumePreservesInstance 流式恢复不触发 adapter.Start）",
+        "passed：apps/mobile/test/session_send_auto_start_test.dart（stopped 会话发送前自动恢复走 resume、不再 start；resume 报告本机无实例时才回退 start）",
+        "passed：apps/mobile/test/session_screens_test.dart（停止后发送自动恢复的命令计数与队列清空语义）"
+      ]
     },
     {
       "id": "V092-07",
       "title": "无句柄/无映射/投影不一致的显式错误与恢复路径",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "错误可见性",
       "priority": "P0",
@@ -184,12 +188,16 @@
       "cleanup": [
         "关闭 runner 与临时 SQLite"
       ],
-      "evidence": []
+      "evidence": [
+        "passed：internal/daemon/v092_lifecycle_contract_test.go（三类失败可区分：无映射/自报成功无句柄 → ErrSessionInstanceMissing（LOCAL_STATE_MISSING）；adapter 显式失败保持真实失败类别并保留诊断细节；失败不写成功唤醒结果）",
+        "passed：internal/daemon/runner.go 统一错误归口（v0.9.2 P2：resume 自报成功但未交出/没有可用句柄 → ErrSessionInstanceMissing）",
+        "passed：apps/mobile/lib/state/session_controller.dart 恢复判定（仅当错误面指向本机实例缺失才回退 start；其余失败浮出真实原因）"
+      ]
     },
     {
       "id": "V092-08",
       "title": "并发/重复 start 幂等；桥异常退出可见终态",
-      "status": "pending",
+      "status": "passed",
       "phase": "P2",
       "category": "幂等与终态",
       "priority": "P1",
@@ -205,7 +213,10 @@
       "cleanup": [
         "关闭 runner 与假桥"
       ],
-      "evidence": []
+      "evidence": [
+        "passed：internal/daemon/v092_lifecycle_contract_test.go（TestV092BridgeExitKeepsMappingAndClosesTurn：桥异常退出后映射不变且失败以 turn_completed 收口；TestV092RepeatedStartReclaimsHandle：重复 start 回收旧句柄并覆盖映射，DCM-03 语义保留）",
+        "passed：internal/daemon/v092_attrib_matrix_test.go（TestV092AttribBridgeExitVisibleFailure 可见失败链）"
+      ]
     },
     {
       "id": "V092-09",

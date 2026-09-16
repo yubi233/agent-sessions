@@ -1365,10 +1365,23 @@ class SessionController extends ChangeNotifier {
     );
   }
 
-  /// daemon 重启/实例回收后，原空闲会话在移动端呈 stopped；直接 send 会被
-  /// 执行端以 local_state_missing 拒绝（时间线浮出"请先启动会话"）。与写权
-  /// 自动获取同一体验方向：发送前对 stopped 会话自动补一次 session.start
-  /// （resume 重建本机实例）；启动失败仍走显式错误面，不静默吞掉。
+  /// 发送前自动恢复（v0.9.2 P2 / C3 / T3 裁决）：
+  /// **存在本地实例映射时必须走 resume，只有确实没有映射时才 start。**
+  ///
+  /// 为什么要改：daemon 重启后 store 里的 instance 映射仍在、内存句柄已释放，
+  /// 执行端对该会话的 send 会以 local_state_missing 拒绝。旧实现无条件补
+  /// `session.start`，而 daemon 的 start 走 `session/new` **新建** Provider 实例并
+  /// 覆盖映射——用户看到会话"恢复"了，实际上下文已断链（P0 实测 b5 对照分支）。
+  /// resume 则用映射中的原 instance id 调 `session.load/resume`，续接原会话。
+  ///
+  /// 判定顺序：
+  ///   1) 非 stopped 会话：无需恢复，直接返回 true（保持既有直发路径）。
+  ///   2) 先 resume：capability 具备 resume 且 lease 可用时才尝试；失败时读取
+  ///      错误面判断是否为"本机没有实例映射"。
+  ///   3) 仅当错误明确指向"无本机实例"（首次启动、或从未成功启动过）才回退
+  ///      start——这是新会话唯一正确的语义。
+  ///   4) 其它失败（Provider 不可用、版本门、环境失败）原样返回 false，
+  ///      由调用方把真实原因浮出，绝不静默改走 start 掩盖故障。
   Future<bool> _ensureSessionRunnableForSend({
     required String deviceId,
     required bool canWrite,
@@ -1376,7 +1389,49 @@ class SessionController extends ChangeNotifier {
     if (selectedSession?.status != MobileSessionStatus.stopped) {
       return true;
     }
+    final resumeBlocked = resumeBlockedReason(canWrite: canWrite);
+    if (resumeBlocked == null) {
+      // 清掉上一轮错误，避免把历史失败误判成本次恢复结果。
+      _errorMessage = null;
+      await resumeSelectedSession(deviceId: deviceId, canWrite: canWrite);
+      if (_errorMessage == null) {
+        return _sessionRecoveryLooksHealthy;
+      }
+      if (!_looksLikeMissingLocalInstance(_errorMessage)) {
+        // 真实故障（版本门/Provider 不可用/环境失败）：保持显式错误，不掩盖。
+        return false;
+      }
+    }
     return startSelectedSession(deviceId: deviceId, canWrite: canWrite);
+  }
+
+  /// resume 成功后判定会话是否真的可写：status 已离开 stopped，或时间线出现了
+  /// 恢复事实。这里只做保守判断——不能仅凭"命令被受理"就宣告恢复成功，
+  /// 否则后续 send 仍会以 local_state_missing 失败。
+  bool get _sessionRecoveryLooksHealthy =>
+      selectedSession?.status != MobileSessionStatus.stopped;
+
+  /// 判断错误面是否指向"本机没有该会话的实例映射"（local_state_missing 语义）。
+  /// 只做子串匹配，不依赖 Relay 暴露内部错误码；匹配不到时一律按真实故障处理。
+  bool _looksLikeMissingLocalInstance(String? message) {
+    if (message == null || message.isEmpty) return false;
+    // 这些文案与 internal/daemon/runner.go 的 local_state_missing 语义一一对应：
+    //   "local_state_missing: session instance 不存在"          映射缺失；
+    //   "...adapter resume 自报成功但未交出/没有可用句柄"        结果自报成功但实例不可用。
+    // 两者都由 Daemon 归入同一类可重试错误（LOCAL_STATE_MISSING），客户端据此
+    // 才允许回退 start；其余错误一律按真实故障浮出，不掩盖。
+    const markers = <String>[
+      'local_state_missing',
+      '本机实例',
+      '本机句柄',
+      '尚未启动',
+      '请先启动会话',
+      'session instance',
+    ];
+    for (final marker in markers) {
+      if (message.contains(marker)) return true;
+    }
+    return false;
   }
 
   /// 提交用户消息。[intent] 是本地提交意图（v0.9.0 C1）：newTurn 创建新业务
@@ -1412,7 +1467,12 @@ class SessionController extends ChangeNotifier {
       deviceId: deviceId!,
       canWrite: canWrite,
     )) {
-      _setError('会话自动启动未成功，请先手动启动会话再发送。');
+      // v0.9.2 G4：恢复失败时区分"能恢复但没恢复成功"与真实故障。
+      // 具体原因（Provider 不可用 / 版本门 / 环境失败）已由恢复路径写入错误面，
+      // 这里只在完全没有原因时给保守兜底文案。
+      _setError(
+        _errorMessage ?? '会话恢复未成功，请先手动恢复会话再发送。',
+      );
       return;
     }
     // v0.8.6 A②：上一回合未终态时的同文本重发会被 Relay 幂等去重（不产生

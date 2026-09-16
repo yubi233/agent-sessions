@@ -161,13 +161,17 @@ func TestV092AttribRestartResumePreservesInstance(t *testing.T) {
 
 	// b2) 非流式 adapter 的 resume 契约（V092-07/G4 证据）：即使 adapter 自报
 	// resumed，只要没交出本机可运行句柄，runner 也必须 fail-closed，绝不伪造可用实例。
+	// v0.9.2 P2：该形态与"映射不存在"统一归入 ErrSessionInstanceMissing，
+	// 客户端才能稳定区分"需要重建本机实例"与真实执行失败。
 	if err := restarted.ConsumeCommand(context.Background(), Command{
 		Kind:        "session.resume",
 		PayloadJSON: `{"session_id":"v092-restart","workspace_root":"/tmp/v092-ws"}`,
 	}); err == nil {
 		t.Fatal("非流式 adapter 无句柄时必须 fail-closed（不得伪造 resumed）")
+	} else if !errors.Is(err, ErrSessionInstanceMissing) {
+		t.Fatalf("无可用句柄必须归入 local_state_missing 语义: %v", err)
 	} else if !strings.Contains(err.Error(), "没有可用句柄") {
-		t.Fatalf("错误应点明无可用句柄: %v", err)
+		t.Fatalf("错误应保留可诊断原因: %v", err)
 	}
 	if _, getErr := s.Get(resumeResultKey("v092-restart")); getErr == nil {
 		t.Fatal("失败恢复不得写入成功唤醒结果")
@@ -347,4 +351,11 @@ func v092HasSequence(got []adapter.EventType, want ...adapter.EventType) bool {
 		}
 	}
 	return idx == len(want)
+}
+
+// wasDisposedNow 并发安全地读取 Dispose 是否被调用（重复 start 回收语义的观测点）。
+func (h *fakeHandle) wasDisposedNow() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.disposed
 }
