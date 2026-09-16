@@ -2356,8 +2356,90 @@ components:
           items:
             type: string
             maxLength: 96
+        # v0.9.2 P1（迭代计划 §3.2 C1，T2 已裁决）：执行侧 Provider 运行时事实。
+        # Daemon 是 DSH 会话的真实执行者，Relay 进程无权代表它宣布可用性；
+        # 该字段让 Relay 把"谁在声明可用"如实转达客户端（additive，可缺省）。
+        provider_facts:
+          type: array
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/ProviderFact"
         signature:
           $ref: "#/components/schemas/TerminalSignature"
+    ProviderModelFact:
+      type: object
+      additionalProperties: false
+      required: [value]
+      properties:
+        provider:
+          type: string
+          maxLength: 64
+        value:
+          type: string
+          maxLength: 192
+        id:
+          type: string
+          maxLength: 192
+        name:
+          type: string
+          maxLength: 192
+        context_window_tokens:
+          type: integer
+          format: int64
+          minimum: 0
+        reasoning:
+          type: boolean
+        efforts:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+            maxLength: 64
+    ProviderModelGroupFact:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id:
+          type: string
+          maxLength: 96
+        name:
+          type: string
+          maxLength: 128
+        models:
+          type: array
+          maxItems: 64
+          items:
+            $ref: "#/components/schemas/ProviderModelFact"
+    ProviderFact:
+      type: object
+      additionalProperties: false
+      required: [kind, available]
+      properties:
+        kind:
+          type: string
+          maxLength: 32
+        available:
+          type: boolean
+        version:
+          type: string
+          maxLength: 64
+        # 失败原因由执行侧给出，Relay 原样转发（不加工、不猜测）。
+        reason:
+          type: string
+          maxLength: 256
+        default_model:
+          type: string
+          maxLength: 192
+        observed_at_unix_ms:
+          type: integer
+          format: int64
+          minimum: 0
+        model_groups:
+          type: array
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/ProviderModelGroupFact"
     DaemonHelloResponse:
       type: object
       required: [terminal_id, protocol_version, min_protocol_version, heartbeat_interval_seconds, after_delivery_seq]
@@ -2394,6 +2476,12 @@ components:
         protocol_version:
           type: integer
           minimum: 1
+        # v0.9.2 P1：心跳随行刷新执行侧 Provider 事实（环境变化后无需重连即可纠正）。
+        provider_facts:
+          type: array
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/ProviderFact"
         signature:
           $ref: "#/components/schemas/TerminalSignature"
     SessionContentDEK:

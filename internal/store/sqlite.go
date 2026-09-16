@@ -408,11 +408,11 @@ func (r *sqliteRepo) CreateTerminal(ctx context.Context, t TerminalRow) error {
 		`INSERT INTO terminals(
 			id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
 			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms,
-			presence_revision,presence_projected_state
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			presence_revision,presence_projected_state,provider_facts_json
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.DeviceID, t.AccountID, t.Hostname, t.Platform, t.Status, t.LastSeenUnixMS,
 		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS,
-		t.PresenceRevision, t.PresenceProjectedState)
+		t.PresenceRevision, t.PresenceProjectedState, t.ProviderFactsJSON)
 	return err
 }
 
@@ -420,7 +420,7 @@ func (r *sqliteRepo) CreateTerminal(ctx context.Context, t TerminalRow) error {
 // scanTerminal 与 ListTerminals 的扫描顺序。
 const terminalColumns = `id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
 			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms,
-			presence_revision,presence_projected_state`
+			presence_revision,presence_projected_state,provider_facts_json`
 
 func (r *sqliteRepo) TerminalByID(ctx context.Context, id string) (TerminalRow, error) {
 	return scanTerminal(r.db.QueryRowContext(ctx,
@@ -437,7 +437,7 @@ func scanTerminal(row *sql.Row) (TerminalRow, error) {
 	if err := row.Scan(
 		&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
 		&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
-		&t.PresenceRevision, &t.PresenceProjectedState,
+		&t.PresenceRevision, &t.PresenceProjectedState, &t.ProviderFactsJSON,
 	); err != nil {
 		return TerminalRow{}, err
 	}
@@ -457,7 +457,7 @@ func (r *sqliteRepo) ListTerminals(ctx context.Context, accountID string) ([]Ter
 		if err := rows.Scan(
 			&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
 			&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
-			&t.PresenceRevision, &t.PresenceProjectedState,
+			&t.PresenceRevision, &t.PresenceProjectedState, &t.ProviderFactsJSON,
 		); err != nil {
 			return nil, err
 		}
@@ -486,7 +486,10 @@ func (r *sqliteRepo) TouchTerminal(ctx context.Context, id string, unixMS int64)
 //
 // 返回最新 revision 与是否发生投影变化，供 presence invalidation 按 revision
 // 去重、单次发布（计划 §3.3）。
-func (r *sqliteRepo) TouchTerminalPresence(ctx context.Context, terminalID string, nowUnixMS int64, prevAvailability string, nextState string) (int64, bool, error) {
+// providerFactsJSON 为 nil 时表示本次心跳未携带 Provider 事实（旧 Daemon 或未变更），
+// 保持既有快照不动；非 nil 时整体替换（含"执行侧现在报告不可用"的空事实），
+// 这样环境变化后一个心跳周期内即可纠正 Relay 的对外表述。
+func (r *sqliteRepo) TouchTerminalPresence(ctx context.Context, terminalID string, nowUnixMS int64, prevAvailability string, nextState string, providerFactsJSON *string) (int64, bool, error) {
 	var revision int64
 	var changed bool
 	err := r.WithTx(ctx, func(ctx context.Context, tx Repository) error {
@@ -507,6 +510,13 @@ func (r *sqliteRepo) TouchTerminalPresence(ctx context.Context, terminalID strin
 		exec, ok := tx.(*sqliteRepo)
 		if !ok {
 			return errors.New("terminal presence touch: transaction repository type mismatch")
+		}
+		if providerFactsJSON != nil {
+			_, err = exec.db.ExecContext(ctx,
+				`UPDATE terminals SET status='online', last_seen_unix_ms=?, last_heartbeat_unix_ms=?,
+				 presence_revision=?, presence_projected_state=?, provider_facts_json=? WHERE id=?`,
+				nowUnixMS, lastHeartbeat, revision, nextState, *providerFactsJSON, terminalID)
+			return err
 		}
 		_, err = exec.db.ExecContext(ctx,
 			`UPDATE terminals SET status='online', last_seen_unix_ms=?, last_heartbeat_unix_ms=?,
@@ -549,7 +559,7 @@ func (r *sqliteRepo) ListPresenceSweepCandidates(ctx context.Context, suspectBef
 		if err := rows.Scan(
 			&t.ID, &t.DeviceID, &t.AccountID, &t.Hostname, &t.Platform, &t.Status, &t.LastSeenUnixMS,
 			&t.ProtocolVersion, &t.DaemonVersion, &t.CapabilitiesJSON, &t.LastHeartbeatUnixMS,
-			&t.PresenceRevision, &t.PresenceProjectedState,
+			&t.PresenceRevision, &t.PresenceProjectedState, &t.ProviderFactsJSON,
 		); err != nil {
 			return nil, err
 		}
@@ -616,8 +626,8 @@ func (r *sqliteRepo) UpsertDaemonTerminal(ctx context.Context, t TerminalRow) er
 		`INSERT INTO terminals(
 			id,device_id,account_id,hostname,platform,status,last_seen_unix_ms,
 			protocol_version,daemon_version,capabilities_json,last_heartbeat_unix_ms,
-			presence_revision,presence_projected_state
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+			presence_revision,presence_projected_state,provider_facts_json
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(device_id) DO UPDATE SET
 			hostname=excluded.hostname,
 			platform=excluded.platform,
@@ -628,10 +638,11 @@ func (r *sqliteRepo) UpsertDaemonTerminal(ctx context.Context, t TerminalRow) er
 			capabilities_json=excluded.capabilities_json,
 			last_heartbeat_unix_ms=excluded.last_heartbeat_unix_ms,
 			presence_revision=excluded.presence_revision,
-			presence_projected_state=excluded.presence_projected_state`,
+			presence_projected_state=excluded.presence_projected_state,
+			provider_facts_json=excluded.provider_facts_json`,
 		t.ID, t.DeviceID, t.AccountID, t.Hostname, t.Platform, t.Status, t.LastSeenUnixMS,
 		t.ProtocolVersion, t.DaemonVersion, t.CapabilitiesJSON, t.LastHeartbeatUnixMS,
-		t.PresenceRevision, t.PresenceProjectedState)
+		t.PresenceRevision, t.PresenceProjectedState, t.ProviderFactsJSON)
 	return err
 }
 

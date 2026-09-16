@@ -1319,6 +1319,17 @@ func (a *API) handleCapabilities(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	// v0.9.2 P1（T2 裁决）：Relay 自身的 Detect 只代表"Relay 能不能跑这个 Provider"。
+	// 云端 Relay 镜像是 scratch 单二进制（无 node / 无 DSH 检出），它的探测必然
+	// fail-closed，但 DSH 会话的真实执行者是账号下的 Daemon。因此这里把**在线
+	// Terminal 上报的执行侧事实**合并进来：Relay 自己成功时以自己为准；失败时
+	// 采用执行侧事实；两侧都没有可用事实时保持 fail-closed（绝不猜成可用）。
+	//
+	// 读取失败不阻断能力查询：合并是增强路径，拿不到事实时退回 Relay 自身结果
+	// （与 v0.9.2 之前的语义一致），避免把一次存储抖动升级成全局不可用。
+	if facts, factsErr := domain.OnlineTerminalFacts(c.Request.Context(), a.Repo, domain.DefaultPresencePolicy(), subject(c).AccountID, domain.NowUnixMS()); factsErr == nil {
+		providers = domain.MergeProviderFacts(providers, facts)
+	}
 	writeOK(c, gin.H{"providers": providers})
 }
 

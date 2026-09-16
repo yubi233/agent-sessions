@@ -34,13 +34,23 @@ type Adapter struct {
 	workspaceFactory func(string) (BridgeTransport, error)
 	production       bool
 
-	// 一次性握手缓存：首次 Detect 后确定能力口径。
+	// 握手结果缓存：首次 Detect 后确定能力口径；成功快照永久命中，
+	// 失败结果受控重探（v0.9.2 P1 / C2，见 reprobe.go）。
 	handshakeDone bool
 	handshakeOK   bool
 	version       string
 	failReason    string
 	modelGroups   []adapter.ModelCapabilityGroup
 	defaultModel  string
+
+	// reprobeCooldown 是失败后的最小重探间隔（0 = 不缓存失败，仅诊断/测试使用）。
+	reprobeCooldown time.Duration
+	// reprobeAllowedAt 是允许下一次重探的时间点；零值表示不限制。
+	reprobeAllowedAt time.Time
+	// reprobeAttempts 累计重探次数（成功复位），用于诊断与测试观测。
+	reprobeAttempts int
+	// clock 是可注入时钟（测试不 sleep）；为零值时回退 time.Now。
+	clock func() time.Time
 }
 
 // New 构造生产适配器（真实 dsh-acp-demo 子进程）。
@@ -49,6 +59,7 @@ func New() *Adapter {
 		factory:          func() (BridgeTransport, error) { return newBinTransport() },
 		workspaceFactory: func(root string) (BridgeTransport, error) { return newBinTransportForWorkspace(root) },
 		production:       true,
+		reprobeCooldown:  reprobeCooldownFromEnv(),
 	}
 }
 
@@ -62,7 +73,16 @@ func NewWithTransport(factory func() (BridgeTransport, error)) *Adapter {
 	return &Adapter{
 		factory:          factory,
 		workspaceFactory: func(string) (BridgeTransport, error) { return factory() },
+		reprobeCooldown:  reprobeCooldownFromEnv(),
 	}
+}
+
+// now 返回可注入时钟；未注入时使用系统时间（重探判定的唯一时间来源）。
+func (a *Adapter) now() time.Time {
+	if a.clock != nil {
+		return a.clock()
+	}
+	return time.Now()
 }
 
 func (a *Adapter) transportForWorkspace(workspaceRoot string) (BridgeTransport, error) {
@@ -152,15 +172,28 @@ func configuredPersistenceCompression() (string, error) {
 
 // Detect 做 ACP 握手并缓存：协议版本须为 1 才升级能力矩阵；
 // 版本不符或握手失败 → 全部能力 unsupported、各带中文原因、Version 留空（fail-closed）。
-// 首次 Detect 成功即认定桥可用；此后每次真实会话握手（Start/Resume）都会把新的
-// 动态模型目录写回缓存（见 storeHandshake），能力矩阵不依赖编译期模型白名单。
+//
+// 缓存语义（v0.9.2 P1 / C2）：
+//   - 成功快照永久命中：后续 Detect 不再 spawn 桥（握手有成本，禁止每请求重探）；
+//     此后每次真实会话握手（Start/Resume）仍会把新的动态模型目录写回缓存
+//     （见 storeHandshake），能力矩阵不依赖编译期模型白名单。
+//   - 失败结果受**受控重探测**约束：首次失败后，冷却窗口（缺省 15s，
+//     AGENT_SESSIONS_DSH_REPROBE_COOLDOWN_MS 可配）到期才允许再次 spawn 桥，
+//     从而在"环境修复后无需重启进程"与"不把每次请求都变成 spawn"之间取平衡。
+//
+// 持锁执行（Registry 对每类 Provider 顺序调用，结果需要原子提交；同时使并发
+// 重探天然 single-flight）。
 func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.handshakeDone {
+	if a.handshakeDone && !a.shouldReprobeLocked() {
+		// 命中缓存：成功快照直接返回；失败快照在冷却窗口内也原样返回（保持稳定事实）。
 		return a.matrixLocked(), nil
 	}
-	// 一次性握手（持锁执行：Registry 对每类 Provider 顺序调用，结果需要原子提交）。
+	// 首次探测与冷却后的重探走同一条握手路径；重探成败都由下面统一登记。
+	if a.handshakeDone {
+		a.reprobeAttempts++
+	}
 	var tr BridgeTransport
 	var err error
 	if a.factory == nil {
@@ -190,7 +223,12 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	}
 	a.handshakeDone = true
 	if err != nil {
+		// 失败原因实时覆盖：重探的新原因必须比旧原因更新，用户才能看到当前事实。
 		a.failReason = err.Error()
+		a.noteDetectFailureLocked()
+		a.logReprobeFailure(a.reprobeAttempts, a.failReason)
+	} else {
+		a.noteDetectSuccessLocked()
 	}
 	return a.matrixLocked(), nil
 }

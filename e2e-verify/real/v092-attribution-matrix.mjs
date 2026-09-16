@@ -50,15 +50,15 @@ const MATRIX = [
     layer: "L3",
     case_id: "V092-05",
     package: "./internal/adapter/dsh/",
-    run: "TestV092DetectCacheLocksFailureUntilRestart",
-    claim: "首次 Detect 失败被永久缓存；环境修复后同进程内仍不可用（现状缺陷，P1 反转）",
+    run: "TestV092ReprobeRecoversAfterTransportFailure",
+    claim: "受控重探：冷却窗口内不重探（防 spawn 风暴），到期后自动恢复（无需重启进程）",
   },
   {
     layer: "L3",
     case_id: "V092-05",
     package: "./internal/adapter/dsh/",
-    run: "TestV092DetectCacheLocksHandshakeFailure",
-    claim: "握手失败形态同样被永久缓存",
+    run: "TestV092ReprobeRecoversAfterHandshakeFailure",
+    claim: "握手失败形态同样受控自愈；新失败原因实时覆盖旧原因",
   },
   {
     layer: "L3",
@@ -66,6 +66,13 @@ const MATRIX = [
     package: "./internal/adapter/dsh/",
     run: "TestV092DetectCacheHitsAreFree",
     claim: "成功握手后缓存命中不重复 spawn（重探测不得退化为每请求重探）",
+  },
+  {
+    layer: "L3",
+    case_id: "V092-05",
+    package: "./internal/adapter/dsh/",
+    run: "TestV092ReprobeCooldownEnv",
+    claim: "冷却配置语义：0=不缓存失败（诊断），非法/空值回退缺省 15s",
   },
   {
     layer: "L2",

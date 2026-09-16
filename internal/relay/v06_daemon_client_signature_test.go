@@ -45,7 +45,7 @@ func TestV06DaemonClientSignedProductionLoop(t *testing.T) {
 	defer cancel()
 
 	// 1) signed hello：客户端内部先取一次性 challenge，再以 challenge 作为 nonce 签名。
-	hello, err := client.Hello(ctx, "v06-prod-client", "prod-host", "darwin", []string{"start"})
+	hello, err := client.Hello(ctx, "v06-prod-client", "prod-host", "darwin", []string{"start"}, nil)
 	if err != nil {
 		t.Fatalf("production signed hello: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestV06DaemonClientSignedProductionLoop(t *testing.T) {
 	}
 
 	// 2) signed heartbeat：随机 nonce 自动生成；重复 nonce 由 Relay fail-closed（由契约套件覆盖）。
-	if _, err := client.Heartbeat(ctx); err != nil {
+	if _, err := client.Heartbeat(ctx, nil); err != nil {
 		t.Fatalf("production signed heartbeat: %v", err)
 	}
 
@@ -216,14 +216,14 @@ func TestV06DaemonSignerLoaderProductionWiring(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	hello, err := client.Hello(ctx, "v06-signer-wiring", "wiring-host", "darwin", []string{"start"})
+	hello, err := client.Hello(ctx, "v06-signer-wiring", "wiring-host", "darwin", []string{"start"}, nil)
 	if err != nil {
 		t.Fatalf("signed hello via loader-built signer: %v", err)
 	}
 	if hello.TerminalID == "" || hello.HeartbeatIntervalSeconds <= 0 {
 		t.Fatalf("hello projection incomplete: %+v", hello)
 	}
-	if _, err := client.Heartbeat(ctx); err != nil {
+	if _, err := client.Heartbeat(ctx, nil); err != nil {
 		t.Fatalf("signed heartbeat via loader-built signer: %v", err)
 	}
 }

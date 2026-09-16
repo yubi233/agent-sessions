@@ -15,16 +15,41 @@ import (
 )
 
 // Provider 描述一个可用 Provider 及其能力。
+//
+// FactsSource 是 v0.9.2 P1（T2 裁决）新增的 additive 字段，回答"谁在声明可用"：
+//   - "relay"：Relay 进程自身的 Detect 成功（Relay 确实能执行该 Provider）；
+//   - "terminal"：执行侧 Terminal(Daemon) 上报的事实（Relay 自己无法执行，
+//     例如云端 scratch 镜像没有 node/DSH 检出）；
+//   - "unavailable"：两侧都没有可用事实，保持 fail-closed。
+//
+// 该字段不改变 available 的语义（仍然只有"能真实建立会话"才为 true），
+// 只是让客户端与诊断能区分"Provider 真的不可用"和"本进程看不到执行侧"。
 type Provider struct {
 	Kind         string               `json:"kind"`
 	Version      string               `json:"version"`
 	Available    bool                 `json:"available"`
 	Capabilities []adapter.Capability `json:"capabilities"`
+	FactsSource  string               `json:"facts_source,omitempty"`
 }
 
 // Registry 聚合五类 Provider。
 type Registry struct {
 	adapters map[string]adapter.Adapter
+}
+
+// NewWithAdapters 用调用方提供的适配器实例构造注册表（v0.9.2 P1）。
+// Daemon 侧需要让"上报给 Relay 的能力事实"与"真正执行命令的适配器"是同一个实例：
+// 共享实例意味着两者共用同一份握手缓存与受控重探测状态，既不会重复 spawn 桥进程，
+// 也不会出现"上报可用但执行侧不可用"的撕裂。
+func NewWithAdapters(adapters map[string]adapter.Adapter) *Registry {
+	copied := make(map[string]adapter.Adapter, len(adapters))
+	for kind, a := range adapters {
+		if a == nil {
+			continue
+		}
+		copied[kind] = a
+	}
+	return &Registry{adapters: copied}
 }
 
 // New 构造注册表。

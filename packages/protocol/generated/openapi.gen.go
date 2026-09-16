@@ -1303,7 +1303,8 @@ type DaemonEventUploadResponse struct {
 
 // DaemonHeartbeatRequest defines model for DaemonHeartbeatRequest.
 type DaemonHeartbeatRequest struct {
-	ProtocolVersion int `json:"protocol_version"`
+	ProtocolVersion int             `json:"protocol_version"`
+	ProviderFacts   *[]ProviderFact `json:"provider_facts,omitempty"`
 
 	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
@@ -1319,11 +1320,12 @@ type DaemonHeartbeatResponse struct {
 
 // DaemonHelloRequest defines model for DaemonHelloRequest.
 type DaemonHelloRequest struct {
-	Capabilities    []string `json:"capabilities"`
-	DaemonVersion   string   `json:"daemon_version"`
-	Hostname        string   `json:"hostname"`
-	Platform        string   `json:"platform"`
-	ProtocolVersion int      `json:"protocol_version"`
+	Capabilities    []string        `json:"capabilities"`
+	DaemonVersion   string          `json:"daemon_version"`
+	Hostname        string          `json:"hostname"`
+	Platform        string          `json:"platform"`
+	ProtocolVersion int             `json:"protocol_version"`
+	ProviderFacts   *[]ProviderFact `json:"provider_facts,omitempty"`
 
 	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
 	Signature *TerminalSignature `json:"signature,omitempty"`
@@ -1571,6 +1573,35 @@ type Project struct {
 // ProjectList defines model for ProjectList.
 type ProjectList struct {
 	Projects []Project `json:"projects"`
+}
+
+// ProviderFact defines model for ProviderFact.
+type ProviderFact struct {
+	Available        bool                      `json:"available"`
+	DefaultModel     *string                   `json:"default_model,omitempty"`
+	Kind             string                    `json:"kind"`
+	ModelGroups      *[]ProviderModelGroupFact `json:"model_groups,omitempty"`
+	ObservedAtUnixMs *int64                    `json:"observed_at_unix_ms,omitempty"`
+	Reason           *string                   `json:"reason,omitempty"`
+	Version          *string                   `json:"version,omitempty"`
+}
+
+// ProviderModelFact defines model for ProviderModelFact.
+type ProviderModelFact struct {
+	ContextWindowTokens *int64    `json:"context_window_tokens,omitempty"`
+	Efforts             *[]string `json:"efforts,omitempty"`
+	Id                  *string   `json:"id,omitempty"`
+	Name                *string   `json:"name,omitempty"`
+	Provider            *string   `json:"provider,omitempty"`
+	Reasoning           *bool     `json:"reasoning,omitempty"`
+	Value               string    `json:"value"`
+}
+
+// ProviderModelGroupFact defines model for ProviderModelGroupFact.
+type ProviderModelGroupFact struct {
+	Id     string               `json:"id"`
+	Models *[]ProviderModelFact `json:"models,omitempty"`
+	Name   *string              `json:"name,omitempty"`
 }
 
 // RecoveryCodeResponse defines model for RecoveryCodeResponse.

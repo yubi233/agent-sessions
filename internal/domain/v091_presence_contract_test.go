@@ -168,11 +168,11 @@ func TestV091HeartbeatIdempotentMonotonicRevision(t *testing.T) {
 
 	// 连续推进的心跳：活性前进、无状态变化、revision 不增长。
 	now = now.Add(1 * time.Second)
-	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1); err != nil {
+	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1, nil, false); err != nil {
 		t.Fatalf("heartbeat t+1s: %v", err)
 	}
 	now = now.Add(1 * time.Second)
-	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1); err != nil {
+	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1, nil, false); err != nil {
 		t.Fatalf("heartbeat t+2s: %v", err)
 	}
 	row = assertTerminal(t0+2_000, 0, PresenceOnline)
@@ -180,14 +180,14 @@ func TestV091HeartbeatIdempotentMonotonicRevision(t *testing.T) {
 	// 乱序/更旧的 heartbeat（时钟回拨视角）：last_heartbeat 不能倒退。
 	backdated := time.UnixMilli(t0 - 5_000)
 	now = backdated
-	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1); err != nil {
+	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1, nil, false); err != nil {
 		t.Fatalf("stale heartbeat: %v", err)
 	}
 	row = assertTerminal(t0+2_000, 0, PresenceOnline)
 
 	// 回到最新时间继续在线心跳，revision 仍不无界增长。
 	now = time.UnixMilli(t0 + 15_000)
-	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1); err != nil {
+	if _, err := svc.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1, nil, false); err != nil {
 		t.Fatalf("heartbeat t+15s: %v", err)
 	}
 	row = assertTerminal(t0+15_000, 0, PresenceOnline)
@@ -281,7 +281,7 @@ func TestV091HeartbeatRecoveryRestoresOnlineConsistently(t *testing.T) {
 
 	// 阶段三：恢复后的重复心跳不产生重复状态变化。
 	now = now.Add(15 * time.Second)
-	if _, err := daemons.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1); err != nil {
+	if _, err := daemons.Heartbeat(ctx, accountID, deviceID, RoleTerminal, 1, nil, false); err != nil {
 		t.Fatalf("post-recovery heartbeat: %v", err)
 	}
 	row, err = repo.TerminalByDeviceID(ctx, deviceID)

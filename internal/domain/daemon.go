@@ -43,6 +43,11 @@ type DaemonHelloInput struct {
 	Hostname        string
 	Platform        string
 	Capabilities    []string
+	// ProviderFacts 是执行侧对其可执行 Provider 的运行时事实（v0.9.2 P1，additive）。
+	// 为空表示旧 Daemon 未上报，Relay 保持既有口径（不猜测、不回退到编译期白名单）。
+	ProviderFacts []ProviderFact
+	// ProviderFactsReported 区分"上报了空快照"与"完全没有该字段"（旧 Daemon）。
+	ProviderFactsReported bool
 }
 
 type DaemonHelloResult struct {
@@ -221,6 +226,18 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 	terminal.ProtocolVersion = in.ProtocolVersion
 	terminal.DaemonVersion = strings.TrimSpace(in.DaemonVersion)
 	terminal.CapabilitiesJSON = string(capabilities)
+	// v0.9.2 P1：执行侧 Provider 事实随 hello 落库。空列表也写入（"执行侧明确
+	// 声明当前没有任何可用 Provider"是有效事实），只有旧 Daemon 完全不携带该字段
+	// 时才保持既有快照——由调用方用 reported 标志区分。
+	if in.ProviderFactsReported {
+		raw, marshalErr := json.Marshal(in.ProviderFacts)
+		if marshalErr != nil {
+			return DaemonHelloResult{}, fmt.Errorf("序列化执行侧 Provider 事实: %w", marshalErr)
+		}
+		terminal.ProviderFactsJSON = string(raw)
+	} else if errors.Is(err, sql.ErrNoRows) || terminal.ProviderFactsJSON == "" {
+		terminal.ProviderFactsJSON = ""
+	}
 	terminal.LastHeartbeatUnixMS = now
 	terminal.PresenceRevision = presenceRevision
 	terminal.PresenceProjectedState = string(PresenceOnline)
@@ -254,7 +271,26 @@ func (s *DaemonService) Hello(ctx context.Context, in DaemonHelloInput) (DaemonH
 	}, nil
 }
 
-func (s *DaemonService) Heartbeat(ctx context.Context, accountID, deviceID, role string, protocolVersion int) (DaemonHeartbeatResult, error) {
+// providerFactsForHeartbeat 把执行侧事实序列化为存储载荷。
+// 返回 nil 表示"本次未上报"（旧 Daemon / 未携带字段），存储层据此保持既有快照；
+// 返回指针表示"本次上报了事实快照"——即使快照是空数组也整体替换，这样执行侧
+// 从"能跑 DSH"退化为"跑不了"时，一个心跳周期内就能纠正 Relay 的对外表述。
+func providerFactsForHeartbeat(facts []ProviderFact, reported bool) (*string, error) {
+	if !reported {
+		return nil, nil
+	}
+	if facts == nil {
+		facts = []ProviderFact{}
+	}
+	raw, err := json.Marshal(facts)
+	if err != nil {
+		return nil, fmt.Errorf("序列化执行侧 Provider 事实: %w", err)
+	}
+	encoded := string(raw)
+	return &encoded, nil
+}
+
+func (s *DaemonService) Heartbeat(ctx context.Context, accountID, deviceID, role string, protocolVersion int, providerFacts []ProviderFact, providerFactsReported bool) (DaemonHeartbeatResult, error) {
 	if role != RoleTerminal || deviceID == "" {
 		return DaemonHeartbeatResult{}, ErrTerminalRequired
 	}
@@ -272,7 +308,12 @@ func (s *DaemonService) Heartbeat(ctx context.Context, accountID, deviceID, role
 	// 的重复心跳不制造 revision（V091-02），恢复转换（offline/unknown -> online）
 	// 恰好 +1 一次（V091-05）。协议已通过 validateDaemonProtocol，next 恒为 online。
 	prevAvailability := s.Presence.Project(terminal, now)
-	revision, changed, err := s.repo.TouchTerminalPresence(ctx, terminal.ID, now, string(prevAvailability), string(PresenceOnline))
+	// v0.9.2 P1：心跳随行刷新执行侧 Provider 事实（未携带时保持既有快照）。
+	factsJSON, err := providerFactsForHeartbeat(providerFacts, providerFactsReported)
+	if err != nil {
+		return DaemonHeartbeatResult{}, err
+	}
+	revision, changed, err := s.repo.TouchTerminalPresence(ctx, terminal.ID, now, string(prevAvailability), string(PresenceOnline), factsJSON)
 	if err != nil {
 		return DaemonHeartbeatResult{}, err
 	}

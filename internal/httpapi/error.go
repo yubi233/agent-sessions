@@ -4,7 +4,9 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yubi233/agent-sessions/internal/domain"
@@ -111,6 +113,11 @@ func mapError(err error) (int, protocol.APIError) {
 // writeError 统一写出脱敏错误响应。
 func writeError(c *gin.Context, err error) {
 	status, apiErr := mapError(err)
+	if status >= http.StatusInternalServerError && os.Getenv("AGENT_SESSIONS_DEBUG_ERRORS") == "1" {
+		// 仅诊断用途（默认关闭）：未映射错误默认被折叠为 "internal error"。
+		// 排查时用该开关把原始错误打到 stderr，避免把内部细节放进响应体。
+		fmt.Fprintf(os.Stderr, "[httpapi-debug] %s %s: %v\n", c.Request.Method, c.Request.URL.Path, err)
+	}
 	c.AbortWithStatusJSON(status, apiErr)
 }
 

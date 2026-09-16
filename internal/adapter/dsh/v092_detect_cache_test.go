@@ -1,18 +1,16 @@
 package dsh
 
-// V092-02 Daemon 进程内 Detect 复核（v0.9.2 §4「P0 实测归因」）。
+// V092-02 / V092-05 DSH 适配器进程内探测契约（v0.9.2 P0 归因 + P1 受控重探测）。
 //
-// 归因目标（§1.2 四层）：
-//   L1：能力事实源位于**进程内**适配器。Detect 的成败由持有该适配器的进程
-//       决定——Relay 容器为 scratch 单二进制（无 node、无 DSH 检出）时，
-//       同一份代码在云端 Relay 必然 fail-closed，而本机 Daemon 侧正常。
-//   L3：首次握手结果被永久缓存（adapter.go handshakeDone），失败后不可恢复：
-//       环境修复（装上 node / 修好桥路径）也不会让既有进程重新可用，
-//       只能重启进程。这正是"手机显示 Provider 当前不可用后一直不恢复"的机制。
+// 背景（P0 实测，报告 e2e-verify/reports/2026-09-16T04-36-52-300Z/V092-ATTRIB/）：
+//   L1：能力事实源位于**进程内**适配器。同一份 dsh.Adapter 代码在云端 Relay 容器
+//       （scratch 单二进制，无 node / 无 DSH 检出）必然 fail-closed，而执行侧
+//       Daemon 进程正常。移动端消费的 /v1/capabilities 来自 Relay 进程，故误判。
+//   L3：首次握手结果被永久缓存，环境修复后同进程内不可自愈，只能重启进程。
 //
-// 本文件只做归因取证与回归钉扎，不改变产品行为；受控重探测（C2/V092-05）
-// 在 P1 落地时把 TestV092DetectCacheLocksFailureUntilRestart 从"记录现状"
-// 反转为"修复后必须可恢复"。
+// P1 修复（C2/§3.2 冻结契约）：Detect 增加**受控重探测**——
+//   失败才重探、冷却窗口约束、并发 single-flight、成功快照仍零成本命中。
+//   本文件的缓存类用例因此从"记录 L3 现状"反转为"钉扎 C2 契约"。
 //
 // 对应项目文档 docs/zh/项目文档.md「PC Daemon」与「统一能力模型」章节。
 
@@ -27,13 +25,26 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
-// (L1) 进程内事实源：同一份 dsh.Adapter 代码的 Detect 结果完全由该进程的环境决定。
-// 子场景 1 = 云端 Relay 形态（无 node / 无桥检出 → 传输层无法 spawn）：
-// Detect 不返回错误，而是给出 fail-closed 矩阵（Version 空 + 全 unsupported + 中文原因）。
+// v092NoNodeFactory 返回"云端 Relay 形态"的传输工厂：spawn 必然失败（无 node）。
+func v092NoNodeFactory() (BridgeTransport, error) {
+	return nil, errors.New(`未找到 node 运行时: exec: "node": executable file not found in $PATH`)
+}
+
+// v092HealthyFactory 返回可正常握手的假桥（等价"环境已修复"）。
+func v092HealthyFactory(t *testing.T, sessionID string) func() (BridgeTransport, error) {
+	t.Helper()
+	return func() (BridgeTransport, error) {
+		fb := newFakeBridge()
+		fb.script = respondByMethod(t, sessionID)
+		return fb, nil
+	}
+}
+
+// (L1) 进程内事实源：同一份 Adapter 代码的可用性完全由持有它的进程环境决定。
+// 子场景 = 云端 Relay 形态（传输层无法 spawn）：Detect 不返回错误，而是给出
+// fail-closed 矩阵（Version 空 + 全 unsupported + 可解释中文原因）。
 func TestV092DetectIsPerProcessFact(t *testing.T) {
-	a := NewWithTransport(func() (BridgeTransport, error) {
-		return nil, errors.New(`未找到 node 运行时: exec: "node": executable file not found in $PATH`)
-	})
+	a := NewWithTransport(v092NoNodeFactory)
 	caps, err := a.Detect(context.Background())
 	if err != nil {
 		t.Fatalf("Detect 不应返回错误（fail-closed 走能力矩阵）: %v", err)
@@ -52,26 +63,31 @@ func TestV092DetectIsPerProcessFact(t *testing.T) {
 			t.Fatalf("fail-closed 必须带可解释的中文原因: %#v", c)
 		}
 	}
-	// 原因必须可传导（移动端展示"Provider 当前不可用"背后的可诊断事实）。
+	// 原因必须可传导（移动端"Provider 当前不可用"背后的可诊断事实）。
 	if !strings.Contains(caps.Capabilities[0].Reason, "node") {
 		t.Fatalf("原因应保留可诊断细节: %q", caps.Capabilities[0].Reason)
 	}
 }
 
-// (L3-a) 缓存死锁（传输层失败形态）：spawn 失败（云端 scratch 容器无 node）后
-// handshakeDone 置位，此后不再重探；即使桥已恢复可用，同一进程内仍永久 fail-closed。
-func TestV092DetectCacheLocksFailureUntilRestart(t *testing.T) {
-	failing := true
-	var spawns int
+// (C2-a) 传输层失败后的受控重探：冷却窗口内不重探（防 spawn 风暴），
+// 冷却到期后自动重探并恢复能力与模型目录——不再需要重启进程。
+func TestV092ReprobeRecoversAfterTransportFailure(t *testing.T) {
+	recovered := false
+	spawns := 0
 	a := NewWithTransport(func() (BridgeTransport, error) {
 		spawns++
-		if failing {
-			return nil, errors.New(`未找到 node 运行时: exec: "node": executable file not found in $PATH`)
+		if !recovered {
+			return v092NoNodeFactory()
 		}
 		fb := newFakeBridge()
-		fb.script = respondByMethod(t, "v092-healed")
+		fb.script = respondByMethod(t, "v092-transport-healed")
 		return fb, nil
 	})
+	// 注入可控时钟：测试不 sleep，直接推进时间越过冷却窗口。
+	now := time.Unix(1_800_000_000, 0)
+	a.clock = func() time.Time { return now }
+	a.reprobeCooldown = 15 * time.Second
+
 	first, err := a.Detect(context.Background())
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
@@ -79,66 +95,110 @@ func TestV092DetectCacheLocksFailureUntilRestart(t *testing.T) {
 	if first.Version != "" {
 		t.Fatalf("首次失败必须 fail-closed: %#v", first)
 	}
+	firstReason := first.Capabilities[0].Reason
 	if spawns != 1 {
 		t.Fatalf("首次 Detect 应尝试一次 spawn，spawns=%d", spawns)
 	}
 
-	// "环境修复"：装上 node / 修好桥路径。同一适配器实例必须仍然不可用（L3）。
-	failing = false
+	// "环境修复"（装上 node）：冷却窗口内必须仍然不重探，事实保持稳定。
+	recovered = true
+	now = now.Add(5 * time.Second)
 	second, err := a.Detect(context.Background())
 	if err != nil {
-		t.Fatalf("第二次 Detect: %v", err)
+		t.Fatalf("冷却期内 Detect: %v", err)
 	}
 	if second.Version != "" {
-		t.Fatalf("现状应仍被缓存锁死（L3 缺陷）；P1 实现受控重探测后本断言需反转: %#v", second)
+		t.Fatalf("冷却窗口内不得重探（应继续返回失败快照）: %#v", second)
 	}
 	if spawns != 1 {
-		t.Fatalf("失败缓存命中时不得重新 spawn，spawns=%d（want 1）", spawns)
+		t.Fatalf("冷却窗口内不得重新 spawn，spawns=%d（want 1）", spawns)
 	}
-	// 关键用户影响：同一进程内，后续所有 Detect 都返回首次失败原因，
-	// 移动端因此持续显示"Provider 当前不可用"，只有重启进程才能恢复。
-	if second.Capabilities[0].Reason != first.Capabilities[0].Reason {
-		t.Fatalf("缓存必须原样返回首次失败原因: %q vs %q",
-			second.Capabilities[0].Reason, first.Capabilities[0].Reason)
+	if second.Capabilities[0].Reason != firstReason {
+		t.Fatalf("冷却窗口内原因必须保持稳定: %q vs %q", second.Capabilities[0].Reason, firstReason)
+	}
+
+	// 冷却到期：下一次 Detect 触发重探并恢复。
+	now = now.Add(11 * time.Second)
+	third, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatalf("冷却到期后 Detect: %v", err)
+	}
+	if third.Version == "" {
+		t.Fatalf("冷却到期后必须自愈（无需重启进程），实际仍 fail-closed: %s", third.Capabilities[0].Reason)
+	}
+	if spawns != 2 {
+		t.Fatalf("冷却到期应重探一次，spawns=%d（want 2）", spawns)
+	}
+	var startOK bool
+	for _, c := range third.Capabilities {
+		if c.Name == "start" && c.Status == adapter.CapabilityNative {
+			startOK = true
+		}
+	}
+	if !startOK {
+		t.Fatalf("恢复后 start 必须 native: %#v", third.Capabilities)
+	}
+	if a.reprobeAttemptCount() != 0 {
+		t.Fatalf("成功后重探计数必须复位，got %d", a.reprobeAttemptCount())
 	}
 }
 
-// (L3-b) 缓存死锁（握手失败形态）：传输可创建但握手报错（桥存在但版本/协议异常）。
-// 与 L3-a 同构：失败被永久缓存。
-func TestV092DetectCacheLocksHandshakeFailure(t *testing.T) {
-	failing := true
+// (C2-b) 握手失败形态（桥存在但不应答/协议不匹配）同样受控自愈，
+// 且**新失败原因实时覆盖旧原因**（用户看到的是当前事实，不是历史陈迹）。
+func TestV092ReprobeRecoversAfterHandshakeFailure(t *testing.T) {
+	mode := "no-reply"
 	a := NewWithTransport(func() (BridgeTransport, error) {
 		fb := newFakeBridge()
-		if failing {
-			// initialize 无应答（桥存在但不应答/协议不匹配）：等价握手失败。
-			// 用调用方 deadline 收敛等待，不阻塞 30s 默认握手超时。
+		switch mode {
+		case "no-reply":
+			// 桥不应答 initialize：用调用方 deadline 收敛等待（不阻塞 30s 默认超时）。
 			fb.script = func(*fakeBridge, map[string]any) {}
-			return fb, nil
+		case "gate-rejected":
+			fb.script = respondInitializeAgentInfo(t, verifiedBridgeName, "9.9.9")
+		default:
+			fb.script = respondByMethod(t, "v092-handshake-healed")
 		}
-		fb.script = respondByMethod(t, "v092-handshake-healed")
 		return fb, nil
 	})
-	shortCtx, cancelShort := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	first, err := a.Detect(shortCtx)
-	cancelShort()
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
+	now := time.Unix(1_800_000_000, 0)
+	a.clock = func() time.Time { return now }
+	a.reprobeCooldown = 10 * time.Second
+
+	probe := func() adapter.Capabilities {
+		t.Helper()
+		shortCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		caps, err := a.Detect(shortCtx)
+		if err != nil {
+			t.Fatalf("Detect: %v", err)
+		}
+		return caps
 	}
+
+	first := probe()
 	if first.Version != "" {
 		t.Fatalf("握手失败必须 fail-closed: %#v", first)
 	}
-	failing = false
-	second, err := a.Detect(context.Background())
-	if err != nil {
-		t.Fatalf("第二次 Detect: %v", err)
-	}
+	// 第二轮：原因类型变化（版本门拒绝）→ 冷却到期后重探必须刷新原因文本。
+	mode = "gate-rejected"
+	now = now.Add(11 * time.Second)
+	second := probe()
 	if second.Version != "" {
-		t.Fatalf("握手失败同样被永久缓存（L3）；P1 受控重探测落地后本断言需反转: %#v", second)
+		t.Fatalf("版本门拒绝仍须 fail-closed: %#v", second)
+	}
+	if !strings.Contains(second.Capabilities[0].Reason, "9.9.9") {
+		t.Fatalf("重探后的新失败原因必须覆盖旧原因: %q", second.Capabilities[0].Reason)
+	}
+	// 第三轮：真正修复 → 恢复。
+	mode = "healthy"
+	now = now.Add(11 * time.Second)
+	third := probe()
+	if third.Version == "" {
+		t.Fatalf("修复后必须自愈，实际: %s", third.Capabilities[0].Reason)
 	}
 }
 
-// (对照) 成功握手后同样被缓存：第二次 Detect 不重新 spawn（握手有成本，C2 明确
-// 禁止无条件每请求重探）。该用例与上面互为边界，避免 P1 实现改成"每次都重探"。
+// (C2-c) 边界：成功快照永久零成本命中——重探测不得退化为"每个请求都 spawn 桥"。
 func TestV092DetectCacheHitsAreFree(t *testing.T) {
 	var spawns int
 	a := NewWithTransport(func() (BridgeTransport, error) {
@@ -160,10 +220,42 @@ func TestV092DetectCacheHitsAreFree(t *testing.T) {
 	if spawns != spawnsAfterFirst {
 		t.Fatalf("成功缓存不得重复 spawn（spawns %d → %d）", spawnsAfterFirst, spawns)
 	}
+	if a.reprobeAttemptCount() != 0 {
+		t.Fatalf("成功快照路径不得累计重探计数，got %d", a.reprobeAttemptCount())
+	}
+}
+
+// (C2-d) 冷却配置语义：显式 0 = 不缓存失败（每次重探，诊断用）；
+// 非法/空值回退缺省 15s（该开关不具备"关闭安全门"的语义）。
+func TestV092ReprobeCooldownEnv(t *testing.T) {
+	t.Setenv(EnvReprobeCooldown, "0")
+	if got := reprobeCooldownFromEnv(); got != 0 {
+		t.Fatalf("显式 0 应关闭失败缓存: %v", got)
+	}
+	t.Setenv(EnvReprobeCooldown, "2500")
+	if got := reprobeCooldownFromEnv(); got != 2500*time.Millisecond {
+		t.Fatalf("显式毫秒值应生效: %v", got)
+	}
+	t.Setenv(EnvReprobeCooldown, "  ")
+	if got := reprobeCooldownFromEnv(); got != defaultReprobeCooldown {
+		t.Fatalf("空白应回退缺省: %v", got)
+	}
+	t.Setenv(EnvReprobeCooldown, "-1")
+	if got := reprobeCooldownFromEnv(); got != defaultReprobeCooldown {
+		t.Fatalf("负值应回退缺省: %v", got)
+	}
+	t.Setenv(EnvReprobeCooldown, "abc")
+	if got := reprobeCooldownFromEnv(); got != defaultReprobeCooldown {
+		t.Fatalf("非法值应回退缺省: %v", got)
+	}
+	os.Unsetenv(EnvReprobeCooldown)
+	if got := reprobeCooldownFromEnv(); got != defaultReprobeCooldown {
+		t.Fatalf("未设置应使用缺省: %v", got)
+	}
 }
 
 // (live) 执行侧真实桥复核：门控 AGENT_SESSIONS_DSH_LIVE=1。
-// 与 TestLiveBridgeLifecycle 同口径，额外记录模型目录规模，供 P0 归因报告引用。
+// 与 TestLiveBridgeLifecycle 同口径，额外记录模型目录规模，供归因报告引用。
 // 环境不可用时明确 fail（不记 passed），保证"执行侧正常"的结论有真实凭据。
 func TestV092LiveExecutionSideDetect(t *testing.T) {
 	if os.Getenv("AGENT_SESSIONS_DSH_LIVE") != "1" {

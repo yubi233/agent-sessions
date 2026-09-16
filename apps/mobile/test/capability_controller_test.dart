@@ -9,6 +9,102 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/fixture_owner.dart';
 
 void main() {
+  // v0.9.2 G1/G4（V092-03/04）：能力事实来源与不可用原因的客户端回归。
+  // 云端 Relay 自己跑不了 DSH，可用性事实由执行侧 Daemon 上报并在 Relay 标注
+  // facts_source=terminal；客户端必须原样保留该字段（仅诊断用，不参与门控），
+  // 并且在不可用时如实展示执行侧给出的原因。
+  group('V092 capability 事实来源与不可用原因', () {
+    test('facts_source 解析：terminal/relay/unavailable 与旧 Relay 缺字段', () {
+      final parsed = CapabilityMatrix.fromRelayJson({
+        'providers': [
+          {
+            'kind': 'dsh',
+            'version': '0.0.1',
+            'available': true,
+            'facts_source': 'terminal',
+            'capabilities': [
+              {'name': 'start', 'status': 'native'},
+            ],
+          },
+          {
+            'kind': 'opencode',
+            'version': '1.17.13',
+            'available': true,
+            'facts_source': 'relay',
+            'capabilities': [
+              {'name': 'start', 'status': 'native'},
+            ],
+          },
+          {
+            'kind': 'codex',
+            'available': false,
+            'facts_source': 'unavailable',
+            'capabilities': [
+              {
+                'name': 'start',
+                'status': 'unsupported',
+                'reason': '执行侧未找到 node 运行时',
+              },
+            ],
+          },
+          {
+            // 旧 Relay 不返回 facts_source：必须解析为空串，不抛错、不改变门控。
+            'kind': 'claude',
+            'version': '1.0.0',
+            'available': true,
+            'capabilities': [
+              {'name': 'start', 'status': 'native'},
+            ],
+          },
+        ],
+      });
+      expect(parsed.provider('dsh').factsSource, 'terminal');
+      expect(parsed.provider('dsh').factsFromExecutionSide, isTrue);
+      expect(parsed.provider('opencode').factsSource, 'relay');
+      expect(parsed.provider('opencode').factsFromExecutionSide, isFalse);
+      expect(parsed.provider('codex').factsSource, 'unavailable');
+      expect(parsed.provider('claude').factsSource, '');
+      // 门控仍只由 available/status 决定：新字段不得放行未声明能力。
+      expect(
+        parsed.provider('claude').factsFromExecutionSide,
+        isFalse,
+      );
+      expect(parsed.provider('claude').capability('start').isSupported, isTrue);
+    });
+
+    test('Provider 不可用时原因原样透出（不折叠成笼统文案）', () {
+      final parsed = CapabilityMatrix.fromRelayJson({
+        'providers': [
+          {
+            'kind': 'dsh',
+            'available': false,
+            'facts_source': 'unavailable',
+            'capabilities': [
+              {
+                'name': 'start',
+                'status': 'unsupported',
+                'reason': '执行侧未找到 node 运行时',
+              },
+            ],
+          },
+        ],
+      });
+      final profile = parsed.provider('dsh');
+      // available=false 时 capability() 统一 fail-closed，但原因优先取矩阵声明。
+      final entry = profile.capability('start');
+      expect(entry.isSupported, isFalse);
+      expect(
+        entry.reason == null || entry.reason!.contains('不可用'),
+        isTrue,
+      );
+      // 执行侧原因本身必须能从原始矩阵读出（供 composer 展示）。
+      final declared = profile.capabilities
+          .firstWhere((item) => item.name == 'start')
+          .reason;
+      expect(declared, '执行侧未找到 node 运行时');
+    });
+  });
+
   group('MOBILE-03 MODE-01..03 capability 控制状态机', () {
     test('V07-02：模型目录与默认值只接受 Host 明确声明的安全选项', () {
       final parsed = CapabilityMatrix.fromRelayJson({

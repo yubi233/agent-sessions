@@ -50,6 +50,8 @@ class SessionModelSeat extends StatefulWidget {
     this.provider,
     this.providerVersion,
     this.providerAvailable = false,
+    this.providerReason,
+    this.providerFactsSource,
     this.modelCapability = const CapabilityEntry(
       name: 'model_select',
       availability: CapabilityAvailability.unsupported,
@@ -70,6 +72,14 @@ class SessionModelSeat extends StatefulWidget {
   final String? provider;
   final String? providerVersion;
   final bool providerAvailable;
+
+  /// Provider 不可用时由 Relay 转达的执行侧原因（v0.9.2 G4）。
+  /// 为空时回退到既有的保守文案，绝不猜测原因。
+  final String? providerReason;
+
+  /// 可用性事实来源（relay / terminal / unavailable；v0.9.2 G1）。
+  /// 仅用于详情展示，不参与任何门控判断。
+  final String? providerFactsSource;
   final SessionModelCatalog catalog;
   final CapabilityEntry modelCapability;
   final CapabilityEntry effortCapability;
@@ -178,7 +188,14 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
   }
 
   String get _pickerHint {
-    if (!widget.providerAvailable) return 'Provider 当前不可用。';
+    if (!widget.providerAvailable) {
+      // v0.9.2 G4（错误可见）：可用性事实来自执行侧，失败原因也应原样呈现，
+      // 而不是折叠成笼统的"Provider 当前不可用"。原因由 Relay 转达的
+      // 执行侧事实给出（如"未找到 node 运行时"），用户据此能判断该修什么。
+      final reason = widget.providerReason?.trim();
+      if (reason != null && reason.isNotEmpty) return reason;
+      return 'Provider 当前不可用。';
+    }
     if (_canOpenPicker) {
       return _effortDisabled ? '选择模型' : '选择模型和推理等级';
     }

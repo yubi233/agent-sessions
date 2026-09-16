@@ -115,7 +115,7 @@ func TestV091PresenceReaperTransitionsBoundedAndIsolated(t *testing.T) {
 	//（心跳间隔 < 40s，prev 投影恒为 online，不制造恢复转换）。
 	for i := 0; i < 3; i++ {
 		f.advance(15 * time.Second)
-		if _, err := f.daemon.Heartbeat(ctx, f.accountID, "dev-v091-reaper-beta", RoleTerminal, 1); err != nil {
+		if _, err := f.daemon.Heartbeat(ctx, f.accountID, "dev-v091-reaper-beta", RoleTerminal, 1, nil, false); err != nil {
 			t.Fatalf("keep beta alive: %v", err)
 		}
 	}
@@ -205,7 +205,7 @@ func TestV091PresenceReaperBoundedBatchSelfHeals(t *testing.T) {
 	// 丢唤醒自愈：全新 Terminal 一次性拨到远超 deadline（跳过 unknown 窗口的所有
 	// tick），下一次扫描仍然把最终事实补齐。
 	f.advance(10 * time.Minute)
-	if _, err := f.daemon.Heartbeat(ctx, f.accountID, "dev-v091-reaper-bounded-a", RoleTerminal, 1); err != nil {
+	if _, err := f.daemon.Heartbeat(ctx, f.accountID, "dev-v091-reaper-bounded-a", RoleTerminal, 1, nil, false); err != nil {
 		t.Fatalf("revive bounded-a: %v", err)
 	}
 	f.advance(10 * time.Minute)

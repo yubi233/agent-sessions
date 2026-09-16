@@ -408,6 +408,12 @@ var migrations = []string{
 	//     旧 Relay/旧客户端兼容策略见迭代计划 §4 P0。
 	`ALTER TABLE terminals ADD COLUMN presence_revision INTEGER NOT NULL DEFAULT 0;`,
 	`ALTER TABLE terminals ADD COLUMN presence_projected_state TEXT NOT NULL DEFAULT '';`,
+	// v0.9.2 P1（迭代计划 §3.2 C1，T2 裁决）：执行侧 Provider 运行时事实。
+	// Daemon 是 DSH 等 Provider 的真实执行者；Relay 进程自己的 Detect 无法代表它
+	// （云端 Relay 镜像是 scratch 单二进制，没有 node/DSH 检出）。该列保存 Terminal
+	// 上报的事实快照（版本、失败原因、模型目录安全元数据），供 /v1/capabilities
+	// 在 Relay 自身探测失败时采用执行侧事实；空串表示旧 Daemon 未上报（保持既有口径）。
+	`ALTER TABLE terminals ADD COLUMN provider_facts_json TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

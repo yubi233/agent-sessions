@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -23,6 +25,158 @@ type daemonHelloRequest struct {
 	Platform        string                  `json:"platform"`
 	Capabilities    []string                `json:"capabilities"`
 	Signature       authz.TerminalSignature `json:"signature"`
+	// ProviderFacts 是执行侧 Provider 运行时事实（v0.9.2 P1）。用指针区分
+	// "上报了空数组"（有效事实：当前没有任何可用 Provider）与"旧 Daemon 完全没有
+	// 该字段"（保持既有快照，不把未知当成不可用）。
+	ProviderFacts *[]providerFactPayload `json:"provider_facts"`
+}
+
+// providerFactPayload 是执行侧事实的 wire 形状（与 openapi ProviderFact 对齐）。
+// 只承载安全元数据：版本、中文失败原因与模型目录；不接受路径、凭据或正文。
+type providerFactPayload struct {
+	Kind             string                      `json:"kind"`
+	Available        bool                        `json:"available"`
+	Version          string                      `json:"version"`
+	Reason           string                      `json:"reason"`
+	DefaultModel     string                      `json:"default_model"`
+	ObservedAtUnixMS int64                       `json:"observed_at_unix_ms"`
+	ModelGroups      []providerModelGroupPayload `json:"model_groups"`
+}
+
+type providerModelGroupPayload struct {
+	ID     string                     `json:"id"`
+	Name   string                     `json:"name"`
+	Models []providerModelFactPayload `json:"models"`
+}
+
+type providerModelFactPayload struct {
+	Provider            string   `json:"provider"`
+	Value               string   `json:"value"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	ContextWindowTokens int64    `json:"context_window_tokens"`
+	Reasoning           bool     `json:"reasoning"`
+	Efforts             []string `json:"efforts"`
+}
+
+// providerFactFields 是长度上限（与 openapi schema 的 maxLength 对齐）。
+// 越界即拒绝整条请求：静默截断会让客户端展示与执行侧不一致的目录。
+const (
+	maxProviderFactKindLength    = 32
+	maxProviderFactVersionLength = 64
+	maxProviderFactReasonLength  = 256
+	maxProviderFactModelLength   = 192
+	maxProviderFactGroupLength   = 96
+	maxProviderFactEffortLength  = 64
+	maxProviderFactsPerTerminal  = 8
+	maxProviderFactGroups        = 8
+	maxProviderFactModels        = 64
+	maxProviderFactEfforts       = 16
+)
+
+// providerFactsToDomain 把 wire 事实转换为领域事实，并做边界校验。
+// 校验失败一律拒绝（fail-closed）：宁可让旧快照继续生效，也不接受越界内容。
+func providerFactsToDomain(in *[]providerFactPayload) ([]domain.ProviderFact, bool, error) {
+	if in == nil {
+		return nil, false, nil
+	}
+	payloads := *in
+	if payloads == nil {
+		payloads = []providerFactPayload{}
+	}
+	if len(payloads) > maxProviderFactsPerTerminal {
+		return nil, true, fmt.Errorf("provider_facts 最多 %d 条", maxProviderFactsPerTerminal)
+	}
+	out := make([]domain.ProviderFact, 0, len(payloads))
+	for _, payload := range payloads {
+		kind := strings.TrimSpace(payload.Kind)
+		if kind == "" {
+			return nil, true, errors.New("provider_facts 缺少 kind")
+		}
+		if len(kind) > maxProviderFactKindLength {
+			return nil, true, fmt.Errorf("provider_facts kind 超长（上限 %d）", maxProviderFactKindLength)
+		}
+		reason := strings.TrimSpace(payload.Reason)
+		if len(reason) > maxProviderFactReasonLength {
+			return nil, true, fmt.Errorf("provider_facts reason 超长（上限 %d）", maxProviderFactReasonLength)
+		}
+		version := strings.TrimSpace(payload.Version)
+		if len(version) > maxProviderFactVersionLength {
+			return nil, true, fmt.Errorf("provider_facts version 超长（上限 %d）", maxProviderFactVersionLength)
+		}
+		if len(payload.ModelGroups) > maxProviderFactGroups {
+			return nil, true, fmt.Errorf("provider_facts model_groups 最多 %d 组", maxProviderFactGroups)
+		}
+		fact := domain.ProviderFact{
+			Kind:             kind,
+			Available:        payload.Available,
+			Version:          version,
+			Reason:           reason,
+			ObservedAtUnixMS: payload.ObservedAtUnixMS,
+		}
+		for _, group := range payload.ModelGroups {
+			if len(group.Models) > maxProviderFactModels {
+				return nil, true, fmt.Errorf("provider_facts 分组 %q 模型数超上限 %d", group.ID, maxProviderFactModels)
+			}
+			converted := domain.ProviderFactGroup{ID: strings.TrimSpace(group.ID), Name: strings.TrimSpace(group.Name)}
+			if len(converted.ID) > maxProviderFactGroupLength {
+				return nil, true, fmt.Errorf("provider_facts 分组 id 超长（上限 %d）", maxProviderFactGroupLength)
+			}
+			for _, model := range group.Models {
+				value := strings.TrimSpace(model.Value)
+				if value == "" {
+					return nil, true, errors.New("provider_facts 模型缺少 value（opaque 选择值不可猜测）")
+				}
+				if len(value) > maxProviderFactModelLength {
+					return nil, true, fmt.Errorf("provider_facts 模型 value 超长（上限 %d）", maxProviderFactModelLength)
+				}
+				if len(model.Efforts) > maxProviderFactEfforts {
+					return nil, true, fmt.Errorf("provider_facts 模型 efforts 最多 %d 项", maxProviderFactEfforts)
+				}
+				efforts := make([]string, 0, len(model.Efforts))
+				for _, effort := range model.Efforts {
+					trimmed := strings.TrimSpace(effort)
+					if len(trimmed) > maxProviderFactEffortLength {
+						return nil, true, fmt.Errorf("provider_facts effort 超长（上限 %d）", maxProviderFactEffortLength)
+					}
+					if trimmed != "" {
+						efforts = append(efforts, trimmed)
+					}
+				}
+				converted.Models = append(converted.Models, domain.ProviderFactModel{
+					Provider:            strings.TrimSpace(model.Provider),
+					Value:               value,
+					ID:                  strings.TrimSpace(model.ID),
+					Name:                strings.TrimSpace(model.Name),
+					ContextWindowTokens: model.ContextWindowTokens,
+					Reasoning:           model.Reasoning,
+					Efforts:             efforts,
+				})
+			}
+			fact.ModelGroups = append(fact.ModelGroups, converted)
+		}
+		if defaultModel := strings.TrimSpace(payload.DefaultModel); defaultModel != "" {
+			// 默认模型必须落在目录内：否则客户端会展示一个无法提交的默认项。
+			if !providerFactHasModel(fact.ModelGroups, defaultModel) {
+				return nil, true, fmt.Errorf("provider_facts 默认模型 %q 不在模型目录内", defaultModel)
+			}
+			fact.DefaultModel = defaultModel
+		}
+		out = append(out, fact)
+	}
+	return out, true, nil
+}
+
+// providerFactHasModel 判断模型引用是否出现在目录中。
+func providerFactHasModel(groups []domain.ProviderFactGroup, value string) bool {
+	for _, group := range groups {
+		for _, model := range group.Models {
+			if model.Value == value {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *API) handleDaemonHello(c *gin.Context) {
@@ -37,10 +191,16 @@ func (a *API) handleDaemonHello(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	providerFacts, factsReported, err := providerFactsToDomain(req.ProviderFacts)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, err.Error()))
+		return
+	}
 	result, err := a.Daemons.Hello(c.Request.Context(), domain.DaemonHelloInput{
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
 		ProtocolVersion: req.ProtocolVersion, DaemonVersion: req.DaemonVersion,
 		Hostname: req.Hostname, Platform: req.Platform, Capabilities: req.Capabilities,
+		ProviderFacts: providerFacts, ProviderFactsReported: factsReported,
 	})
 	if err != nil {
 		writeError(c, err)
@@ -104,6 +264,8 @@ func (a *API) handleDaemonChallenge(c *gin.Context) {
 type daemonHeartbeatRequest struct {
 	ProtocolVersion int                     `json:"protocol_version"`
 	Signature       authz.TerminalSignature `json:"signature"`
+	// ProviderFacts 语义同 hello：指针区分"上报空快照"与"未携带"。
+	ProviderFacts *[]providerFactPayload `json:"provider_facts"`
 }
 
 func (a *API) handleDaemonHeartbeat(c *gin.Context) {
@@ -118,7 +280,12 @@ func (a *API) handleDaemonHeartbeat(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	result, err := a.Daemons.Heartbeat(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, req.ProtocolVersion)
+	providerFacts, factsReported, err := providerFactsToDomain(req.ProviderFacts)
+	if err != nil {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, err.Error()))
+		return
+	}
+	result, err := a.Daemons.Heartbeat(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role, req.ProtocolVersion, providerFacts, factsReported)
 	if err != nil {
 		writeError(c, err)
 		return

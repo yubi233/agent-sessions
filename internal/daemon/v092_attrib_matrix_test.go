@@ -306,6 +306,7 @@ func TestV092AttribVersionGateRejectionIsExplicit(t *testing.T) {
 		t.Fatal("版本门拒绝不得留下事件摘要")
 	}
 }
+
 // v092LastHandle 返回最近创建的 fake handle。调用方不得持 fake.mu——
 // lastHandle() 自身会加锁（P0 矩阵首轮曾因持锁调用导致测试自死锁 600s 超时）。
 func v092LastHandle(t *testing.T, fake *fakeAdapter) *fakeHandle {
@@ -330,6 +331,7 @@ func (h *fakeHandle) injectSendError(err error) {
 	defer h.mu.Unlock()
 	h.sendErr = err
 }
+
 // newStreamingFakeAdapter 构造 DSH 真实形态的流式 fake adapter（ResumeStreaming 交出句柄）。
 // 非流式 fakeAdapter 无法把 runtime handle 交给 runner，只能验证 fail-closed 分支。
 func newStreamingFakeAdapter(provider string) *streamingFakeAdapter {

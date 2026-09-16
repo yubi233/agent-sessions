@@ -75,7 +75,9 @@ type Repository interface {
 	//     （legacy 列保持既有语义）并把持久投影推进到 nextState。
 	// 返回最新 revision 与「本次调用是否发生投影变化」，供 presence invalidation
 	// 按 revision 去重、单次发布（计划 §3.3）。
-	TouchTerminalPresence(ctx context.Context, terminalID string, nowUnixMS int64, prevAvailability string, nextState string) (revision int64, changed bool, err error)
+	// providerFactsJSON 为 nil 表示本次心跳未携带 Provider 事实（保持既有快照），
+	// 非 nil 时整体替换（v0.9.2 P1 执行侧事实源）。
+	TouchTerminalPresence(ctx context.Context, terminalID string, nowUnixMS int64, prevAvailability string, nextState string, providerFactsJSON *string) (revision int64, changed bool, err error)
 	// ListPresenceSweepCandidates 列出「需要过期投影转换」的 Terminal（只返回会
 	// 发生真实转换的行，避免已转换行饿死有界批次）：持久投影 online 且退出 suspect
 	// 窗，或持久投影 unknown 且过了 offline deadline。按 last_heartbeat 升序、
@@ -367,16 +369,19 @@ type RecoveryRow struct {
 
 // TerminalRow 是 terminals 表的行投影。
 type TerminalRow struct {
-	ID                  string
-	DeviceID            string
-	AccountID           string
-	Hostname            string
-	Platform            string
-	Status              string
-	LastSeenUnixMS      int64
-	ProtocolVersion     int
-	DaemonVersion       string
-	CapabilitiesJSON    string
+	ID               string
+	DeviceID         string
+	AccountID        string
+	Hostname         string
+	Platform         string
+	Status           string
+	LastSeenUnixMS   int64
+	ProtocolVersion  int
+	DaemonVersion    string
+	CapabilitiesJSON string
+	// ProviderFactsJSON 是执行侧上报的 Provider 运行时事实（v0.9.2 P1，additive）。
+	// 空串表示旧 Daemon 未上报；内容只含版本、失败原因与模型目录安全元数据。
+	ProviderFactsJSON   string
 	LastHeartbeatUnixMS int64
 	// PresenceRevision 是 availability 投影的单调版本号（v0.9.1 C1，additive）。
 	// 只在投影真实变化时 +1；客户端与 SSE invalidation 以它做去重与丢帧补偿。

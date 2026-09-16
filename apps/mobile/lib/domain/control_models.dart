@@ -213,6 +213,7 @@ class ProviderCapabilityProfile {
     required this.version,
     required this.available,
     required this.capabilities,
+    this.factsSource = '',
   });
 
   factory ProviderCapabilityProfile.fromRelayJson(Map<String, dynamic> json) {
@@ -234,6 +235,11 @@ class ProviderCapabilityProfile {
       kind: kind.trim(),
       version: json['version'] is String ? (json['version'] as String) : '',
       available: json['available'] == true,
+      // v0.9.2 G1：facts_source 是 additive 字段，回答"谁在声明这份可用性"。
+      // 旧 Relay 不返回该字段时必须解析为空串而不是报错，保持向后兼容。
+      factsSource: json['facts_source'] is String
+          ? (json['facts_source'] as String).trim()
+          : '',
       capabilities: rawCapabilities
           .whereType<Map>()
           .map(
@@ -249,6 +255,7 @@ class ProviderCapabilityProfile {
         kind: kind.isEmpty ? 'unknown' : kind,
         version: '',
         available: false,
+        factsSource: '',
         capabilities: const [],
       );
 
@@ -256,6 +263,15 @@ class ProviderCapabilityProfile {
   final String version;
   final bool available;
   final List<CapabilityEntry> capabilities;
+
+  /// v0.9.2 G1：可用性事实来源（relay / terminal / unavailable；旧 Relay 为空串）。
+  /// 该字段只用于诊断与解释，不参与门控决策——门控仍然只由 available 与
+  /// 各能力的 status 决定，避免新增字段改变既有安全语义。
+  final String factsSource;
+
+  /// 该 Provider 是否由执行侧（Daemon/Terminal）声明可用。
+  /// 云端 Relay 自己跑不了 DSH 时，手机看到的就是这种事实。
+  bool get factsFromExecutionSide => factsSource == 'terminal';
 
   /// provider 不可用和未声明能力都一律不可写，避免新能力被 UI 静默放行。
   CapabilityEntry capability(String name) {

@@ -1363,7 +1363,33 @@ export interface components {
             hostname: string;
             platform: string;
             capabilities: string[];
+            provider_facts?: components["schemas"]["ProviderFact"][];
             signature?: components["schemas"]["TerminalSignature"];
+        };
+        ProviderModelFact: {
+            provider?: string;
+            value: string;
+            id?: string;
+            name?: string;
+            /** Format: int64 */
+            context_window_tokens?: number;
+            reasoning?: boolean;
+            efforts?: string[];
+        };
+        ProviderModelGroupFact: {
+            id: string;
+            name?: string;
+            models?: components["schemas"]["ProviderModelFact"][];
+        };
+        ProviderFact: {
+            kind: string;
+            available: boolean;
+            version?: string;
+            reason?: string;
+            default_model?: string;
+            /** Format: int64 */
+            observed_at_unix_ms?: number;
+            model_groups?: components["schemas"]["ProviderModelGroupFact"][];
         };
         DaemonHelloResponse: {
             terminal_id: string;
@@ -1379,6 +1405,7 @@ export interface components {
         };
         DaemonHeartbeatRequest: {
             protocol_version: number;
+            provider_facts?: components["schemas"]["ProviderFact"][];
             signature?: components["schemas"]["TerminalSignature"];
         };
         SessionContentDEK: {

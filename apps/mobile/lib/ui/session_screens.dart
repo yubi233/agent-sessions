@@ -5876,11 +5876,16 @@ class _HappyComposerMetaRow extends StatelessWidget {
     final modelDetail = selectedModel == null
         ? null
         : capabilities.modelDetailFor('model_select', selectedModel);
+    // v0.9.2 G4：不可用时把执行侧给出的原因（经 Relay 转达）交给 composer，
+    // 用户看到的是"未找到 node 运行时"这类可操作事实，而不是笼统的不可用。
+    final providerReason = capabilities.capability('start').reason;
     return SessionModelSeat(
       key: const Key('happy-session-model-row'),
       provider: sessions.selectedSession?.provider,
       providerVersion: capabilities.version,
       providerAvailable: capabilities.available,
+      providerReason: providerReason,
+      providerFactsSource: capabilities.factsSource,
       capabilities: [
         for (final name in const [
           'model_select',

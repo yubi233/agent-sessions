@@ -182,7 +182,10 @@ type RelayCommandWire struct {
 
 // Hello 协商版本和 Terminal ID。Caller 应把 Terminal ID 仅保存在本机 state，作为诊断元数据。
 // 配置了 Signer 时先取一次性 challenge，再以 challenge 作为 hello 签名 nonce（ADR-012）。
-func (c *RelayClient) Hello(ctx context.Context, daemonVersion, hostname, platform string, capabilities []string) (RelayHello, error) {
+// providerFacts 为 nil 时不下发 provider_facts 字段（旧 Relay 兼容：多一个字段
+// 在签名 body 里是 additive 变更，未识别字段不会改变既有语义）。非 nil 时按
+// "执行侧事实快照"整体上报，Relay 端据此纠正 App 侧的能力表述（v0.9.2 P1）。
+func (c *RelayClient) Hello(ctx context.Context, daemonVersion, hostname, platform string, capabilities []string, providerFacts []ProviderFactPayload) (RelayHello, error) {
 	var out RelayHello
 	challenge := ""
 	if c.Signer != nil {
@@ -192,13 +195,17 @@ func (c *RelayClient) Hello(ctx context.Context, daemonVersion, hostname, platfo
 		}
 		challenge = issued
 	}
-	err := c.postJSONSigned(ctx, "/v1/daemon/hello", map[string]any{
+	body := map[string]any{
 		"protocol_version": daemonProtocolVersion,
 		"daemon_version":   daemonVersion,
 		"hostname":         hostname,
 		"platform":         platform,
 		"capabilities":     capabilities,
-	}, challenge, &out)
+	}
+	if providerFacts != nil {
+		body["provider_facts"] = providerFacts
+	}
+	err := c.postJSONSigned(ctx, "/v1/daemon/hello", body, challenge, &out)
 	if err != nil {
 		return RelayHello{}, err
 	}
@@ -241,9 +248,15 @@ func (c *RelayClient) Challenge(ctx context.Context) (string, error) {
 	return payload.Challenge, nil
 }
 
-func (c *RelayClient) Heartbeat(ctx context.Context) (RelayHeartbeat, error) {
+// Heartbeat 同时刷新执行侧 Provider 事实（v0.9.2 P1）：环境变化后无需重连，
+// 一个心跳周期内就能让 Relay/App 看到当前事实。providerFacts 为 nil 时不下发。
+func (c *RelayClient) Heartbeat(ctx context.Context, providerFacts []ProviderFactPayload) (RelayHeartbeat, error) {
+	body := map[string]any{"protocol_version": daemonProtocolVersion}
+	if providerFacts != nil {
+		body["provider_facts"] = providerFacts
+	}
 	var out RelayHeartbeat
-	err := c.postJSON(ctx, "/v1/daemon/heartbeat", map[string]any{"protocol_version": daemonProtocolVersion}, &out)
+	err := c.postJSON(ctx, "/v1/daemon/heartbeat", body, &out)
 	return out, err
 }
 
@@ -738,6 +751,9 @@ type RelayLoop struct {
 	Hostname      string
 	Platform      string
 	Capabilities  []string
+	// ProviderFacts 采集执行侧 Provider 运行时事实（v0.9.2 P1）。为 nil 时不随
+	// hello/heartbeat 上报，Relay 保持既有口径（不猜测可用性）。
+	ProviderFacts *ProviderFactCollector
 	Logger        *slog.Logger
 
 	mu                    sync.RWMutex
@@ -1053,11 +1069,21 @@ func (l *RelayLoop) ensureStartupSessionRecovery(ctx context.Context) error {
 	return nil
 }
 
+// providerFactSnapshot 返回本次 hello/heartbeat 应携带的执行侧事实快照。
+// 未配置采集器时返回 nil（不上报字段），Relay 因此保持既有 fail-closed 口径；
+// 配置了采集器但尚未完成首轮观测时同样返回 nil——"未知"绝不能被上报成"不可用"。
+func (l *RelayLoop) providerFactSnapshot(ctx context.Context) []ProviderFactPayload {
+	if l.ProviderFacts == nil {
+		return nil
+	}
+	return l.ProviderFacts.Snapshot(ctx)
+}
+
 func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if l.Store == nil || l.Client == nil || l.Runner == nil {
 		return errors.New("relay loop dependencies missing")
 	}
-	hello, err := l.Client.Hello(ctx, nonEmpty(l.DaemonVersion, "agent-sessions-daemon"), nonEmpty(l.Hostname, "localhost"), nonEmpty(l.Platform, "unknown"), l.Capabilities)
+	hello, err := l.Client.Hello(ctx, nonEmpty(l.DaemonVersion, "agent-sessions-daemon"), nonEmpty(l.Hostname, "localhost"), nonEmpty(l.Platform, "unknown"), l.Capabilities, l.providerFactSnapshot(ctx))
 	if err != nil {
 		return err
 	}
@@ -1069,7 +1095,7 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 	if err := l.adoptTerminalIdentity(hello.TerminalID); err != nil {
 		return err
 	}
-	if _, err := l.Client.Heartbeat(ctx); err != nil {
+	if _, err := l.Client.Heartbeat(ctx, l.providerFactSnapshot(ctx)); err != nil {
 		return err
 	}
 	// hello 会在同一进程的网络重连中重复发送，不能作为进程启动信号；进程级
@@ -1127,7 +1153,7 @@ func (l *RelayLoop) runOnce(ctx context.Context) error {
 			return err
 		case <-ticker.C:
 			l.logSchedulerStats(l.Logger)
-			heartbeat, err := l.Client.Heartbeat(ctx)
+			heartbeat, err := l.Client.Heartbeat(ctx, l.providerFactSnapshot(ctx))
 			if err != nil {
 				return err
 			}

@@ -28,6 +28,7 @@ import (
 	"github.com/yubi233/agent-sessions/internal/adapter/codex"
 	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
 	"github.com/yubi233/agent-sessions/internal/adapter/opencode"
+	"github.com/yubi233/agent-sessions/internal/adapterreg"
 	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
 	"github.com/yubi233/agent-sessions/packages/crypto"
@@ -343,6 +344,13 @@ func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, 
 	loop.Platform = runtime.GOOS
 	loop.WorkspaceManager = workspaceManager
 	loop.Capabilities = daemonCapabilities()
+	// v0.9.2 P1（T2 裁决）：执行侧 Provider 事实上报。
+	// 关键点是共享适配器实例——采集器与 runner 用同一份 adapters map，因此
+	// "上报给 Relay 的能力"就是"真正执行命令的能力"，不会出现两份探测各自为政。
+	// fixture 模式不上报：mock adapter 不代表本机真实执行能力，上报它会误导客户端。
+	if !useFixtureAdapter {
+		loop.ProviderFacts = daemon.NewProviderFactCollector(adapterreg.NewWithAdapters(adapters))
+	}
 	// v0.8.9 P1 回滚开关：AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT=0/false 关闭
 	// generation 强制（仍记录世代，不做比较与隔离）。回滚不回退已完成的本地迁移。
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT"))) {
