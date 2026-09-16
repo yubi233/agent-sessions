@@ -7,7 +7,7 @@
  "id_registry": {
   "prefix": "ADPT-DSH",
   "start": 1,
-  "end": 13
+  "end": 14
  },
  "owner": "Agent Sessions Platform",
  "environment": {
@@ -310,6 +310,32 @@
     "internal/adapter/dsh/fakebridge_test.go",
     "internal/adapter/dsh/adapter.go",
     "internal/adapter/dsh/handle.go"
+   ]
+  },
+  {
+   "id": "ADPT-DSH-14",
+   "title": "桥版本门：agentInfo name/version 白名单 fail-closed（ADR-013 §2 兑现）",
+   "status": "passed",
+   "phase": "v0.9.2-security-hardening",
+   "category": "DSH",
+   "priority": "P0",
+   "test_layer": "unit/contract",
+   "precondition": "注入内存假桥；桥名/版本白名单默认 deepseek-harness-acp@0.0.1，可用 AGENT_SESSIONS_DSH_ALLOWED_VERSIONS 覆盖。",
+   "steps": [
+    "Detect：protocolVersion=1 且版本越界（9.9.9）→ 断言全 unsupported、中文原因含版本、Version 留空",
+    "Detect：桥名不匹配 → 同上，原因点名桥名",
+    "storeHandshake：先良好握手再坏版本握手 → last-good 快照不被覆盖",
+    "Start/Resume：未登记版本 → 返回错误、子进程已回收、无 session/new 出站帧",
+    "AGENT_SESSIONS_DSH_ALLOWED_VERSIONS=0.0.1,0.2.0 → 0.2.0 放行；显式置空 → 报错"
+   ],
+   "expected": "未登记桥名/版本一律 fail-closed（能力矩阵全 unsupported 且 Version 留空，会话建立/恢复被拒绝并回收子进程）；白名单经环境变量显式复验登记后放行。已知限制：agentInfo.version 为桥侧静态值，本门不提供 checkout 内容级校验。",
+   "cleanup": [
+    "Dispose 假桥"
+   ],
+   "evidence": [
+    "internal/adapter/dsh/version_gate.go",
+    "internal/adapter/dsh/version_gate_test.go",
+    "internal/adapter/dsh/adapter.go"
    ]
   }
  ]

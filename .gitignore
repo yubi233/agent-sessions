@@ -61,6 +61,7 @@ packages/protocol/generated/.cache/
 .dsh-fix-*/
 .dsh-media/
 .dsh-sessions/
+.dsh-vision-router/
 # 本地个人 LLM 接入配置（dsh-happy-init 生成，含个人端点；fixture 版本在 e2e-verify/fixtures/dsh/）
 cordis.yml
 

@@ -2023,6 +2023,8 @@ func isDomain(err error) bool {
 }
 
 // reqIP 提取脱敏的客户端标识，仅用于审计，不记录 token/正文。
+// ClientIP 按 Relay 受信任代理网段解析且天然不含端口（原 Split(":") 会把
+// IPv6 地址截成空串），这里直接透传。
 func reqIP(c *gin.Context) string {
-	return strings.Split(c.ClientIP(), ":")[0]
+	return c.ClientIP()
 }

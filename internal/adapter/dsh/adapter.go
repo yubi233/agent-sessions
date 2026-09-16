@@ -180,6 +180,9 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 			err = initErr
 		} else if info.ProtocolVersion != 1 {
 			err = fmt.Errorf("桥协议版本不符（protocolVersion=%v，要求 1）", info.ProtocolVersion)
+		} else if gateErr := bridgeHandshakeAllowed(info); gateErr != nil {
+			// 版本门（ADR-013 §2）：未登记桥名/版本 → fail-closed 矩阵，Version 留空。
+			err = gateErr
 		} else {
 			// 版本门通过：采集桥 agentInfo 写入能力快照（ADR-013 §2）。
 			a.storeHandshakeLocked(info)
@@ -206,6 +209,10 @@ func (a *Adapter) storeHandshake(info initializeResult) {
 // 版本门未通过的握手不写回：保持既有快照（fail-closed，不因探测失败清空目录）。
 func (a *Adapter) storeHandshakeLocked(info initializeResult) {
 	if info.ProtocolVersion != 1 {
+		return
+	}
+	// 版本门（ADR-013 §2）：未登记桥名/版本的握手不写回，保持既有 last-good 快照。
+	if err := bridgeHandshakeAllowed(info); err != nil {
 		return
 	}
 	a.handshakeOK = true
@@ -261,6 +268,10 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	}
 	if info.ProtocolVersion != 1 {
 		return fail(fmt.Errorf("dsh 协议版本不符: protocolVersion=%v", info.ProtocolVersion))
+	}
+	// 版本门（ADR-013 §2）：未登记桥名/版本不允许建立会话，统一回收子进程。
+	if err := bridgeHandshakeAllowed(info); err != nil {
+		return fail(err)
 	}
 	// 每次真实会话握手都刷新能力矩阵目录：DSH 配置变化后，下一次 Start/Resume
 	// 自动把新渠道/模型/档位目录写回适配器缓存（Capabilities/session controls 读取）。
@@ -327,6 +338,10 @@ func (a *Adapter) resumeStreaming(ctx context.Context, req adapter.ResumeRequest
 	}
 	if info.ProtocolVersion != 1 {
 		return fail(fmt.Errorf("dsh 协议版本不符: protocolVersion=%v", info.ProtocolVersion))
+	}
+	// 版本门（ADR-013 §2）：与 Start 同口径，未登记桥名/版本不允许恢复会话。
+	if err := bridgeHandshakeAllowed(info); err != nil {
+		return fail(err)
 	}
 	// 恢复会话的握手同样刷新能力矩阵目录（与 Start 口径一致）。
 	a.storeHandshake(info)

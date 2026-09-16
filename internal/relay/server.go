@@ -3,7 +3,10 @@ package relay
 import (
 	"database/sql"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yubi233/agent-sessions/internal/daemon"
@@ -52,6 +55,13 @@ func newServerWithPresence(db *sql.DB, logger *slog.Logger, signatureRequired bo
 		logger = slog.Default()
 	}
 	router.Use(gin.Logger(), gin.Recovery())
+	// 代理信任面（XFF 伪造防线）：显式声明受信任网段，取代 Gin 默认的"信任所有"。
+	// 云端 Caddy 经 compose 私网反代并追加真实客户端 IP（默认网段已覆盖）；
+	// 公网直连 peer 不受信任，其 X-Forwarded-For 一律忽略，ClientIP 回落为套接字对端。
+	if err := router.SetTrustedProxies(trustedProxies(logger)); err != nil {
+		logger.Warn("设置受信任代理网段失败，回退为不信任任何代理", "error", err)
+		_ = router.SetTrustedProxies(nil)
+	}
 
 	health := router.Group("/")
 	health.Use(localHealthCORS())
@@ -82,6 +92,52 @@ func newServerWithPresence(db *sql.DB, logger *slog.Logger, signatureRequired bo
 	api.Daemons.Hub = presence
 	api.RegisterRoutes(router, logger, presence)
 	return router, presence
+}
+
+// EnvTrustedProxies 覆盖受信任代理网段（逗号分隔 CIDR 或裸 IP）；值 "none" 表示
+// 全不信任（ClientIP 恒为套接字对端）。未设置→默认网段；显式置空或含非法条目→
+// warn 并回落默认网段（保守方向，不阻断起服）。
+const EnvTrustedProxies = "AGENT_SESSIONS_TRUSTED_PROXIES"
+
+// defaultTrustedProxies 是默认信任网段：loopback + 私网 + 链路本地。
+// 覆盖本地开发（127.0.0.1 直连）与云端部署（Caddy 容器经 compose 私网反代）两类拓扑。
+var defaultTrustedProxies = []string{
+	"127.0.0.0/8", "::1/128",
+	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+	"fc00::/7", "fe80::/10", "169.254.0.0/16",
+}
+
+// trustedProxies 解析生效的受信任代理网段（见 EnvTrustedProxies）。
+func trustedProxies(logger *slog.Logger) []string {
+	raw, ok := os.LookupEnv(EnvTrustedProxies)
+	if !ok {
+		return defaultTrustedProxies
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		logger.Warn("受信任代理网段显式置空，回落默认网段", "default", defaultTrustedProxies)
+		return defaultTrustedProxies
+	}
+	if strings.EqualFold(raw, "none") {
+		return nil
+	}
+	var proxies []string
+	for _, part := range strings.Split(raw, ",") {
+		entry := strings.TrimSpace(part)
+		if entry == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(entry); err != nil && net.ParseIP(entry) == nil {
+			logger.Warn("受信任代理网段含非法条目，回落默认网段", "entry", entry)
+			return defaultTrustedProxies
+		}
+		proxies = append(proxies, entry)
+	}
+	if len(proxies) == 0 {
+		logger.Warn("受信任代理网段未包含有效条目，回落默认网段", "default", defaultTrustedProxies)
+		return defaultTrustedProxies
+	}
+	return proxies
 }
 
 // localHealthCORS 只允许本地 P0 Web 状态页读取健康端点。
