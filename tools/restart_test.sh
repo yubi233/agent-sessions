@@ -255,6 +255,80 @@ AGENT_SESSIONS_RESTART_LIB_ONLY=1 bash -c '
   CannedBody=""
   diag="$(daemon_presence_diagnostics)"
   grep -F "presence=unknown" <<< "$diag" >/dev/null || { echo "v091: unreachable relay must report unknown: $diag" >&2; exit 1; }
+
+  # --- 场景 7：status 新进程从 state 缓存恢复最小诊断上下文。
+  printf "%s" "{\"tokens\":{\"access_token\":\"cached-owner-token\"}}" > "$(local_token_file local-owner-bootstrap.json)"
+  printf "%s" "{\"id\":\"cached-device-id\"}" > "$(local_token_file local-daemon-approval.json)"
+  LOCAL_OWNER_ACCESS_TOKEN=""
+  LOCAL_DEV_TERMINAL_DEVICE_ID=""
+  CannedBody="{\"terminals\":[{\"device_id\":\"cached-device-id\",\"availability\":\"online\",\"last_seen_unix_ms\":$NOW_MS}]}"
+  diag="$(daemon_presence_diagnostics)"
+  grep -F "presence=online" <<< "$diag" >/dev/null || { echo "v091: cached status context must recover presence: $diag" >&2; exit 1; }
+  if grep -qE "cached-device-id|cached-owner-token" <<< "$diag"; then
+    echo "v091: cached diagnostics leaked identifiers: $diag" >&2
+    exit 1
+  fi
 ' _ "$ROOT_DIR"
 rm -rf "$v091_lib_state"
 printf 'restart.sh v0.9.1 presence gate regression passed\n'
+
+# Flutter localdev bootstrap logs must redact both owner payload and the X25519
+# private seed injected through dart-define.
+redacted_flutter_command="$(AGENT_SESSIONS_RESTART_LIB_ONLY=1 bash -c '
+  source "$1/restart.sh"
+  redacted_command flutter run \
+    --dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=fixture-owner-secret \
+    --dart-define=LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=fixture-private-secret
+' _ "$ROOT_DIR")"
+grep -F -- '--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=<redacted>' <<< "$redacted_flutter_command" >/dev/null
+grep -F -- '--dart-define=LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=<redacted>' <<< "$redacted_flutter_command" >/dev/null
+if grep -qE 'fixture-owner-secret|fixture-private-secret' <<< "$redacted_flutter_command"; then
+  echo 'restart.sh leaked localdev bootstrap secrets in command logging' >&2
+  exit 1
+fi
+
+# v0.9.1 localdev DSH bootstrap regression: after the first heartbeat, restart.sh
+# must use the real sync-dsh contract and select the DSH projection for this project;
+# the legacy managed ws_local-dev id is not an acceptable Flutter workspace id.
+v091_sync_state="$(mktemp -d /tmp/agent-sessions-v091-dsh-sync.XXXXXX)"
+AGENT_SESSIONS_RESTART_LIB_ONLY=1 bash -c '
+  set -euo pipefail
+  source "$1/restart.sh"
+
+  STATE_DIR="'"$v091_sync_state"'/state"
+  LOG_DIR="'"$v091_sync_state"'/logs"
+  mkdir -p "$STATE_DIR" "$LOG_DIR"
+  WITH_RELAY=true
+  WITH_DAEMON=true
+  LOCAL_DEV_PAIRING=true
+  RELAY_ADDR="127.0.0.1:1"
+  LOCAL_OWNER_ACCESS_TOKEN="owner-token-redacted"
+  ROOT_DIR="/Users/example/agent-sessions"
+  sync_calls="$STATE_DIR/sync-calls"
+  sync_state_calls="$STATE_DIR/sync-state-calls"
+  : > "$sync_calls"
+  : > "$sync_state_calls"
+  http_request() {
+    case "$1" in
+      workspace.sync_dsh)
+        printf x >> "$sync_calls"
+        printf "%s" "{\"status\":\"pending\",\"command_id\":\"cmd-sync\"}"
+        ;;
+      workspace.sync_dsh.status)
+        printf x >> "$sync_state_calls"
+        printf "%s" "{\"status\":\"succeeded\",\"workspace_ids\":[\"ws-dsh\"]}"
+        ;;
+      workspace.list)
+        printf "%s" "{\"workspaces\":[{\"id\":\"ws-managed\",\"origin\":\"managed\",\"display_name\":\"agent-sessions\"},{\"id\":\"ws-dsh\",\"origin\":\"dsh\",\"display_name\":\"agent-sessions\"}]}"
+        ;;
+      *) return 1 ;;
+    esac
+  }
+  sleep() { return 0; }
+  sync_local_dev_dsh_workspace
+  [[ "$LOCAL_DEV_DSH_WORKSPACE_ID" == "ws-dsh" ]]
+  [[ "$(wc -c < "$sync_calls" | tr -d "[:space:]")" == 1 ]]
+  [[ "$(wc -c < "$sync_state_calls" | tr -d "[:space:]")" == 1 ]]
+' _ "$ROOT_DIR"
+rm -rf "$v091_sync_state"
+printf 'restart.sh v0.9.1 automatic DSH workspace sync regression passed\n'

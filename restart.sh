@@ -62,6 +62,7 @@ DAEMON_TOKEN_SOURCE=""
 LOCAL_DEV_TERMINAL_DEVICE_ID=""
 LOCAL_OWNER_ACCESS_TOKEN=""
 LOCAL_OWNER_BOOTSTRAP_B64=""
+LOCAL_DEV_DSH_WORKSPACE_ID=""
 # v0.8.8 P1：localdev owner X25519 私钥（ensure_local_owner_bootstrap 经
 # encryption-keygen 幂等生成；dry-run/无 pairing 路径保持空）。
 LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=""
@@ -227,7 +228,8 @@ def redact(value: str) -> str:
     value = re.sub(r"(Authorization:\s*Bearer\s+)[^\"'\s]+", r"\1<redacted>", value)
     value = re.sub(r'("(?:access_token|refresh_token)"\s*:\s*")[^"]+', r'\1<redacted>', value)
     value = re.sub(r"(AGENT_SESSIONS_DAEMON_TOKEN=)[^\"'\s]+", r"\1<redacted>", value)
-    value = re.sub(r"(--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=).*", r"\1<redacted>", value)
+    value = re.sub(r"(--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=)[^\"'\s]+", r"\1<redacted>", value)
+    value = re.sub(r"(--dart-define=LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=).*", r"\1<redacted>", value)
     return value
 
 print(" ".join(shlex.quote(redact(arg)) for arg in sys.argv[1:]))
@@ -253,6 +255,7 @@ with open(path, "rb") as fh:
     text = fh.read(4096).decode("utf-8", "replace")
 text = re.sub(r'("(?:access_token|refresh_token)"\s*:\s*")[^"]+', r'\1<redacted>', text)
 text = re.sub(r"(Authorization:\s*Bearer\s+)[^\"'\s]+", r"\1<redacted>", text)
+text = re.sub(r"(--dart-define=LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=)[^\"'\s]+", r"\1<redacted>", text)
 text = text.replace("\n", "\\n").strip()
 if len(text) > 2000:
     text = text[:2000] + "...<truncated>"
@@ -635,6 +638,21 @@ raise SystemExit(1)
 '
 }
 
+# status 是独立 shell 进程，不继承 start/restart 期间的内存变量。只从当前
+# state dir 的 0600 配对缓存恢复列表查询所需的最小上下文；不输出凭据、不刷新
+# token，也不在诊断路径触发 Relay DB 重建。
+load_cached_local_presence_credentials() {
+  local owner_file daemon_approval_file
+  owner_file="$(local_token_file local-owner-bootstrap.json)"
+  daemon_approval_file="$(local_token_file local-daemon-approval.json)"
+  if [[ -z "$LOCAL_OWNER_ACCESS_TOKEN" && -s "$owner_file" ]]; then
+    LOCAL_OWNER_ACCESS_TOKEN="$(json_get tokens.access_token < "$owner_file" 2>/dev/null || true)"
+  fi
+  if [[ -z "$LOCAL_DEV_TERMINAL_DEVICE_ID" && -s "$daemon_approval_file" ]]; then
+    LOCAL_DEV_TERMINAL_DEVICE_ID="$(json_get id < "$daemon_approval_file" 2>/dev/null || true)"
+  fi
+}
+
 # `go run` can stay alive while compiling even if the resulting Daemon exits
 # immediately. For the default local stack, require Relay to observe a newer
 # heartbeat before reporting readiness or starting Flutter.
@@ -832,6 +850,7 @@ raise SystemExit(0 if any(isinstance(item, dict) and item.get("id")==target for 
     echo "workspace: using cached local dev Workspace $LOCAL_DEV_WORKSPACE_ID"
     if [[ "$WITH_DAEMON" == true ]]; then
       confirm_local_dev_workspace || return 1
+      sync_local_dev_dsh_workspace || return 1
     fi
     return 0
   fi
@@ -861,7 +880,77 @@ print(json.dumps(doc, separators=(",", ":")))' "$LOCAL_DEV_PROJECT_ID" "$termina
   echo "workspace: registered local dev Workspace $LOCAL_DEV_WORKSPACE_ID${terminal_id:+ for Terminal $terminal_id}"
   if [[ "$WITH_DAEMON" == true ]]; then
     confirm_local_dev_workspace || return 1
+    sync_local_dev_dsh_workspace || return 1
   fi
+}
+
+# DSH 工作区不能由 workspace.create 直接伪装登记为 origin=dsh；只有 Daemon
+# 扫描并回传受控候选后，Relay 才会创建/升级 DSH 投影。localdev 启动时自动跑一次
+# 正式同步，确保 Flutter 不会拿 managed 的 ws_local-dev 作为 DSH 工作区。
+sync_local_dev_dsh_workspace() {
+  if [[ "$WITH_RELAY" != true || "$WITH_DAEMON" != true ]] || ! truthy "$LOCAL_DEV_PAIRING"; then
+    return 0
+  fi
+  require_command curl || return 1
+  require_command python3 || return 1
+
+  local response command_id state status workspaces project_name
+  response="$(http_request workspace.sync_dsh \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    -d '{}' \
+    "http://$RELAY_ADDR/v1/workspaces/sync-dsh")" || return 1
+  command_id="$(printf '%s' "$response" | json_get command_id 2>/dev/null || true)"
+  status="$(printf '%s' "$response" | json_get status 2>/dev/null || true)"
+
+  if [[ "$status" == "pending" || "$status" == "accepted" ]]; then
+    if [[ -z "$command_id" ]]; then
+      echo "workspace: DSH sync response has no command id" >&2
+      return 1
+    fi
+    for _ in $(seq 1 300); do
+      state="$(http_request workspace.sync_dsh.status \
+        -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+        "http://$RELAY_ADDR/v1/workspaces/sync-dsh/$command_id")" || return 1
+      status="$(printf '%s' "$state" | json_get status 2>/dev/null || true)"
+      if [[ "$status" != "pending" && "$status" != "accepted" ]]; then
+        response="$state"
+        break
+      fi
+      sleep 0.2
+    done
+  fi
+
+  if [[ "$status" != "succeeded" ]]; then
+    local error_code
+    error_code="$(printf '%s' "$response" | json_get error_code 2>/dev/null || true)"
+    echo "workspace: DSH sync did not succeed (status=${status:-unknown}${error_code:+ error_code=$error_code})" >&2
+    return 1
+  fi
+
+  # workspace_ids 只提供 opaque ID；用 Daemon 派生的 display_name 绑定当前项目，
+  # 不读取或重新推导 canonical root。
+  project_name="$(basename "$ROOT_DIR")"
+  workspaces="$(http_request workspace.list \
+    -H "Authorization: Bearer $LOCAL_OWNER_ACCESS_TOKEN" \
+    "http://$RELAY_ADDR/v1/workspaces")" || return 1
+  LOCAL_DEV_DSH_WORKSPACE_ID="$(printf '%s' "$workspaces" | PROJECT_NAME="$project_name" SYNC_RESULT="$response" python3 -c 'import json, os, sys
+doc = json.load(sys.stdin)
+name = os.environ["PROJECT_NAME"]
+result = json.loads(os.environ["SYNC_RESULT"])
+synced = {item for item in result.get("workspace_ids", []) if isinstance(item, str)}
+for item in doc.get("workspaces", []):
+    if (isinstance(item, dict) and item.get("id") in synced and
+            item.get("origin") == "dsh" and
+            item.get("display_name") == name and item.get("id")):
+        print(item["id"])
+        raise SystemExit(0)
+raise SystemExit(1)' 2>/dev/null || true)"
+  if [[ -z "$LOCAL_DEV_DSH_WORKSPACE_ID" ]]; then
+    echo "workspace: DSH sync succeeded but current project was not returned" >&2
+    return 1
+  fi
+  echo "workspace: DSH sync ready for local project"
 }
 
 confirm_local_dev_workspace() {
@@ -1182,7 +1271,7 @@ start_flutter() {
     args+=("--dart-define=LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64=$LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64")
   fi
   if [[ "$FLUTTER_MODE" == "mac" && "$WITH_RELAY" == true ]] && truthy "$LOCAL_DEV_PAIRING"; then
-    args+=("--dart-define=LOCAL_DEV_WORKSPACE_ID=$LOCAL_DEV_WORKSPACE_ID")
+    args+=("--dart-define=LOCAL_DEV_WORKSPACE_ID=${LOCAL_DEV_DSH_WORKSPACE_ID:-$LOCAL_DEV_WORKSPACE_ID}")
   fi
   if [[ -n "$FLUTTER_TARGET_SESSION_ID" && "$FLUTTER_MODE" == "mac" ]]; then
     args+=("--dart-define=LOCAL_DEV_TARGET_SESSION_ID=$FLUTTER_TARGET_SESSION_ID")
@@ -1504,6 +1593,7 @@ daemon_presence_diagnostics() {
   local presence last_seen availability bucket log_file reconnects failures
   availability="unknown"
   bucket="unknown"
+  load_cached_local_presence_credentials
   presence="$(local_dev_terminal_presence 2>/dev/null || true)"
   if [[ -n "$presence" ]]; then
     last_seen="${presence%% *}"

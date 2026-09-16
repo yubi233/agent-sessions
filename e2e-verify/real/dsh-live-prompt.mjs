@@ -205,6 +205,10 @@ async function runAttempt() {
       remainingRisk: `真实模型往返成立（model=${model}, stopReason=${stopReason ?? "n/a"}, 回复长度=${assistantText.length}）；单次冒烟不构成模型能力 full gate。`,
     };
   } catch (error) {
+    // 临时诊断：输出助手文本前缀以定位 oracle 失配（不写入报告）
+    if (typeof assistantText === "string" && assistantText.length > 0) {
+      console.error(`[dsh-live-prompt][diag] assistantText=${JSON.stringify(assistantText.slice(0, 60))} stopReason=${stopReason}`);
+    }
     const message = String(error?.message ?? error);
     const result = classifyDshLiveFailure({ model, provider, message, stderr: stderr.join("") });
     // 诊断用：子进程 stderr 尾部随失败结果带出（不入正式报告字段，仅诊断与日志）。
