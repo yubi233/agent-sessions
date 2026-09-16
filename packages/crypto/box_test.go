@@ -1,10 +1,13 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/ecdh"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -155,5 +158,36 @@ func TestSealOpenRoundtrip(t *testing.T) {
 	}
 	if string(pt) != "hello" {
 		t.Fatalf("got %q", pt)
+	}
+}
+
+// R17 回归：Android/Flutter 注册的 X25519 公钥为 url-safe base64（可带 padding），
+// DEK wrap 沿途用 DecodePublic 解码——只认 standard raw 会把合法公钥判
+// "owner encryption public key 无效"，附件 E2EE 全链路失效。两种字母表必须等价解码。
+func TestDecodePublicAcceptsUrlSafeAndPadded(t *testing.T) {
+	raw := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	std := EncodePublic(raw)
+	urlSafePadded := base64.URLEncoding.EncodeToString(raw)
+	urlSafeRaw := base64.RawURLEncoding.EncodeToString(raw)
+
+	for name, encoded := range map[string]string{
+		"standard_raw":   std,
+		"url_safe_paded": urlSafePadded,
+		"url_safe_raw":   urlSafeRaw,
+	} {
+		decoded, err := DecodePublic(encoded)
+		if err != nil {
+			t.Fatalf("%s: 解码失败: %v", name, err)
+		}
+		if !bytes.Equal(decoded, raw) {
+			t.Fatalf("%s: 解码结果不一致: %x != %x", name, decoded, raw)
+		}
+	}
+
+	if _, err := DecodePublic("not-base64-!!"); err == nil {
+		t.Fatal("非法输入必须报错")
 	}
 }

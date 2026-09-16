@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // 算法版本写入 envelope，便于后续轮换时双读。
@@ -214,9 +215,13 @@ func RandomDEK() ([]byte, error) {
 // EncodePublic 把公钥编码为标准 base64。
 func EncodePublic(pub []byte) string { return b64(pub) }
 
-// DecodePublic 解码公钥。
+// DecodePublic 解码公钥。兼容两种 base64 字母表：Go 侧 EncodePublic 产出
+// standard raw；Android/Flutter 注册的 X25519 公钥为 url-safe 且可带 padding
+// （Dart base64UrlEncode，R17 实测 DEK wrap 被判"公钥无效"的根因）。解码前
+// 统一归一：url-safe 字符映射回标准字母表并剥离 padding，再按 raw 标准解码。
 func DecodePublic(s string) ([]byte, error) {
-	return base64.RawStdEncoding.DecodeString(s)
+	normalized := strings.NewReplacer("-", "+", "_", "/", "=", "").Replace(s)
+	return base64.RawStdEncoding.DecodeString(normalized)
 }
 
 // MustNonce 仅用于 golden vector 固定 nonce。
