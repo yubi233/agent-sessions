@@ -34,7 +34,9 @@ type fakeAdapter struct {
 	resumes       []adapter.ResumeRequest
 	resumeResult  adapter.ResumeResult
 	startOverride adapter.Handle // 注入异常 handle（如事件流已关闭）
-	handles       []*fakeHandle
+	// startErr 注入 Start 失败（v0.9.2 P0 归因矩阵：桥版本门拒绝等显式失败路径）。
+	startErr error
+	handles  []*fakeHandle
 }
 
 // streamingFakeAdapter 模拟 DSH 的 ResumeStreaming：ready 返回后才发送回放事件，
@@ -125,6 +127,9 @@ func (f *fakeAdapter) Start(ctx context.Context, req adapter.StartRequest) (adap
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.starts = append(f.starts, req)
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
 	if f.startOverride != nil {
 		return f.startOverride, nil
 	}
