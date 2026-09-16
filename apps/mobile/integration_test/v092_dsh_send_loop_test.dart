@@ -110,7 +110,12 @@ Future<Finder> _waitForAny(
 }) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
-    await tester.pump(const Duration(milliseconds: 250));
+    // 关键：真实 Relay 的响应要靠**真实**事件循环推进。
+    // 在 testWidgets 里裸 await Future.delayed 只会推进 fake 时钟，HTTP I/O
+    // 永远不会完成——这正是前几轮稳定 did not complete 的根因。
+    // runAsync 让回调跑在真实异步环境里，因此网络与微任务都能推进。
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 250)));
+    await tester.pump(const Duration(milliseconds: 50));
     for (final candidate in candidates) {
       if (candidate.evaluate().isNotEmpty) return candidate;
     }
