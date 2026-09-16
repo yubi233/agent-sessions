@@ -1437,8 +1437,13 @@ class SessionController extends ChangeNotifier {
       '请先启动会话',
       'session instance',
     ];
+    // 大小写不敏感（R15 真机暴露）：执行侧上报的是错误**码**形态
+    // （LOCAL_STATE_MISSING，全大写+下划线），而这里的标记沿用 Daemon 日志里的
+    // 小写文案形态。用区分大小写的 contains 会让"同一个语义"因为大小写而漏判，
+    // 直接导致自动恢复不触发。
+    final normalized = message.toLowerCase();
     for (final marker in markers) {
-      if (message.contains(marker)) return true;
+      if (normalized.contains(marker.toLowerCase())) return true;
     }
     return false;
   }
@@ -2765,9 +2770,18 @@ class SessionController extends ChangeNotifier {
           // 执行端可能已经把会话收口为 idle，但失败回执本身不包含 session
           // 投影；先补拉一次快照，避免旧的 streaming 状态继续留在 UI。
           await _bestEffortRefreshAfterCommandFailure(sessionId);
+          // v0.9.2 G4 修正（R15 真机暴露）：把执行侧的具体原因（error_code）带进错误面。
+          // 原实现只报「命令 failed」，造成两个后果：
+          //   1) 用户看不到"为什么失败"，只看到通用文案——与 G4「错误可见且可区分」冲突；
+          //   2) 上层无法据此判定**可重试类别**：Daemon 重启后的 LOCAL_STATE_MISSING
+          //      本可自动 resume 重试，却因为文案里没有这个标记被当成真实故障，
+          //      用户被卡在「显示空闲却发不出去」。
+          final reason = (terminal.errorCode ?? '').trim();
           throw RelayFailure(
             RelayFailureKind.protocol,
-            '消息发送失败（命令 ${terminal.status}），请查看时间线中的失败提示。',
+            reason.isEmpty
+                ? '消息发送失败（命令 ${terminal.status}），请查看时间线中的失败提示。'
+                : '消息发送失败（命令 ${terminal.status} · $reason），请查看时间线中的失败提示。',
           );
         }
       }
