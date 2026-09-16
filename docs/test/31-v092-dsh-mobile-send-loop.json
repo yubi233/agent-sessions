@@ -20,7 +20,7 @@
     "fixture_data": true,
     "local_test": true,
     "headless": false,
-    "note": "P0 已完成并提交（8d87210）：V092-01（云端只读探针，real_upstream=true）、V092-02（归因矩阵 10/10 passed）。P1 已完成并提交（09fc1c8）：V092-03/04/05 passed。P2 已完成：V092-06/07/08 passed（发送前恢复改 resume、失败四类可区分、幂等与异常终态）。V092-09/10（云端真机）随 P3 推进，依赖 T6 终端凭据恢复；未运行项不得记 passed。"
+    "note": "P0（8d87210）/P1（09fc1c8）/P2（6db9c43）已交付；P3 已交付 headed 回归 12/12、统一回归入口、Android gate 缺陷修复（f8d09be）与本地/云端真机链路打通。**云端实测确认 P1 生效**：恢复终端令牌并部署 v0.9.2 relay 后，云端 /v1/capabilities 的 dsh 由 fail-closed 变为 available=true/version=0.0.1。V092-09/10 的真机 UI 自动化仍待收口（账号级启动方式），保持 pending，不以探针或命令调度结果替代手机 UI 结论。"
   },
   "cases": [
     {
@@ -93,7 +93,8 @@
         "passed：internal/relay/v092_provider_facts_contract_test.go（TestV092CapabilitiesAdoptTerminalFactsAfterHello / TestV092CapabilitiesIgnoreFactsFromOfflineTerminal / TestV092CapabilitiesFollowHeartbeatFactRefresh / TestV092HelloRejectsMalformedProviderFacts / TestV092CapabilitiesPreferRelayWhenRelayCanExecute）",
         "passed：internal/domain/provider_facts_test.go（合并规则 6 条：Relay 优先、采用执行侧、两侧不可用 fail-closed、绝不伪造可用、最新观测择优且顺序无关、执行侧独有 Provider）",
         "passed：internal/daemon/provider_facts_test.go（采集器：首轮前不上报、TTL 内不重复探测、失败事实照常上报、nil 采集器安全、kind 稳定排序）",
-        "passed：apps/mobile/test/capability_controller_test.dart（facts_source 解析与门控不受新字段影响）"
+        "passed：apps/mobile/test/capability_controller_test.dart（facts_source 解析与门控不受新字段影响）",
+        "passed（云端实测，2026-09-16）：部署 v0.9.2 relay 镜像（agent-sessions/relay:v092-365a1fb）到 ECS 并恢复既有终端令牌后，云端 GET /v1/capabilities 返回 dsh available=true、version=0.0.1、unsupported_count=0 —— 修复前同一端点必然 fail-closed（未找到 node 运行时）。报告 e2e-verify/reports/2026-09-16T08-12-01-078Z/V092-ATTRIB/cloud-capabilities-probe.json。"
       ]
     },
     {
@@ -237,7 +238,10 @@
       "cleanup": [
         "不在云端留下测试正文；不重置 SQLite、不改终端绑定"
       ],
-      "evidence": []
+      "evidence": [
+        "链路已打通（2026-09-16）：真机 d723617 经 USB 在线；云端终端凭据按 T6-B 恢复（受限工具只追加既有终端令牌，先校验设备/角色/状态），本地 Daemon 以该令牌连接云端 Relay 后终端恢复 online；真机用例 apps/mobile/integration_test/v092_dsh_send_loop_test.dart 已能编译、装机并执行到断言阶段。",
+        "**未通过**：真机 UI 自动化仍在应用入口启动方式上失败（app.main() 异步初始化在 integration_test 绑定下报 did not complete），因此手机 UI 首条发送闭环尚无真机证据，保持 pending。"
+      ]
     },
     {
       "id": "V092-10",
@@ -258,7 +262,9 @@
       "cleanup": [
         "恢复 daemon 单一实例运行态"
       ],
-      "evidence": []
+      "evidence": [
+        "待 V092-09 真机 UI 自动化收口后执行（Daemon 重启后续发路径的本地集成与 Flutter 回归已通过：internal/daemon/v092_lifecycle_contract_test.go、session_send_auto_start_test.dart）。"
+      ]
     }
   ]
 }
