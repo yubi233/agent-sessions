@@ -4,6 +4,7 @@
 // 展开工作区进入会话详情，只读投影只显示状态/事件类型，不渲染密文正文。
 // workspace_name 的移动端副标题/空状态显示由 Flutter widget/gate 覆盖。
 import { launchHeaded, browserLabel } from "../lib/browser.mjs";
+import { waitForDeliverySeq } from "../lib/delivery.mjs";
 
 export const v085ReadonlyWorkspacesWeb = {
   id: "v085-readonly-workspaces-web",
@@ -158,10 +159,14 @@ async function seedWorkspaces(relayBase, account) {
 
   // 2) sync-dsh 回执造两个受控 DSH 工作区（均登记 origin=dsh）。
   const sync = await req("/v1/workspaces/sync-dsh", { method: "POST", body: { terminal_id: terminalId } });
+  // 回执前先确认命令确实已投递给本 Terminal 并拿到真实 delivery_seq：
+  // 硬编码 seq 在共享 Relay 上会因其它命令/重试使投递序号漂移而失败
+  // （2026-09-16 整套运行偶发：回执被拒导致工作区为空，诊断为"expected 2"）。
+  const syncDeliverySeq = await waitForDeliverySeq(relayBase, terminalHeaders, sync.command_id);
   await req("/v1/daemon/commands/" + encodeURIComponent(sync.command_id) + "/dsh-workspace-result", {
     method: "POST", headers: terminalHeaders,
     body: {
-      protocol_version: 1, delivery_seq: 1, status: "succeeded",
+      protocol_version: 1, delivery_seq: syncDeliverySeq, status: "succeeded",
       candidates: [
         { canonical_root: "/fixture/v085/money-tracker", display_name: "money-tracker" },
         { canonical_root: "/fixture/v085/novel-draft", display_name: "novel-draft" },
@@ -169,8 +174,21 @@ async function seedWorkspaces(relayBase, account) {
     },
   });
   const listed = await req("/v1/workspaces");
-  const workspaces = (listed.workspaces || []).filter((w) => w.origin === "dsh");
-  if (workspaces.length !== 2) throw new Error("expected 2 dsh workspaces");
+  // fixture owner 是**跨套件共享**的单租户账号（见 lib/fixture-account.mjs），
+  // 因此账号下会累积其它套件建立的 DSH 工作区。这里只断言本套件刚刚创建的两个
+  // 工作区存在（按 display_name 精确匹配），不账号级计数——计数会让本套件在
+  // 整套运行时必然失败（2026-09-16 实测：got 7）。
+  const dshWorkspaces = (listed.workspaces || []).filter((w) => w.origin === "dsh");
+  const workspaces = [
+    dshWorkspaces.find((w) => w.display_name === "money-tracker"),
+    dshWorkspaces.find((w) => w.display_name === "novel-draft"),
+  ].filter(Boolean);
+  if (workspaces.length !== 2) {
+    throw new Error(
+      "本套件期望的 2 个 dsh 工作区缺失, got " + workspaces.length +
+      " (dsh total=" + dshWorkspaces.length + ", sync delivery_seq=" + syncDeliverySeq + ")",
+    );
+  }
   const workspaceIds = workspaces.map((w) => w.id);
   const sessionIds = [];
 

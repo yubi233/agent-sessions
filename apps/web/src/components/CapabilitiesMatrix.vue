@@ -6,7 +6,7 @@
 // 布局说明（2026-08-26 UI 审计）：旧结构为 5 列表格，能力行左侧 colspan=3
 // 空占位造成大面积空白；现改为 2 列结构，provider 信息收进跨列分组头行。
 import type { CapabilityStatus, ProviderCapabilities } from "../types";
-import { CAPABILITY_LABELS } from "../types";
+import { CAPABILITY_LABELS, factsSourceLabel } from "../types";
 
 defineProps<{ providers: ProviderCapabilities[] }>();
 
@@ -58,6 +58,18 @@ function statusClass(status: CapabilityStatus): string {
               :class="provider.available ? 'is-available' : 'is-unavailable'"
             >
               {{ provider.available ? "可用" : "不可用" }}
+            </span>
+            <!-- v0.9.2 G1：回答"谁在声明这份可用性"，让云端（执行侧上报）与
+                 本机（Relay 自己探测）两种事实来源在页面上可区分；
+                 旧 Relay 不返回该字段时不渲染（保持既有版式）。 -->
+            <span
+              v-if="factsSourceLabel(provider.facts_source)"
+              class="matrix-provider-meta"
+              data-label="FactsSource"
+              :data-testid="`matrix-facts-source-${provider.kind}`"
+              :data-facts-source="provider.facts_source"
+            >
+              {{ factsSourceLabel(provider.facts_source) }}
             </span>
           </th>
         </tr>

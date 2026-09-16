@@ -18,8 +18,25 @@
 | `task test:android:e2e`                                                                            | 后续 Android AVD integration diagnostic                           | 不属于本轮 v0.1 gate                                                                      |
 | `task test:android:device -- --device-id <adb-serial>`                                             | 已授权物理 Android integration gate                               | 报告标记 `real_device=true`；fixture 不代表真实 Provider 或 Push                          |
 | `e2e-verify/mobile/`                                                                               | MacBook Flutter macOS full gate、P6 录屏、后续 AVD 诊断和报告脚本 | 本轮 `run-macos.mjs` 启动可见桌面窗口；`record-macos.mjs` 的演示产物写入 `e2e-verify/screencasts/`，Android 原生验收留待后续阶段 |
+| `task test:v092:local`                                                                             | v0.9.2 DSH 移动端发送闭环本地 full gate（V092 唯一聚合入口）      | 含 P0 归因矩阵、Go V092 契约、全量 Go/Flutter/Web 与 headed 真实浏览器 12 套件；不调用真实模型、不运行 Android 实机 |
+| `task test:v092:headed`                                                                            | v0.9.2 执行侧能力事实源 headed 可见验收                            | 系统 Chrome、`headless=false`；断言 DSH 可用性与事实来源标签随执行侧上报变化 |
+| `task test:v092:attrib`                                                                            | v0.9.2 P0 归因矩阵（fixture + `--live` 真实桥握手）              | 不发 prompt、不消耗 token；报告落 `e2e-verify/reports/<ts>/V092-ATTRIB/`                 |
+| `task test:v092:cloud`                                                                             | v0.9.2 云端只读复测（V092-01）                                     | 需 `deploy/acceptance.env` 与本地 600 权限令牌文件；只做 GET/登录，不修改服务端业务状态   |
 
 不要使用不存在的`pnpm --filter @agent-sessions/e2e-verify test`命令；当前 package 公开的是`test:e2e`，推荐始终从根目录`task test:e2e`运行。
+
+## 回归脚本统一管理（v0.9.2 起）
+
+所有可重复运行的回归入口只有三处，新增测试必须落到其中之一，不得另起临时脚本：
+
+1. **Taskfile 聚合门**：`task test:v092:local`（v0.9.2）、`task test:v091:local`（v0.9.1）等按版本聚合；子项覆盖文档、生成物、Go 契约、全仓、restart、Flutter、Web 与 headed 浏览器。
+2. **headed 浏览器场景注册表**：`e2e-verify/lib/suites.mjs` 是唯一事实源，场景实现放 `e2e-verify/suites/`；共享助手放 `e2e-verify/lib/`（如 `delivery.mjs` 的 `waitForDeliverySeq`）。
+3. **定向诊断入口**：`e2e-verify/real/` 下的可重复运行脚本（如 `v092-attribution-matrix.mjs`、`v092-cloud-capabilities-probe.mjs`），报告落 `e2e-verify/reports/<ts>/<plan_id>/`。
+
+两条既有的隔离约定（2026-09-16 修复）：
+
+- **投递序号必须从命令流读取**：Relay 按 `(terminal, MAX+1)` 分配 `delivery_seq`，硬编码会在重试或同 Terminal 其它命令后漂移，回执被拒（409）而 seed 静默产出空结果。统一用 `waitForDeliverySeq()`。
+- **fixture owner 是跨套件共享的单租户账号**（`lib/fixture-account.mjs`）：断言只能针对"本套件创建的对象"（按 display_name/id 精确匹配），不得断言账号级总数。
 
 ## 经授权的 OpenCode 真实模型 smoke
 

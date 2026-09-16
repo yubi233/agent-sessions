@@ -5,6 +5,7 @@
 // 工具载荷的 fixture_payload 形状与 LocalDevEventEncoder 一致，移动端同构渲染
 // 由 localdev_encoder 契约测试与 Flutter widget 测试覆盖）。
 import { launchHeaded, browserLabel } from "../lib/browser.mjs";
+import { waitForDeliverySeq } from "../lib/delivery.mjs";
 
 export const v082DshCapabilityWeb = {
   id: "v082-dsh-capability-web",
@@ -137,9 +138,11 @@ async function seedDshToolTimeline(relayBase, account) {
   // 2) sync-dsh 回执造受控 DSH 工作区（与 v081 suite 同路径：hello 声明 dsh_workspace_sync，
   //    owner 提交 sync 命令，fixture Terminal 回执 candidates 生成 origin=dsh workspace）。
   const sync = await req("/v1/workspaces/sync-dsh", { method: "POST", body: { terminal_id: terminalId } });
+  // 投递序号由 Relay 分配，必须从命令流读真实值（硬编码会在序号漂移时被拒）。
+  const syncDeliverySeq = await waitForDeliverySeq(relayBase, terminalHeaders, sync.command_id);
   await req("/v1/daemon/commands/" + encodeURIComponent(sync.command_id) + "/dsh-workspace-result", {
     method: "POST", headers: terminalHeaders,
-    body: { protocol_version: 1, delivery_seq: 1, status: "succeeded",
+    body: { protocol_version: 1, delivery_seq: syncDeliverySeq, status: "succeeded",
       candidates: [{ canonical_root: "/fixture/v082/dsh-timeline", display_name: "v082-dsh-timeline" }] },
   });
   const listed = await req("/v1/workspaces");
@@ -160,9 +163,9 @@ async function seedDshToolTimeline(relayBase, account) {
         provider: "dsh", ciphertext: { fixture_payload: { provider: "dsh" } } } },
   });
   const commandId = command.id;
-  // Relay 投递在提交事务内落表：同一 Terminal 的 delivery_seq 按 MAX+1 单调分配，
-  // 本链路 sync-dsh 命令先占 seq=1，session.start 命令必为 seq=2（调试实证；不可写死 1）。
-  const startDeliverySeq = 2;
+  // Relay 投递在提交事务内落表：同一 Terminal 的 delivery_seq 按 MAX+1 单调分配。
+  // 从命令流读取真实序号，不写死（序号会随重试/其它命令漂移）。
+  const startDeliverySeq = await waitForDeliverySeq(relayBase, terminalHeaders, commandId);
   for (const ackKind of ["received", "started"]) {
     await req("/v1/daemon/commands/" + commandId + "/ack", {
       method: "POST", headers: terminalHeaders,

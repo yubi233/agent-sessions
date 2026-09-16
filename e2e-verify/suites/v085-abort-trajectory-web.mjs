@@ -5,6 +5,7 @@
 // 即可用 terminal_status 投影）。Web 只读架构不渲染密文正文与 HH:mm:ss——移动端
 // 的“已中止 · 时间”渲染由 Flutter widget 测试与可见 macOS gate 覆盖（V085-20..23）。
 import { launchHeaded, browserLabel } from "../lib/browser.mjs";
+import { waitForDeliverySeq } from "../lib/delivery.mjs";
 
 export const v085AbortTrajectoryWeb = {
   id: "v085-abort-trajectory-web",
@@ -141,9 +142,11 @@ async function seedAbortTrajectory(relayBase, account) {
 
   // 2) sync-dsh 回执造受控 DSH 工作区。
   const sync = await req("/v1/workspaces/sync-dsh", { method: "POST", body: { terminal_id: terminalId } });
+  // 投递序号由 Relay 分配，必须从命令流读真实值（硬编码会在序号漂移时被拒）。
+  const syncDeliverySeq = await waitForDeliverySeq(relayBase, terminalHeaders, sync.command_id);
   await req("/v1/daemon/commands/" + encodeURIComponent(sync.command_id) + "/dsh-workspace-result", {
     method: "POST", headers: terminalHeaders,
-    body: { protocol_version: 1, delivery_seq: 1, status: "succeeded",
+    body: { protocol_version: 1, delivery_seq: syncDeliverySeq, status: "succeeded",
       candidates: [{ canonical_root: "/fixture/v085/abort-trajectory", display_name: "v085-abort-trajectory" }] },
   });
   const listed = await req("/v1/workspaces");
@@ -164,7 +167,7 @@ async function seedAbortTrajectory(relayBase, account) {
         provider: "dsh", ciphertext: { fixture_payload: { provider: "dsh" } } } },
   });
   const commandId = command.id;
-  const startDeliverySeq = 2;
+  const startDeliverySeq = await waitForDeliverySeq(relayBase, terminalHeaders, commandId);
   for (const ackKind of ["received", "started"]) {
     await req("/v1/daemon/commands/" + commandId + "/ack", {
       method: "POST", headers: terminalHeaders,

@@ -25,8 +25,14 @@ async function main() {
     process.exit(2);
   }
 
+  // 套件级 Relay 环境变量：某些场景需要复现特定的**部署形态**（例如 v092 要复现
+  // 云端 Relay 是 scratch 单二进制、进程内没有 node/DSH 检出的形态），这类差异
+  // 只能通过 Relay 进程自身的环境体现。合并 selected 中声明的 relayEnv，
+  // 未声明的套件行为保持不变（仍继承当前进程环境）。
+  const relayEnv = Object.assign({}, ...selected.map((s) => s.relayEnv || {}));
+
   // 启动动态端口的隔离 Relay，避免误连用户已有本地服务。
-  const relay = await startRelay();
+  const relay = await startRelay({ env: relayEnv });
   const web = await startWeb({ relayBase: relay.base });
   const admin = await startAdmin({ port: 15174, relayBase: relay.base });
   const fixtureAccount = createFixtureAccountFactory(relay.base);
