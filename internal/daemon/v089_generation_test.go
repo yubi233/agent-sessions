@@ -220,9 +220,11 @@ func TestV089RelayLoopHelloGenerationChangeIsolatesStaleAndServesNewCommands(t *
 	}
 }
 
-// V089-02 运行期发现：heartbeat generation 变化 → 本地收口 + ErrRelayGenerationChanged
-// 终态退出（RunWithRetry 不进入退避重试）。
-func TestV089RelayLoopRuntimeGenerationChangeStopsLoopWithTerminalError(t *testing.T) {
+// V089-02 运行期发现：heartbeat generation 变化 → 单事务收口 + 隔离重连。
+// 2026-09-16 语义变更：不再以 ErrRelayGenerationChanged 终态退出进程，改为隔离
+// 旧状态后以新世代重连（见 relay.go RunWithRetry）——换库/重新配对后 Daemon 无需
+// 人工重启即可恢复服务；仍持旧 token 时由 401/403 分支兜底退出，不无限重试。
+func TestV089RelayLoopRuntimeGenerationChangeIsolatesAndReconnects(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -231,8 +233,9 @@ func TestV089RelayLoopRuntimeGenerationChangeStopsLoopWithTerminalError(t *testi
 	seedV089GenerationState(t, store, "relgen_old_aaaa")
 
 	relay := newV089DiagRelay(t, false)
-	relay.helloGeneration = "relgen_old_aaaa" // hello 一致：正常进入服务
-	relay.heartbeatGeneration = "relgen_new_bbbb"
+	// 阶段一状态：hello 仍返回旧世代（连接建立时的世界），heartbeat 已返回新世代
+	//（Relay 运行期被重建）——该变化只能由 heartbeat 通道发现。
+	relay.setGenerations("relgen_old_aaaa", "relgen_new_bbbb")
 	relay.heartbeatIntervalSeconds = 1 // 短周期：让 ticker 分支在有界时间内触发
 
 	guard := &startGuardAdapter{}
@@ -240,30 +243,63 @@ func TestV089RelayLoopRuntimeGenerationChangeStopsLoopWithTerminalError(t *testi
 	defer runner.Close(context.Background())
 	loop := NewRelayLoop(store, &RelayClient{BaseURL: relay.server.URL, AccessToken: "fixture"}, runner, nil, newDiagLogger(t))
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- loop.RunWithRetry(context.Background()) }()
+	go func() { done <- loop.RunWithRetry(ctx) }()
+
+	// 阶段一：运行期发现世代变化 → 单事务收口（旧世代事件 quarantine）。
+	waitDeadline := time.Now().Add(5 * time.Second)
+	for {
+		events, err := store.RelayEventOutboxSnapshot()
+		if err == nil && len(events) == 1 && events[0].Status == "quarantined" {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatalf("runtime change must quarantine stale events: %+v err=%v", events, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// 阶段二：模拟 Relay 重建完成——hello 也返回新世代；循环必须重连并采用新世代。
+	// 这是 2026-09-16 修复的核心断言：旧行为在此处退出进程（云上换库后断链）。
+	relay.setGenerations("relgen_new_bbbb", "relgen_new_bbbb")
+	waitDeadline = time.Now().Add(5 * time.Second)
+	for {
+		if generation, _ := store.RelayGeneration(); generation == "relgen_new_bbbb" {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			generation, _ := store.RelayGeneration()
+			t.Fatalf("reconnect must adopt the new generation, got %q", generation)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// 循环仍在运行（未退出进程）。
 	select {
 	case err := <-done:
-		if !errors.Is(err, ErrRelayGenerationChanged) {
-			t.Fatalf("RunWithRetry must stop with terminal generation error, got %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("RunWithRetry did not stop after runtime generation change")
+		t.Fatalf("RunWithRetry must keep running after generation change, got %v", err)
+	default:
 	}
-	// 收口证据：换库前已对存活 Relay 合法收口的命令保持其权威终态（ResultStatus=failed
-	// 来自 Relay 收据回显），但旧世代事件/usage 被隔离、游标清零、新世代落档。
-	events, err := store.RelayEventOutboxSnapshot()
-	if err != nil || len(events) != 1 || events[0].Status != "quarantined" {
-		t.Fatalf("runtime change must quarantine stale events: %+v err=%v", events, err)
-	}
+
+	// 收口完整性最终态：usage 隔离、cursor 清零。
 	if usages, err := store.PendingRelayUsages(); err != nil || len(usages) != 0 {
 		t.Fatalf("runtime change must quarantine stale usages: %d err=%v", len(usages), err)
 	}
 	if cursor, err := store.RelayDeliveryCursor(); err != nil || cursor != 0 {
 		t.Fatalf("runtime change must reset cursor: %d err=%v", cursor, err)
 	}
-	if generation, _ := store.RelayGeneration(); generation != "relgen_new_bbbb" {
-		t.Fatalf("new generation must be recorded: %q", generation)
+
+	// 取消后立即退出，返回 context.Canceled（而不是世代错误）。
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunWithRetry must exit with context cancellation, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunWithRetry did not exit after cancel")
 	}
 }
 
@@ -316,8 +352,8 @@ func TestV089GenerationEnforcementDisabledRecordsWithoutIsolation(t *testing.T) 
 }
 
 // V089-06 retry 分类矩阵补充：认证失效（401）立即退出，不进入退避重试——
-// 与 ErrRelayGenerationChanged 终态、stale 404 单次收口、网络错误有界退避
-// 共同构成分离的 failure class（§3.3：不能合并为 transient retry）。
+// 与 ErrRelayGenerationChanged 隔离重连（2026-09-16 起）、stale 404 单次收口、
+// 网络错误有界退避共同构成分离的 failure class（§3.3：不能合并为 transient retry）。
 func TestV089RunWithRetryAuthFailureExitsImmediately(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
 	if err != nil {

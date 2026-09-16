@@ -44,16 +44,16 @@
       "steps": [
         "go test：httptest Relay 返回 generation，断言 Daemon RelayHello/heartbeat 结构解析并持久化到 local_state",
         "hello generation 与本地记录不同时，断言 Daemon 停止新命令处理并触发世代切换收口",
-        "heartbeat 发现 generation 变化时，断言当前 Relay loop 被取消并进入受控恢复",
+        "heartbeat 发现 generation 变化时，断言单事务收口后隔离重连并以新世代恢复服务（2026-09-16 语义变更：不再取消 loop 终态退出；旧 token 由 401/403 分支兜底退出）",
         "旧 Relay（响应缺 relay_generation）时，断言按 legacy 策略告警或要求重启，不进入无限重试"
       ],
-      "expected": "generation 以 hello 为启动权威、heartbeat 为运行期发现手段；变化触发收口；缺失走兼容策略。",
+      "expected": "generation 以 hello 为启动权威、heartbeat 为运行期发现手段；变化触发收口后重连恢复；缺失走兼容策略。",
       "cleanup": [
         "关闭 httptest server 与临时 store"
       ],
       "evidence": [
         "go test ./internal/relay -run TestV089 -count=1 全绿（2026-09-06）：真实 gin 栈 hello/heartbeat 携带同一非空 relay_generation；restartRelay 同库重开稳定；新库必异",
-        "go test ./internal/daemon -run TestV089RelayLoopRuntimeGenerationChangeStopsLoopWithTerminalError：heartbeat 运行期发现变化→单事务收口→ErrRelayGenerationChanged 终态退出（不退避重试）",
+        "go test ./internal/daemon -run TestV089RelayLoopRuntimeGenerationChangeIsolatesAndReconnects：heartbeat 运行期发现变化→单事务收口→隔离重连并采用新世代（2026-09-16 语义变更，替代原终态退出用例）",
         "openapi.yaml DaemonHelloResponse/DaemonHeartbeatResponse additive relay_generation + 三语言生成物重生成零漂移"
       ]
     },

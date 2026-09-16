@@ -886,11 +886,24 @@ func (l *RelayLoop) RunWithRetry(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// v0.8.9 P1：运行期世代变化是确定性终态（本地已收口）。退出而非退避重试，
-		// 避免在已失效的 Relay 世代上按 100ms-6.4s 无限刷日志（§2.2-4 / V089-06）。
+		// 2026-09-16 行为变更：运行期世代变化不再退出进程，改为隔离旧状态后重连。
+		// detectRuntimeGenerationChange 已在 runOnce 内完成单事务收口（命令收口/
+		// outbox quarantine/cursor 清零/Terminal 绑定清除）；本循环退避后再次
+		// runOnce：若 Relay 换库后 Daemon 已重新配对（token 已更新），hello 会
+		// 直接采用新世代并重建 SSE 命令流，无需人工重启进程。若 token 仍属旧库，
+		// 由下方 401/403 分支兜底退出——身份失效仍 fail-closed，不会无限重试。
 		if errors.Is(err, ErrRelayGenerationChanged) {
-			l.Logger.Warn("daemon relay loop stopping: relay generation changed; restart required after re-pairing")
-			return err
+			l.Logger.Warn("daemon relay generation changed; isolating stale state and reconnecting",
+				"backoff_ms", backoff.Milliseconds())
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			if backoff < 5*time.Second {
+				backoff *= 2
+			}
+			continue
 		}
 		var httpErr *RelayHTTPError
 		if errors.As(err, &httpErr) && (httpErr.Status == http.StatusForbidden || httpErr.Status == http.StatusUnauthorized || httpErr.Status == http.StatusConflict || httpErr.Status == http.StatusUpgradeRequired) {
@@ -998,8 +1011,9 @@ func (l *RelayLoop) adoptRelayGeneration(helloGeneration string) error {
 }
 
 // detectRuntimeGenerationChange 处理 heartbeat 通道的世代发现（§3.1）：变化时先
-// 完成与 hello 路径相同的本地收口，再返回 ErrRelayGenerationChanged 让 RunWithRetry
-// 按终态退出——运行期换库意味着 token/身份已失效，重试或继续服务只会放大错位。
+// 完成与 hello 路径相同的本地收口，再返回 ErrRelayGenerationChanged 交由
+// RunWithRetry 退避重连（2026-09-16 变更：先前为终态退出进程；换库后若 Daemon
+// 已重新配对则自动以新世代恢复服务，仍持有旧 token 时由 401/403 分支退出）。
 func (l *RelayLoop) detectRuntimeGenerationChange(hbGeneration string) error {
 	if l.GenerationEnforcementDisabled || strings.TrimSpace(hbGeneration) == "" {
 		return nil
@@ -1015,7 +1029,7 @@ func (l *RelayLoop) detectRuntimeGenerationChange(hbGeneration string) error {
 	if err != nil {
 		return err
 	}
-	l.Logger.Warn("relay generation changed at runtime; local relay state isolated and daemon will stop",
+	l.Logger.Warn("relay generation changed at runtime; local relay state isolated and daemon will reconnect",
 		"reason", summary.Reason,
 		"previous_generation_prefix", sanitizeGeneration(summary.PreviousGeneration),
 		"generation_prefix", sanitizeGeneration(summary.NewGeneration),

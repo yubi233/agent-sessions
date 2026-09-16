@@ -195,6 +195,16 @@ func newV089DiagRelay(t *testing.T, result404 bool) *v089DiagRelay {
 	return r
 }
 
+// setGenerations 在锁内更新 hello/heartbeat 世代：供运行期世代切换回归在连接
+// 存活期间模拟「Relay 重建」——重建前 hello 返回旧世代，重建完成后 hello 也
+// 返回新世代，验证 Daemon 的隔离重连会采用新世代恢复服务。
+func (r *v089DiagRelay) setGenerations(helloGeneration, heartbeatGeneration string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.helloGeneration = helloGeneration
+	r.heartbeatGeneration = heartbeatGeneration
+}
+
 func (r *v089DiagRelay) snapshot() (result404s, hellos, streamHits, event404s int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
