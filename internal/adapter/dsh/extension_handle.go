@@ -353,7 +353,7 @@ func (a *Adapter) ListSessions(ctx context.Context, cwd string, cursor string) (
 	go h.readLoop()
 	defer func() { _ = h.Dispose(context.Background()) }()
 
-	initCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	initCtx, cancel := withTimeout(ctx, handshakeTimeoutFor())
 	defer cancel()
 	info, err := h.initialize(initCtx)
 	if err != nil {
@@ -369,7 +369,7 @@ func (a *Adapter) ListSessions(ctx context.Context, cwd string, cursor string) (
 	if strings.TrimSpace(cursor) != "" {
 		params["cursor"] = cursor
 	}
-	listCtx, cancelList := withTimeout(ctx, handshakeTimeout)
+	listCtx, cancelList := withTimeout(ctx, handshakeTimeoutFor())
 	defer cancelList()
 	raw, err := h.request(listCtx, "session/list", params)
 	if err != nil {

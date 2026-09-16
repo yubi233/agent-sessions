@@ -218,7 +218,7 @@ func (h *handle) applyModel(ctx context.Context) error {
 	if model == "" || model == applied {
 		return nil
 	}
-	applyCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	applyCtx, cancel := withTimeout(ctx, handshakeTimeoutFor())
 	defer cancel()
 	if _, err := h.request(applyCtx, "session/set_config_option", map[string]any{
 		"sessionId": h.sessionID,
@@ -259,7 +259,7 @@ func (h *handle) applyEffort(ctx context.Context) error {
 	if effort == "" || effort == applied {
 		return nil
 	}
-	applyCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	applyCtx, cancel := withTimeout(ctx, handshakeTimeoutFor())
 	defer cancel()
 	if _, err := h.request(applyCtx, "session/set_config_option", map[string]any{
 		"sessionId": h.sessionID,

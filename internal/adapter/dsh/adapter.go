@@ -15,7 +15,13 @@ import (
 
 // handshakeTimeout 是 initialize / session/new 的默认超时。P0 实测冷启动约 359ms，
 // 30s 宽裕量足以覆盖慢速磁盘；无调用方截止时间时才套用。
-const handshakeTimeout = 30 * time.Second
+// 握手超时改为可配置（v0.9.2 R4：真机实测遇到 30s 内桥未完成 initialize）。
+// 读取入口见 handshake.go 的 handshakeTimeoutFromEnv；缺省值不变。
+// handshakeTimeoutFor 在 handshake.go 中按需解析环境变量。
+
+// handshakeTimeoutFor 每次调用都重新解析环境变量：既便于测试覆盖，也避免包级
+// 变量把进程启动时的环境固化（回滚时 unset 即恢复缺省）。
+func handshakeTimeoutFor() time.Duration { return handshakeTimeoutFromEnv() }
 
 // ModelCatalog is returned by each ACP session handshake and cached for its lifetime.
 type ModelCatalog struct {
@@ -204,7 +210,7 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 	if err == nil {
 		h := newHandle(tr)
 		go h.readLoop()
-		initCtx, cancel := withTimeout(ctx, handshakeTimeout)
+		initCtx, cancel := withTimeout(ctx, handshakeTimeoutFor())
 		info, initErr := h.initialize(initCtx)
 		cancel()
 		// 握手完成后立即关闭本次探测子进程，避免进程泄漏。
@@ -298,7 +304,7 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 		_ = h.Dispose(context.Background())
 		return nil, cause
 	}
-	initCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	initCtx, cancel := withTimeout(ctx, handshakeTimeoutFor())
 	info, err := h.initialize(initCtx)
 	cancel()
 	if err != nil {
@@ -316,7 +322,7 @@ func (a *Adapter) Start(ctx context.Context, req adapter.StartRequest) (adapter.
 	a.storeHandshake(info)
 	// 会话 cwd 取调用方工作区（与 ACP session/new 的 cwd 语义一致）；mcpServers 固定空数组
 	// （桥对非空 mcpServers 直接抛 invalidParams，见 acp-demo validateSessionParams）。
-	newCtx, cancelNew := withTimeout(ctx, handshakeTimeout)
+	newCtx, cancelNew := withTimeout(ctx, handshakeTimeoutFor())
 	sessionID, err := h.newSession(newCtx, workspaceRoot)
 	cancelNew()
 	if err != nil {
@@ -368,7 +374,7 @@ func (a *Adapter) resumeStreaming(ctx context.Context, req adapter.ResumeRequest
 		_ = h.Dispose(context.Background())
 		return adapter.ResumeResult{}, cause
 	}
-	initCtx, cancel := withTimeout(ctx, handshakeTimeout)
+	initCtx, cancel := withTimeout(ctx, handshakeTimeoutFor())
 	info, err := h.initialize(initCtx)
 	cancel()
 	if err != nil {
@@ -390,7 +396,7 @@ func (a *Adapter) resumeStreaming(ctx context.Context, req adapter.ResumeRequest
 			return fail(err)
 		}
 	}
-	resumeCtx, cancelResume := withTimeout(ctx, handshakeTimeout)
+	resumeCtx, cancelResume := withTimeout(ctx, handshakeTimeoutFor())
 	if req.ReplayHistory {
 		err = h.loadSession(resumeCtx, workspaceRoot)
 	} else {
