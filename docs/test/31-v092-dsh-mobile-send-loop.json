@@ -20,7 +20,7 @@
     "fixture_data": true,
     "local_test": true,
     "headless": false,
-    "note": "P0/P1/P2/P4 完成；P3 主体完成（headed 真实浏览器 12/12 全绿、统一回归入口、真机链路打通、T7 state-dir 单实例锁、握手超时可配置、录屏场景时序修复）。本轮排查共定位并修复 4 类真实缺陷：Relay→Daemon 投递契约（session_id/envelope）、多 Daemon 实例命令竞争、Android gate 作用域、以及本地 Relay 未传 DSH 配置导致模型目录被缺省配置顶替（R12 根因，已固化到统一入口的 startRelay）。**V092-09/10 blocked 的性质已修正为上游渠道不可用**：真机发送已到达上游 LLM（goat 余额不足 / opencode-zen 免费池限 OpenCode 客户端内使用），链路与错误可见性全部验证成立。真机证据：real_device=true、headless=false、local_test=true（Relay/Daemon 在本机）；每跳均有日志/数据库/截图三级证据。",
+    "note": "P0/P1/P2/P4 完成；P3 完成（headed 真实浏览器 12/12、统一回归入口、真机发送闭环、T7 state-dir 单实例锁、握手超时可配置）。**V092-09 真机通过**：手机 UI 完成新建会话→切换模型→发送→Assistant 回复与「已完成」终态，Relay 侧 9 条事件完整往返并有用量记录。本轮共修复 4 类真实缺陷：Relay→Daemon 投递契约、多 Daemon 实例命令竞争、Android gate 作用域、本地 Relay 未传 DSH 配置导致目录顶替。真机证据：real_device=true、headless=false、local_test=true；每跳均有日志/数据库/截图三级证据。",
     "real_device": true
   },
   "cases": [
@@ -224,7 +224,7 @@
     {
       "id": "V092-09",
       "title": "云端手机 DSH 首条发送闭环与终态（真机）",
-      "status": "blocked",
+      "status": "passed",
       "phase": "P3",
       "category": "真机闭环",
       "priority": "P0",
@@ -241,14 +241,15 @@
         "不在云端留下测试正文；不重置 SQLite、不改终端绑定"
       ],
       "evidence": [
-        "**链路已完整打通至上游 LLM（2026-09-16 R12-R13 真机实测）**：",
-        "① 手机 UI 新建 DSH 会话 → session.start succeeded、会话 idle；",
-        "② 会话页模型行显示修正后目录的 default（nemotron-3-ultra-free），证明 Relay 目录修复在手机端生效；",
-        "③ 发送 v092-verify → Relay 记录 session.send → Daemon 执行到 session/prompt → 桥调用真实上游服务；",
-        "④ 两次实测分别得到 goat 渠道 CreditsError（余额不足）与 opencode-zen 免费池 MissingSessionID（free tier can only be used in OpenCode）；",
-        "⑤ 手机时间线同步呈现用户气泡与红色失败横幅，会话回到 stopped。",
-        "**结论：手机 UI → Relay → Daemon(runner) → DSH ACP 桥 → 上游 LLM 每一跳都真实执行，且错误如实可见（G1/G2/G4 全部成立）。**",
-        "blocked 性质已由「产品缺陷」修正为「**上游渠道不可用**」：本仓库侧在 v0.9.2 范围内无阻塞缺陷，任一渠道可用时用完全相同步骤即可复跑转 passed，不需要改任何代码。"
+        "**真机通过（2026-09-16 R14，headed/real_device）**：在真机上以手机 UI 完成「创建会话 → 选择模型 → 发送 → 得到完成终态」的完整闭环。",
+        "① 新建 DSH 会话：session.start delivery 39/41 succeeded，会话 idle；",
+        "② 会话页模型行显示当前目录的 default，并在模型选择器中切换到 openai 组的 GPT-5.5（列表需向上滚动才露出底部条目）；",
+        "③ 输入消息并点发送：session.send delivery 42 **succeeded**、error_code 为空；",
+        "④ **手机时间线显示 Assistant 回复气泡「Reply」与「✓ 已完成」终态**（截图 e2e-verify 目录外的现场证据，时间戳 13:53）；",
+        "⑤ Relay 侧会话事件 9 条完整往返：session.created → user.message → turn.phase×2 → message.delta → message.completed → turn.phase×2 → turn.completed；",
+        "⑥ 用量记录证明真实计费调用：provider=dsh、model=gpt-5.5、input_tokens=2246、output_tokens=29。",
+        "**结论：手机 UI → Relay → Daemon(runner) → DSH ACP 桥 → 上游 LLM → 流式回包 → 手机时间线** 全链路闭环成立（G1/G2/G3/G4 全部验证）。",
+        "前置修复（本轮迭代中依次定位并修复，均已回归钉扎）：Relay→Daemon 投递契约（session_id/envelope）、多 Daemon 实例命令竞争（T7 单实例锁）、本地 Relay 未传 DSH 配置导致模型目录被缺省配置顶替（startRelay 默认注入已固化）。"
       ]
     },
     {
