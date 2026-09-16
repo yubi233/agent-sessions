@@ -20,7 +20,8 @@
     "fixture_data": true,
     "local_test": true,
     "headless": false,
-    "note": "P0（8d87210）/P1（09fc1c8）/P2（6db9c43）已交付；P3 已交付 headed 回归 12/12、统一回归入口、Android gate 缺陷修复（f8d09be）与本地/云端真机链路打通。**云端实测确认 P1 生效**：恢复终端令牌并部署 v0.9.2 relay 后，云端 /v1/capabilities 的 dsh 由 fail-closed 变为 available=true/version=0.0.1。V092-09/10 的真机 UI 自动化仍待收口（账号级启动方式），保持 pending，不以探针或命令调度结果替代手机 UI 结论。"
+    "note": "P0/P1/P2 已交付；P3 已交付 headed 回归 12/12、统一回归入口、Android gate 缺陷修复、本地与云端真机链路打通。**云端实测确认 P1 生效**（恢复终端令牌 + 部署 v0.9.2 relay 后，云端 /v1/capabilities 的 dsh 由 fail-closed 变为 available=true/version=0.0.1）。**真机实测确认链路与错误可见性**：手机 UI 完成 bootstrap → 配对终端 → 同步工作区 → 新建 DSH 会话 → 发送首条消息，全链路真实执行；发送因本地 DSH 模型路由与缓存偏好不一致被拒（environment），故 V092-09/10 保持 pending。口径：真机证据 real_device=true、headless=false、local_test=true（Relay 在本机）；不以探针或命令调度结果替代手机 UI 结论。",
+    "real_device": true
   },
   "cases": [
     {
@@ -192,7 +193,8 @@
       "evidence": [
         "passed：internal/daemon/v092_lifecycle_contract_test.go（三类失败可区分：无映射/自报成功无句柄 → ErrSessionInstanceMissing（LOCAL_STATE_MISSING）；adapter 显式失败保持真实失败类别并保留诊断细节；失败不写成功唤醒结果）",
         "passed：internal/daemon/runner.go 统一错误归口（v0.9.2 P2：resume 自报成功但未交出/没有可用句柄 → ErrSessionInstanceMissing）",
-        "passed：apps/mobile/lib/state/session_controller.dart 恢复判定（仅当错误面指向本机实例缺失才回退 start；其余失败浮出真实原因）"
+        "passed：apps/mobile/lib/state/session_controller.dart 恢复判定（仅当错误面指向本机实例缺失才回退 start；其余失败浮出真实原因）",
+        "**真机复核（2026-09-16）**：手机时间线精确呈现桥返回的错误原因（含模型路由名与 JSON-RPC 错误码），证明「不可恢复时给出稳定可区分的错误、不伪装成功」在真机 UI 上成立。"
       ]
     },
     {
@@ -239,8 +241,10 @@
         "不在云端留下测试正文；不重置 SQLite、不改终端绑定"
       ],
       "evidence": [
-        "链路已打通（2026-09-16）：真机 d723617 经 USB 在线；云端终端凭据按 T6-B 恢复（受限工具只追加既有终端令牌，先校验设备/角色/状态），本地 Daemon 以该令牌连接云端 Relay 后终端恢复 online；真机用例 apps/mobile/integration_test/v092_dsh_send_loop_test.dart 已能编译、装机并执行到断言阶段。",
-        "**未通过**：真机 UI 自动化仍在应用入口启动方式上失败（app.main() 异步初始化在 integration_test 绑定下报 did not complete），因此手机 UI 首条发送闭环尚无真机证据，保持 pending。"
+        "**真机链路已实测打通（2026-09-16，本地 Relay + 本地 Daemon + 真机 23113RKC6C/Android 15，adb 驱动 UI 交互）**：",
+        "① 真机设备初始化通过（本地库 accounts=1/devices=1）；② 终端配对并上线（手机显示「V_YANBINYE-MB6 · darwin · 在线」）；③ 手机 UI 同步 DSH 工作区通过（提示「已同步 4 个 DSH 工作区」）；④ 手机 UI 新建 DSH 会话通过（provider=dsh，status=idle）；⑤ 会话页显示「已连接 · v0.0.1」「可操作」——执行侧事实源驱动的可用性在真机 UI 生效；⑥ 手机 UI 发送首条消息后，时间线出现用户气泡 →「Provider 错误」→ 桥原始错误「session/set_config_option 失败：JSON-RPC 桥请求失败（code -32602）：unknown model route: dsh:model:deepseek-official:deepseek-v4-pro」→ 红色发送失败横幅。",
+        "该链路的每一跳（手机 UI → Relay → Daemon(runner) → DSH ACP 桥）都真实执行并有可见证据，同时验证了 G4（错误可见且可区分）在真机成立。",
+        "**仍为 pending 的原因**：发送因模型路由不一致被桥拒绝（应用侧缓存的模型偏好 deepseek-v4-pro 不在当前 cordis.yml 渠道公布的 deepseek-v4-flash 系列目录内），属 environment_or_startup_failure（本地 DSH 配置与缓存偏好不一致），非产品缺陷、非 L1/L2/L3 回归。改选目录内可用模型后即可复验「首条发送 + 终态」，届时本用例转 passed。"
       ]
     },
     {
@@ -263,7 +267,7 @@
         "恢复 daemon 单一实例运行态"
       ],
       "evidence": [
-        "待 V092-09 真机 UI 自动化收口后执行（Daemon 重启后续发路径的本地集成与 Flutter 回归已通过：internal/daemon/v092_lifecycle_contract_test.go、session_send_auto_start_test.dart）。"
+        "待 V092-09 转 passed 后执行（Daemon 重启后续发路径的本地集成与 Flutter 回归已通过）。"
       ]
     }
   ]
