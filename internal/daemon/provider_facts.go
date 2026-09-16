@@ -169,10 +169,29 @@ func providerFactFromRegistry(provider adapterreg.Provider, observedAt time.Time
 		if capability.Name != "model_select" {
 			continue
 		}
-		fact.DefaultModel = capability.Default
 		fact.ModelGroups = providerModelGroupsFromCapability(capability)
+		// wire 契约：default_model 必须落在 model_groups 内（Relay 端 fail-closed
+		// 校验按 Value 精确匹配，违例会拒绝**整条** hello/heartbeat，终端 presence
+		// 因此完全无法上线——R16 环境恢复时实测）。适配器目录字段漂移（如只填旧
+		// Options/ModelDetails 而未迁 ModelGroups）时在这里降级为“无默认值”：
+		// 目录缺失是特性降级，不该升级成可用性事故。
+		if hasProviderFactModelValue(fact.ModelGroups, capability.Default) {
+			fact.DefaultModel = capability.Default
+		}
 	}
 	return fact
+}
+
+// hasProviderFactModelValue 与 Relay 端 providerFactHasModel 同口径：按模型 Value 精确匹配。
+func hasProviderFactModelValue(groups []ProviderModelGroupPayload, value string) bool {
+	for _, group := range groups {
+		for _, model := range group.Models {
+			if model.Value == value {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // firstCapabilityReason 取第一条非空中文原因（fail-closed 矩阵每条原因相同）。

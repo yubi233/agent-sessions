@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -623,5 +624,34 @@ func TestAdoptTerminalIdentityResetsCursorOnlyOnChange(t *testing.T) {
 	}
 	if terminalID, err := store.Get("terminal_id"); err != nil || terminalID != "term-new" {
 		t.Fatalf("terminal_id = %q err=%v, want term-new", terminalID, err)
+	}
+}
+
+// R16 回归：Relay 的 fail-closed 拒绝原因全在错误响应的 message 字段里（如
+// "provider_facts 默认模型 %q 不在模型目录内"）。只打状态码+code 会让每次诊断
+// 都退化成抓包，message 必须进入错误文本。
+func TestRelayHTTPErrorMessageInErrorText(t *testing.T) {
+	body := `{"code":"INVALID_REQUEST","message":"provider_facts 默认模型 \"opencode/big-pickle\" 不在模型目录内"}`
+	response := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	err := readRelayHTTPError(response)
+	if err.Error() != `relay http status 400: INVALID_REQUEST: provider_facts 默认模型 "opencode/big-pickle" 不在模型目录内` {
+		t.Fatalf("message 必须进入错误文本: %v", err)
+	}
+	var httpErr *RelayHTTPError
+	if !errors.As(err, &httpErr) || httpErr.Code != "INVALID_REQUEST" {
+		t.Fatalf("errors.As 语义必须保持: %v", err)
+	}
+}
+
+func TestRelayHTTPErrorWithoutMessageKeepsLegacyFormat(t *testing.T) {
+	response := &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Body:       io.NopCloser(strings.NewReader(`{"code":"UNAUTHENTICATED"}`)),
+	}
+	if got := readRelayHTTPError(response).Error(); got != "relay http status 401: UNAUTHENTICATED" {
+		t.Fatalf("无 message 时保持既有格式: %s", got)
 	}
 }

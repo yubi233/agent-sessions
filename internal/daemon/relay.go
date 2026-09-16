@@ -92,13 +92,22 @@ type RelayClient struct {
 type RelayHTTPError struct {
 	Status int
 	Code   string
+	// Message 是 Relay 错误响应的 message 字段。R16 排查实证：hello/heartbeat 被
+	// fail-closed 校验拒绝时只打 "status 400: INVALID_REQUEST"，真正的拒绝原因
+	// （如 provider_facts 默认模型不在目录内）全在 message 里，缺失会让每次诊断
+	// 都退化成抓包。因此 message 必须进入错误文本。
+	Message string
 }
 
 func (e *RelayHTTPError) Error() string {
-	if e.Code == "" {
+	switch {
+	case e.Message != "" && e.Message != e.Code:
+		return fmt.Sprintf("relay http status %d: %s: %s", e.Status, e.Code, e.Message)
+	case e.Code != "":
+		return fmt.Sprintf("relay http status %d: %s", e.Status, e.Code)
+	default:
 		return fmt.Sprintf("relay http status %d", e.Status)
 	}
-	return fmt.Sprintf("relay http status %d: %s", e.Status, e.Code)
 }
 
 type RelayHello struct {
@@ -756,10 +765,11 @@ func (c *RelayClient) streamClient() *http.Client {
 
 func readRelayHTTPError(response *http.Response) error {
 	var payload struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
 	}
 	_ = json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&payload)
-	return &RelayHTTPError{Status: response.StatusCode, Code: payload.Code}
+	return &RelayHTTPError{Status: response.StatusCode, Code: payload.Code, Message: payload.Message}
 }
 
 // EventEncoder 是 Daemon 把规范化 Provider event 封装为 Relay 可存储密文的边界。生产端必须注入

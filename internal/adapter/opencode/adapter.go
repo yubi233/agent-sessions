@@ -149,6 +149,11 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 					Efforts:             append([]string(nil), detail.Efforts...),
 				}
 			}
+			// v0.9.2 P1 的 provider facts 只消费 ModelGroups（ACP 的 provider-parent/
+			// model-child 目录形态）；只填旧 Options/ModelDetails 会让 fact 以
+			// “有默认值、无目录”上行，被 Relay 的 fail-closed 校验整条拒绝——
+			// daemon 由此陷入 hello/heartbeat 400 循环、终端无法上线（R16 实测）。
+			entry.ModelGroups = modelGroupsFromCatalog(catalog)
 		}
 		caps = append(caps, entry)
 	}
@@ -157,6 +162,40 @@ func (a *Adapter) Detect(ctx context.Context) (adapter.Capabilities, error) {
 		Version:      health.Version,
 		Capabilities: caps,
 	}, nil
+}
+
+// modelGroupsFromCatalog 把扁平的 Zen 免费目录（Options/Details）映射为 SPI 的
+// provider-parent/model-child 目录：按模型引用的 provider 前缀分组。元数据只保留
+// 目录已确认的安全字段；没有服务端展示名时以完整模型引用充当 ID/Name，不猜测。
+func modelGroupsFromCatalog(catalog ModelCatalog) []adapter.ModelCapabilityGroup {
+	groups := make([]adapter.ModelCapabilityGroup, 0, 1)
+	index := make(map[string]int)
+	for _, option := range catalog.Options {
+		providerID, modelID := option, option
+		if idx := strings.Index(option, "/"); idx >= 0 {
+			providerID = option[:idx]
+			modelID = option[idx+1:]
+		}
+		gi, ok := index[providerID]
+		if !ok {
+			gi = len(groups)
+			index[providerID] = gi
+			groups = append(groups, adapter.ModelCapabilityGroup{ID: providerID, Name: providerID})
+		}
+		model := adapter.ModelCapabilityModel{
+			Provider: providerID,
+			Value:    option,
+			ID:       modelID,
+			Name:     option,
+		}
+		if detail, ok := catalog.Details[option]; ok {
+			model.ContextWindowTokens = detail.ContextWindowTokens
+			model.Reasoning = detail.Reasoning
+			model.Efforts = append([]string(nil), detail.Efforts...)
+		}
+		groups[gi].Models = append(groups[gi].Models, model)
+	}
+	return groups
 }
 
 // effortSelectCapability 根据目录中是否有可选 variants 暴露 effort_select。

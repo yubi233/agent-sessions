@@ -172,3 +172,42 @@ func TestV092ProviderFactSnapshotOrderedByKind(t *testing.T) {
 	}
 	_ = time.Now
 }
+
+// R16 回归：wire 契约守门——default_model 必须落在 model_groups 内。Relay 端按
+// Value fail-closed 校验，违例会拒绝**整条** hello/heartbeat（终端 presence 因此
+// 完全无法上线，实测见 32-v0.9.2 实施记录 §17.5）。适配器目录字段漂移（只填旧
+// Options/ModelDetails、未迁 ModelGroups）时必须降级为“无默认值”。
+func TestProviderFactDropsDefaultModelNotInGroups(t *testing.T) {
+	collector, _ := newFactCollector(&countingAdapter{kind: "opencode", version: "1.17.13"})
+	if err := collector.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	snapshot := collector.Snapshot(context.Background())
+	if len(snapshot) != 1 {
+		t.Fatalf("快照应包含 1 条事实: %#v", snapshot)
+	}
+	fact := snapshot[0]
+	if fact.DefaultModel != "" {
+		t.Fatalf("默认模型不在目录内时必须降级为无默认值（否则整条 hello 被拒）: %#v", fact)
+	}
+	if !fact.Available || fact.Version != "1.17.13" {
+		t.Fatalf("可用性事实不得受降级影响: %#v", fact)
+	}
+}
+
+// 与 Relay 端 providerFactHasModel 同口径：按模型 Value 精确匹配。
+func TestHasProviderFactModelValueMatchesByValue(t *testing.T) {
+	groups := []ProviderModelGroupPayload{{
+		ID:     "opencode",
+		Models: []ProviderModelFactPayload{{Provider: "opencode", Value: "opencode/big-pickle", ID: "big-pickle"}},
+	}}
+	if !hasProviderFactModelValue(groups, "opencode/big-pickle") {
+		t.Fatal("按 Value 匹配应命中")
+	}
+	if hasProviderFactModelValue(groups, "m1") {
+		t.Fatal("ID/Name 不参与匹配，只有 Value 算命中")
+	}
+	if hasProviderFactModelValue(nil, "") {
+		t.Fatal("空目录对空默认值也不命中（无默认值语义）")
+	}
+}

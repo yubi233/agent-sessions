@@ -309,3 +309,42 @@ func equalStrings(left, right []string) bool {
 	}
 	return true
 }
+
+// R16 回归：provider facts（v0.9.2 P1）只消费 SPI 的 ModelGroups。Detect 产出的
+// model_select 能力必须同时填充 ModelGroups，否则 fact 会以“有默认值、无目录”
+// 上行并被 Relay 整条拒绝。这里直接钉住目录 → groups 的映射契约。
+func TestModelGroupsFromCatalogGroupsByProviderPrefix(t *testing.T) {
+	catalog := ModelCatalog{
+		Options: []string{"opencode/a-model", "opencode/b-model", "other/c-model"},
+		Default: "opencode/a-model",
+		Details: map[string]ModelDetails{
+			"opencode/a-model": {ContextWindowTokens: 272000, Reasoning: true, Efforts: []string{"low", "high"}},
+		},
+	}
+	groups := modelGroupsFromCatalog(catalog)
+	if len(groups) != 2 {
+		t.Fatalf("应按 provider 前缀分成两组: %#v", groups)
+	}
+	if groups[0].ID != "opencode" || len(groups[0].Models) != 2 {
+		t.Fatalf("opencode 组应包含两个模型: %#v", groups[0])
+	}
+	first := groups[0].Models[0]
+	if first.Value != "opencode/a-model" || first.ID != "a-model" || first.Provider != "opencode" {
+		t.Fatalf("模型引用映射不正确: %#v", first)
+	}
+	if first.ContextWindowTokens != 272000 || !first.Reasoning {
+		t.Fatalf("Details 安全元数据必须随目录复制: %#v", first)
+	}
+	if len(first.Efforts) != 2 {
+		t.Fatalf("推理档位元数据必须随目录复制: %#v", first)
+	}
+	if groups[1].ID != "other" || groups[1].Models[0].Value != "other/c-model" {
+		t.Fatalf("第二个 provider 分组不正确: %#v", groups[1])
+	}
+}
+
+func TestModelGroupsFromCatalogEmptyOptionsIsNil(t *testing.T) {
+	if groups := modelGroupsFromCatalog(ModelCatalog{}); len(groups) != 0 {
+		t.Fatalf("空目录应返回空 groups: %#v", groups)
+	}
+}
