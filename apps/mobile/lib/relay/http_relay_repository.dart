@@ -22,19 +22,27 @@ class HttpRelayRepository implements RelayRepository {
     required Future<AuthTokens?> Function() readTokens,
     Future<void> Function(AuthTokens tokens)? writeTokens,
     DateTime Function()? clock,
-  }) : this._(dio, readTokens, clock ?? DateTime.now, writeTokens);
+    void Function()? onAuthInvalid,
+  }) : this._(dio, readTokens, clock ?? DateTime.now, writeTokens, onAuthInvalid);
 
   HttpRelayRepository._(
     this._dio,
     this._readTokens,
     this._clock,
     this._writeTokens,
+    this._onAuthInvalid,
   );
 
   final Dio _dio;
   final Future<AuthTokens?> Function() _readTokens;
   final DateTime Function() _clock;
   final Future<void> Function(AuthTokens tokens)? _writeTokens;
+
+  /// v0.9.2 失败可区分：刷新被服务端**明确拒绝**（无效/设备撤销/reuse 撤销）
+  /// 时的全局收敛回调。只有凭据终态触发，网络/5xx 等暂时故障绝不触发——
+  /// 否则一次网络抖动就会把用户登出。回调由调用方接线到认证层的
+  /// handleAuthInvalid（清本机认证 → 回到重连/恢复码入口）。
+  final void Function()? _onAuthInvalid;
 
   /// 并发的多个 401 共享同一次在途刷新：refresh token 是旋转的单次凭证，
   /// 重复使用会触发 Relay 的 reuse 撤销，把整个令牌族作废。
@@ -855,8 +863,30 @@ class HttpRelayRepository implements RelayRepository {
 
   /// v0.9.0 C6：session SSE transport 的 401 重验入口。
   /// 复用 [_refreshTokensOnce] 的并发 single-flight（旋转 token 立即持久化）；
-  /// 返回是否刷新成功，调用方成功后重连。
-  Future<bool> refreshTokenOnce() async => (await _refreshTokensOnce()) != null;
+  /// 返回是否刷新成功，调用方成功后重连。刷新被服务端拒绝时同样返回 false
+  /// （凭据终态的全局收敛由 [_notifyAuthInvalid] 负责，SSE 侧只需退避）。
+  Future<bool> refreshTokenOnce() async {
+    try {
+      return (await _refreshTokensOnce()) != null;
+    } on RelayFailure {
+      return false;
+    }
+  }
+
+  /// v0.9.2 P1：App 冷启动恢复的刷新入口，与 401/SSE 刷新共享同一 single-flight。
+  ///
+  /// 为什么必须存在：Relay 的 refresh token 是轮转式单次凭证，任何两条并发的
+  /// /v1/auth/refresh 携带同一把 token 时，后到者必触发 reuse 检测并撤销整个
+  /// family（真机事故 2026-09-16 22:39:59：冷启动时启动恢复与首批 401 刷新
+  /// 同一秒各发一条 refresh，200+401，family 被撤销，用户在下一轮 access
+  /// 过期后被登出）。因此所有刷新入口必须收敛到 [_refreshTokensOnce]，
+  /// 禁止调用方绕过它直接 [refresh]。
+  ///
+  /// 结果三态（v0.9.2 失败可区分）：成功返回新 token（已由 [_refreshStoredTokens]
+  /// 落盘）；服务端明确拒绝（凭据终态，含 reuse 撤销）抛
+  /// [RelayFailureKind.unauthorized]；网络/5xx 等暂时故障返回 null——凭据可能
+  /// 仍然有效，调用方必须按可重试处理，不得清理本机认证。
+  Future<AuthTokens?> refreshStoredTokens() => _refreshTokensOnce();
 
   /// v0.9.0 C6：会话 SSE 专用 streaming client（复用同一 baseUrl 配置；
   /// 建流时读取最新 access token，401 刷新后重连自动携带新 token）。
@@ -878,20 +908,38 @@ class HttpRelayRepository implements RelayRepository {
     return task.whenComplete(() => _refreshInFlight = null);
   }
 
+  /// 结果三态见 [refreshStoredTokens]：成功返回新 token 并立即落盘（否则下一次
+  /// 刷新会携带已被轮换的旧 refresh token，触发 reuse 撤销）；服务端明确拒绝抛
+  /// unauthorized；无本地凭据同属不可恢复终态；网络/5xx/响应异常返回 null。
   Future<AuthTokens?> _refreshStoredTokens() async {
     final stored = await _readTokens();
     if (stored == null) {
-      return null;
+      throw const RelayFailure(
+        RelayFailureKind.unauthorized,
+        '设备连接已失效，请重新连接。',
+      );
     }
     try {
       final refreshed = await refresh(stored.refreshToken);
-      // 新 token（含旋转后的 refresh token）必须立刻持久化，否则下一次刷新
-      // 会携带已被轮换的旧 refresh token，触发 reuse 撤销。
       await _writeTokens?.call(refreshed);
       return refreshed;
-    } catch (_) {
+    } on RelayFailure catch (failure) {
+      if (failure.kind == RelayFailureKind.unauthorized) {
+        // 服务端明确拒绝刷新：凭据终态，原样上抛（触发 onAuthInvalid 收敛）。
+        rethrow;
+      }
+      return null;
+    } on Object {
+      // 响应解析等非凭据故障：按暂时不可用收敛，不误杀本地凭据。
       return null;
     }
+  }
+
+  /// 凭据终态的全局收敛回调（v0.9.2）。回调自身异常不得掩盖真实错误。
+  void _notifyAuthInvalid() {
+    try {
+      _onAuthInvalid?.call();
+    } catch (_) {}
   }
 
   Future<Response<dynamic>> _send(
@@ -942,7 +990,18 @@ class HttpRelayRepository implements RelayRepository {
         );
       }
       if (status == 401 && accessToken != null && allowAuthRefresh) {
-        final refreshed = await _refreshTokensOnce();
+        final AuthTokens? refreshed;
+        try {
+          refreshed = await _refreshTokensOnce();
+        } on RelayFailure {
+          // 服务端明确拒绝刷新（无效/设备撤销/reuse 撤销）：凭据终态。
+          // 全局收敛到重连/恢复码入口；业务侧保持未授权语义。
+          _notifyAuthInvalid();
+          throw const RelayFailure(
+            RelayFailureKind.unauthorized,
+            '设备连接已失效，请重新连接。',
+          );
+        }
         if (refreshed != null) {
           return _send(
             method,
@@ -953,6 +1012,12 @@ class HttpRelayRepository implements RelayRepository {
             allowAuthRefresh: false,
           );
         }
+        // 刷新暂不可达（网络/5xx）：这是可重试故障，不得伪装成凭据失效——
+        // 否则一次网络抖动就会让用户误以为设备被登出。
+        throw const RelayFailure(
+          RelayFailureKind.unavailable,
+          'Relay 暂时不可用，请稍后重试。',
+        );
       }
       throw switch (status) {
         401 => const RelayFailure(

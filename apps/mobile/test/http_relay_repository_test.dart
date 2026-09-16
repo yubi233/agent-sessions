@@ -1538,6 +1538,81 @@ void main() {
       );
       expect(refreshCalls, 1);
     });
+
+    test('刷新被服务端拒绝时保持未授权语义并触发 onAuthInvalid（凭据终态收敛）', () async {
+      var authInvalidCalls = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        if (options.path == '/v1/auth/refresh') {
+          return _jsonResponse({'error': 'token reused'}, statusCode: 401);
+        }
+        return _jsonResponse({'error': 'unauthenticated'}, statusCode: 401);
+      });
+      final dio = Dio(BaseOptions(baseUrl: 'http://relay.fixture'));
+      dio.httpClientAdapter = adapter;
+      final repository = HttpRelayRepository(
+        dio: dio,
+        readTokens: () async => AuthTokens(
+          accessToken: 'access-stale',
+          refreshToken: 'refresh-dead',
+          expiresAt: DateTime.utc(2026, 8, 14),
+        ),
+        writeTokens: (_) async {},
+        clock: () => DateTime.utc(2026, 8, 14),
+        onAuthInvalid: () => authInvalidCalls += 1,
+      );
+
+      await expectLater(
+        repository.listDevices(),
+        throwsA(
+          isA<RelayFailure>().having(
+            (failure) => failure.kind,
+            'kind',
+            RelayFailureKind.unauthorized,
+          ),
+        ),
+      );
+      // 凭据终态必须触发全局收敛（v0.9.2 失败可区分）。
+      expect(authInvalidCalls, 1);
+    });
+
+    test('刷新网络失败时保持可重试语义（unavailable），不误报凭据失效', () async {
+      var authInvalidCalls = 0;
+      final adapter = _FixtureHttpAdapter((options) {
+        if (options.path == '/v1/auth/refresh') {
+          throw DioException(
+            requestOptions: options,
+            type: DioExceptionType.connectionError,
+          );
+        }
+        return _jsonResponse({'error': 'unauthenticated'}, statusCode: 401);
+      });
+      final dio = Dio(BaseOptions(baseUrl: 'http://relay.fixture'));
+      dio.httpClientAdapter = adapter;
+      final repository = HttpRelayRepository(
+        dio: dio,
+        readTokens: () async => AuthTokens(
+          accessToken: 'access-stale',
+          refreshToken: 'refresh-live',
+          expiresAt: DateTime.utc(2026, 8, 14),
+        ),
+        writeTokens: (_) async {},
+        clock: () => DateTime.utc(2026, 8, 14),
+        onAuthInvalid: () => authInvalidCalls += 1,
+      );
+
+      // 网络抖动不是凭据终态：业务侧得到可重试的 unavailable，且绝不触发登出收敛。
+      await expectLater(
+        repository.listDevices(),
+        throwsA(
+          isA<RelayFailure>().having(
+            (failure) => failure.kind,
+            'kind',
+            RelayFailureKind.unavailable,
+          ),
+        ),
+      );
+      expect(authInvalidCalls, 0);
+    });
   });
 }
 

@@ -83,7 +83,10 @@ final themeControllerProvider = ChangeNotifierProvider<ThemeController>((ref) {
   return controller;
 });
 
-final relayRepositoryProvider = Provider<RelayRepository>((ref) {
+/// 显式类型：onAuthInvalid 闭包引用 appControllerProvider，与下方
+/// appControllerProvider 形成 top_level_cycle，需要显式类型断开推断循环。
+final Provider<RelayRepository> relayRepositoryProvider =
+    Provider<RelayRepository>((ref) {
   const relayBaseUrl = String.fromEnvironment('RELAY_BASE_URL');
   if (relayBaseUrl.isEmpty) {
     return FixtureRelayRepository();
@@ -104,6 +107,12 @@ final relayRepositoryProvider = Provider<RelayRepository>((ref) {
     readTokens: () => ref.read(secureTokenStoreProvider).read(),
     // 401 自动刷新会把旋转后的 refresh token 写回安全存储，防止 reuse 撤销整族令牌。
     writeTokens: (tokens) => ref.read(secureTokenStoreProvider).write(tokens),
+    // v0.9.2 失败可区分：运行期刷新被服务端明确拒绝（无效/设备撤销/reuse 撤销）
+    // 时全局收敛到 AppController——清本机认证并回到连接页（重连/恢复码入口），
+    // 不再把凭据失效混进业务错误横幅。回调仅在运行期触发，构造期不读
+    // appControllerProvider，不存在初始化循环依赖。
+    onAuthInvalid:
+        () => ref.read(appControllerProvider.notifier).handleAuthInvalid(),
   );
 });
 
@@ -163,11 +172,18 @@ final workspaceFilesRepositoryProvider = Provider<WorkspaceFilesRepository>((
 });
 
 final appControllerProvider = ChangeNotifierProvider<AppController>((ref) {
+  final relay = ref.read(relayRepositoryProvider);
   final controller = AppController(
-    relay: ref.read(relayRepositoryProvider),
+    relay: relay,
     tokenStore: ref.read(secureTokenStoreProvider),
     identityStore: ref.read(deviceIdentityStoreProvider),
     encryptedCache: ref.read(encryptedCacheStoreProvider),
+    // v0.9.2 P1：启动恢复的刷新收敛到 HttpRelayRepository 的 single-flight，
+    // 与首批请求的 401 刷新/SSE 刷新互斥。否则冷启动（access 已过期）时两条
+    // 并发刷新携带同一把轮转式 refresh token，后到者触发 reuse 撤销整个
+    // 令牌族，用户在下一轮 access 过期后被登出（2026-09-16 真机事故根因）。
+    refreshFromStore:
+        relay is HttpRelayRepository ? relay.refreshStoredTokens : null,
   );
   unawaited(controller.initialize());
   return controller;

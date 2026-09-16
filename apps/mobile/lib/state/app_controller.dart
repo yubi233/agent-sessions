@@ -14,19 +14,29 @@ class AppController extends ChangeNotifier {
     required SecureTokenStore tokenStore,
     required DeviceIdentityStore identityStore,
     required EncryptedCacheStore encryptedCache,
-  }) : this._(relay, tokenStore, identityStore, encryptedCache);
+    Future<AuthTokens?> Function()? refreshFromStore,
+  }) : this._(relay, tokenStore, identityStore, encryptedCache, refreshFromStore);
 
   AppController._(
     this._relay,
     this._tokenStore,
     this._identityStore,
     this._encryptedCache,
+    this._refreshFromStore,
   );
 
   final RelayRepository _relay;
   final SecureTokenStore _tokenStore;
   final DeviceIdentityStore _identityStore;
   final EncryptedCacheStore _encryptedCache;
+
+  /// v0.9.2 P1：启动恢复的刷新入口（真实 Relay 注入 HttpRelayRepository 的
+  /// single-flight 实现）。refresh token 是轮转式单次凭证，启动刷新绝不能
+  /// 绕过仓库的并发去重直接 [_relay.refresh]——冷启动时 SessionController
+  /// 的首批请求会因 access 过期触发 401 刷新，两条并发刷新携带同一把旧
+  /// token，后到者触发 Relay reuse 检测并撤销整个令牌族（2026-09-16 真机
+  /// 事故根因）。为 null 时（fixture 模式无轮转撤销语义）保留直接刷新兜底。
+  final Future<AuthTokens?> Function()? _refreshFromStore;
 
   AppAuthPhase _phase = AppAuthPhase.booting;
   AuthTokens? _tokens;
@@ -87,18 +97,42 @@ class AppController extends ChangeNotifier {
       }
       _tokens = stored;
       if (stored.needsRefresh) {
-        _tokens = await _relay.refresh(stored.refreshToken);
-        await _tokenStore.write(_tokens!);
+        // 必须走 single-flight 刷新入口：与 401/SSE 刷新互斥，同一把轮转式
+        // refresh token 全生命周期只允许一条在途 /v1/auth/refresh。
+        // 结果三态：成功返回新 token；服务端明确拒绝抛 unauthorized（交由
+        // 下方凭据终态分支清理）；null = 网络/5xx 暂时不可达——凭据可能仍然
+        // 有效，只提示可重试，绝不清理本机认证。
+        final refreshed = _refreshFromStore != null
+            ? await _refreshFromStore()
+            : await _relay.refresh(stored.refreshToken);
+        if (refreshed == null) {
+          _phase = AppAuthPhase.signedOut;
+          _errorMessage = 'Relay 暂时不可用，请稍后重试。';
+          return;
+        }
+        _tokens = refreshed;
+        // single-flight 实现已在刷新成功时立即落盘；这里只为不落盘的兜底
+        // 实现（fixture/旧仓库）补写，避免用旧 token 覆盖更新鲜的落盘结果。
+        if (_refreshFromStore == null) {
+          await _tokenStore.write(_tokens!);
+        }
       }
       await _adoptTokenBinding(_tokens!);
       await _reloadDevices();
       await _refreshBootstrapRequirement();
       _phase = AppAuthPhase.authenticated;
-    } on RelayFailure {
-      // token 失效时只清理本机认证与密文缓存，不将异常详情显示到日志。
-      await _clearLocalSession();
+    } on RelayFailure catch (failure) {
       _phase = AppAuthPhase.signedOut;
-      _errorMessage = '设备连接已失效，请重新连接或使用恢复码。';
+      if (failure.kind == RelayFailureKind.unauthorized) {
+        // 凭据终态（token 无效/设备撤销/reuse 撤销）：清理本机认证与密文缓存，
+        // 不将异常详情显示到日志；连接页自带重连与恢复码入口。
+        await _clearLocalSession();
+        _errorMessage = '设备连接已失效，请重新连接或使用恢复码。';
+      } else {
+        // 网络/5xx 等暂时失败（v0.9.2 失败可区分）：凭据仍然有效，只保留
+        // 可重试提示，绝不清理本机认证——否则离线打开 App 也会被永久登出。
+        _errorMessage = failure.message;
+      }
     } catch (_) {
       await _clearLocalSession();
       _phase = AppAuthPhase.signedOut;
@@ -107,6 +141,21 @@ class AppController extends ChangeNotifier {
       _initializing = false;
       _setBusy(false);
     }
+  }
+
+  /// v0.9.2 失败可区分：运行期刷新被服务端明确拒绝（token 无效/设备撤销/
+  /// reuse 撤销）时的全局收敛——清理本机认证并回到连接页（重新配对/恢复码
+  /// 入口），而不是把凭据失效散落在业务错误横幅里让用户卡死在原页面。
+  /// 幂等：并发 401 只收敛一次；仅已认证态动作，不干扰启动期（initialize
+  /// 自行按同一语义处理）与未认证态。
+  Future<void> handleAuthInvalid() async {
+    if (_phase != AppAuthPhase.authenticated) return;
+    await _clearLocalSession();
+    _devices = const [];
+    _pairings.clear();
+    _phase = AppAuthPhase.signedOut;
+    _errorMessage = '设备连接已失效，请重新连接或使用恢复码。';
+    notifyListeners();
   }
 
   /// Happy-style Android 主路径：不要求账号登录；首台手机用本机安全密钥直接初始化 owner。
