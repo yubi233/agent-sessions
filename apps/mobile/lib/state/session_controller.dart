@@ -1382,11 +1382,20 @@ class SessionController extends ChangeNotifier {
   ///      start——这是新会话唯一正确的语义。
   ///   4) 其它失败（Provider 不可用、版本门、环境失败）原样返回 false，
   ///      由调用方把真实原因浮出，绝不静默改走 start 掩盖故障。
+  /// [force] 为 true 时**跳过**「status 不是 stopped 就直接放行」的短路。
+  ///
+  /// 为什么需要 force（v0.9.2 P2 修正，R14 真机暴露）：本机实例映射的丢失
+  /// （Daemon 重启、state 目录被清理）与客户端可见的 session.status **无关**——
+  /// Daemon 重启不会改写 Relay 的 session 投影，status 可能仍是 idle/running。
+  /// 此时按 status 短路会直接放行发送，命令到达执行侧后必然以
+  /// local_state_missing 失败，用户看到的就是「明明显示空闲却发不出去」。
+  /// 因此失败路径用 force 强制走一次恢复（resume → 回退 start）。
   Future<bool> _ensureSessionRunnableForSend({
     required String deviceId,
     required bool canWrite,
+    bool force = false,
   }) async {
-    if (selectedSession?.status != MobileSessionStatus.stopped) {
+    if (!force && selectedSession?.status != MobileSessionStatus.stopped) {
       return true;
     }
     final resumeBlocked = resumeBlockedReason(canWrite: canWrite);
@@ -1499,11 +1508,15 @@ class SessionController extends ChangeNotifier {
     // 乐观回显：不等 daemon 事件回传，先在本地挂出待确认的用户气泡。
     _pendingOutgoingBySession[sessionId] = trimmed;
     _notifyListeners();
-    final accepted = await _submitCommand(
+    // 重试时只换幂等键，密文与意图保持一致（同一份用户输入不被重复引用附件）。
+    Future<bool> submitSend(String opKey) => _submitCommand(
       sessionId: sessionId,
-      operation: operation,
+      operation: opKey,
       kind: SessionCommandKind.send,
       deviceId: deviceId,
+      // 这里必须显式传 canWrite：_submitCommand 的默认值是 true，而调用方
+      // 传入的是真实的（可能为 false 的）可写判定，不能因为抽成闭包而丢失。
+      canWrite: canWrite,
       ciphertext: {
         'fixture_payload': {
           'message': trimmed,
@@ -1518,6 +1531,26 @@ class SessionController extends ChangeNotifier {
       awaitTurnCompletion: awaitTurnCompletion,
       submissionIntent: intent,
     );
+    var accepted = await submitSend(operation);
+    // v0.9.2 P2 修正（R14 真机暴露）：发送被执行侧以「本机没有该会话实例」拒绝时
+    // 自动恢复并重试一次。触发条件是**执行侧错误**而不是客户端 status——
+    // Daemon 重启/state 清理会丢失实例映射，但 Relay 的 session 投影往往仍是
+    // idle/running，`_ensureSessionRunnableForSend` 的 status 短路因此不会触发，
+    // 用户看到的现象是「显示空闲却发不出去」。
+    if (!accepted && _looksLikeMissingLocalInstance(_errorMessage)) {
+      _errorMessage = null;
+      _notifyListeners();
+      final recovered = await _ensureSessionRunnableForSend(
+        deviceId: deviceId,
+        canWrite: canWrite,
+        force: true,
+      );
+      if (recovered) {
+        // 幂等键必须变化：Relay 按 operation 去重，沿用旧键会直接返回上一次
+        // 失败的命令，重试形同虚设。
+        accepted = await submitSend('$operation#recovered');
+      }
+    }
     if (accepted) {
       // v0.9.0 C1：回合在途标记与超时标记已在 Relay 202 即时受理分支内处理
       // （_noteSendAcceptedAt202），不再等首批快照返回后才置位。
