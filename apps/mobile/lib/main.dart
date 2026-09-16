@@ -417,6 +417,22 @@ class _LocalVisualScenarioCoordinatorState
   Future<void> _runV092SendLoopScenario() async {
     final sessionId = widget.sessionId;
     final ownerDeviceId = widget.localVisualOwnerDeviceId;
+
+    // 关键顺序（v0.9.2 R8 修正）：**先启动状态驱动，再尝试进入会话**。
+    //
+    // 此前实现先把"等待会话就绪 + selectSession"做完才进入状态循环；一旦
+    // sessionId 为空或该会话没出现在列表里（首次进会话、fixture 与投影不同步等），
+    // 函数会直接 return，状态驱动**从未开始**——采集窗口内画面因此完全静止
+    // （实测 100 帧只 1 个唯一 md5）。而录屏要立的证据恰恰是"事实变化导致可见变化"，
+    // 会话导航只是让画面更好看，不能成为状态驱动的前置条件。
+    final relay = ref.read(relayRepositoryProvider);
+    if (relay is FixtureRelayRepository) {
+      // 不 await：状态驱动必须尽早跑起来并持续整个采集窗口。
+      unawaited(_driveV092FactPhases(relay));
+    }
+
+    // 以下为可选增强：把会话页打开，让 composer/模型入口把执行侧给出的不可用
+    // 原因渲染成可见文案。失败**不影响**上面的状态驱动。
     if (sessionId == null || ownerDeviceId == null) return;
     for (var attempt = 0; attempt < 240; attempt += 1) {
       final app = ref.read(appControllerProvider);
@@ -435,24 +451,17 @@ class _LocalVisualScenarioCoordinatorState
     await sessions.refreshCapabilities(force: true);
     await sessions.selectSession(sessionId);
     ref.read(appRouterProvider).go('/sessions/$sessionId');
-    final relay = ref.read(relayRepositoryProvider);
-    if (relay is! FixtureRelayRepository) return;
-    // 状态转换只发生一次，且必须落在可见窗口的 5fps 采集窗口内。
-    //
-    // 关键约束（2026-09-16 实测两次失败后确定）：
-    //   1) 可见窗口采集在 widget 契约测试**之后**才启动；若转换在启动前就结束，
-    //      采到的 100 帧完全相同、画面停在稳态（首轮实测 frame-0005/0050/0090
-    //      的 md5 一致）。
-    //   2) 但也不能周期性高频切换：每次 force 刷新都会重建页面，而采集通道要求
-    //      **严格 200ms 连续节拍**落帧；高频重建会让"连续节拍未完成"，采集与
-    //      录屏双双失败（第二、三轮实测）。
-    //
-    // 因此：先停留足够长的时间（覆盖 widget 测试 + App 启动 + 采集启动），再
-    // 做唯一一次转换，随后保持稳定，让转换后的稳态也能被连续帧记录。
-    // 转换周期取 10 秒：可见窗口的采集窗口是 100 帧 × 200ms = 20 秒，因此无论
-    // 采集从哪一刻启动（它在 widget 契约测试之后才开始），窗口内都必然包含完整
-    // 的"不可用 → 可用"转换；周期又不短于 10 秒，不会像 5 秒级切换那样让
-    // render-tree 落帧的严格 200ms 节拍抖动（实测 5 秒周期会导致采集失败）。
+  }
+
+  /// 状态驱动循环：周期性在「执行侧不可用」与「执行侧已恢复」之间切换能力事实，
+  /// 并每次 force 刷新能力矩阵，使画面在采集窗口内必然出现可见变化。
+  ///
+  /// 为什么独立成方法（v0.9.2 R8）：它必须能被**无条件**调用——录屏要立的证据是
+  /// 「事实变化导致可见变化」，不能因为「会话还没就绪」就整段不执行。
+  /// 周期取 10 秒：采集窗口是 100 帧 × 200ms = 20 秒，窗口内必然覆盖完整转换；
+  /// 同时不短于 10 秒，避免频繁重建让 render-tree 落帧的严格 200ms 节拍抖动
+  /// （实测 5 秒周期会导致采集失败）。
+  Future<void> _driveV092FactPhases(FixtureRelayRepository relay) async {
     const phaseStay = Duration(seconds: 10);
     // 先立即进入"执行侧不可用"阶段：composer/模型入口展示执行侧给出的真实原因。
     for (var round = 0; round < 30; round += 1) {
