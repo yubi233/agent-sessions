@@ -1403,10 +1403,15 @@ class SessionController extends ChangeNotifier {
       // 清掉上一轮错误，避免把历史失败误判成本次恢复结果。
       _errorMessage = null;
       await resumeSelectedSession(deviceId: deviceId, canWrite: canWrite);
-      if (_errorMessage == null) {
-        return _sessionRecoveryLooksHealthy;
+      if (_errorMessage == null && _sessionRecoveryLooksHealthy) {
+        return true;
       }
-      if (!_looksLikeMissingLocalInstance(_errorMessage)) {
+      // R17：resume 自报成功但状态投影不翻转（daemon 持久映射仍在时 resume
+      // 恒成功，却只恢复句柄、不注册实例也不写状态事件——实测会话保持
+      // stopped，用户被"恢复未成功"死锁）也必须回退 start：宁可丢上下文
+      // 也要把会话救活。resume 以 missing-instance 失败的既有回退语义不变。
+      if (_errorMessage != null &&
+          !_looksLikeMissingLocalInstance(_errorMessage)) {
         // 真实故障（版本门/Provider 不可用/环境失败）：保持显式错误，不掩盖。
         return false;
       }
@@ -1483,9 +1488,10 @@ class SessionController extends ChangeNotifier {
     )) {
       // v0.9.2 G4：恢复失败时区分"能恢复但没恢复成功"与真实故障。
       // 具体原因（Provider 不可用 / 版本门 / 环境失败）已由恢复路径写入错误面，
-      // 这里只在完全没有原因时给保守兜底文案。
+      // 这里只在完全没有原因时给保守兜底文案。R17 起恢复链含 resume 与启动
+      // 双重兜底，仍失败说明执行侧无法服务该会话——引导新建会话而非无限重试。
       _setError(
-        _errorMessage ?? '会话恢复未成功，请先手动恢复会话再发送。',
+        _errorMessage ?? '会话自动恢复未成功，请新建会话后重试。',
       );
       return;
     }
@@ -2915,6 +2921,9 @@ class SessionController extends ChangeNotifier {
       // 新回合受理即清除上一轮的本地超时标记（重新计时）。
       _turnTimedOut.remove(sessionId);
     }
+    // v0.9.2 R17：deadline 节拍与传输解耦——SSE live 抑制轮询/L1 拉取后，
+    // 超时评估必须有自己的节拍，否则悬挂回合永远收敛不了。
+    _ensureTurnDeadlineTimer();
     _notifyListeners();
   }
 
@@ -3078,6 +3087,43 @@ class SessionController extends ChangeNotifier {
     // 时不留永久回显）。空草稿仍允许用户中止，有草稿走既有 queue/steer 交互。
     _pendingOutgoingBySession.remove(sessionId);
     _notifyListeners();
+  }
+
+  /// v0.9.2 R17：deadline 评估与传输解耦的节拍器。C6 起 SSE live 时在途轮询与
+  /// L1 都跳过拉取、SSE 空轮询也不触发 wake——若执行侧对受理的回合静默无事件
+  /// （无 turn.phase、无终态，实测 R17：resume 只恢复句柄不产生任何状态事件），
+  /// deadline 评估就没有任何调用点，UI 会永远停留在"生成中"。这里以固定节拍
+  /// 独立评估所有活跃回合；无活跃回合时自取消，全程不产生任何网络请求。
+  @visibleForTesting
+  Duration turnDeadlineTickInterval = const Duration(seconds: 5);
+  Timer? _turnDeadlineTimer;
+
+  /// 202 锚定即武装节拍器（幂等）；测试经 [turnDeadlineTickArmed] 与
+  /// [evaluateTurnDeadlineTick] 直接驱动。
+  void _ensureTurnDeadlineTimer() {
+    if (_disposed || _turnDeadlineTimer != null) return;
+    _turnDeadlineTimer = Timer.periodic(turnDeadlineTickInterval, (_) {
+      if (_disposed || _activeTurns.isEmpty) {
+        _turnDeadlineTimer?.cancel();
+        _turnDeadlineTimer = null;
+        return;
+      }
+      evaluateTurnDeadlineTick();
+    });
+  }
+
+  /// 是否仍有未收敛的 deadline 节拍器（测试观测用）。
+  @visibleForTesting
+  bool get turnDeadlineTickArmed => _turnDeadlineTimer != null;
+
+  /// 节拍一次：评估所有活跃回合的 UX deadline。
+  /// [_evaluateTurnDeadlines] 自带幂等（已置位/未到期的回合零变更零通知），
+  /// 因此节拍本身不会产生通知风暴。
+  @visibleForTesting
+  void evaluateTurnDeadlineTick() {
+    for (final sessionId in List<String>.of(_activeTurns.keys)) {
+      _evaluateTurnDeadlines(sessionId);
+    }
   }
 
   /// v0.9.0 C1/T7：L1 降频续轮——选中会话 10 秒一拍（单会话 0.1 QPS），
@@ -3665,6 +3711,8 @@ class SessionController extends ChangeNotifier {
     _stopSessionEventTransport();
     _quietReconcileTimer?.cancel();
     _quietReconcileTimer = null;
+    _turnDeadlineTimer?.cancel();
+    _turnDeadlineTimer = null;
     super.dispose();
   }
 

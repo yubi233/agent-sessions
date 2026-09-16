@@ -146,6 +146,42 @@ void main() {
     // 断言 3：重试成功后不再残留上一轮的错误面。
     expect(controller.errorMessage, isNull);
   });
+  test('R17：resume 自报成功但状态投影不翻转时回退 start（不再死锁）', () async {
+    // R17 实测：daemon 持久映射仍在时 resume 恒成功，但只恢复句柄、不注册
+    // 实例也不写状态事件——投影保持 stopped。旧实现在健康门失败后直接放弃，
+    // 用户被"会话恢复未成功，请先手动恢复会话再发送"死锁（无手动入口）。
+    // 修复后：resume 成功但不健康 → 回退 start → 消息真正发出。
+    var now = baseNow;
+    final relay = _RecordingCommandRelay(clock: () => now);
+    relay.projectSelectedSessionAsStopped = true;
+    relay.keepStoppedAfterResume = true;
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = SessionController(relay: relay, clock: () => now);
+    await controller.initialize();
+    final created = await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: false,
+    );
+    expect(created, isNotNull);
+
+    await controller.sendMessage(
+      message: 'R17 回归',
+      deviceId: owner.deviceId,
+      canWrite: true,
+    );
+
+    expect(relay.submittedKinds, contains(SessionCommandKind.resume),
+        reason: '恢复链仍先走 resume（保留上下文的优先语义）');
+    expect(relay.submittedKinds, contains(SessionCommandKind.start),
+        reason: 'resume 成功但不健康时必须回退 start（死锁修复）');
+    expect(relay.submittedKinds, contains(SessionCommandKind.send),
+        reason: '恢复成功后消息必须真正发出');
+    expect(controller.errorMessage, isNull, reason: '恢复链完成后不得残留错误面');
+  });
+
   test('非 stopped 会话发送不触发额外恢复命令', () async {
     var now = baseNow;
     final relay = _RecordingCommandRelay(clock: () => now);
@@ -194,6 +230,11 @@ class _RecordingCommandRelay extends FixtureRelayRepository {
   /// 用于覆盖"新会话必须回退 start"的分支。
   bool failResumeWithMissingInstance = false;
 
+  /// R17 实测形态：resume 自报成功（持久映射仍在），但 daemon 只恢复句柄、
+  /// 不注册实例也不写状态事件——投影**永远**保持 stopped。用于覆盖
+  /// "resume 成功但不健康 → 必须回退 start"的死锁修复。
+  bool keepStoppedAfterResume = false;
+
   @override
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
@@ -205,7 +246,9 @@ class _RecordingCommandRelay extends FixtureRelayRepository {
     );
     // 恢复命令提交后，真实 daemon 会把会话投影推进为 idle；fixture 也必须跟随，
     // 否则停止投影会永久生效，恢复永远"看起来失败"而掩盖真实的恢复路径。
-    if (!projectSelectedSessionAsStopped || submittedKinds.isNotEmpty) {
+    final stop = projectSelectedSessionAsStopped &&
+        (keepStoppedAfterResume || submittedKinds.isEmpty);
+    if (!stop) {
       return snapshot;
     }
     // 只改客户端可见投影；fixture 内部状态保持原样（与真实 daemon 重启后

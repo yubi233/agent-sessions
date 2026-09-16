@@ -211,4 +211,53 @@ void main() {
     expect(find.byKey(const Key('session-turn-timeout-row')), findsNothing);
     expect(find.byKey(const Key('session-turn-status-row')), findsOneWidget);
   });
+
+/// R17 回归：deadline 节拍器与传输解耦。C6 起 SSE live 时在途轮询与 L1 都跳过
+/// 拉取——若执行侧对受理回合静默无事件（无 turn.phase、无终态），旧实现没有
+/// 任何 deadline 评估调用点，UI 永远停留在"生成中"（真机 6 分钟实测）。
+/// 202 锚定即武装节拍器，节拍一次即收敛 UX 表达，与是否有轮询无关。
+test('R17：deadline 节拍器武装、驱动收敛且只切 UX 表达', () async {
+  final relay = _NeverCompletingRelay(clock: () => DateTime.now());
+  final owner = await bootstrapFixtureOwner(relay);
+  final controller = SessionController(
+    relay: relay,
+    modelEffortMemory: InMemoryModelEffortPreferenceStore(),
+  );
+  controller.turnDeadlineTickInterval = const Duration(milliseconds: 10);
+  // 窗口压到最小：本测试只验证节拍器路径，轮询窗口不参与收敛。
+  controller.foregroundPollAttempts = 1;
+  controller.backgroundPollAttempts = 1;
+  controller.pollInterval = const Duration(milliseconds: 5);
+  controller.l1PollInterval = const Duration(milliseconds: 5);
+  var monotonicMs = 0;
+  controller.monotonicElapsed = () => Duration(milliseconds: monotonicMs);
+  await controller.initialize();
+  await controller.createSession(
+    workspaceId: 'fixture-workspace',
+    provider: 'codex',
+    deviceId: owner.deviceId,
+    canWrite: true,
+    autoStart: true,
+  );
+  final sessionId = controller.selectedSessionId!;
+  expect(controller.turnDeadlineTickArmed, isFalse,
+      reason: '无活跃回合时节拍器不应武装');
+
+  await controller.sendMessage(
+    message: '看看天德华府的最新情况',
+    deviceId: owner.deviceId,
+    canWrite: true,
+  );
+  expect(controller.turnDeadlineTickArmed, isTrue,
+      reason: '202 锚定即武装 deadline 节拍器');
+
+  // 推进单调时钟跨过 2 分钟 UX deadline，节拍一次即收敛。
+  monotonicMs = 2 * 60 * 1000 + 1;
+  controller.evaluateTurnDeadlineTick();
+  expect(controller.isTurnTimedOut(sessionId), isTrue);
+  // v0.9.0 C1 语义保持：超时只切 UX 表达，活动回合事实与中断能力保持。
+  expect(controller.isTurnInFlight, isTrue);
+  expect(controller.turnDeadlineTickArmed, isTrue,
+      reason: '活跃回合仍在时节拍器保持武装（迟到终态仍可按事件校正）');
+});
 }
