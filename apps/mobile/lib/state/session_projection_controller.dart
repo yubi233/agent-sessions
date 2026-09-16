@@ -70,6 +70,30 @@ class SessionProjectionController {
         continue;
       }
 
+      // v0.9.2 R17：同回合 assistant 帧收敛——delta（streaming=true）帧与
+      // completed（streaming=false）帧描述**同一条**回复，必须渲染为一条气泡；
+      // 否则用户看到「运行中」+「已完成」两条重复回复（真机录屏实测）。
+      if (nodeKind == ConversationNodeKind.assistant) {
+        // ① 新流式帧取代仍在 streaming 的前帧（同回合只有一条在途气泡）。
+        final prevStreaming = nodes.lastIndexWhere(
+          (n) => n.kind == ConversationNodeKind.assistant && n.isStreaming,
+        );
+        if (prevStreaming >= 0) {
+          nodes.removeAt(prevStreaming);
+        }
+        // ② turn.completed 终态帧（completed_turn=true、无正文）并入最后一条
+        //    assistant 气泡并置「已完成」，自身不新增气泡。
+        if (event.completedTurn && event.text?.trim().isNotEmpty != true) {
+          final idx = nodes.lastIndexWhere(
+            (n) => n.kind == ConversationNodeKind.assistant,
+          );
+          if (idx >= 0) {
+            nodes[idx] = _nodeWithCompletedTail(nodes[idx]);
+          }
+          continue;
+        }
+      }
+
       if (nodeKind == ConversationNodeKind.assistant &&
           event.text?.trim().isNotEmpty != true &&
           !event.isStreaming) {
@@ -130,6 +154,36 @@ class SessionProjectionController {
       turnPhase: turnPhase,
     );
   }
+
+  /// R17：把 turn.completed 终态标记并入最后一条 assistant 气泡
+  /// （isStreaming=false + completedTurn=true），保留原文与全部展示字段。
+  ConversationNode _nodeWithCompletedTail(ConversationNode node) =>
+      ConversationNode(
+        key: node.key,
+        kind: node.kind,
+        sequence: node.sequence,
+        label: node.label,
+        text: node.text,
+        errorCode: node.errorCode,
+        httpStatus: node.httpStatus,
+        isStreaming: false,
+        toolStatus: node.toolStatus,
+        safeReasoningSummary: node.safeReasoningSummary,
+        messageId: node.messageId,
+        createdAt: node.createdAt,
+        copyText: node.copyText,
+        canCopy: node.canCopy,
+        showTimestamp: node.showTimestamp,
+        canFork: node.canFork,
+        forkUnavailable: node.forkUnavailable,
+        pendingSteering: node.pendingSteering,
+        references: node.references,
+        filePath: node.filePath,
+        toolDetails: node.toolDetails,
+        producedFiles: node.producedFiles,
+        feedbackAvailable: node.feedbackAvailable,
+        completedTurn: true,
+      );
 
   ConversationNodeKind _nodeKindFor(SessionTimelineEvent event) =>
       switch (event.kind) {

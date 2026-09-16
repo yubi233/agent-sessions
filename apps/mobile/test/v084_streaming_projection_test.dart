@@ -202,4 +202,55 @@ void main() {
       expect(snapshot.chatNodes, isEmpty);
     });
   });
+
+/// R17 回归：真机录屏实测——同回合的 message.delta（streaming=true）与
+/// message.completed（streaming=false）帧被投影成两个 assistant 节点，
+/// 用户看到同一回复渲染两次（一次「运行中」、一次「已完成」）。
+/// 修复后：completed 帧取代 streaming 帧，turn.completed 标记并入该气泡。
+test('R17：同回合 delta 与 completed 帧收敛为单条 assistant 气泡（已完成）', () {
+  final timeline = [
+    _eventOf(2, {
+      'kind': 'user_message',
+      'text': 'Say OK. One word reply.',
+    }),
+    _eventOf(3, {'kind': 'turn_phase', 'phase': 'preparing', 'revision': 1}),
+    _eventOf(4, {'kind': 'turn_phase', 'phase': 'streaming', 'revision': 2}),
+    _eventOf(5, {
+      'kind': 'assistant_message',
+      'label': 'Assistant',
+      'streaming': true,
+      'text': 'OK',
+    }),
+    _eventOf(6, {
+      'kind': 'assistant_message',
+      'label': 'Assistant',
+      'streaming': false,
+      'copy_text': 'OK',
+      'text': 'OK',
+    }),
+    _eventOf(7, {'kind': 'turn_phase', 'phase': 'finishing', 'revision': 3}),
+    _eventOf(8, {'kind': 'turn_phase', 'phase': 'completed', 'revision': 4}),
+    _eventOf(9, {
+      'kind': 'assistant_message',
+      'completed_turn': true,
+      'label': 'Assistant',
+    }),
+  ].map(SessionTimelineEvent.fromRelayEvent).toList();
+
+  final snapshot = const SessionProjectionController().buildSnapshot(
+    timeline: timeline,
+    controls: _controls(),
+  );
+
+  final assistantNodes = snapshot.chatNodes
+      .where((node) => node.kind == ConversationNodeKind.assistant)
+      .toList();
+  expect(assistantNodes.length, 1,
+      reason: '同一条回复不得渲染成「运行中」+「已完成」两个气泡');
+  final node = assistantNodes.single;
+  expect(node.isStreaming, isFalse);
+  expect(node.completedTurn, isTrue, reason: 'completed_turn 标记并入该气泡');
+  expect(node.text, 'OK');
+});
+
 }
