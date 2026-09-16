@@ -20,7 +20,7 @@
     "fixture_data": true,
     "local_test": true,
     "headless": false,
-    "note": "P0/P1/P2 已交付；P3 已交付 headed 回归 12/12、统一回归入口、Android gate 缺陷修复、本地与云端真机链路打通。**云端实测确认 P1 生效**（恢复终端令牌 + 部署 v0.9.2 relay 后，云端 /v1/capabilities 的 dsh 由 fail-closed 变为 available=true/version=0.0.1）。**真机实测确认链路与错误可见性**：手机 UI 完成 bootstrap → 配对终端 → 同步工作区 → 新建 DSH 会话 → 发送首条消息，全链路真实执行；发送因本地 DSH 模型路由与缓存偏好不一致被拒（environment），故 V092-09/10 保持 pending。口径：真机证据 real_device=true、headless=false、local_test=true（Relay 在本机）；不以探针或命令调度结果替代手机 UI 结论。",
+    "note": "P0/P1/P2 已交付；P3 已交付 headed 真实浏览器回归 12/12、统一回归入口、Android gate 缺陷修复、T7 state-dir 单实例锁（跨进程实测拒绝第二实例）、以及本地与云端真机链路打通。云端实测确认 P1 生效（dsh 由 fail-closed 变为 available=true/version=0.0.1）。真机实测确认链路与错误可见性（G4）成立，并修复了两类本仓库真实缺陷：Relay→Daemon 命令投递契约、多实例命令竞争。**V092-09/10 标记 blocked**：阻塞点收敛到上游 DSH 的 provider 命名不一致（目录公布 vs 路由解析），本仓库无法通过代码或配置消除（已实测排除换模型与补 modelProviders 两条路径）。",
     "real_device": true
   },
   "cases": [
@@ -224,7 +224,7 @@
     {
       "id": "V092-09",
       "title": "云端手机 DSH 首条发送闭环与终态（真机）",
-      "status": "pending",
+      "status": "blocked",
       "phase": "P3",
       "category": "真机闭环",
       "priority": "P0",
@@ -241,16 +241,21 @@
         "不在云端留下测试正文；不重置 SQLite、不改终端绑定"
       ],
       "evidence": [
-        "**真机链路已实测打通（2026-09-16，本地 Relay + 本地 Daemon + 真机 23113RKC6C/Android 15，adb 驱动 UI 交互）**：",
-        "① 真机设备初始化通过（本地库 accounts=1/devices=1）；② 终端配对并上线（手机显示「V_YANBINYE-MB6 · darwin · 在线」）；③ 手机 UI 同步 DSH 工作区通过（提示「已同步 4 个 DSH 工作区」）；④ 手机 UI 新建 DSH 会话通过（provider=dsh，status=idle）；⑤ 会话页显示「已连接 · v0.0.1」「可操作」——执行侧事实源驱动的可用性在真机 UI 生效；⑥ 手机 UI 发送首条消息后，时间线出现用户气泡 →「Provider 错误」→ 桥原始错误「session/set_config_option 失败：JSON-RPC 桥请求失败（code -32602）：unknown model route: dsh:model:deepseek-official:deepseek-v4-pro」→ 红色发送失败横幅。",
-        "该链路的每一跳（手机 UI → Relay → Daemon(runner) → DSH ACP 桥）都真实执行并有可见证据，同时验证了 G4（错误可见且可区分）在真机成立。",
-        "**仍为 pending 的原因**：发送因模型路由不一致被桥拒绝（应用侧缓存的模型偏好 deepseek-v4-pro 不在当前 cordis.yml 渠道公布的 deepseek-v4-flash 系列目录内），属 environment_or_startup_failure（本地 DSH 配置与缓存偏好不一致），非产品缺陷、非 L1/L2/L3 回归。改选目录内可用模型后即可复验「首条发送 + 终态」，届时本用例转 passed。"
+        "**已完成的本仓库侧全链路验证（本地 Relay + 本地 Daemon + 真机 23113RKC6C/Android 15，adb 驱动 UI，headless=false）**：",
+        "① 真机设备初始化通过；② 终端配对上线（手机显示「darwin · 在线」）；③ 手机 UI 同步 4 个 DSH 工作区；④ 手机 UI 新建 DSH 会话；",
+        "⑤ 会话页显示「已连接 · v0.0.1」「可操作」——执行侧事实源驱动的可用性在真机 UI 生效；",
+        "⑥ 手机 UI 发送后，时间线出现用户气泡 →「Provider 错误」→ **桥返回的原始错误**（含 JSON-RPC 错误码与模型路由名）→ 红色失败横幅；",
+        "⑦ Daemon 记录 kind=session.send；Relay delivery 有终态行。三级证据（手机截图 / Daemon 日志 / Relay 数据库）互证。",
+        "**blocked 原因（已收敛到上游 DSH，非本仓库可修）**：桥对客户端公布的模型目录条目（deepseek-v4-flash / deepseek-v4-pro）与它自己可解析的路由表不一致——",
+        "桥把公布的 provider id（deepseek-official）当作路由 channel，而承载这些模型的 provider 实为 goat，导致任选目录内模型都被 -32602 unknown model route 拒绝。",
+        "已排除的修复路径：(a) 换用目录内另一模型（flash 同样被拒）；(b) 在 cordis.yml 的 acp-agent.modelProviders 补两行（已实测仍被拒）——说明问题在 channel 段而非模型名。",
+        "上游修法（二选一，均在 DSH 仓库）：让 catalog 输出的 provider 等于 llm provider id，或在路由解析侧接受该别名并映射。"
       ]
     },
     {
       "id": "V092-10",
       "title": "云端 Daemon 重启后手机继续发送（resume 路径，真机）",
-      "status": "pending",
+      "status": "blocked",
       "phase": "P3",
       "category": "真机闭环",
       "priority": "P0",
@@ -267,7 +272,9 @@
         "恢复 daemon 单一实例运行态"
       ],
       "evidence": [
-        "待 V092-09 转 passed 后执行（Daemon 重启后续发路径的本地集成与 Flutter 回归已通过）。"
+        "依赖 V092-09 的首条发送成功终态；在 V092-09 解除上游阻塞前无法执行。",
+        "本仓库侧的 resume 契约已就绪并有回归：internal/daemon/v092_lifecycle_contract_test.go（重启后 resume 保留原 instance、并发 single-flight、桥异常退出可见终态、重复 start 回收句柄）与 apps/mobile/test/session_send_auto_start_test.dart（resume 优先、仅缺失映射才回退 start）。",
+        "另：R3 修复了 Relay→Daemon 投递契约（session_id 与 envelope 层），修复后 session.start/resume 在真机链路中可达并返回 succeeded（delivery 26/27）。"
       ]
     }
   ]
