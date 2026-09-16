@@ -201,11 +201,11 @@ final sessionControllerProvider = ChangeNotifierProvider<SessionController>((
   // （认证相位回到 signedOut）时先 resetForAuthBoundary——递增认证代际丢弃
   // 旧代际回包并清空运行期状态——再由 AppController 清 token/cache；重新认证
   // （回到 authenticated）后重建会话运行期（重新拉列表/能力矩阵）。
+  // 2026-09-16 P1 修正：不得用 previousPhase == nextPhase 早退——riverpod 3
+  // 的首帧/合并通知会把 booting→authenticated 折叠为同值对，早退会把真实
+  // 跃迁丢弃导致 SessionController 永不初始化（恢复码接管路径实测）。
   ref.listen(appControllerProvider, (previous, next) {
-    final previousPhase = previous?.phase;
-    final nextPhase = next.phase;
-    if (previousPhase == nextPhase) return;
-    switch (nextPhase) {
+    switch (next.phase) {
       case AppAuthPhase.signedOut:
         controller.resetForAuthBoundary();
       case AppAuthPhase.authenticated:

@@ -4,6 +4,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:agent_sessions_mobile/domain/models.dart';
+import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/domain/terminal_models.dart';
 import 'package:agent_sessions_mobile/app/providers.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
@@ -96,6 +97,26 @@ TerminalStatusController _eligibleController(
 /// 消化控制器内所有微任务（含 single-flight whenComplete 补拍链）。
 void _drain(FakeAsync async) {
   async.flushMicrotasks();
+}
+
+/// 认证门控的会话 fixture（2026-09-16 P1 回归专用）：未认证时 listSessions 抛
+/// unauthorized（复刻真实 HTTP 401 阶段），认证后才返回真实数据——用于复现
+/// 「provider 创建于未认证相位」时会话列表的门控行为。
+class _AuthGatedSessionRelay extends FixtureRelayRepository {
+  _AuthGatedSessionRelay() : super(clock: () => DateTime.now());
+
+  /// 认证开关：模拟恢复码接管完成后设备令牌才生效。
+  bool authenticated = false;
+  int listSessionsCalls = 0;
+
+  @override
+  Future<List<MobileSession>> listSessions() async {
+    listSessionsCalls++;
+    if (!authenticated) {
+      throw const RelayFailure(RelayFailureKind.unauthorized, '设备令牌未生效。');
+    }
+    return super.listSessions();
+  }
 }
 
 void main() {
@@ -446,6 +467,67 @@ void main() {
               '相位变化必须触发终端列表首拍——否则终端列表永远不拉取，'
               '工作区页停留在空态、无法进入 DSH 会话');
       terminals.detachSurface();
+    });
+
+    test('恢复码接管序列（SessionController）：provider 创建于未认证、相位变化后必须重跑 initialize（2026-09-16 P1 回归）',
+        () async {
+      // 认证门控 fixture：未认证的首次 initialize 必然失败（401），确保本用例
+      // 真正覆盖「相位跃迁触发重建」，而不是依赖创建时的首次成功。
+      final relay = _AuthGatedSessionRelay();
+      final tokens = InMemorySecureTokenStore();
+      final identities = InMemoryDeviceIdentityStore();
+      final owner = await bootstrapFixtureOwner(
+        relay,
+        tokens: tokens,
+        identities: identities,
+      );
+      // 预置一个会话：认证后 initialize 必须能拉到它（非空断言的事实基础）。
+      await relay.createSession(
+        CreateMobileSessionInput(
+          workspaceId: 'ws-p1-session',
+          provider: 'codex',
+          deviceId: owner.deviceId,
+        ),
+      );
+
+      final app = AppController(
+        relay: relay,
+        tokenStore: tokens,
+        identityStore: identities,
+        encryptedCache: InMemoryEncryptedCacheStore(),
+      );
+      final container = ProviderContainer(
+        overrides: [
+          relayRepositoryProvider.overrideWithValue(relay),
+          appControllerProvider.overrideWith((_) => app),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      // 真实 App 中首页 ref.watch sessionControllerProvider（活跃监听）；这里用
+      // container.listen 等价模拟。provider 创建时相位仍为 booting（未认证）。
+      container.listen(sessionControllerProvider, (_, _) {});
+      final sessions = container.read(sessionControllerProvider);
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(relay.listSessionsCalls, greaterThan(0),
+          reason: 'provider 创建时必须已尝试首次 initialize（门控前置）');
+      expect(sessions.sessions, isEmpty,
+          reason: '未认证时 listSessions 被 401 拒绝：不得出现伪造的 ready 列表');
+
+      // 模拟恢复码接管/启动完成：相位变为 authenticated。
+      relay.authenticated = true;
+      await app.initialize();
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(app.phase, AppAuthPhase.authenticated);
+      // 2026-09-16 P1（providers.dart）：相位监听不得用 previousPhase == nextPhase
+      // 早退——riverpod3 首帧/合并通知会把 booting→authenticated 折叠为同值对，
+      // 早退会丢弃真实跃迁，SessionController 永不重建，会话列表停留空态。
+      expect(sessions.sessions, isNotEmpty,
+          reason: '恢复码接管后相位变化必须触发 SessionController.initialize（会话列表拉取）');
     });
   });
 
