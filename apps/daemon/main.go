@@ -83,7 +83,7 @@ func run(args []string) error {
 	case "doctor":
 		return cmdDoctor()
 	case "run":
-		return cmdRun(st, *relayBase, *accessToken, *fixtureAdapter, *requeueFailedEvents)
+		return cmdRun(st, *relayBase, *accessToken, *fixtureAdapter, *requeueFailedEvents, dir)
 	case "runner":
 		// 本地 outbox -> Adapter 兑现演示（Relay 连接未实现，不假装已连）。
 		return cmdRunner(st)
@@ -253,8 +253,18 @@ func pinnedTLSClientFromEnv(getenv func(string) string) *http.Client {
 	}
 }
 
-func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, requeueFailedEvents bool) error {
+func cmdRun(st *daemon.Store, relayBase, accessToken string, useFixtureAdapter, requeueFailedEvents bool, stateDir string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// v0.9.2 T7（state-dir 单实例锁）：同一个 state-dir 上并存多个 Daemon 会共享
+	// 同一份 Relay 终端身份与 delivery_seq 游标，导致命令投递竞争、以
+	// DAEMON_EXECUTION_FAILED 收场（2026-09-16 实测 3 实例并发场景）。
+	// 因此启动即独占加锁；已被占用时 fail-loud 拒绝启动，而不是静默成为第二个
+	// 消费者。锁随进程退出自动释放，不留需要手工清理的陈旧锁。
+	stateLock, lockErr := daemon.AcquireStateDirLock(stateDir)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer func() { _ = stateLock.Release() }()
 	if requeueFailedEvents {
 		// 人工恢复入口：把 failed 事件（含曾被 RELAY_REJECTED_PERMANENT 的死信）
 		// 全量复位为 pending。重复 event_id 由 Relay 幂等去重，重放安全。
