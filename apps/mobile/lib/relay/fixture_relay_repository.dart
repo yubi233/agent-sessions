@@ -35,6 +35,10 @@ class FixtureRelayRepository implements RelayRepository {
   var _failNextAttachmentChunk = false;
   int? _failAttachmentChunkAtIndex;
   bool _networkAvailable = true;
+  // v0.9.2（V092 录屏/可见场景）：模拟"执行侧上报 DSH 不可用"的形态。
+  // 开启后 getCapabilities 的 dsh 条目回到 fail-closed，且 facts_source=unavailable，
+  // 用于录制"不可用 → 恢复 → 可发送"的闭环；不影响其它 Provider 条目。
+  bool executionSideDshUnavailable = false;
   bool _repeatCursorEventOnNextSnapshot = false;
   final Map<String, List<int>> _snapshotAfterSequences = {};
 
@@ -1109,6 +1113,10 @@ class FixtureRelayRepository implements RelayRepository {
             // emulated（Keystore 实机 gate 承接 V085）。
             'attachments',
           },
+          // v0.9.2 P1：执行侧事实来源（云端形态下 Relay 自己跑不了 DSH，
+          // 可用性由 Daemon 上报），与 /v1/capabilities 的 facts_source 对齐。
+          factsSource: 'terminal',
+          unavailableReason: executionSideDshUnavailable ? '执行侧未找到 node 运行时' : null,
           // 与 internal/adapter/dsh successMatrix v0.8.8 口径一致：
           // 升格项 reason 引用套件证据；未接通项如实标注残余链路。
           unsupportedReasons: const {
@@ -1645,15 +1653,9 @@ class FixtureRelayRepository implements RelayRepository {
     state.updateSession(status: MobileSessionStatus.stopped, now: now);
   }
 
-  /// v0.2/P2：resume 在 fixture 中只追加系统通知，不伪造 Provider 唤醒结果。
-  void _appendSystemNotice(_FixtureSessionState state, String text) {
-    final now = _clock();
-    state.append(
-      eventType: 'session.resumed',
-      payload: {'kind': 'system_notice', 'label': '恢复', 'text': text},
-      now: now,
-    );
-  }
+  // v0.9.2 P2：原 _appendSystemNotice 助手已被 resume 分支的显式事件取代
+  // （resume 需要同时推进会话投影为 idle，才能端到端验证"发送前自动恢复"），
+  // 故删除以免留下无人调用的死代码。
 
   /// v0.2/P3：模型切换只更新 controls 并追加系统通知；不伪造 Provider 已切换成功的证据。
   void _applyModelSelect(
@@ -2000,6 +2002,12 @@ ProviderCapabilityProfile _fixtureProvider(
   Set<String> native = const {},
   Set<String> emulated = const {},
   Map<String, String> unsupportedReasons = const {},
+  // v0.9.2（V092 录屏/可见场景）：可用性事实来源（relay/terminal/unavailable）。
+  // 缺省为空串，与"旧 Relay 不返回该字段"的兼容形态一致。
+  String factsSource = '',
+  // v0.9.2：执行侧声明不可用时的原因；非空即整条 Provider fail-closed
+  // （available=false + 全部 capability unsupported + 同一中文原因）。
+  String? unavailableReason,
 }) {
   const names = [
     'start',
@@ -2023,20 +2031,26 @@ ProviderCapabilityProfile _fixtureProvider(
     'delegate_session',
     'delegate_cross_provider',
   ];
+  final unavailable = unavailableReason != null;
   return ProviderCapabilityProfile(
     kind: kind,
-    version: 'fixture-1.0',
-    available: true,
+    version: unavailable ? '' : 'fixture-1.0',
+    available: !unavailable,
+    factsSource: factsSource,
     capabilities: names
         .map(
           (name) => CapabilityEntry(
             name: name,
-            availability: native.contains(name)
+            availability: unavailable
+                ? CapabilityAvailability.unsupported
+                : native.contains(name)
                 ? CapabilityAvailability.native
                 : emulated.contains(name)
                 ? CapabilityAvailability.emulated
                 : CapabilityAvailability.unsupported,
-            reason: native.contains(name) || emulated.contains(name)
+            reason: unavailable
+                ? unavailableReason
+                : native.contains(name) || emulated.contains(name)
                 ? null
                 : unsupportedReasons[name] ?? 'fixture Provider 未声明此能力。',
           ),

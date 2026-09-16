@@ -145,6 +145,19 @@ export const FLUTTER_RECORDING_SCOPES = Object.freeze({
     scenarioIds: Object.freeze(["VISUAL-MOBILE-40"]),
     requiredTestIds: Object.freeze([]),
   }),
+  // v0.9.2：DSH 发送闭环与能力事实源录屏范围。
+  // 内容先定（Taskfile record:v092，2026-09-16）：
+  //   A) VISUAL-MOBILE-41（dsh-v092-send-loop）连续帧：
+  //      1) 执行侧上报不可用阶段：DSH 会话的模型/发送入口禁用，并展示执行侧给出的
+  //         真实原因（「执行侧未找到 node 运行时」），而不是笼统的"Provider 当前不可用"；
+  //      2) 执行侧恢复阶段：能力矩阵刷新为可用，发送入口恢复可操作（G1 事实源一致）；
+  //      3) 会话页连续稳定帧（工作区显示名与执行侧终端归属可见）。
+  //   5fps 连续帧；仅作通过后的展示证据，不作为功能回归替代；前置 gate 报告必须
+  //   passed（task test:v092:local）。
+  v092: Object.freeze({
+    scenarioIds: Object.freeze(["VISUAL-MOBILE-41"]),
+    requiredTestIds: Object.freeze([]),
+  }),
 });
 
 function recordingScope(scope = DEFAULT_FLUTTER_RECORDING_SCOPE) {

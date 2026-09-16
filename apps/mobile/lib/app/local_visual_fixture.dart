@@ -36,6 +36,12 @@ enum LocalVisualScenario {
   // v0.9.1（V091-14）：Terminal presence 四态可见场景（online/offline/unknown/
   // unsupported 来自 Relay availability 投影；headed gate 专用，见 run-macos-v091.mjs）。
   terminalPresenceV091,
+  // v0.9.2（V092，录屏内容先定 2026-09-16）：DSH 发送闭环与能力事实源可见场景。
+  // 画面序列：① 执行侧上报不可用 → DSH 会话 composer 展示真实原因（不是笼统
+  // "Provider 当前不可用"）；② 执行侧恢复可用（等同修好 node/桥路径）→ composer
+  // 恢复可发送；③ 会话时间线出现发送后的用户消息与终态。全部数据来自确定性
+  // fixture，不连接真实 Relay、不调用模型。
+  dshV092SendLoop,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -79,6 +85,7 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'owner-ready' => LocalVisualScenario.ownerReady,
   'dsh-workspace-home' => LocalVisualScenario.dshWorkspaceHome,
   'terminal-presence-v091' => LocalVisualScenario.terminalPresenceV091,
+  'dsh-v092-send-loop' => LocalVisualScenario.dshV092SendLoop,
   'dsh-session-tool-timeline' => LocalVisualScenario.dshSessionToolTimeline,
   'dsh-capability-gates' => LocalVisualScenario.dshCapabilityGates,
   'dsh-streaming-turn-phase' =>
@@ -303,6 +310,38 @@ class LocalVisualFixture {
 
     // v0.8.1/v0.8.2：DSH 可见场景共用的安全预置（工作区只含 display name 与
     // opaque 元数据，不注入任何路径/JSONL 位置/正文）。
+    if (scenario == LocalVisualScenario.dshV092SendLoop) {
+      // v0.9.2（V092）：DSH 发送闭环可见场景。
+      // 预置内容与 terminalPresenceV091 共用同一套安全投影（工作区只含 display
+      // name 与 opaque 元数据），额外把 dsh 的能力事实来源标注为执行侧上报，
+      // 并保留一个"执行侧当前不可用"的初始态，用于录制原因可见性。
+      relay.executionSideDshUnavailable = true;
+      relay.replaceTerminals([
+        TerminalSummary.fromRelayJson({
+          'id': 'term-v092-dsh',
+          'hostname': 'V092 执行侧',
+          'platform': 'macos',
+          'status': 'online',
+          'protocol_version': 1,
+          'availability': 'online',
+          'presence_revision': 1,
+          'last_heartbeat_unix_ms':
+              DateTime.utc(2026, 9, 16, 12).millisecondsSinceEpoch,
+          'capabilities': const ['dsh_workspace_sync', 'start', 'send', 'resume'],
+        }),
+      ]);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-v092-dsh',
+          projectId: 'v092-dsh',
+          terminalId: 'term-v092-dsh',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'agent-sessions',
+          status: 'active',
+        ),
+      ]);
+    }
+
     if (scenario == LocalVisualScenario.terminalPresenceV091) {
       // v0.9.1（V091-14）：四态 presence 投影 fixture。availability /
       // presence_revision 是 Relay additive 权威字段；fixtures 不含真实

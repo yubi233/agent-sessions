@@ -219,6 +219,8 @@ test("P2/P3/P4/P5/V081 截图场景在 runner 中固定登记，避免录制前�
       "VISUAL-MOBILE-39",
       // v0.9.1 Terminal presence 四态场景（V091-14 / VISUAL-MOBILE-40）。
       "VISUAL-MOBILE-40",
+      // v0.9.2 DSH 发送闭环与能力事实源场景（V092 / VISUAL-MOBILE-41）。
+      "VISUAL-MOBILE-41",
     ],
   );
 });

@@ -499,6 +499,17 @@ tasks:
           --tls-fingerprint "${AGENT_SESSIONS_ACC_TLS_FINGERPRINT}" \
           --token-file "${V092_OWNER_TOKEN_FILE:-/tmp/acc-daemon/owner_token.txt}"
 
+  record:v092:
+    desc: v0.9.2 DSH 发送闭环与能力事实源 macOS fixture 录屏（录屏内容先定（2026-09-16）：VISUAL-MOBILE-41 dsh-v092-send-loop 连续帧——① 执行侧上报不可用阶段：模型/发送入口禁用并展示执行侧真实原因「执行侧未找到 node 运行时」；② 执行侧恢复阶段：能力矩阵刷新为可用、发送入口恢复；③ 会话页连续稳定帧（工作区显示名与执行侧终端归属）。5fps 连续帧；不作为功能回归替代；前置 gate 报告（task test:v092:local）必须 passed）
+    cmds:
+      - |
+        if [[ -z "${V092_FLUTTER_GATE_REPORT:-}" || ! -f "$V092_FLUTTER_GATE_REPORT" ]]; then
+          echo "record:v092 blocked: 先设置 V092_FLUTTER_GATE_REPORT 指向已 passed 的 v0.9.2 macOS gate 报告（task test:v092:local 产出）" >&2
+          exit 2
+        fi
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs e2e-verify/mobile/record-macos.test.mjs
+      - node e2e-verify/mobile/record-macos.mjs --scope v092 --gate-report "$V092_FLUTTER_GATE_REPORT"
+
   record:v091:
     desc: v0.9.1 Terminal presence 录屏（录屏内容先定（2026-09-08）：VISUAL-MOBILE-40 terminal-presence-v091 四态终端卡片主页连续帧——online（macos·在线+同步按钮）、offline（macos·离线+「终端离线，无法请求同步。」）、unknown（macos·状态未知+「终端状态未确认，稍后自动重试。」）、unsupported（macos·协议不兼容+禁用原因）；5fps 连续帧；不作为功能回归替代；record-macos scope v091 随 P4 注册，前置 gate 报告必须 passed）
     cmds:

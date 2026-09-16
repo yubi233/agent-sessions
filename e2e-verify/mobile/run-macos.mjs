@@ -280,6 +280,16 @@ export const MACOS_SCREENSHOT_SCENARIOS = Object.freeze([
     directory: "visual-mobile-40-terminal-presence-v091",
     localVisualScenario: "terminal-presence-v091",
   }),
+  // v0.9.2（V092）DSH 发送闭环与能力事实源可见场景：连续帧覆盖
+  //   ① 执行侧上报不可用 → 会话 composer 展示执行侧给出的真实原因；
+  //   ② 执行侧恢复（等同修好 node/桥路径）→ 能力矩阵回到可用、入口可发送；
+  //   ③ 会话页连续稳定帧（发送入口与状态行）。
+  // 数据全部来自确定性 fixture；不连接真实 Relay、不调用模型。
+  Object.freeze({
+    id: "VISUAL-MOBILE-41",
+    directory: "visual-mobile-41-dsh-v092-send-loop",
+    localVisualScenario: "dsh-v092-send-loop",
+  }),
 ]);
 
 function wait(milliseconds) {

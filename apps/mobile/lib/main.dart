@@ -407,15 +407,36 @@ class _LocalVisualScenarioCoordinator extends ConsumerStatefulWidget {
 
 class _LocalVisualScenarioCoordinatorState
     extends ConsumerState<_LocalVisualScenarioCoordinator> {
+  /// v0.9.2（V092 录屏）：驱动"执行侧不可用 → 恢复可用"的可见状态转换，
+  /// 使一次连续录屏即可覆盖 G4（原因可见）与 G1（执行侧事实驱动可发送）两个断言面。
+  /// 只操作确定性 fixture，不连接真实 Relay、不调用模型。
+  Future<void> _runV092SendLoopScenario() async {
+    // 阶段一停留：执行侧不可用 → composer/模型入口展示执行侧给出的真实原因。
+    await Future<void>.delayed(const Duration(seconds: 6));
+    if (!mounted) return;
+    final relay = ref.read(relayRepositoryProvider);
+    if (relay is FixtureRelayRepository) {
+      // 阶段二：执行侧恢复（等同修好 node 运行时 / 桥路径）→ 能力矩阵回到可用。
+      relay.executionSideDshUnavailable = false;
+    }
+    await ref.read(sessionControllerProvider.notifier).refreshCapabilities();
+    await Future<void>.delayed(const Duration(seconds: 8));
+  }
+
   @override
   void initState() {
     super.initState();
     if (widget.scenario == LocalVisualScenario.pairingPending) {
       _openPairingWhenOwnerReady();
     } else if (widget.scenario == LocalVisualScenario.dshWorkspaceHome ||
-        widget.scenario == LocalVisualScenario.terminalPresenceV091) {
-      // v0.9.1（V091-14）：四态 presence 场景与 DSH 主页共用入口与布局。
+        widget.scenario == LocalVisualScenario.terminalPresenceV091 ||
+        widget.scenario == LocalVisualScenario.dshV092SendLoop) {
+      // v0.9.1（V091-14）/v0.9.2（V092）：presence 四态与 DSH 发送闭环场景
+      // 与 DSH 主页共用入口与布局。
       _openDshWorkspaceHomeWhenReady();
+      if (widget.scenario == LocalVisualScenario.dshV092SendLoop) {
+        unawaited(_runV092SendLoopScenario());
+      }
     } else if (widget.scenario == LocalVisualScenario.terminalStatus) {
       _openTerminalsWhenReady();
     } else if (widget.scenario == LocalVisualScenario.settingsIndex) {
