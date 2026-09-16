@@ -402,6 +402,10 @@ async function main() {
   let screenState = null;
   let selectedSerial = "";
   let adbPath = null;
+  // cloud 必须在 try 外声明：finally 的报告块要用它决定 real_upstream/fixture_data
+  // 口径，若声明在 try 内会抛 ReferenceError（"cloud is not defined"），
+  // 整个物理设备 gate 在报告阶段失败——2026-09-16 实测到的缺陷。
+  let cloud = null;
 
   try {
     args = parseDeviceArgs(process.argv.slice(2));
@@ -411,7 +415,7 @@ async function main() {
     }
     // 云端验收模式（计划 ACC-02..05）：提供 --endpoint/ACC_RELAY_ENDPOINT 即视为
     // 真实云端链路验证；报告与 dart-define 均按该口径切换。
-    const cloud = args.endpoint
+    cloud = args.endpoint
       ? { endpoint: args.endpoint, tlsFingerprint: args.tlsFingerprint }
       : null;
 

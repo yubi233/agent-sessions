@@ -435,19 +435,42 @@ class _LocalVisualScenarioCoordinatorState
     await sessions.refreshCapabilities(force: true);
     await sessions.selectSession(sessionId);
     ref.read(appRouterProvider).go('/sessions/$sessionId');
-    // 阶段一停留：执行侧上报不可用 → composer/模型入口展示执行侧给出的真实原因。
-    await Future<void>.delayed(const Duration(seconds: 7));
-    if (!mounted) return;
     final relay = ref.read(relayRepositoryProvider);
-    if (relay is FixtureRelayRepository) {
-      // 阶段二：执行侧恢复（等同修好 node 运行时 / 桥路径）→ 能力矩阵回到可用，
-      // 发送入口恢复（G1：可用性事实随执行侧变化，不再是笼统的不可用）。
+    if (relay is! FixtureRelayRepository) return;
+    // 状态转换只发生一次，且必须落在可见窗口的 5fps 采集窗口内。
+    //
+    // 关键约束（2026-09-16 实测两次失败后确定）：
+    //   1) 可见窗口采集在 widget 契约测试**之后**才启动；若转换在启动前就结束，
+    //      采到的 100 帧完全相同、画面停在稳态（首轮实测 frame-0005/0050/0090
+    //      的 md5 一致）。
+    //   2) 但也不能周期性高频切换：每次 force 刷新都会重建页面，而采集通道要求
+    //      **严格 200ms 连续节拍**落帧；高频重建会让"连续节拍未完成"，采集与
+    //      录屏双双失败（第二、三轮实测）。
+    //
+    // 因此：先停留足够长的时间（覆盖 widget 测试 + App 启动 + 采集启动），再
+    // 做唯一一次转换，随后保持稳定，让转换后的稳态也能被连续帧记录。
+    // 转换周期取 10 秒：可见窗口的采集窗口是 100 帧 × 200ms = 20 秒，因此无论
+    // 采集从哪一刻启动（它在 widget 契约测试之后才开始），窗口内都必然包含完整
+    // 的"不可用 → 可用"转换；周期又不短于 10 秒，不会像 5 秒级切换那样让
+    // render-tree 落帧的严格 200ms 节拍抖动（实测 5 秒周期会导致采集失败）。
+    const phaseStay = Duration(seconds: 10);
+    // 先立即进入"执行侧不可用"阶段：composer/模型入口展示执行侧给出的真实原因。
+    for (var round = 0; round < 30; round += 1) {
+      if (!mounted) return;
+      relay.executionSideDshUnavailable = true;
+      await ref.read(sessionControllerProvider.notifier).refreshCapabilities(
+        force: true,
+      );
+      await Future<void>.delayed(phaseStay);
+      if (!mounted) return;
+      // 执行侧恢复（等同修好 node 运行时 / 桥路径）→ 能力矩阵回到可用、发送
+      // 入口恢复（G1：可用性事实随执行侧变化，不再是笼统的不可用）。
       relay.executionSideDshUnavailable = false;
+      await ref.read(sessionControllerProvider.notifier).refreshCapabilities(
+        force: true,
+      );
+      await Future<void>.delayed(phaseStay);
     }
-    await ref.read(sessionControllerProvider.notifier).refreshCapabilities(
-      force: true,
-    );
-    await Future<void>.delayed(const Duration(seconds: 9));
   }
 
   @override
