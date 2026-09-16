@@ -14,14 +14,27 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // options.env 可在进程环境之上追加覆盖项（如 AGENT_SESSIONS_OPENCODE_URL），
 // 供需要把 Relay 接到真实 opencode serve 的回归场景使用；默认保持与 runner 环境一致。
 // 默认 port=0 时由操作系统分配空闲端口，避免测试误连用户已有 Relay。
+//
+// v0.9.2 R12（必须固化的坑）：**Relay 与 Daemon 必须共用同一份 DSH 配置**。
+// Relay 自带 DSH adapter，按 T2 裁决「自身探测成功时以自己为准」，它公布的模型目录
+// 会直接成为客户端看到的目录；若 Relay 未设置 AGENT_SESSIONS_DSH_CONFIG，它会用
+// adapter 缺省配置（DSH 仓库 examples/acp-agent/cordis.yml，provider=deepseek-official）
+// 探测，于是客户端拿到一份「与真正执行命令的 Daemon 完全不同」的模型目录——
+// 表现为「模型选择器里选得到的模型发出去就是 unknown model route」。
+// 这里默认注入本仓库根目录的 cordis.yml；调用方显式提供的 env 仍可覆盖（例如
+// v092-capability-facts-web 套件故意指向不存在的桥，以验证执行侧事实回退路径）。
 export async function startRelay({ port = 0, addr = "127.0.0.1", env = {} } = {}) {
   const actualPort = port === 0 ? await reservePort(addr) : port;
   const dbPath = join(mkdtempSync(join(tmpdir(), "agent-sessions-relay-")), "relay.db");
   const bin = await buildRelay();
   const args = ["--addr", `${addr}:${actualPort}`, "--db", dbPath];
+  const dshDefaultConfig = join(ROOT, "cordis.yml");
+  const defaults = existsSync(dshDefaultConfig)
+    ? { AGENT_SESSIONS_DSH_CONFIG: dshDefaultConfig }
+    : {};
   const child = spawn(bin, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...defaults, ...env },
   });
 
   let logs = "";
