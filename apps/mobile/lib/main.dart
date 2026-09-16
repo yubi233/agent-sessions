@@ -410,17 +410,44 @@ class _LocalVisualScenarioCoordinatorState
   /// v0.9.2（V092 录屏）：驱动"执行侧不可用 → 恢复可用"的可见状态转换，
   /// 使一次连续录屏即可覆盖 G4（原因可见）与 G1（执行侧事实驱动可发送）两个断言面。
   /// 只操作确定性 fixture，不连接真实 Relay、不调用模型。
+  ///
+  /// 必须进入**会话详情页**：只有会话页的 composer/模型入口会把执行侧给出的
+  /// 不可用原因渲染成可见文案；停在 DSH 工作区主页时画面不变化，录屏无法证明
+  /// 任何断言（2026-09-16 首轮录屏实测：100 帧完全相同且只显示工作区列表）。
   Future<void> _runV092SendLoopScenario() async {
-    // 阶段一停留：执行侧不可用 → composer/模型入口展示执行侧给出的真实原因。
-    await Future<void>.delayed(const Duration(seconds: 6));
+    final sessionId = widget.sessionId;
+    final ownerDeviceId = widget.localVisualOwnerDeviceId;
+    if (sessionId == null || ownerDeviceId == null) return;
+    for (var attempt = 0; attempt < 240; attempt += 1) {
+      final app = ref.read(appControllerProvider);
+      final sessions = ref.read(sessionControllerProvider);
+      final ready = app.isAuthenticated &&
+          app.currentDevice?.id != null &&
+          sessions.sessions.any((session) => session.id == sessionId);
+      if (ready) break;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    final sessions = ref.read(sessionControllerProvider);
+    await sessions.initialize();
+    // 先把执行侧"不可用"事实拉进能力矩阵，再进入会话页——否则会话页首帧用的是
+    // 上一次（可能可用）的快照，画面不会体现不可用态。refreshCapabilities 默认
+    // 有 15s 节流，这里必须 force。
+    await sessions.refreshCapabilities(force: true);
+    await sessions.selectSession(sessionId);
+    ref.read(appRouterProvider).go('/sessions/$sessionId');
+    // 阶段一停留：执行侧上报不可用 → composer/模型入口展示执行侧给出的真实原因。
+    await Future<void>.delayed(const Duration(seconds: 7));
     if (!mounted) return;
     final relay = ref.read(relayRepositoryProvider);
     if (relay is FixtureRelayRepository) {
-      // 阶段二：执行侧恢复（等同修好 node 运行时 / 桥路径）→ 能力矩阵回到可用。
+      // 阶段二：执行侧恢复（等同修好 node 运行时 / 桥路径）→ 能力矩阵回到可用，
+      // 发送入口恢复（G1：可用性事实随执行侧变化，不再是笼统的不可用）。
       relay.executionSideDshUnavailable = false;
     }
-    await ref.read(sessionControllerProvider.notifier).refreshCapabilities();
-    await Future<void>.delayed(const Duration(seconds: 8));
+    await ref.read(sessionControllerProvider.notifier).refreshCapabilities(
+      force: true,
+    );
+    await Future<void>.delayed(const Duration(seconds: 9));
   }
 
   @override

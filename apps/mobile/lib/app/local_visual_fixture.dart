@@ -308,40 +308,7 @@ class LocalVisualFixture {
       pairingRequestId = pairing.id;
     }
 
-    // v0.8.1/v0.8.2：DSH 可见场景共用的安全预置（工作区只含 display name 与
-    // opaque 元数据，不注入任何路径/JSONL 位置/正文）。
-    if (scenario == LocalVisualScenario.dshV092SendLoop) {
-      // v0.9.2（V092）：DSH 发送闭环可见场景。
-      // 预置内容与 terminalPresenceV091 共用同一套安全投影（工作区只含 display
-      // name 与 opaque 元数据），额外把 dsh 的能力事实来源标注为执行侧上报，
-      // 并保留一个"执行侧当前不可用"的初始态，用于录制原因可见性。
-      relay.executionSideDshUnavailable = true;
-      relay.replaceTerminals([
-        TerminalSummary.fromRelayJson({
-          'id': 'term-v092-dsh',
-          'hostname': 'V092 执行侧',
-          'platform': 'macos',
-          'status': 'online',
-          'protocol_version': 1,
-          'availability': 'online',
-          'presence_revision': 1,
-          'last_heartbeat_unix_ms':
-              DateTime.utc(2026, 9, 16, 12).millisecondsSinceEpoch,
-          'capabilities': const ['dsh_workspace_sync', 'start', 'send', 'resume'],
-        }),
-      ]);
-      relay.replaceWorkspaces(const [
-        MobileWorkspace(
-          id: 'ws-v092-dsh',
-          projectId: 'v092-dsh',
-          terminalId: 'term-v092-dsh',
-          origin: MobileWorkspaceOrigin.dsh,
-          displayName: 'agent-sessions',
-          status: 'active',
-        ),
-      ]);
-    }
-
+    // v0.9.2 场景预置见下方 dshSessionId 声明之后（需要 ownerDeviceId 与会话 id 变量）。
     if (scenario == LocalVisualScenario.terminalPresenceV091) {
       // v0.9.1（V091-14）：四态 presence 投影 fixture。availability /
       // presence_revision 是 Relay additive 权威字段；fixtures 不含真实
@@ -396,6 +363,46 @@ class LocalVisualFixture {
         scenario == LocalVisualScenario.dshV085ReadonlyProjections ||
         scenario == LocalVisualScenario.dshV087TypewriterStreaming;
     String? dshSessionId;
+    if (scenario == LocalVisualScenario.dshV092SendLoop) {
+      // v0.9.2（V092）：DSH 发送闭环可见场景（录屏内容先定 2026-09-16）。
+      // 预置一套安全投影（工作区只含 display name 与 opaque 元数据），把 dsh 的
+      // 能力事实来源标注为执行侧上报，并保留“执行侧当前不可用”的初始态。
+      relay.executionSideDshUnavailable = true;
+      relay.replaceTerminals([
+        TerminalSummary.fromRelayJson({
+          'id': 'term-v092-dsh',
+          'hostname': 'V092 执行侧',
+          'platform': 'macos',
+          'status': 'online',
+          'protocol_version': 1,
+          'availability': 'online',
+          'presence_revision': 1,
+          'last_heartbeat_unix_ms':
+              DateTime.utc(2026, 9, 16, 12).millisecondsSinceEpoch,
+          'capabilities': const ['dsh_workspace_sync', 'start', 'send', 'resume'],
+        }),
+      ]);
+      relay.replaceWorkspaces(const [
+        MobileWorkspace(
+          id: 'ws-v092-dsh',
+          projectId: 'v092-dsh',
+          terminalId: 'term-v092-dsh',
+          origin: MobileWorkspaceOrigin.dsh,
+          displayName: 'agent-sessions',
+          status: 'active',
+        ),
+      ]);
+      // 会话必须先存在：只有会话详情页的 composer/模型入口才会把执行侧给出的
+      // 不可用原因渲染成可见文案（G4 的断言面）。
+      final v092Session = await relay.createSession(
+        CreateMobileSessionInput(
+          workspaceId: 'ws-v092-dsh',
+          provider: 'dsh',
+          deviceId: ownerDeviceId,
+        ),
+      );
+      dshSessionId = v092Session.id;
+    }
     if (isDshScenario) {
       relay.replaceTerminals([
         TerminalSummary(
