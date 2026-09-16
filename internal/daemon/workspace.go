@@ -102,6 +102,11 @@ type WorkspaceCreatePayload struct {
 }
 
 // DecodeWorkspaceCreatePayload 校验 Relay 下发的 workspace.create 载荷。
+// v0.9.2 P2/P3 命令投递契约修正后，`name` 在 ciphertext envelope 内
+// （`{"ciphertext":{"name":...},"workspace_id":...}`），workspace_id 在顶层；
+// 本解码双读两代形态（顶层 name 为旧客户端兼容），两者都缺失才判非法——
+// 否则 workspace.create 永远 PATH_DENIED，create-with-folder 收敛失败
+// （R17 实测：V07 契约回归暴露）。
 func DecodeWorkspaceCreatePayload(raw, expectedWorkspaceID string) (WorkspaceCreatePayload, error) {
 	var payload WorkspaceCreatePayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
@@ -109,6 +114,16 @@ func DecodeWorkspaceCreatePayload(raw, expectedWorkspaceID string) (WorkspaceCre
 	}
 	if strings.TrimSpace(payload.WorkspaceID) != strings.TrimSpace(expectedWorkspaceID) || expectedWorkspaceID == "" {
 		return WorkspaceCreatePayload{}, ErrWorkspaceNameInvalid
+	}
+	if strings.TrimSpace(payload.Name) == "" {
+		var envelope struct {
+			Ciphertext struct {
+				Name string `json:"name"`
+			} `json:"ciphertext"`
+		}
+		if err := json.Unmarshal([]byte(raw), &envelope); err == nil {
+			payload.Name = strings.TrimSpace(envelope.Ciphertext.Name)
+		}
 	}
 	if err := ValidateWorkspaceName(payload.Name); err != nil {
 		return WorkspaceCreatePayload{}, err

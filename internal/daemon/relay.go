@@ -1588,7 +1588,7 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 			}
 			if err != nil {
 				status, errorCode = "failed", WorkspaceCreateErrorCode(err)
-				l.Logger.Warn("daemon workspace creation failed", "command", command.CommandID, "error_code", errorCode)
+				l.Logger.Warn("daemon workspace creation failed", "command", command.CommandID, "error_code", errorCode, "err_detail", fmt.Sprintf("%v", err)) // TEMP-R17-INSTRUMENT
 			}
 		}
 		receipt, resolveErr := l.Client.ResolveWorkspace(ctx, command.CommandID, command.DeliverySeq,
