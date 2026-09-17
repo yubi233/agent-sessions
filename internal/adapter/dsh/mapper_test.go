@@ -75,6 +75,34 @@ func TestMapSessionUpdateIncludesReplayUserMessage(t *testing.T) {
 	}
 }
 
+// TestMapSessionUpdateDropsSkillCatalogInjection 钉住 V093-03 的 Go 侧防御纵深：
+// skill-catalog 注入（<system-reminder> 前缀）以 user 角色在 resume 回放中出现时，
+// mapper 必须丢弃并计数，不得把它映射为 EventUserMessage（R18 实测：它被客户端
+// 投影成「你」的消息）。桥侧按 source.kind 过滤是根因修复；这里按固定文本前缀
+// 兜底未升级旧桥的回放路径。
+func TestMapSessionUpdateDropsSkillCatalogInjection(t *testing.T) {
+	// 注入帧：skill 目录的固定形态（<system-reminder> 开头）。
+	event, ok, variant := mapSessionUpdate("sess-1", json.RawMessage(`{
+    "sessionUpdate":"user_message_chunk",
+    "content":{"type":"text","text":"<system-reminder>\nA skill is a reusable set of task-specific instructions.\n</system-reminder>"}
+  }`), nil)
+	if ok {
+		t.Fatalf("skill-catalog 注入帧必须被丢弃，却得到事件 %+v", event)
+	}
+	if variant != "user_message_chunk" {
+		t.Fatalf("variant = %q, want user_message_chunk（丢弃也要按变体计数）", variant)
+	}
+	// 多行正文且前缀严格匹配大小写：<system-reminder> 开头才丢弃；
+	// 普通用户正文即使提到 system-reminder 字样也不在句首，不受影响。
+	event, ok, _ = mapSessionUpdate("sess-1", json.RawMessage(`{
+    "sessionUpdate":"user_message_chunk",
+    "content":{"type":"text","text":"请解释 system-reminder 的作用"}
+  }`), nil)
+	if !ok || event.Type != adapter.EventUserMessage {
+		t.Fatalf("普通用户消息不得被误伤：ok=%v event=%+v", ok, event)
+	}
+}
+
 // TestMapToolCallToEventToolCall 工具打开帧 → EventToolCall：载荷白名单。
 func TestMapToolCallToEventToolCall(t *testing.T) {
 	event, ok, variant := mapSessionUpdate("sess-1", json.RawMessage(`{

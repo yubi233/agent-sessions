@@ -82,7 +82,7 @@
     {
       "id": "V093-03",
       "title": "resume 后上下文投影正确：system-reminder 不投影为用户消息、用户正文可见",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "上下文投影",
       "priority": "P0",
@@ -99,7 +99,11 @@
         "清理复现会话；不修改既有会话数据"
       ],
       "evidence": [
-        "R18 真机 dump（2026-09-17）：时间线出现 content-desc 以 `会话节点 你 | 你 | <system-reminder>` 开头的节点，而用户实际发送的 `V092-10 retry after restart` 不可见；该回合 delta_events=16779、delta_chars=35282、跨度 232 秒。"
+        "R18 真机 dump（2026-09-17）：时间线出现 content-desc 以 `会话节点 你 | 你 | <system-reminder>` 开头的节点，而用户实际发送的 `V092-10 retry after restart` 不可见；该回合 delta_events=16779、delta_chars=35282、跨度 232 秒。",
+        "根因（2026-09-18 钉死）：桥（deepseek-harness packages/acp）的 replaySession 把会话历史中全部 user/message 事件（含 skill 插件注入的 `source.kind=skill-catalog` 的 <system-reminder> 模型侧上下文）重放为 user_message_chunk；Go mapper 无过滤映射为 EventUserMessage → 客户端投影为「你」。live turn 不转发 user 消息，注入只在 resume 回放路径泄漏。",
+        "桥侧修复 passed：deepseek-harness commit（replaySession 按 source.kind=skill-catalog 过滤，防御性读取、不按文本匹配；模型上下文不变，仅过滤回放投影）；回归 tests/replay-skill-catalog.spec.ts（种子克隆事件断言：真实用户消息仍回放、<system-reminder> 帧为 0、load 后 prompt 正常路由）；acp 套件 142/142；pnpm build:lib:host 重建 lib（运行时入口）后 dsh-v084-overlay 真实桥复跑全绿、AGENT_SESSIONS_DSH_LIVE=1 TestLiveBridgeLifecycle passed（版本门不受影响，wire 版本仍 0.0.1）。",
+        "Go 侧防御纵深 passed：internal/adapter/dsh/mapper.go 对 user_message_chunk 按 <system-reminder> 固定前缀丢弃并计数（兜底未升级旧桥）；回归 TestMapSessionUpdateDropsSkillCatalogInjection（注入帧丢弃 + 普通正文不误伤）；internal/adapter 全包回归通过。",
+        "口径说明：35282 字符级异常产出是模型面对 resume+目录注入的行为离群，不是投影层可断言量；本用例的机器断言落在投影正确性（时间线不含系统注入、用户正文可见），回合长度由 V093-04 真机复测人工确认。"
       ]
     },
     {

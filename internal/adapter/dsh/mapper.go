@@ -3,9 +3,15 @@ package dsh
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
+
+// systemReminderPrefix 是 harness skill 插件注入的模型侧上下文的固定文本前缀。
+// 这类内容以 user 角色事件入会话历史（source.kind=skill-catalog），只面向模型，
+// 不属于用户可见对话（v0.9.3 V093-03 / R18 F3）。
+const systemReminderPrefix = "<system-reminder>"
 
 // updateBody 是 session/update 通知中 update 字段的白名单投影：
 // 只解析映射 canonical 事件所需的字段，桥私有 metadata 一律不进公共协议。
@@ -169,6 +175,16 @@ func mapSessionUpdate(sessionID string, update json.RawMessage, meta map[string]
 		return adapter.Event{}, false, variant
 	}
 	if variant == "user_message_chunk" {
+		// v0.9.3 V093-03 防御纵深：skill-catalog 注入只面向模型，绝不进入
+		// 用户可见投影。桥侧已按持久化 source.kind 过滤（V093-03 修复）；
+		// 这里按注入帧的固定文本前缀兜底丢弃并计数——未升级的旧桥在 resume
+		// 回放时仍可能把它作为 user_message_chunk 发出（R18 实测形态：
+		// 时间线出现以 <system-reminder> 开头的「你」消息）。真实用户消息
+		// 不以该前缀开头；若用户手动输入该字面量，也按注入帧同权丢弃，
+		// 避免伪造系统注入通道。
+		if strings.HasPrefix(block.Text, systemReminderPrefix) {
+			return adapter.Event{}, false, variant
+		}
 		// 用户回放仍是完整消息（ADR-015 §4：replay 不做增量）。
 		payload := map[string]any{
 			"instance_id": sessionID,
