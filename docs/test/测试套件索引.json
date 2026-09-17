@@ -1299,10 +1299,10 @@
         "RELAY-REALTIME",
         "CLOUD-ANDROID-ACCEPTANCE"
       ],
-      "status": "in_progress",
+      "status": "delivered",
       "allow_real_upstream": true,
       "uniqueness_rule": "拥有 V092-01..10：v0.9.2 DSH 移动端发送闭环专项——能力事实源归因与修正（V092-01..04）、受控重探测（V092-05）、重启后 resume 恢复与显式错误（V092-06/07）、幂等与异常终态（V092-08）、云端真机首条发送与重启后续发（V092-09/10）。ACC-04/06、ADPT-DSH-*、DCM-03/04、AMI-01/02、V091-04、V089-0x 既有 ID 仅消费不重定义；本轮不重开 ACC 结论、不改版本门与代理信任设计。",
-      "note": "来源计划 docs/zh/迭代计划/迭代计划v0.9.2.md；报告目录 e2e-verify/reports/<ts>/V092-ATTRIB/；P0 归因矩阵入口 e2e-verify/real/v092-attribution-matrix.mjs；口径分层：V092-01 real_upstream（只读探针）、V092-09/10 real_device=true + headless=false。"
+      "note": "来源计划 docs/zh/迭代计划/迭代计划v0.9.2.md；报告目录 e2e-verify/reports/<ts>/V092-ATTRIB/；P0 归因矩阵入口 e2e-verify/real/v092-attribution-matrix.mjs；口径分层：V092-01 real_upstream（只读探针）、V092-09/10 real_device=true + headless=false。 2026-09-18 更新：V092-10 经 v0.9.3 V093-04 真机收口为 passed，套件状态 delivered（见实施记录 33）。"
     },
     {
       "plan_id": "V093",
@@ -1329,10 +1329,10 @@
         "RELAY-REALTIME",
         "MOBILE-CORE"
       ],
-      "status": "planned",
+      "status": "delivered",
       "allow_real_upstream": true,
       "uniqueness_rule": "拥有 V093-01..05：v0.9.3 事件投递吞吐与 resume 上下文投影收口专项——投递吞吐归因与修复（V093-01/02）、resume 后上下文投影（V093-03）、daemon 重启后首条发送零手工（V093-04）、v0.9.2 收口回归（V093-05）。V092-10 仅消费不重定义；不重开 V092-01..09 已通过结论，不改版本门与代理信任设计。",
-      "note": "来源计划 docs/zh/迭代计划/迭代计划v0.9.3.md；缺陷证据 e2e-verify/reports/<ts>/V093/；口径分层：V093-01/02/03 local_test + fixture_data（fixture 桥注入确定性 delta，不消耗 token），V093-04 real_device=true + headless=false（真实模型调用需先确认预算与停止点），V093-05 聚合门全量回归。"
+      "note": "来源计划 docs/zh/迭代计划/迭代计划v0.9.3.md；V093-01..05 全部 passed（2026-09-18）。V093-01 归因报告 e2e-verify/reports/V093-ATTRIB/；V093-04 真机报告 e2e-verify/reports/v093-device/v093-04-report.json（本地拓扑 real_device=true、headless=false，真实模型 2 次）。残余观察：云端形态复测受重启窗口约束未执行；熄屏-离线门控与 UI 收敛的交互列为观察项（实施记录 33 §7）。"
     }
   ]
 }
