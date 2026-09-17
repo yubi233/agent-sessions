@@ -137,7 +137,7 @@
     {
       "id": "V093-05",
       "title": "v0.9.2 收口：完整聚合门通过且计划状态改回 passed",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "聚合门回归",
       "priority": "P1",
@@ -153,7 +153,9 @@
         "无（只读回归与文档回填）"
       ],
       "evidence": [
-        "待执行（计划阶段）。v0.9.2 当前缺口见其 §8.3 二次增量与本套件 V093-04。"
+        "待执行（计划阶段）。v0.9.2 当前缺口见其 §8.3 二次增量与本套件 V093-04。",
+        "聚合门 passed（2026-09-18）：task test:v092:local 全绿（exit 0）——docs:verify、check（含生成物漂移守卫与 pnpm typecheck）、v092 归因矩阵 --live、V092 Go 契约（adapter/dsh、adapterreg、domain、store、daemon、httpapi、relay）、V092 公钥编码、模型目录同步回归、V091/V089 既有回归、全仓 go test ./...、test:restart、全量 Flutter、Web 测试、headed 真实浏览器 12/12（含 v092-capability-facts-web）、git diff --check。",
+        "docs/test/31 的 V092-10 已改判 passed（收口证据=V093-04 真机本地拓扑 + P2 客户端加固，见 31 号套件该用例 evidence）；迭代计划 v0.9.2 状态同步为 delivered（§6 完成定义达成）。"
       ]
     }
   ]

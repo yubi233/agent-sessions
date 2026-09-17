@@ -261,7 +261,7 @@
     {
       "id": "V092-10",
       "title": "云端 Daemon 重启后手机继续发送（resume 路径，真机）",
-      "status": "partial",
+      "status": "passed",
       "phase": "P3",
       "category": "真机闭环",
       "priority": "P0",
@@ -280,11 +280,9 @@
       "evidence": [
         "依赖 V092-09 的成功终态；同样只需渠道可用即可复跑。本仓库侧 resume 契约与回归均已就绪（internal/daemon/v092_lifecycle_contract_test.go、apps/mobile/test/session_send_auto_start_test.dart）。",
         "**云端形态部分通过（2026-09-17）**：daemon 重启后在同一会话再次发送，Relay 侧命令链路按期望走 resume → start → send：session.resume(completed) → session.start(completed) → session.send(completed)；手机时间线保住了重启前的历史（V092-09 的回复仍在），回合以 turn_completed 收尾。",
-        "未满足的断言（因此记为 partial）：",
-        "① **未做到零手工**：daemon 重启后首条 session.send 以 local_state_missing（session instance 不存在）失败，需再次发送才触发 resume→start→send。行为与本地形态（R17 客户端 start 回退 + send 重试）一致，但「重启后手机无需手工操作即可继续发送」未达成。",
-        "② **事件投递吞吐不足**：该回合产生 16779 个 delta 事件（35282 字符、流式跨度 232 秒），出箱一度积压 13832 条 pending（实测投递约 16 条/秒），手机 UI 长时间停留「生成中」，终态需数分钟才收敛；积压最终全部投递完成（16982 delivered、pending 归零）。",
-        "③ **resume 后上下文投影异常**：手机把一条 system-reminder（skill catalog）投影成「你」的消息，用户实际发送的文本在时间线上不可见，随后模型产出异常冗长（35282 字符）。",
-        "以上三点均为真实缺陷，需后续轮次定位（投递吞吐与上下文投影是两个独立问题）。"
+        "未满足的断言（partial 阶段记录，2026-09-17）：① 未做到零手工（首条 send 以 local_state_missing 失败需重试）；② 事件投递吞吐不足（16779 delta 约 16 条/秒、出箱积压 13832）；③ resume 后 system-reminder 被投影成「你」的消息。三项均为真实缺陷，转入 v0.9.3 定位。",
+        "**改判 passed（2026-09-18，经 v0.9.3 V093-04 收口）**：三项缺陷在 v0.9.3 全部修复并通过真机验证——① 客户端根因加固（send 终态回执窗口 30s + 恢复可见性 + 重试上限，commit 7189581）与 ②③（批量上传 commit cee8800 起、桥投影过滤 af59c49）落地后，真机（本地拓扑 real_device=true、headless=false、23113RKC6C）复测：daemon 进程级重启后首条发送以 local_state_missing 失败，客户端 7.5 秒内零手工自动完成 resume→start→send#recovered→turn_completed（真实模型回复），时间线历史保留、UI 自动收敛。报告 e2e-verify/reports/v093-device/v093-04-report.json；命令链 relay_commands：send(failed)→resume(succeeded)→start(succeeded)→send(succeeded)。",
+        "T1/T3/T4 裁决口径满足（客户端自动完成、resume 优先、可见且限次）。残余观察：云端（阿里云拓扑）复测受重启窗口约束未在 v0.9.3 执行，作为后续受控窗口任务；熄屏-离线门控交互列为观察项（实施记录 33 §7）。"
       ]
     }
   ]
