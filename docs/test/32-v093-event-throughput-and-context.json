@@ -1,0 +1,143 @@
+{
+  "suite": "V093",
+  "plan_id": "V093",
+  "description": "v0.9.3 事件投递吞吐与 resume 上下文投影收口。来源：docs/zh/迭代计划/迭代计划v0.9.3.md；缺陷证据来自 v0.9.2 云端真机验收（实施记录 32 §20）。三项缺陷：① Daemon→Relay 事件投递吞吐不足（单回合 16779 个 delta、出箱一度积压 13832 条 pending、实测约 16 条/秒、手机 UI 数分钟才收敛）；② resume 后上下文投影错误（system-reminder 被投影成用户消息、用户正文在时间线不可见、回合异常冗长）；③ daemon 重启后首条 session.send 以 local_state_missing 失败、需人工重试。口径分层：V093-01 为 local_test/fixture_data 归因；V093-02/03 为集成 + Flutter；V093-04 必须 real_device=true、headless=false，不得用 AVD、headless、fixture Relay 或命令调度结果替代手机 UI 结论；V093-05 为聚合门回归。",
+  "environment": {
+    "local": "隔离 SQLite + 本地 Relay/Daemon；V093-01/02 允许 fixture 桥与脚本化 delta 注入（确定性、不消耗 token）",
+    "bridge": "真实 DSH ACP 桥子进程（AGENT_SESSIONS_DSH_LIVE=1）用于投递链路的端到端确认",
+    "flutter": "apps/mobile 本地 flutter test（单 worker）",
+    "cloud": "https://39.106.135.11（自签证书，TLS 指纹钉扎；Relay 镜像 v092-365a1fb）",
+    "device": "USB 真机 d723617（23113RKC6C，Android 15 / API 35）",
+    "evidence": "e2e-verify/reports/<timestamp>/V093/（脱敏报告，不含 token、正文、终端/工作区 ID 原文）"
+  },
+  "verification": {
+    "real_browser": true,
+    "real_browser_headed": true,
+    "real_visible_flutter": true,
+    "real_model": true,
+    "real_upstream": true,
+    "fixture_data": true,
+    "local_test": true,
+    "headless": false,
+    "real_device": true,
+    "note": "计划阶段（2026-09-17）：V093-01..05 全部为 planned。真实模型调用仅用于 V093-04 的真机复测，执行前需确认预算与停止点；V093-02 的压测优先用 fixture 桥注入确定性 delta 流，避免为压测消耗 token。"
+  },
+  "cases": [
+    {
+      "id": "V093-01",
+      "title": "Daemon→Relay 事件投递吞吐瓶颈可复现、可量化归因",
+      "status": "planned",
+      "phase": "P0",
+      "category": "传输吞吐归因",
+      "priority": "P0",
+      "test_layer": "targeted_diagnostic",
+      "precondition": "本地 Relay + Daemon 可跑；可复现一个产生万级 message.delta 的回合（fixture 桥或真实模型均可）；daemon.db 与 Relay SQLite 可只读访问。",
+      "steps": [
+        "复现万级 delta 回合，记录 delta 总数、流式跨度、单回合字符数",
+        "采样 relay_event_outbox 的 (status,count) 与 relay_commands 状态，记录积压峰值与实测投递速率",
+        "对照 internal/daemon 的上传循环打埋点（批量大小、串行 ack、节流与重试策略），不靠猜测",
+        "产出量化结论：积压峰值、追平耗时、单条/批量成本，并给出修复方案与目标阈值"
+      ],
+      "expected": "瓶颈被量化归因并可解释；形成可实施的修复方案与目标（万级 delta 在秒级追平、UI 无需视图切换即收敛）。",
+      "cleanup": [
+        "清理复现产生的本地 state 与临时会话；不写入云端业务数据"
+      ],
+      "evidence": [
+        "R18 云端实测快照（2026-09-17）：单回合 16779 个 delta、出箱 delivered 3866 / pending 13116、实测约 16 条/秒、积压最终全部投递（16982 delivered、pending 归零）——见实施记录 32 §20.6。",
+        "同轮观察：手机 UI 在回合 turn_completed 后仍长时间显示「生成中」，需一次视图切换才收敛到「已完成」。"
+      ]
+    },
+    {
+      "id": "V093-02",
+      "title": "万级 delta 回合的事件投递秒级追平且手机 UI 自动收敛到终态",
+      "status": "planned",
+      "phase": "P1",
+      "category": "传输吞吐修复",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "V093-01 已给出瓶颈结论与目标阈值；具备确定性 delta 注入能力（fixture 桥）。",
+      "steps": [
+        "以 fixture 桥注入 N 条确定性 delta（N 覆盖万级），记录出箱积压峰值",
+        "断言回合结束后积压在目标阈值内归零，并记录追平耗时",
+        "以真实 DSH 桥复跑一次端到端，确认真实链路同样满足阈值",
+        "Flutter 侧断言：回合终态到达后 UI 无需视图切换即显示终态（投影自动收敛）"
+      ],
+      "expected": "积压在阈值内归零；手机 UI 自动收敛到终态，不再需要切换视图。",
+      "cleanup": [
+        "停止注入进程；清理本地 state；不重置既有 SQLite"
+      ],
+      "evidence": [
+        "待执行（计划阶段）。基线见 V093-01 的 R18 量化结论。"
+      ]
+    },
+    {
+      "id": "V093-03",
+      "title": "resume 后上下文投影正确：system-reminder 不投影为用户消息、用户正文可见",
+      "status": "planned",
+      "phase": "P1",
+      "category": "上下文投影",
+      "priority": "P0",
+      "test_layer": "integration",
+      "precondition": "可复现 resume 场景（daemon 重启后同会话继续发送）。",
+      "steps": [
+        "复现 resume 场景并抓取桥注入的上下文与客户端投影结果",
+        "断言 system-reminder（skill catalog 等）不被投影为「你」的消息",
+        "断言用户实际发送的正文在时间线可见且顺序正确",
+        "断言回合长度回落正常（不再出现 35282 字符级别的异常产出）"
+      ],
+      "expected": "resume 后时间线只反映真实用户消息与助手回复；系统注入内容不进入用户可见投影。",
+      "cleanup": [
+        "清理复现会话；不修改既有会话数据"
+      ],
+      "evidence": [
+        "R18 真机 dump（2026-09-17）：时间线出现 content-desc 以 `会话节点 你 | 你 | <system-reminder>` 开头的节点，而用户实际发送的 `V092-10 retry after restart` 不可见；该回合 delta_events=16779、delta_chars=35282、跨度 232 秒。"
+      ]
+    },
+    {
+      "id": "V093-04",
+      "title": "Daemon 重启后首条发送零手工自动恢复（V092-10 收口，真机）",
+      "status": "planned",
+      "phase": "P2",
+      "category": "真机闭环",
+      "priority": "P0",
+      "test_layer": "e2e_real_device",
+      "precondition": "V092-09 云端已通过；可在受控窗口重启 daemon；真机 USB 在线且已绑定云端账号。",
+      "steps": [
+        "重启 daemon 进程（保留 state-dir 与映射）",
+        "手机对同一会话发送**首条**消息（此后不再有任何人工操作）",
+        "断言客户端自动完成 resume/start 回退与 send 重试，命令最终 completed",
+        "断言时间线历史未丢失、终态自动收敛，报告标记 real_device=true、headless=false"
+      ],
+      "expected": "daemon 重启后手机首条发送即成功，无需用户第二次操作（T4 裁决：客户端自动完成）。",
+      "cleanup": [
+        "恢复 daemon 单一实例运行态"
+      ],
+      "evidence": [
+        "R18 云端实测（2026-09-17）：首条 send 以 local_state_missing 失败，需再次发送才触发 resume(completed)→start(completed)→send(completed)——见实施记录 32 §20.6 与 docs/test/31 的 V092-10 evidence。",
+        "裁决（2026-09-17，用户）：口径取「客户端自动完成」，不接受人工二次发送。"
+      ]
+    },
+    {
+      "id": "V093-05",
+      "title": "v0.9.2 收口：完整聚合门通过且计划状态改回 passed",
+      "status": "planned",
+      "phase": "P3",
+      "category": "聚合门回归",
+      "priority": "P1",
+      "test_layer": "aggregate_gate",
+      "precondition": "V093-02/03/04 已完成并回归钉扎。",
+      "steps": [
+        "运行 task test:v092:local（含 headed 真实浏览器 12/12 与 test:restart）",
+        "运行 task docs:verify 与 git diff --check",
+        "把 docs/test/31 的 V092-10 状态由 partial 改为 passed，并同步迭代计划 v0.9.2 的状态口径"
+      ],
+      "expected": "聚合门全绿；V092-10 收口为 passed，v0.9.2 状态满足其 §6 完成定义。",
+      "cleanup": [
+        "无（只读回归与文档回填）"
+      ],
+      "evidence": [
+        "待执行（计划阶段）。v0.9.2 当前缺口见其 §8.3 二次增量与本套件 V093-04。"
+      ]
+    }
+  ]
+}
