@@ -463,6 +463,10 @@ tasks:
       - go test ./internal/daemon -run 'TestV092' -count=1
       # V092 Relay/HTTP 事实源合并与模型目录（V092-03/04）。
       - go test ./internal/httpapi ./internal/relay -run 'TestV092' -count=1
+      # v0.9.2 §19.3：跨端公钥编码契约（Flutter 侧统一 standard raw，Go/Relay 侧接受性）。
+      - go test ./packages/crypto -run 'TestV092' -count=1
+      # v0.9.2 §19.3：模型目录同步工具（settings.yaml -> cordis.yml）口径与幂等回归。
+      - task: test:v092:models
       # 既有 V091 presence 与 V089 生命周期契约不得回退。
       - go test ./internal/domain ./internal/relay ./internal/store ./internal/httpapi -run 'TestV091' -count=1
       - go test ./internal/store ./internal/relay ./internal/daemon -run 'TestV089' -count=1
@@ -753,6 +757,21 @@ tasks:
   docs:verify:
     cmds:
       - python3 tools/docs_verify.py
+
+  models:sync:
+    desc: 同步 DSH 模型目录（~/.dsh/settings.yaml -> cordis.yml），消除「默认模型/模型目录」双源漂移（v0.9.2 §19.3）。cordis.yml 是 .gitignore 的本地生成配置，需同步后重启 daemon 才生效
+    cmds:
+      - python3 tools/sync_model_catalog.py --write
+
+  models:check:
+    desc: 校验 DSH 模型目录是否与 settings.yaml 一致（有差异退出码 1，供人工/门禁核对；不写入）
+    cmds:
+      - python3 tools/sync_model_catalog.py --check
+
+  test:v092:models:
+    desc: v0.9.2 模型目录同步工具的回归（fixture 驱动：口径、注释保留、幂等），不依赖本机 ~/.dsh/settings.yaml
+    cmds:
+      - python3 -m unittest discover -s tools/tests -p 'test_sync_model_catalog.py' -v
 
   test:v04:p0:
     desc: v0.4 P0 文档、生成物与格式门禁
