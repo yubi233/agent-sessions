@@ -20,7 +20,7 @@
     "fixture_data": true,
     "local_test": true,
     "headless": false,
-    "note": "P0/P1/P2/P4 完成；P3 完成（headed 真实浏览器 12/12、统一回归入口、真机发送闭环、T7 state-dir 单实例锁、握手超时可配置）。**V092-09 真机通过**：手机 UI 完成新建会话→切换模型→发送→Assistant 回复与「已完成」终态，Relay 侧 9 条事件完整往返并有用量记录。本轮共修复 4 类真实缺陷：Relay→Daemon 投递契约、多 Daemon 实例命令竞争、Android gate 作用域、本地 Relay 未传 DSH 配置导致目录顶替。真机证据：real_device=true、headless=false、local_test=true；每跳均有日志/数据库/截图三级证据。",
+    "note": "P0/P1/P2/P4 完成；P3 完成（headed 真实浏览器 12/12、统一回归入口、真机发送闭环、T7 state-dir 单实例锁、握手超时可配置）。**V092-09 真机通过**：手机 UI 完成新建会话→切换模型→发送→Assistant 回复与「已完成」终态，Relay 侧 9 条事件完整往返并有用量记录。本轮共修复 4 类真实缺陷：Relay→Daemon 投递契约、多 Daemon 实例命令竞争、Android gate 作用域、本地 Relay 未传 DSH 配置导致目录顶替。真机证据：real_device=true、headless=false、local_test=true；每跳均有日志/数据库/截图三级证据。 **2026-09-17 云端形态增量**：T6-B 窗口内完成云端凭据恢复（30 天 terminal 令牌 + 恢复码生产同源写入）与真机 owner 接管；V092-09 云端 passed、V092-10 云端 partial（见各自 evidence）。关键修复：模型目录双源对齐（tools/sync_model_catalog.py）消除了 403 FreeTierError；同轮暴露「事件投递吞吐」与「resume 后上下文投影」两个新缺陷。",
     "real_device": true
   },
   "cases": [
@@ -249,13 +249,19 @@
         "⑤ Relay 侧会话事件 9 条完整往返：session.created → user.message → turn.phase×2 → message.delta → message.completed → turn.phase×2 → turn.completed；",
         "⑥ 用量记录证明真实计费调用：provider=dsh、model=gpt-5.5、input_tokens=2246、output_tokens=29。",
         "**结论：手机 UI → Relay → Daemon(runner) → DSH ACP 桥 → 上游 LLM → 流式回包 → 手机时间线** 全链路闭环成立（G1/G2/G3/G4 全部验证）。",
-        "前置修复（本轮迭代中依次定位并修复，均已回归钉扎）：Relay→Daemon 投递契约（session_id/envelope）、多 Daemon 实例命令竞争（T7 单实例锁）、本地 Relay 未传 DSH 配置导致模型目录被缺省配置顶替（startRelay 默认注入已固化）。"
+        "前置修复（本轮迭代中依次定位并修复，均已回归钉扎）：Relay→Daemon 投递契约（session_id/envelope）、多 Daemon 实例命令竞争（T7 单实例锁）、本地 Relay 未传 DSH 配置导致模型目录被缺省配置顶替（startRelay 默认注入已固化）。",
+        "**云端形态通过（2026-09-17，阿里云 ECS + USB 真机 d723617）**：T6-B 窗口内按序完成——helper 重发 terminal 令牌（-ttl 720h，克服 24h 默认 TTL 与 SSH 窗口不确定）→ 经生产同源领域路径（PairingService.GenerateRecoveryCode）为云端账号补发一次性恢复码 → 手机走「使用恢复码接管」完成 owner 接管（旧 owner 撤销、新 owner 建立，recovery_codes 被消费）→ 手机进入 DSH 工作区页，显示 4 个工作区与在线终端 V_YANBINYE-MB6。",
+        "① 首条发送曾被 provider 拒绝：403 FreeTierError（OpenCode 免费池只允许官方客户端调用），因为 cordis.yml 的桥默认模型是 opencode-zen/nemotron-3-ultra-free；",
+        "② 根因是「默认模型双源」：~/.dsh/settings.yaml 的 agent-default-model（goat/deepseek/deepseek-v4.1-flash）与 cordis.yml 的 acp-agent.config.provider/model 是两个不同的配置键、消费方不同（客户端/网关 vs acp-demo 桥插件），不存在自动同步；",
+        "③ 用 tools/sync_model_catalog.py（settings.yaml → cordis.yml，行级定点改写保留注释）对齐并重启 daemon 后，新建会话模型行显示「DeepSeek V4.1 Flash」，发送后手机时间线出现 Assistant 回复「收到,V092 cloud ping reply OK — 链路正常,无待处理事项」与「已完成」终态；",
+        "④ 服务端证据：daemon 出箱 message.completed + turn.completed（terminal_status=idle）全部 delivered；daemon 日志 terminal=turn_completed；",
+        "⑤ 观察：终态在手机 UI 上需要一次视图切换才收敛（实时投影滞后），已并入 V092-10 的发现项。"
       ]
     },
     {
       "id": "V092-10",
       "title": "云端 Daemon 重启后手机继续发送（resume 路径，真机）",
-      "status": "blocked",
+      "status": "partial",
       "phase": "P3",
       "category": "真机闭环",
       "priority": "P0",
@@ -272,7 +278,13 @@
         "恢复 daemon 单一实例运行态"
       ],
       "evidence": [
-        "依赖 V092-09 的成功终态；同样只需渠道可用即可复跑。本仓库侧 resume 契约与回归均已就绪（internal/daemon/v092_lifecycle_contract_test.go、apps/mobile/test/session_send_auto_start_test.dart）。"
+        "依赖 V092-09 的成功终态；同样只需渠道可用即可复跑。本仓库侧 resume 契约与回归均已就绪（internal/daemon/v092_lifecycle_contract_test.go、apps/mobile/test/session_send_auto_start_test.dart）。",
+        "**云端形态部分通过（2026-09-17）**：daemon 重启后在同一会话再次发送，Relay 侧命令链路按期望走 resume → start → send：session.resume(completed) → session.start(completed) → session.send(completed)；手机时间线保住了重启前的历史（V092-09 的回复仍在），回合以 turn_completed 收尾。",
+        "未满足的断言（因此记为 partial）：",
+        "① **未做到零手工**：daemon 重启后首条 session.send 以 local_state_missing（session instance 不存在）失败，需再次发送才触发 resume→start→send。行为与本地形态（R17 客户端 start 回退 + send 重试）一致，但「重启后手机无需手工操作即可继续发送」未达成。",
+        "② **事件投递吞吐不足**：该回合产生 16779 个 delta 事件（35282 字符、流式跨度 232 秒），出箱一度积压 13832 条 pending（实测投递约 16 条/秒），手机 UI 长时间停留「生成中」，终态需数分钟才收敛；积压最终全部投递完成（16982 delivered、pending 归零）。",
+        "③ **resume 后上下文投影异常**：手机把一条 system-reminder（skill catalog）投影成「你」的消息，用户实际发送的文本在时间线上不可见，随后模型产出异常冗长（35282 字符）。",
+        "以上三点均为真实缺陷，需后续轮次定位（投递吞吐与上下文投影是两个独立问题）。"
       ]
     }
   ]
