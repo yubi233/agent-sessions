@@ -2003,6 +2003,8 @@ class _SessionChatView extends StatelessWidget {
       turnPhase: projection.turnPhase,
       // v0.8.6 A①：客户端回合超时标记——超时横幅替代无限转圈。
       turnTimedOut: sessions.isTurnTimedOut(sessionId),
+      // v0.9.3 P2（T4 / V093-04）：自动恢复提示行——恢复期间可见，非静默。
+      recoveryNotice: sessions.recoveryNotice,
       // v0.9.0 C3：事件新鲜度次级行 + 「查看结果」手动出口（强制快照同步，
       // 成功只在真实事实到达时清横幅）。
       timeoutFreshnessText: _formatTimeoutFreshness(

@@ -209,6 +209,85 @@ void main() {
       reason: '运行中/空闲会话不应重复注入 resume/start',
     );
   });
+
+  test('V093-04：send 失败回执晚到（超过快速窗口、落在 send 窗口内）仍触发自动恢复', () async {
+    // F4 复现钉死（R18 云端形态）：daemon 重启后的首条 send，其 failed 回执
+    // 要等执行端重连并执行后才返回。旧实现 send 与其它命令共用 24×250ms=6s
+    // 窗口，回执晚到即返回 null → 按"受理即确认"放行 → LOCAL_STATE_MISSING
+    // 自动恢复永远不触发，用户被迫手动重发。修复后 send 使用独立的加长窗口
+    // （sendReceiptPollAttempts），回执落在窗口内就能驱动自动恢复链。
+    //
+    // 测试把两个窗口同时缩小：快速窗口 2 拍（0.5s）模拟旧口径，send 窗口
+    // 12 拍（3s）；fixture 让首条 send 的回执第 6 拍才转为 failed——
+    // 它落在快速窗口之外（旧实现必然漏掉）、send 窗口之内（新实现能接住）。
+    var now = baseNow;
+    final relay = _RecordingCommandRelay(clock: () => now);
+    relay.delayedFailSendReceiptPolls = 6;
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = SessionController(relay: relay, clock: () => now);
+    controller.receiptPollAttempts = 2;
+    controller.sendReceiptPollAttempts = 12;
+    await controller.initialize();
+    final created = await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    expect(created, isNotNull);
+    relay.submittedKinds.clear();
+
+    await controller.sendMessage(
+      message: '重启后首条发送',
+      deviceId: owner.deviceId,
+      canWrite: true,
+    );
+
+    expect(
+      relay.submittedKinds,
+      contains(SessionCommandKind.resume),
+      reason: '晚到的 local_state_missing 回执必须触发自动恢复（T1 零手工）',
+    );
+    expect(controller.recoveryNotice, isNull,
+        reason: '恢复结束后提示必须清除');
+  });
+
+  test('V093-04/T4：恢复过程对用户可见（恢复提示在 resume 期间非空）', () async {
+    var now = baseNow;
+    final relay = _RecordingCommandRelay(clock: () => now);
+    relay.failFirstSendWithMissingInstance = true;
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = SessionController(relay: relay, clock: () => now);
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    relay.submittedKinds.clear();
+    relay.submittedOperations.clear();
+    String? noticeAtResume;
+    relay.onSubmitted = (kind) {
+      if (kind == SessionCommandKind.resume && noticeAtResume == null) {
+        noticeAtResume = controller.recoveryNotice;
+      }
+    };
+
+    await controller.sendMessage(
+      message: '可见性回归',
+      deviceId: owner.deviceId,
+      canWrite: true,
+    );
+
+    expect(noticeAtResume, isNotNull,
+        reason: 'T4：恢复期间必须有可见提示，不允许静默窗口');
+    expect(noticeAtResume, contains('自动恢复'));
+    expect(controller.recoveryNotice, isNull,
+        reason: '恢复结束后提示必须清除（不残留误导状态）');
+  });
 }
 
 /// 把选中会话投影为 stopped，并记录客户端提交的命令序列。
@@ -259,11 +338,25 @@ class _RecordingCommandRelay extends FixtureRelayRepository {
     );
   }
 
+  /// V093-04：首条 send 的 failed 回执延迟到达（本机实例缺失语义）。
+  /// 值 = getSessionCommand 对该命令前 N 次查询返回 running，第 N+1 次返回
+  /// failed(LOCAL_STATE_MISSING)。模拟 daemon 重启后「投递+执行」晚于客户端
+  /// 快速窗口的时序。
+  int delayedFailSendReceiptPolls = 0;
+
+  /// 命令提交回调（V093-04 可见性断言用）：测试在 resume 提交瞬间抓取
+  /// controller.recoveryNotice 的值。
+  void Function(SessionCommandKind kind)? onSubmitted;
+
+  String? _delayedFailCommandId;
+  int _delayedFailPolls = 0;
+
   @override
   Future<SessionCommandReceipt> submitSessionCommand(
     String sessionId,
     SessionCommandInput input,
-  ) {
+  ) async {
+    onSubmitted?.call(input.kind);
     submittedKinds.add(input.kind);
     submittedOperations.add(input.idempotencyKey);
     if (input.kind == SessionCommandKind.send) {
@@ -282,6 +375,38 @@ class _RecordingCommandRelay extends FixtureRelayRepository {
         '本机实例不存在（local_state_missing），请先启动会话。',
       );
     }
-    return super.submitSessionCommand(sessionId, input);
+    final receipt = await super.submitSessionCommand(sessionId, input);
+    // 第一条成功受理的 send 进入延迟回执通道：记下真实生成的命令 id。
+    if (input.kind == SessionCommandKind.send &&
+        delayedFailSendReceiptPolls > 0 &&
+        _delayedFailCommandId == null) {
+      _delayedFailCommandId = receipt.id;
+    }
+    return receipt;
+  }
+
+  @override
+  Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
+    if (_delayedFailCommandId != null && commandId == _delayedFailCommandId) {
+      _delayedFailPolls += 1;
+      if (_delayedFailPolls <= delayedFailSendReceiptPolls) {
+        // 回执未到（daemon 仍在重启/投递）：命令保持 running。
+        return SessionCommandReceipt(
+          id: commandId,
+          kind: 'session.send',
+          status: 'running',
+          idempotencyKey: 'fixture-$commandId',
+        );
+      }
+      // 回执到达：执行端以本机实例缺失拒绝（V093-04 / T1 零手工的触发源）。
+      return SessionCommandReceipt(
+        id: commandId,
+        kind: 'session.send',
+        status: 'failed',
+        idempotencyKey: 'fixture-$commandId',
+        errorCode: 'LOCAL_STATE_MISSING',
+      );
+    }
+    return super.getSessionCommand(commandId);
   }
 }

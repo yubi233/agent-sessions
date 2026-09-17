@@ -24,6 +24,7 @@ class SessionChatView extends StatefulWidget {
     this.turnTimedOut = false,
     this.timeoutFreshnessText,
     this.onViewResult,
+    this.recoveryNotice,
     this.emptyHero,
     this.leading,
     this.footer = const [],
@@ -49,6 +50,11 @@ class SessionChatView extends StatefulWidget {
   /// 显式超时横幅替代"处理中"状态条，不再无限转圈；迟到的终态事实事件
   /// 到达后 controller 会按事件校正清除该标记。
   final bool turnTimedOut;
+
+  /// v0.9.3 P2（T4 裁决）：会话自动恢复过程的可见提示（V093-04）。非空时在
+  /// 底部提示槽优先展示"正在自动恢复"，替代"生成中"状态条——恢复期间用户
+  /// 必须能看到系统在做什么，不允许静默窗口。
+  final String? recoveryNotice;
 
   /// v0.9.0 C3：超时横幅次级行的事件新鲜度文案（最近一次成功合并的客户端时刻）。
   final String? timeoutFreshnessText;
@@ -270,7 +276,16 @@ class _SessionChatViewState extends State<SessionChatView> {
         // v0.5/回归修复：streaming 状态行固定为一个可见 overlay，而不是懒加载列表项。
         // 这样即使滚动到底部时 footer（如子会话面板）较高，streaming indicator 也始终在树中，
         // 不会因为 ListView 未 build 视口外的行而被测试或用户跳过。
-        if (widget.turnTimedOut)
+        // v0.9.3 P2（T4）：自动恢复提示占底部提示槽的最高优先级——恢复是
+        // 用户当前最需要知道的事实；其余状态（超时/生成中）在恢复期间退让。
+        if (widget.recoveryNotice != null)
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 12,
+            child: _RecoveryNoticeRow(text: widget.recoveryNotice!),
+          )
+        else if (widget.turnTimedOut)
           Positioned(
             left: 16,
             right: 16,
@@ -455,6 +470,45 @@ class _FileOpenErrorDialog extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// v0.9.3 P2（T4 裁决 / V093-04）：会话自动恢复提示行。执行侧实例丢失
+/// （daemon 重启后 LOCAL_STATE_MISSING）触发的自动恢复全程可见——信息样式
+///（非错误），恢复结束由 controller 清除 [SessionController.recoveryNotice]。
+class _RecoveryNoticeRow extends StatelessWidget {
+  const _RecoveryNoticeRow({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        key: const Key('session-recovery-notice-row'),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          color: theme.colorScheme.primaryContainer,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.autorenew_outlined,
+                size: AppSizes.iconSm, color: theme.colorScheme.onPrimaryContainer),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(
+                text,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.onPrimaryContainer),
+              ),
+            ),
+          ],
         ),
       ),
     );

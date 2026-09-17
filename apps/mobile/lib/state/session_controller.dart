@@ -150,6 +150,32 @@ class SessionController extends ChangeNotifier {
   @visibleForTesting
   Duration activePollInterval = const Duration(milliseconds: 250);
 
+  /// v0.9.3 P2 / V093-04（T4 裁决）：命令收据轮询窗口参数化。
+  ///
+  /// 为什么 send 需要比其它命令更长的窗口：R18 云端实测（F4）显示，daemon
+  /// 重启后的首条 send 在「提交 → 执行 → 回执」链路上可能远超 6 秒——命令先在
+  /// Relay 排队等 daemon 重连（SSE 重连 + hello + 启动清扫），失败回执到达时
+  /// 客户端早已放弃轮询并按"受理即确认"放行，LOCAL_STATE_MISSING 自动恢复
+  /// （R14/R17 路径）因此从未触发，用户被迫手动重发。
+  ///
+  /// - [sendReceiptPollAttempts]：send 终态回执专用窗口，默认 120×250ms=30s，
+  ///   覆盖一次 daemon 重启的投递+执行时延；超时仍按"受理即确认"回退。
+  /// - [receiptPollAttempts]：abort / onAccepted 等需要快速反馈的路径，
+  ///   维持 24×250ms=6s 不变。
+  @visibleForTesting
+  int sendReceiptPollAttempts = 120;
+  @visibleForTesting
+  int receiptPollAttempts = 24;
+
+  /// v0.9.3 P2（T4 裁决）：会话自动恢复过程的可见状态。检测到执行侧实例丢失
+  /// （LOCAL_STATE_MISSING）并触发自动恢复期间非空，UI 在 Chat 视图展示提示行，
+  /// 避免"点了发送却毫无反馈"的静默窗口；恢复结束（成功或失败）即清除，
+  /// 绝不自动重试第二轮（重试上限 1 次，见 _ensureSessionRunnableForSend）。
+  String? _recoveryNotice;
+
+  /// 当前自动恢复提示；非空时 Chat 视图渲染恢复提示行。
+  String? get recoveryNotice => _recoveryNotice;
+
   /// 当前选中会话尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
   /// 该会话的回合是否已被客户端判定超时（V086-11）：UI 据此把"处理中"
   /// 状态条替换为显式超时文案，并停止无限转圈。
@@ -1390,6 +1416,12 @@ class SessionController extends ChangeNotifier {
   /// 此时按 status 短路会直接放行发送，命令到达执行侧后必然以
   /// local_state_missing 失败，用户看到的就是「明明显示空闲却发不出去」。
   /// 因此失败路径用 force 强制走一次恢复（resume → 回退 start）。
+  ///
+  /// v0.9.3 P2（T4 裁决）：恢复全程通过 [recoveryNotice] 对用户可见——
+  /// 「点了发送却毫无反馈」的静默窗口会让人重复点击、放大故障感；恢复结束
+  /// （无论成败）立即清除。重试上限钉死为 1 次：本函数只被调用一轮
+  /// （resume → 失败才 start），调用方（sendMessage）对恢复后的重试同样只做
+  /// 一次（#recovered 幂等键），再次失败按真实故障浮出，绝不进入静默重试风暴。
   Future<bool> _ensureSessionRunnableForSend({
     required String deviceId,
     required bool canWrite,
@@ -1398,6 +1430,24 @@ class SessionController extends ChangeNotifier {
     if (!force && selectedSession?.status != MobileSessionStatus.stopped) {
       return true;
     }
+    _recoveryNotice = '检测到终端已重启，正在自动恢复会话并重发…';
+    _notifyListeners();
+    try {
+      return await _ensureSessionRunnableForSendInner(
+        deviceId: deviceId,
+        canWrite: canWrite,
+      );
+    } finally {
+      _recoveryNotice = null;
+      _notifyListeners();
+    }
+  }
+
+  /// 恢复链本体（resume 优先 → 不健康/无实例时回退 start），语义见外层注释。
+  Future<bool> _ensureSessionRunnableForSendInner({
+    required String deviceId,
+    required bool canWrite,
+  }) async {
     final resumeBlocked = resumeBlockedReason(canWrite: canWrite);
     if (resumeBlocked == null) {
       // 清掉上一轮错误，避免把历史失败误判成本次恢复结果。
@@ -2662,8 +2712,15 @@ class SessionController extends ChangeNotifier {
   /// 轮询命令终态回执。succeeded/accepted 等非失败终态返回回执；failed/rejected/
   /// cancelled/expired 返回回执；状态查询失败或超时返回 null，调用方自行决定
   /// 是否回退到"受理即确认"的旧语义。
-  Future<SessionCommandReceipt?> _awaitCommandReceipt(String commandId) async {
-    for (var attempt = 0; attempt < 24; attempt += 1) {
+  /// [maxAttempts] 缺省用 [receiptPollAttempts]（6s，快速反馈路径）；
+  /// send 终态确认传 [sendReceiptPollAttempts]（30s，覆盖 daemon 重启投递时延，
+  /// V093-04 / T4）。
+  Future<SessionCommandReceipt?> _awaitCommandReceipt(
+    String commandId, {
+    int? maxAttempts,
+  }) async {
+    final attempts = maxAttempts ?? receiptPollAttempts;
+    for (var attempt = 0; attempt < attempts; attempt += 1) {
       try {
         final receipt = await _relay.getSessionCommand(commandId);
         switch (receipt.status) {
@@ -2768,7 +2825,13 @@ class SessionController extends ChangeNotifier {
         // local_state_missing）必须立刻浮出并清掉乐观气泡，而不是让客户端在
         // 快照轮询耗尽后无限停留在生成中。终态查询不可用（null）时保持旧的
         // 快照轮询语义，不放大确认链路抖动。
-        final terminal = await _awaitCommandReceipt(receipt.id);
+        // v0.9.3 V093-04：send 用加长窗口（30s）——daemon 重启后的首条 send
+        // 的失败回执可能晚于旧的 6s 窗口到达，窗口太短会让 LOCAL_STATE_MISSING
+        // 自动恢复永远不触发（R18 云端 F4 的根因之一）。
+        final terminal = await _awaitCommandReceipt(
+          receipt.id,
+          maxAttempts: sendReceiptPollAttempts,
+        );
         if (_syncGenerations[sessionId] != syncGeneration) {
           return true;
         }
