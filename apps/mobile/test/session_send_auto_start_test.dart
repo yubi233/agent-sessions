@@ -5,6 +5,13 @@ import 'package:agent_sessions_mobile/state/session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'support/fixture_owner.dart';
 
+/// V093-04b：回执竞争注入的回调需要引用尚未构造的 controller，用可变持有者解耦。
+final _ControllerHolder _controllerHolder = _ControllerHolder();
+
+class _ControllerHolder {
+  SessionController? controller;
+}
+
 /// v0.9.2 P2（V092-06 / C3 / T3 裁决）回归：发送前自动恢复的语义修正。
 ///
 /// 背景：daemon 重启后 store 里的 instance 映射仍在、内存句柄已释放，移动端
@@ -253,6 +260,52 @@ void main() {
         reason: '恢复结束后提示必须清除');
   });
 
+  test('V093-04b：SSE live 下 canonical 终态合并先于回执时，失败仍触发自动恢复', () async {
+    // 录屏复现回归（2026-09-18）：会话 SSE 活跃时，daemon 重启后首条 send 的
+    // fail-closed 终态（turn.completed(stopped)）经 live 快照合并**先于回执
+    // 读取**推进同步代际；旧实现先按代际静默 return true，LOCAL_STATE_MISSING
+    // 自动恢复被当成「正常取消」吞掉——发送失败、会话停止、零恢复、零提示。
+    // 修复后：失败回执是本命令自己的结果，处理优先于代际守卫。
+    var now = baseNow;
+    final relay = _RecordingCommandRelay(clock: () => now);
+    relay.failFirstSendReceipt = true;
+    // 竞争注入：回执返回前先合并 canonical 终态（等价于 SSE live 唤醒的合并）。
+    relay.onFirstSendReceiptPoll = () => _controllerHolder.controller!.refreshTurnResult();
+    final owner = await bootstrapFixtureOwner(relay);
+    _controllerHolder.controller = SessionController(relay: relay, clock: () => now);
+    await _controllerHolder.controller!.initialize();
+    await _controllerHolder.controller!.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    relay.submittedKinds.clear();
+
+    await _controllerHolder.controller!.sendMessage(
+      message: 'SSE live 竞争回归',
+      deviceId: owner.deviceId,
+      canWrite: true,
+    );
+
+    expect(
+      relay.submittedKinds,
+      contains(SessionCommandKind.resume),
+      reason: 'canonical 终态合并先于回执到达时，失败仍必须触发自动恢复（T1 零手工）',
+    );
+    final sendKeys = <String>[];
+    for (var i = 0; i < relay.submittedKinds.length; i += 1) {
+      if (relay.submittedKinds[i] == SessionCommandKind.send) {
+        sendKeys.add(relay.submittedOperations[i]);
+      }
+    }
+    expect(sendKeys.length, 2, reason: '失败后必须恰好重试一次（T4 上限）');
+    expect(sendKeys[0], isNot(sendKeys[1]), reason: '重试必须换幂等键');
+    expect(_controllerHolder.controller!.errorMessage, isNull,
+        reason: '恢复重试成功后不得残留错误面');
+  });
+
   test('V093-04/T4：恢复过程对用户可见（恢复提示在 resume 期间非空）', () async {
     var now = baseNow;
     final relay = _RecordingCommandRelay(clock: () => now);
@@ -323,6 +376,27 @@ class _RecordingCommandRelay extends FixtureRelayRepository {
       sessionId,
       afterSequence: afterSequence,
     );
+    // V093-04b：失败 send 的 canonical 终态投影（turn.completed(stopped)）——
+    // 回执已送达且恢复未开始期间服务该投影，等价于 SSE live 唤醒合并的竞争快照。
+    final serveStoppedTerminal = failFirstSendReceipt &&
+        _receiptFailPollServed &&
+        !submittedKinds.contains(SessionCommandKind.resume);
+    if (serveStoppedTerminal) {
+      return SessionSnapshot(
+        session: snapshot.session.copyWith(status: MobileSessionStatus.stopped),
+        events: [
+          ...snapshot.events,
+          RelaySessionEvent(
+            sequence: snapshot.session.lastSequence + 1,
+            eventType: 'turn.completed',
+            envelope: const {
+              'kind': 'assistant_message',
+              'completed_turn': true,
+            },
+          ),
+        ],
+      );
+    }
     // 恢复命令提交后，真实 daemon 会把会话投影推进为 idle；fixture 也必须跟随，
     // 否则停止投影会永久生效，恢复永远"看起来失败"而掩盖真实的恢复路径。
     final stop = projectSelectedSessionAsStopped &&
@@ -344,12 +418,22 @@ class _RecordingCommandRelay extends FixtureRelayRepository {
   /// 快速窗口的时序。
   int delayedFailSendReceiptPolls = 0;
 
+  /// V093-04b：首条 send 的回执直接 failed（LOCAL_STATE_MISSING），用于覆盖
+  /// 「SSE live 下 canonical 终态合并先于回执」的竞争形态（录屏复现）。
+  bool failFirstSendReceipt = false;
+
+  /// V093-04b：首条 failed 回执返回前触发的回调（测试注入 controller 的
+  /// refreshTurnResult，等价于 SSE live 唤醒的 canonical 终态合并）。
+  Future<void> Function()? onFirstSendReceiptPoll;
+
   /// 命令提交回调（V093-04 可见性断言用）：测试在 resume 提交瞬间抓取
   /// controller.recoveryNotice 的值。
   void Function(SessionCommandKind kind)? onSubmitted;
 
   String? _delayedFailCommandId;
   int _delayedFailPolls = 0;
+  String? _receiptFailCommandId;
+  bool _receiptFailPollServed = false;
 
   @override
   Future<SessionCommandReceipt> submitSessionCommand(
@@ -382,11 +466,31 @@ class _RecordingCommandRelay extends FixtureRelayRepository {
         _delayedFailCommandId == null) {
       _delayedFailCommandId = receipt.id;
     }
+    // V093-04b：同上，回执即失败形态的命令 id 捕获。
+    if (input.kind == SessionCommandKind.send &&
+        failFirstSendReceipt &&
+        _receiptFailCommandId == null) {
+      _receiptFailCommandId = receipt.id;
+    }
     return receipt;
   }
 
   @override
   Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
+    if (_receiptFailCommandId != null && commandId == _receiptFailCommandId) {
+      if (!_receiptFailPollServed) {
+        _receiptFailPollServed = true;
+        // 回执返回前先让测试合并 canonical 终态（模拟 SSE live 竞争）。
+        await onFirstSendReceiptPoll?.call();
+      }
+      return SessionCommandReceipt(
+        id: commandId,
+        kind: 'session.send',
+        status: 'failed',
+        idempotencyKey: 'fixture-$commandId',
+        errorCode: 'LOCAL_STATE_MISSING',
+      );
+    }
     if (_delayedFailCommandId != null && commandId == _delayedFailCommandId) {
       _delayedFailPolls += 1;
       if (_delayedFailPolls <= delayedFailSendReceiptPolls) {

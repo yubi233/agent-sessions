@@ -2832,9 +2832,12 @@ class SessionController extends ChangeNotifier {
           receipt.id,
           maxAttempts: sendReceiptPollAttempts,
         );
-        if (_syncGenerations[sessionId] != syncGeneration) {
-          return true;
-        }
+        // v0.9.3 V093-04 录屏复现修正：失败回执是**本命令自己的结果**，必须
+        // 优先于同步代际守卫处理。SSE live 形态下 canonical 终态合并
+        // （turn.completed(stopped) → _mergeSnapshot 收口）会先于回执读取推进
+        // 同步代际，若先按代际静默 return true，LOCAL_STATE_MISSING 自动恢复
+        // 会被当成「正常取消」吞掉——用户看到的是发送失败、会话停止、零恢复
+        // 且无任何提示。失败路径代际容忍；成功/未知路径的代际守卫保持不变。
         if (terminal != null && terminal.status != 'succeeded') {
           // 执行端可能已经把会话收口为 idle，但失败回执本身不包含 session
           // 投影；先补拉一次快照，避免旧的 streaming 状态继续留在 UI。
@@ -2852,6 +2855,10 @@ class SessionController extends ChangeNotifier {
                 ? '消息发送失败（命令 ${terminal.status}），请查看时间线中的失败提示。'
                 : '消息发送失败（命令 ${terminal.status} · $reason），请查看时间线中的失败提示。',
           );
+        }
+        if (_syncGenerations[sessionId] != syncGeneration) {
+          // 提交等待期间代际已被推进（如并发 abort）：本链按正常取消收敛。
+          return true;
         }
       }
       if (kind == SessionCommandKind.abort) {

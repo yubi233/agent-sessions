@@ -128,9 +128,11 @@
       "evidence": [
         "R18 云端实测（2026-09-17）：首条 send 以 local_state_missing 失败，需再次发送才触发 resume(completed)→start(completed)→send(completed)——见实施记录 32 §20.6 与 docs/test/31 的 V092-10 evidence。",
         "裁决（2026-09-17，用户）：口径取「客户端自动完成」，不接受人工二次发送。",
-        "P2 客户端加固（2026-09-18，本地单测）：send 终态回执轮询窗口独立参数化（sendReceiptPollAttempts 默认 120×250ms=30s，覆盖 daemon 重启投递时延；abort/onAccepted 维持 6s）——R18 云端『回执晚到→按受理即确认放行→恢复永不触发』的时序缺陷由此关闭；T4 可见性：恢复全程 recoveryNotice 提示行（Chat 视图 session-recovery-notice-row），恢复结束即清除，重试上限钉死 1 次；回归 TestV093-04 延迟回执用例与可见性用例（session_send_auto_start_test.dart，7/7 通过）。",
-        "真机验证 passed（2026-09-18，本地拓扑 real_device=true、headless=false）：23113RKC6C（d723617）USB + adb reverse 连本地真实 Relay/Daemon；daemon 仅进程级重启（02:15:57，实例映射存活、内存句柄清空）；02:17:22 手机首条发送以 local_state_missing 失败（daemon 日志一手证据），客户端 7.5 秒内自动完成 resume→start→send#recovered（relay_commands：send failed→resume succeeded→start succeeded→send succeeded），02:17:29 turn_completed（delta_events=328），UI 零操作收敛到「已完成」，助手真实模型回复『收到✅——这是 daemon 重启后的第一条消息,通道正常』。报告 e2e-verify/reports/v093-device/v093-04-report.json（含截图三张与命令链）。",
-        "真实模型调用：2 次（基线回合 + 恢复后重试回合），goat 渠道 deepseek-v4.1-flash，符合计划 §6 停止点约定。",
+        "P2 客户端加固（2026-09-18，本地单测）：send 终态回执轮询窗口独立参数化（sendReceiptPollAttempts 默认 30s）；T4 可见性：恢复全程 recoveryNotice 提示行，恢复结束即清除，重试上限钉死 1 次；回归 session_send_auto_start_test.dart（V093-04 延迟回执 + 可见性 + V093-04b 竞争形态共 8/8）。",
+        "真机验证 passed（2026-09-18，本地拓扑 real_device=true、headless=false）：23113RKC6C（d723617）USB + adb reverse 连本地真实 Relay/Daemon；daemon 仅进程级重启；02:17:22 手机首条发送以 local_state_missing 失败，客户端 7.5 秒内自动完成 resume→start→send#recovered（relay_commands 四行链），02:17:29 turn_completed（delta_events=328），UI 零操作收敛到「已完成」。报告 e2e-verify/reports/v093-device/v093-04-report.json。",
+        "录屏 passed（2026-09-18，真实模型演示）：e2e-verify/screencasts/20260918-0329-v093-04-recovery/——take3 主录屏（113.9s）捕获 SSE live 形态下完整零手工链：发送→Provider 错误 notice→自动重试气泡→真实模型长回合（13163 delta，含工具调用）→turn_completed；take1（103.8s）为录屏过程中发现的缺陷形态对照（见下条）。manifest.json 含命令链与口径。",
+        "录屏暴露并修复的真缺陷（V093-04b）：SSE live 形态下 canonical 终态合并（turn.completed(stopped) → _mergeSnapshot 收口推进同步代际）先于回执读取时，send 链被代际守卫当作「正常取消」静默返回——发送失败、会话停止、零恢复、零提示（take1 视频即该缺陷形态）。修复：失败回执是本命令自己的结果，处理优先于代际守卫（session_controller.dart send 分支重排）；回归 V093-04b 用例钉扎；真机 take3 复验同一形态下自动恢复完整触发。",
+        "真实模型调用：4 次（基线 + 02:17 恢复链 + 录屏 take1 失败未达模型 + take3 恢复链），goat 渠道 deepseek-v4.1-flash，符合计划 §6 停止点约定。",
         "口径说明：云端（阿里云拓扑）形态的复测本轮未执行（云端 daemon 重启窗口受限），本地拓扑结论与 V092-10(local) 同口径；残余风险如实保留。"
       ]
     },
