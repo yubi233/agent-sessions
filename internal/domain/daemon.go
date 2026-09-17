@@ -23,6 +23,12 @@ const (
 	currentDaemonProtocolVersion = 1
 	minDaemonProtocolVersion     = 1
 	daemonHeartbeatInterval      = 15 * time.Second
+
+	// MaxDaemonEventBatchSize 是批量事件上传的条数上限（v0.9.3 V093-02，
+	// 与 OpenAPI DaemonEventBatchUploadRequest.events.maxItems 一致）。
+	// 200 条在 30ms RTT 下把万级 delta 的追平成本压到 ~84 次往返（T3 阈值的依据），
+	// 同时限制单事务写锁持有时长，避免挤压其它 Terminal 的写入。
+	MaxDaemonEventBatchSize = 200
 )
 
 var (
@@ -1166,81 +1172,147 @@ func (s *DaemonService) ReadAttachmentForDaemon(ctx context.Context, accountID, 
 }
 
 func (s *DaemonService) UploadEvent(ctx context.Context, in DaemonEventInput) (DaemonEventResult, error) {
-	if err := validateDaemonProtocol(in.ProtocolVersion); err != nil {
-		return DaemonEventResult{}, err
-	}
-	if strings.TrimSpace(in.EventID) == "" || strings.TrimSpace(in.CommandID) == "" || strings.TrimSpace(in.SessionID) == "" || !validDaemonEventType(in.EventType) {
-		return DaemonEventResult{}, protocol.NewError(protocol.ErrInvalidRequest, "invalid daemon event metadata")
-	}
-	if err := validateDaemonTerminalStatus(in.EventType, in.TerminalStatus); err != nil {
-		return DaemonEventResult{}, err
-	}
-	envelope, err := normalizeDaemonCipherEnvelope(in.EnvelopeJSON)
-	if err != nil {
-		return DaemonEventResult{}, err
-	}
-	terminal, err := s.TerminalForDevice(ctx, in.AccountID, in.DeviceID, in.Role)
-	if err != nil {
-		return DaemonEventResult{}, err
-	}
-	var result DaemonEventResult
-	err = s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
-		if existing, lookupErr := tx.DaemonEventReceiptByID(ctx, in.EventID); lookupErr == nil {
-			if existing.TerminalID != terminal.ID || existing.CommandID != in.CommandID || existing.SessionID != in.SessionID {
-				return ErrScopeDenied
-			}
-			if existing.EventSeq <= 0 {
-				return ErrDaemonCommandState
-			}
-			result = DaemonEventResult{EventID: existing.EventID, EventSeq: existing.EventSeq, Idempotent: true}
-			return nil
-		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
-			return lookupErr
-		}
-
-		cmd, _, commandErr := daemonCommandForTerminal(ctx, tx, terminal, in.CommandID, 0)
-		if commandErr != nil {
-			return commandErr
-		}
-		if cmd.SessionID != in.SessionID {
-			return ErrScopeDenied
-		}
-		// 事件上传只校验命令存在性与终端归属，不做 lease epoch fence：
-		// 回合是会话所有的后台任务，epoch 翻转（含在飞命令被接管作废）不得把
-		// 已发生的事实性事件打成死信——客户端必须最终收到 turn 终态
-		// （ADR-009 决策 5 的 fence 范围仅限命令 ack/执行，不含事件上传）。
-		if err := tx.CreateDaemonEventReceipt(ctx, store.DaemonEventReceiptRow{
-			EventID: in.EventID, TerminalID: terminal.ID, CommandID: in.CommandID, SessionID: in.SessionID,
-			CreatedAtUnixMS: s.now().UnixMilli(),
-		}); err != nil {
-			return err
-		}
-		seq, appendErr := tx.AppendEvent(ctx, store.SessionEventRow{
-			SessionID: in.SessionID, EventType: in.EventType, TerminalStatus: in.TerminalStatus, EnvelopeJSON: envelope,
-			CreatedAtUnixMS: in.CreatedAtUnixMS,
-		})
-		if appendErr != nil {
-			return appendErr
-		}
-		if err := tx.SetSessionLastSeq(ctx, in.SessionID, seq); err != nil {
-			return err
-		}
-		status := sessionStatusForDaemonEvent(in.EventType, in.TerminalStatus)
-		if status != "" {
-			if err := tx.SetSessionStatus(ctx, in.SessionID, status); err != nil {
-				return err
-			}
-		}
-		if err := tx.SetDaemonEventReceiptSeq(ctx, in.EventID, seq); err != nil {
-			return err
-		}
-		result = DaemonEventResult{EventID: in.EventID, EventSeq: seq}
-		return nil
+	// 单条上传是批量通道的 len=1 特例（v0.9.3 V093-02）：共用同一校验与事务体，
+	// 保证「单条」与「批量」的幂等/顺序/归属语义永远不会分叉。
+	results, err := s.UploadEventBatch(ctx, DaemonEventBatchInput{
+		AccountID: in.AccountID, DeviceID: in.DeviceID, Role: in.Role,
+		ProtocolVersion: in.ProtocolVersion, Events: []DaemonEventInput{in},
 	})
 	if err != nil {
 		return DaemonEventResult{}, err
 	}
-	return result, nil
+	return results[0], nil
+}
+
+// DaemonEventBatchInput 是批量事件上传的入参（v0.9.3 V093-02 吞吐收口）。
+type DaemonEventBatchInput struct {
+	AccountID       string
+	DeviceID        string
+	Role            string
+	ProtocolVersion int
+	// Events 必须按投递顺序排列（daemon 出箱按 created_at,event_id 排序）。
+	// 数组顺序即 event_seq 分配顺序，冻结契约不得放松。
+	Events []DaemonEventInput
+}
+
+// UploadEventBatch 把一批 daemon 事件在**单个事务**内按数组顺序落库。
+// 与单条端点完全一致的语义（冻结契约）：
+//   - event_seq 在同一事务内按数组顺序严格递增分配（AppendEvent 的 MAX+1 在事务内执行，
+//     回滚不留空洞）；重复投递幂等：重复 event_id 返回既有回执（idempotent=true），
+//     不重复落库、不推进 last_seq；
+//   - 任一事件校验失败/归属不符 → 整批原子回滚，不产生部分提交。
+//     客户端（daemon flushEvents）收到批量 4xx 后必须回退单条上传，逐条隔离毒丸；
+//   - terminal_status 白名单与会话状态投影逐事件保持与单条路径一致（后到状态覆盖先到）。
+//
+// 吞吐意义：把「每条一次 HTTP 往返 + 一次 autocommit fsync」摊薄为
+// 「⌈N/批⌉ 次往返 + 一次事务提交」，是 V093-01 归因结论（31 条/秒@30ms RTT）的修复。
+func (s *DaemonService) UploadEventBatch(ctx context.Context, in DaemonEventBatchInput) ([]DaemonEventResult, error) {
+	if len(in.Events) == 0 {
+		return nil, protocol.NewError(protocol.ErrInvalidRequest, "empty daemon event batch")
+	}
+	if len(in.Events) > MaxDaemonEventBatchSize {
+		return nil, protocol.NewError(protocol.ErrInvalidRequest, "daemon event batch too large")
+	}
+	if err := validateDaemonProtocol(in.ProtocolVersion); err != nil {
+		return nil, err
+	}
+	terminal, err := s.TerminalForDevice(ctx, in.AccountID, in.DeviceID, in.Role)
+	if err != nil {
+		return nil, err
+	}
+	// 事务前逐条预校验（元数据 + envelope 形状）：结构性错误在进入事务前快速失败，
+	// 事务内只保留幂等查重与落库，缩短 SQLite 写锁持有时间。
+	events := make([]DaemonEventInput, len(in.Events))
+	copy(events, in.Events)
+	for i := range events {
+		event := events[i]
+		if event.AccountID == "" {
+			event.AccountID = in.AccountID
+		}
+		if strings.TrimSpace(event.EventID) == "" || strings.TrimSpace(event.CommandID) == "" || strings.TrimSpace(event.SessionID) == "" || !validDaemonEventType(event.EventType) {
+			return nil, protocol.NewError(protocol.ErrInvalidRequest, fmt.Sprintf("invalid daemon event metadata at index %d", i))
+		}
+		if err := validateDaemonTerminalStatus(event.EventType, event.TerminalStatus); err != nil {
+			return nil, err
+		}
+		envelope, err := normalizeDaemonCipherEnvelope(event.EnvelopeJSON)
+		if err != nil {
+			return nil, err
+		}
+		event.EnvelopeJSON = envelope
+		events[i] = event
+	}
+	var results []DaemonEventResult
+	err = s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		results = make([]DaemonEventResult, len(events))
+		for i := range events {
+			result, eventErr := s.appendDaemonEventInTx(ctx, tx, terminal, events[i])
+			if eventErr != nil {
+				return eventErr
+			}
+			results[i] = result
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// appendDaemonEventInTx 是事件落库的事务体：幂等查重 → 命令归属校验 → 登记 receipt →
+// 追加事件 → 推进 last_seq/状态投影。UploadEvent 与 UploadEventBatch 的唯一落库路径，
+// 两条入口的语义由本函数单点保证。
+func (s *DaemonService) appendDaemonEventInTx(ctx context.Context, tx store.Repository, terminal store.TerminalRow, in DaemonEventInput) (DaemonEventResult, error) {
+	if existing, lookupErr := tx.DaemonEventReceiptByID(ctx, in.EventID); lookupErr == nil {
+		if existing.TerminalID != terminal.ID || existing.CommandID != in.CommandID || existing.SessionID != in.SessionID {
+			return DaemonEventResult{}, ErrScopeDenied
+		}
+		if existing.EventSeq <= 0 {
+			return DaemonEventResult{}, ErrDaemonCommandState
+		}
+		return DaemonEventResult{EventID: existing.EventID, EventSeq: existing.EventSeq, Idempotent: true}, nil
+	} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+		return DaemonEventResult{}, lookupErr
+	}
+
+	cmd, _, commandErr := daemonCommandForTerminal(ctx, tx, terminal, in.CommandID, 0)
+	if commandErr != nil {
+		return DaemonEventResult{}, commandErr
+	}
+	if cmd.SessionID != in.SessionID {
+		return DaemonEventResult{}, ErrScopeDenied
+	}
+	// 事件上传只校验命令存在性与终端归属，不做 lease epoch fence：
+	// 回合是会话所有的后台任务，epoch 翻转（含在飞命令被接管作废）不得把
+	// 已发生的事实性事件打成死信——客户端必须最终收到 turn 终态
+	// （ADR-009 决策 5 的 fence 范围仅限命令 ack/执行，不含事件上传）。
+	if err := tx.CreateDaemonEventReceipt(ctx, store.DaemonEventReceiptRow{
+		EventID: in.EventID, TerminalID: terminal.ID, CommandID: in.CommandID, SessionID: in.SessionID,
+		CreatedAtUnixMS: s.now().UnixMilli(),
+	}); err != nil {
+		return DaemonEventResult{}, err
+	}
+	seq, appendErr := tx.AppendEvent(ctx, store.SessionEventRow{
+		SessionID: in.SessionID, EventType: in.EventType, TerminalStatus: in.TerminalStatus, EnvelopeJSON: in.EnvelopeJSON,
+		CreatedAtUnixMS: in.CreatedAtUnixMS,
+	})
+	if appendErr != nil {
+		return DaemonEventResult{}, appendErr
+	}
+	if err := tx.SetSessionLastSeq(ctx, in.SessionID, seq); err != nil {
+		return DaemonEventResult{}, err
+	}
+	status := sessionStatusForDaemonEvent(in.EventType, in.TerminalStatus)
+	if status != "" {
+		if err := tx.SetSessionStatus(ctx, in.SessionID, status); err != nil {
+			return DaemonEventResult{}, err
+		}
+	}
+	if err := tx.SetDaemonEventReceiptSeq(ctx, in.EventID, seq); err != nil {
+		return DaemonEventResult{}, err
+	}
+	return DaemonEventResult{EventID: in.EventID, EventSeq: seq}, nil
 }
 
 func daemonCommandForTerminal(ctx context.Context, repo store.Repository, terminal store.TerminalRow, commandID string, deliverySeq int64) (store.CommandRow, store.DaemonDeliveryRow, error) {

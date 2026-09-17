@@ -144,6 +144,9 @@ func runV093ThroughputScenario(t *testing.T, events int, rtt time.Duration) (v09
 
 	loop := NewRelayLoop(store, &RelayClient{BaseURL: server.URL, AccessToken: "fixture"}, nil,
 		FixtureEventEncoder{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// V093-02 起新 RelayLoop 默认走批量路径；基线诊断必须显式钉回逐条路径，
+	// 否则「串行基线」的数字会随默认值漂移、失去与 R18 的可比性。
+	loop.eventBatchSize = 1
 
 	// 积压曲线采样：每 200ms 记录一次 pending 数，用于追平形态（半衰期）可视化。
 	stopSampling := make(chan struct{})

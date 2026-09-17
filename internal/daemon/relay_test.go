@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -83,6 +84,19 @@ func TestRelayLoopEnqueuesProviderUsageProjection(t *testing.T) {
 		switch request.URL.Path {
 		case "/v1/daemon/events":
 			_, _ = io.WriteString(w, `{}`)
+		case "/v1/daemon/events/batch":
+			// v0.9.3 V093-02：批量端点 stub——按请求条数回传等长回执。
+			var payload struct {
+				Events []struct {
+					EventID string `json:"event_id"`
+				} `json:"events"`
+			}
+			_ = json.NewDecoder(request.Body).Decode(&payload)
+			results := make([]string, len(payload.Events))
+			for i, event := range payload.Events {
+				results[i] = fmt.Sprintf(`{"event_id":%q,"event_seq":%d,"idempotent":false}`, event.EventID, i+1)
+			}
+			_, _ = io.WriteString(w, `{"results":[`+strings.Join(results, ",")+`]}`)
 		case "/v1/daemon/usage/events":
 			if err := json.NewDecoder(request.Body).Decode(&usageBody); err != nil {
 				t.Fatal(err)

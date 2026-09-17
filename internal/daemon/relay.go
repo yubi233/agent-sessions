@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -379,6 +380,46 @@ func (c *RelayClient) UploadEvent(ctx context.Context, event RelayEvent) error {
 		body["created_at_unix_ms"] = event.CreatedAtUnixMS
 	}
 	return c.postJSON(ctx, "/v1/daemon/events", body, &struct{}{})
+}
+
+// RelayEventBatchReceipt 是批量上传中单条事件的 Relay 回执。
+type RelayEventBatchReceipt struct {
+	EventID    string `json:"event_id"`
+	EventSeq   int64  `json:"event_seq"`
+	Idempotent bool   `json:"idempotent"`
+}
+
+// UploadEvents 把一批事件经 /v1/daemon/events/batch 上传（v0.9.3 V093-02）。
+// 数组顺序即出箱顺序（created_at,event_id），Relay 按该顺序分配严格递增 event_seq；
+// 签名由 postJSON 统一注入，一次签名覆盖整个批量 body。失败时整批返回错误，
+// 由调用方（flushEventChunk）区分「批量级 4xx → 逐条回退」与「瞬态 → 退避重试」。
+func (c *RelayClient) UploadEvents(ctx context.Context, events []RelayEvent) ([]RelayEventBatchReceipt, error) {
+	items := make([]map[string]any, len(events))
+	for i, event := range events {
+		item := map[string]any{
+			"event_id": event.EventID, "command_id": event.CommandID,
+			"session_id": event.SessionID, "event_type": event.EventType,
+			"envelope": json.RawMessage(event.EnvelopeJSON),
+		}
+		if event.TerminalStatus != "" {
+			item["terminal_status"] = event.TerminalStatus
+		}
+		if event.CreatedAtUnixMS > 0 {
+			item["created_at_unix_ms"] = event.CreatedAtUnixMS
+		}
+		items[i] = item
+	}
+	var out struct {
+		Results []RelayEventBatchReceipt `json:"results"`
+	}
+	body := map[string]any{"protocol_version": daemonProtocolVersion, "events": items}
+	if err := c.postJSON(ctx, "/v1/daemon/events/batch", body, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Results) != len(events) {
+		return nil, fmt.Errorf("relay batch receipt count mismatch: got %d, want %d", len(out.Results), len(events))
+	}
+	return out.Results, nil
 }
 
 // UploadUsage 只上传白名单整数计数与 UTC 日桶（ADR-010）。usage key 由 Daemon
@@ -853,6 +894,10 @@ type RelayLoop struct {
 	// 由 apps/daemon 从 AGENT_SESSIONS_RELAY_GENERATION_ENFORCEMENT 注入）。
 	// 关闭后仍记录 relay_generation，但不做比较与隔离；回滚不回退已完成的本地迁移。
 	GenerationEnforcementDisabled bool
+	// eventBatchSize 是事件批量上传的分块大小（v0.9.3 V093-02）。构造时从
+	// AGENT_SESSIONS_DAEMON_EVENT_BATCH_SIZE 读取：1 = 回滚到逐条旧路径（v0.9.2 行为），
+	// 默认 200。测试可直改该字段（构造后）注入确定性行为。
+	eventBatchSize int
 	// legacyRelayWarned 保证"旧 Relay 无 generation 字段"的 legacy 告警每进程只打一次。
 	legacyRelayWarned bool
 
@@ -885,6 +930,8 @@ func NewRelayLoop(store *Store, client *RelayClient, runner *SessionRunner, enco
 		normalWake:  make(chan struct{}, 1),
 		controlWake: make(chan struct{}, 1),
 		dispatched:  make(map[string]time.Time),
+		// v0.9.3 V093-02：批量上传分块大小（回滚开关见 eventBatchSizeEnv）。
+		eventBatchSize: eventBatchSizeFromEnv(),
 	}
 	if runner != nil {
 		runner.SetEventSinkResult(loop.enqueueCanonicalEventResult)
@@ -1965,12 +2012,98 @@ func (l *RelayLoop) flushOutboxes(ctx context.Context) error {
 	return l.flushUsages(ctx)
 }
 
+// eventFlushSummaryThreshold 是 flush 摘要日志升 Info 的最小批量（v0.9.3 V093-01）。
+// 万级 delta 回合的追平必须可见；小批量常态走 Debug，避免日志刷屏。
+const eventFlushSummaryThreshold = 200
+
+// 事件批量上传参数（v0.9.3 V093-02，T3 阈值的工程落点）：
+//   - eventBatchSize：单批条数上限（与 OpenAPI maxItems=200 一致）；
+//   - eventBatchMaxBytes：单批 envelope 字节上限（1MB），防止「200 条 completed 大消息」
+//     撑爆请求体或 Relay 事务；两者先到者截断分块。
+//
+// 回滚开关 AGENT_SESSIONS_DAEMON_EVENT_BATCH_SIZE=1：整批路径退化为逐条旧路径
+// （仍走单条端点），与 v0.9.2 行为完全一致；不重置数据库、不降级协议。
+const (
+	eventBatchSize     = 200
+	eventBatchMaxBytes = 1 << 20
+	eventBatchSizeEnv  = "AGENT_SESSIONS_DAEMON_EVENT_BATCH_SIZE"
+)
+
+// eventBatchSizeFromEnv 读取批量大小回滚开关；未配置用默认 200，配置 <2 视为
+// 显式回滚到逐条路径，配置 >200 收敛到上限（防误配打爆 Relay）。
+func eventBatchSizeFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv(eventBatchSizeEnv))
+	if raw == "" {
+		return eventBatchSize
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return eventBatchSize
+	}
+	if value < 2 {
+		return 1
+	}
+	if value > eventBatchSize {
+		return eventBatchSize
+	}
+	return value
+}
+
+// chunkRelayEvents 把 pending 事件按「条数 + 字节」双上限切块。
+// 顺序保持出箱排序（created_at,event_id）——冻结契约：批量化不得改变投递顺序。
+func chunkRelayEvents(events []RelayEvent, size int) [][]RelayEvent {
+	chunks := [][]RelayEvent{}
+	current := []RelayEvent{}
+	currentBytes := 0
+	for _, event := range events {
+		eventBytes := len(event.EnvelopeJSON)
+		if len(current) > 0 && (len(current) >= size || currentBytes+eventBytes > eventBatchMaxBytes) {
+			chunks = append(chunks, current)
+			current = []RelayEvent{}
+			currentBytes = 0
+		}
+		current = append(current, event)
+		currentBytes += eventBytes
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+	return chunks
+}
+
 func (l *RelayLoop) flushEvents(ctx context.Context) error {
 	started := time.Now()
 	events, err := l.Store.PendingRelayEvents()
 	if err != nil {
 		return err
 	}
+	uploaded := 0
+	for _, chunk := range chunkRelayEvents(events, l.eventBatchSize) {
+		// 批量关闭（回滚开关）：走既有逐条路径，语义零变化。
+		// 开启时所有分块（含 len==1）统一走批量端点——契约单一，避免双路径分叉。
+		if l.eventBatchSize <= 1 {
+			n, err := l.flushEventsOneByOne(ctx, chunk)
+			uploaded += n
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		n, err := l.flushEventChunk(ctx, chunk)
+		uploaded += n
+		if err != nil {
+			return err
+		}
+	}
+	l.logEventFlushSummary(started, uploaded)
+	return nil
+}
+
+// flushEventsOneByOne 是逐条上传的既有路径（v0.9.2 及以前的唯一路径）：
+// 每条事件一次 HTTP POST + 一次 delivered 标记。保留它承担两个职责：
+// ① 回滚开关（eventBatchSize=1）下的完整旧行为；② 批量被 Relay 整批 4xx 拒绝后的
+// 逐条回退——只有逐条路径才能区分「哪一条是确定性毒丸」。
+func (l *RelayLoop) flushEventsOneByOne(ctx context.Context, events []RelayEvent) (int, error) {
 	uploaded := 0
 	for _, event := range events {
 		if err := l.Client.UploadEvent(ctx, event); err != nil {
@@ -1983,7 +2116,7 @@ func (l *RelayLoop) flushEvents(ctx context.Context) error {
 					"event_id", event.EventID, "session_id", event.SessionID,
 					"event_type", event.EventType, "status", httpErr.Status)
 				if failErr := l.Store.MarkRelayEventFailedNow(event.EventID, relayEventPermanentReject); failErr != nil {
-					return failErr
+					return uploaded, failErr
 				}
 				continue
 			}
@@ -1992,20 +2125,48 @@ func (l *RelayLoop) flushEvents(ctx context.Context) error {
 			if attemptErr := l.Store.MarkRelayEventAttempt(event.EventID, sanitizeRelayUploadError(err)); attemptErr != nil {
 				l.Logger.Warn("daemon event attempt accounting failed", "event_id", event.EventID, "error", attemptErr)
 			}
-			return err
+			return uploaded, err
 		}
 		if err := l.Store.MarkRelayEventDelivered(event.EventID); err != nil {
-			return err
+			return uploaded, err
 		}
 		uploaded++
 	}
-	l.logEventFlushSummary(started, uploaded)
-	return nil
+	return uploaded, nil
 }
 
-// eventFlushSummaryThreshold 是 flush 摘要日志升 Info 的最小批量（v0.9.3 V093-01）。
-// 万级 delta 回合的追平必须可见；小批量常态走 Debug，避免日志刷屏。
-const eventFlushSummaryThreshold = 200
+// flushEventChunk 批量上传一个分块（v0.9.3 V093-02）：
+//   - 成功：Relay 单事务按序落库后，本地也在单事务内批量标记 delivered
+//     （把每条一次的 autocommit fsync 摊薄为一次）；
+//   - 批量级 4xx（整批格式/体积/部分事件校验失败，整批原子回滚）：不能据此判定
+//     任何单条是毒丸——回退逐条路径逐条裁决，毒丸/退避语义与 v0.9.2 完全一致；
+//   - 瞬态失败（网络/5xx/超时）：整批未投递，对块内全部事件记录尝试计数后
+//     返回错误，交给既有重连路径（与逐条路径的退避口径一致）。
+func (l *RelayLoop) flushEventChunk(ctx context.Context, chunk []RelayEvent) (int, error) {
+	_, err := l.Client.UploadEvents(ctx, chunk)
+	if err != nil {
+		var httpErr *RelayHTTPError
+		if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 && httpErr.Status != http.StatusTooManyRequests {
+			l.Logger.Warn("daemon event batch rejected by relay; falling back to per-event upload",
+				"count", len(chunk), "status", httpErr.Status)
+			return l.flushEventsOneByOne(ctx, chunk)
+		}
+		for _, event := range chunk {
+			if attemptErr := l.Store.MarkRelayEventAttempt(event.EventID, sanitizeRelayUploadError(err)); attemptErr != nil {
+				l.Logger.Warn("daemon event attempt accounting failed", "event_id", event.EventID, "error", attemptErr)
+			}
+		}
+		return 0, err
+	}
+	ids := make([]string, len(chunk))
+	for i, event := range chunk {
+		ids[i] = event.EventID
+	}
+	if err := l.Store.MarkRelayEventsDelivered(ids); err != nil {
+		return 0, err
+	}
+	return len(chunk), nil
+}
 
 // logEventFlushSummary 输出事件出箱 flush 的脱敏吞吐摘要（V093-01 埋点）。
 // 只含条数/耗时/剩余积压/速率四个整数，不含会话 ID、事件类型或 envelope：

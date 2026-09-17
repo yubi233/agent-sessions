@@ -922,6 +922,34 @@ func (s *Store) MarkRelayEventDelivered(eventID string) error {
 	return err
 }
 
+// MarkRelayEventsDelivered 在**单个事务**内把一批事件标记为 delivered（v0.9.3 V093-02）。
+// 批量上传确认后的配套操作：把每条一次的 autocommit fsync 摊薄为一次事务提交，
+// 这是零 RTT 探针（6968 条/秒）之外本地侧的另一半收益。语义与单条版本一致：
+// 只有 Relay 明确确认（批量回执与请求等长，见 flushEventChunk）后才能调用。
+func (s *Store) MarkRelayEventsDelivered(eventIDs []string) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(`UPDATE relay_event_outbox SET status='delivered', last_error='' WHERE event_id=?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, eventID := range eventIDs {
+		if _, err := stmt.Exec(eventID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // MarkRelayEventAttempt 在一次上传失败后记录尝试次数与脱敏错误分类，
 // 并把下一次重试推迟到指数退避时间点；达到上限后转入 failed 长期保留。
 func (s *Store) MarkRelayEventAttempt(eventID, sanitizedError string) error {

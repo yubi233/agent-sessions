@@ -412,6 +412,84 @@ func (e DaemonCommandResultRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for DaemonEventBatchUploadRequestEventsEventType.
+const (
+	DaemonEventBatchUploadRequestEventsEventTypeCommandUpdated      DaemonEventBatchUploadRequestEventsEventType = "command.updated"
+	DaemonEventBatchUploadRequestEventsEventTypeFileChanged         DaemonEventBatchUploadRequestEventsEventType = "file.changed"
+	DaemonEventBatchUploadRequestEventsEventTypeGitSnapshot         DaemonEventBatchUploadRequestEventsEventType = "git.snapshot"
+	DaemonEventBatchUploadRequestEventsEventTypeMessageCompleted    DaemonEventBatchUploadRequestEventsEventType = "message.completed"
+	DaemonEventBatchUploadRequestEventsEventTypeMessageDelta        DaemonEventBatchUploadRequestEventsEventType = "message.delta"
+	DaemonEventBatchUploadRequestEventsEventTypeMessageThoughtDelta DaemonEventBatchUploadRequestEventsEventType = "message.thought_delta"
+	DaemonEventBatchUploadRequestEventsEventTypeSessionAborted      DaemonEventBatchUploadRequestEventsEventType = "session.aborted"
+	DaemonEventBatchUploadRequestEventsEventTypeSessionActivity     DaemonEventBatchUploadRequestEventsEventType = "session.activity"
+	DaemonEventBatchUploadRequestEventsEventTypeSessionLifecycle    DaemonEventBatchUploadRequestEventsEventType = "session.lifecycle"
+	DaemonEventBatchUploadRequestEventsEventTypeToolCall            DaemonEventBatchUploadRequestEventsEventType = "tool.call"
+	DaemonEventBatchUploadRequestEventsEventTypeToolResult          DaemonEventBatchUploadRequestEventsEventType = "tool.result"
+	DaemonEventBatchUploadRequestEventsEventTypeTurnCompleted       DaemonEventBatchUploadRequestEventsEventType = "turn.completed"
+	DaemonEventBatchUploadRequestEventsEventTypeTurnPhase           DaemonEventBatchUploadRequestEventsEventType = "turn.phase"
+	DaemonEventBatchUploadRequestEventsEventTypeTurnStarted         DaemonEventBatchUploadRequestEventsEventType = "turn.started"
+	DaemonEventBatchUploadRequestEventsEventTypeUsageUpdated        DaemonEventBatchUploadRequestEventsEventType = "usage.updated"
+	DaemonEventBatchUploadRequestEventsEventTypeUserMessage         DaemonEventBatchUploadRequestEventsEventType = "user.message"
+)
+
+// Valid indicates whether the value is a known member of the DaemonEventBatchUploadRequestEventsEventType enum.
+func (e DaemonEventBatchUploadRequestEventsEventType) Valid() bool {
+	switch e {
+	case DaemonEventBatchUploadRequestEventsEventTypeCommandUpdated:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeFileChanged:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeGitSnapshot:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeMessageCompleted:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeMessageDelta:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeMessageThoughtDelta:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeSessionAborted:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeSessionActivity:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeSessionLifecycle:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeToolCall:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeToolResult:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeTurnCompleted:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeTurnPhase:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeTurnStarted:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeUsageUpdated:
+		return true
+	case DaemonEventBatchUploadRequestEventsEventTypeUserMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DaemonEventBatchUploadRequestEventsTerminalStatus.
+const (
+	DaemonEventBatchUploadRequestEventsTerminalStatusIdle    DaemonEventBatchUploadRequestEventsTerminalStatus = "idle"
+	DaemonEventBatchUploadRequestEventsTerminalStatusStopped DaemonEventBatchUploadRequestEventsTerminalStatus = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the DaemonEventBatchUploadRequestEventsTerminalStatus enum.
+func (e DaemonEventBatchUploadRequestEventsTerminalStatus) Valid() bool {
+	switch e {
+	case DaemonEventBatchUploadRequestEventsTerminalStatusIdle:
+		return true
+	case DaemonEventBatchUploadRequestEventsTerminalStatusStopped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DaemonEventUploadRequestEventType.
 const (
 	DaemonEventUploadRequestEventTypeCommandUpdated      DaemonEventUploadRequestEventType = "command.updated"
@@ -1269,6 +1347,44 @@ type DaemonDeliveredCommand struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// DaemonEventBatchUploadRequest defines model for DaemonEventBatchUploadRequest.
+type DaemonEventBatchUploadRequest struct {
+	// Events 顺序即投递顺序；Relay 按数组顺序分配严格递增的 session-local event_seq。
+	Events []struct {
+		CommandId       string `json:"command_id"`
+		CreatedAtUnixMs *int64 `json:"created_at_unix_ms,omitempty"`
+
+		// Envelope Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。
+		Envelope  OpaqueCipherEnvelope                         `json:"envelope"`
+		EventId   string                                       `json:"event_id"`
+		EventType DaemonEventBatchUploadRequestEventsEventType `json:"event_type"`
+		SessionId string                                       `json:"session_id"`
+
+		// TerminalStatus 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
+		TerminalStatus *DaemonEventBatchUploadRequestEventsTerminalStatus `json:"terminal_status,omitempty"`
+	} `json:"events"`
+	ProtocolVersion int `json:"protocol_version"`
+
+	// Signature Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。
+	Signature *TerminalSignature `json:"signature,omitempty"`
+}
+
+// DaemonEventBatchUploadRequestEventsEventType defines model for DaemonEventBatchUploadRequest.Events.EventType.
+type DaemonEventBatchUploadRequestEventsEventType string
+
+// DaemonEventBatchUploadRequestEventsTerminalStatus 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
+type DaemonEventBatchUploadRequestEventsTerminalStatus string
+
+// DaemonEventBatchUploadResponse defines model for DaemonEventBatchUploadResponse.
+type DaemonEventBatchUploadResponse struct {
+	// Results 与请求 events 等长且顺序一一对应。
+	Results []struct {
+		EventId    string `json:"event_id"`
+		EventSeq   int64  `json:"event_seq"`
+		Idempotent bool   `json:"idempotent"`
+	} `json:"results"`
+}
+
 // DaemonEventUploadRequest defines model for DaemonEventUploadRequest.
 type DaemonEventUploadRequest struct {
 	CommandId       string `json:"command_id"`
@@ -2051,6 +2167,9 @@ type ResolveDaemonWorkspaceCommandJSONRequestBody = DaemonWorkspaceResultRequest
 // UploadDaemonEventJSONRequestBody defines body for UploadDaemonEvent for application/json ContentType.
 type UploadDaemonEventJSONRequestBody = DaemonEventUploadRequest
 
+// UploadDaemonEventBatchJSONRequestBody defines body for UploadDaemonEventBatch for application/json ContentType.
+type UploadDaemonEventBatchJSONRequestBody = DaemonEventBatchUploadRequest
+
 // DaemonHeartbeatJSONRequestBody defines body for DaemonHeartbeat for application/json ContentType.
 type DaemonHeartbeatJSONRequestBody = DaemonHeartbeatRequest
 
@@ -2295,6 +2414,9 @@ type ServerInterface interface {
 
 	// (POST /v1/daemon/events)
 	UploadDaemonEvent(c *gin.Context)
+
+	// (POST /v1/daemon/events/batch)
+	UploadDaemonEventBatch(c *gin.Context)
 
 	// (POST /v1/daemon/heartbeat)
 	DaemonHeartbeat(c *gin.Context)
@@ -2828,6 +2950,19 @@ func (siw *ServerInterfaceWrapper) UploadDaemonEvent(c *gin.Context) {
 	}
 
 	siw.Handler.UploadDaemonEvent(c)
+}
+
+// UploadDaemonEventBatch operation middleware
+func (siw *ServerInterfaceWrapper) UploadDaemonEventBatch(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.UploadDaemonEventBatch(c)
 }
 
 // DaemonHeartbeat operation middleware
@@ -3862,4 +3997,5 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/workspace-result", wrapper.ResolveDaemonWorkspaceCommand)
 	router.POST(options.BaseURL+"/v1/daemon/commands/:id/readonly-response", wrapper.StoreWebReadResponse)
 	router.POST(options.BaseURL+"/v1/daemon/events", wrapper.UploadDaemonEvent)
+	router.POST(options.BaseURL+"/v1/daemon/events/batch", wrapper.UploadDaemonEventBatch)
 }

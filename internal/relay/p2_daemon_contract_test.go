@@ -881,7 +881,12 @@ func TestP2RelayDaemonRestartReplaysCommittedEventOutbox(t *testing.T) {
 	firstAdapter := newP2LifecycleAdapter()
 	firstRunner := daemon.NewSessionRunner(local, map[string]adapter.Adapter{"lifecycle": firstAdapter}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	drop := newP2DropCommittedResponseTransport(false, func(request *http.Request, _ []byte) bool {
-		return request.Method == http.MethodPost && request.URL.Path == "/v1/daemon/events"
+		// v0.9.3 V093-02：事件上传默认走批量端点；drop 谓词必须同时覆盖
+		// 单条与批量路径，否则「已提交但响应丢失」的恢复窗口不再被演练。
+		if request.Method != http.MethodPost {
+			return false
+		}
+		return request.URL.Path == "/v1/daemon/events" || request.URL.Path == "/v1/daemon/events/batch"
 	})
 	firstLoop := newP2RecoveryLoop(local, server.URL, terminal.AccessToken, firstRunner, &http.Client{Transport: drop})
 	firstCtx, cancelFirst := context.WithCancel(context.Background())

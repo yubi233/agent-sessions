@@ -9,6 +9,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -33,6 +34,24 @@ func startV088RelayStub(t *testing.T) (events chan map[string]any, results chan 
 		events <- payload
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	})
+	// v0.9.3 V093-02：事件上行默认走批量端点。stub 把批内事件逐条转入同一
+	// events 通道（断言视角不变），并按请求条数回传等长回执。
+	mux.HandleFunc("/v1/daemon/events/batch", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Events []map[string]any `json:"events"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		for _, event := range payload.Events {
+			events <- event
+		}
+		receipts := make([]string, len(payload.Events))
+		for i := range payload.Events {
+			receipts[i] = fmt.Sprintf(`{"event_id":"evt-%d","event_seq":%d,"idempotent":false}`, i+1, i+1)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[` + strings.Join(receipts, ",") + `]}`))
 	})
 	mux.HandleFunc("/v1/daemon/commands/", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

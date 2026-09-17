@@ -134,6 +134,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.POST("/commands/:id/dsh-import-result", a.handleDaemonDSHImportResult)
 		daemon.POST("/commands/:id/readonly-response", a.handleDaemonWebReadResponse)
 		daemon.POST("/events", a.handleDaemonEventUpload)
+		// v0.9.3 V093-02：批量事件上传（单事务按序落库、幂等与单条端点一致）。
+		daemon.POST("/events/batch", a.handleDaemonEventBatchUpload)
 		// v0.8.5 §3.4：Daemon 上行会话级 permission mode 目录快照（Terminal 签名 + home 归属）。
 		daemon.PUT("/sessions/:id/modes", a.handleDaemonSessionModes)
 		// v0.8.5 §3.3：Daemon 鉴权附件密文只读端点（归属校验在 domain，GET 幂等只读）。

@@ -1551,6 +1551,37 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+  /v1/daemon/events/batch:
+    post:
+      operationId: uploadDaemonEventBatch
+      description: >-
+        目标 terminal 批量上传与命令绑定的 canonical event（v0.9.3 V093-02 吞吐收口）。
+        幂等与顺序契约与单条端点完全一致：event_id 重复上传返回同一 canonical 回执；
+        event_seq 按数组顺序严格递增分配；任一事件校验失败则整批原子失败（不产生部分提交），
+        客户端须回退单条上传以隔离确定性毒丸。批次上限 200 条。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonEventBatchUploadRequest"
+      responses:
+        "200":
+          description: batch accepted or idempotently replayed, in array order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DaemonEventBatchUploadResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
 components:
   securitySchemes:
     bearerAuth:
@@ -2831,6 +2862,68 @@ components:
           minimum: 1
         idempotent:
           type: boolean
+    DaemonEventBatchUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, events]
+      properties:
+        protocol_version:
+          type: integer
+          minimum: 1
+        events:
+          type: array
+          minItems: 1
+          maxItems: 200
+          description: 顺序即投递顺序；Relay 按数组顺序分配严格递增的 session-local event_seq。
+          items:
+            type: object
+            additionalProperties: false
+            required: [event_id, command_id, session_id, event_type, envelope]
+            properties:
+              event_id:
+                type: string
+                maxLength: 128
+              command_id:
+                type: string
+                maxLength: 128
+              session_id:
+                type: string
+                maxLength: 128
+              event_type:
+                type: string
+                enum: [session.lifecycle, session.aborted, turn.started, user.message, message.delta, message.thought_delta, message.completed, turn.completed, turn.phase, session.activity, tool.call, tool.result, usage.updated, file.changed, git.snapshot, command.updated]
+              created_at_unix_ms:
+                type: integer
+                format: int64
+                minimum: 1
+              terminal_status:
+                type: string
+                enum: [idle, stopped]
+                description: 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
+              envelope:
+                $ref: "#/components/schemas/OpaqueCipherEnvelope"
+        signature:
+          $ref: "#/components/schemas/TerminalSignature"
+    DaemonEventBatchUploadResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          minItems: 1
+          description: 与请求 events 等长且顺序一一对应。
+          items:
+            type: object
+            required: [event_id, event_seq, idempotent]
+            properties:
+              event_id:
+                type: string
+              event_seq:
+                type: integer
+                format: int64
+                minimum: 1
+              idempotent:
+                type: boolean
     TerminalSignature:
       type: object
       additionalProperties: false

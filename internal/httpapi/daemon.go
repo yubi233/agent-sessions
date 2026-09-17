@@ -763,6 +763,103 @@ func (a *API) handleDaemonEventUpload(c *gin.Context) {
 	writeOK(c, daemonEventUploadView{EventID: result.EventID, EventSeq: result.EventSeq, Idempotent: result.Idempotent})
 }
 
+// maxDaemonEventBatchRequestBytes 是批量事件请求体的硬上限：200 条 × 密文 envelope
+// 的安全余量。超限返回 413，daemon 侧按「批量级拒绝」回退逐条上传（见 flushEventChunk），
+// 不会把合法事件误判为毒丸。
+const maxDaemonEventBatchRequestBytes = 4 << 20
+
+type daemonEventBatchUploadRequest struct {
+	ProtocolVersion int                     `json:"protocol_version"`
+	Events          []daemonEventBatchItem  `json:"events"`
+	Signature       authz.TerminalSignature `json:"signature"`
+}
+
+// daemonEventBatchItem 是批量请求内的单条事件：字段与单条端点一致，
+// 但归属（terminal/command/session）逐条校验，批量通道不放宽任何边界。
+type daemonEventBatchItem struct {
+	EventID         string          `json:"event_id"`
+	CommandID       string          `json:"command_id"`
+	SessionID       string          `json:"session_id"`
+	EventType       string          `json:"event_type"`
+	TerminalStatus  string          `json:"terminal_status,omitempty"`
+	Envelope        json.RawMessage `json:"envelope"`
+	CreatedAtUnixMS int64           `json:"created_at_unix_ms,omitempty"`
+}
+
+// handleDaemonEventBatchUpload 是 /v1/daemon/events/batch（v0.9.3 V093-02 吞吐收口）。
+// 签名语义与单条端点一致：一次签名覆盖整个批量 body（删除顶层 signature 后的紧凑 JSON）。
+// 任一事件校验失败 → 领域层整批原子回滚 → 400；调用方回退逐条隔离毒丸。
+func (a *API) handleDaemonEventBatchUpload(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxDaemonEventBatchRequestBytes)
+	var req daemonEventBatchUploadRequest
+	raw, err := bindJSONBody(c, &req)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(c, protocol.NewError(protocol.ErrPayloadTooLarge, "daemon event batch too large"))
+			return
+		}
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon event batch"))
+		return
+	}
+	if len(req.Events) == 0 {
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "empty daemon event batch"))
+		return
+	}
+	for _, item := range req.Events {
+		if !json.Valid(item.Envelope) {
+			writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "malformed daemon event"))
+			return
+		}
+	}
+	subj := subject(c)
+	if err := a.Daemons.VerifySignedTerminalRequest(c.Request.Context(), subj.AccountID, subj.DeviceID, req.Signature, c.Request.Method, c.Request.URL.Path, terminalSignedBody(raw)); err != nil {
+		writeError(c, err)
+		return
+	}
+	events := make([]domain.DaemonEventInput, len(req.Events))
+	for i, item := range req.Events {
+		events[i] = domain.DaemonEventInput{
+			AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+			ProtocolVersion: req.ProtocolVersion, EventID: item.EventID, CommandID: item.CommandID,
+			SessionID: item.SessionID, EventType: item.EventType, TerminalStatus: item.TerminalStatus,
+			EnvelopeJSON: string(item.Envelope), CreatedAtUnixMS: item.CreatedAtUnixMS,
+		}
+	}
+	results, err := a.Daemons.UploadEventBatch(c.Request.Context(), domain.DaemonEventBatchInput{
+		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role,
+		ProtocolVersion: req.ProtocolVersion, Events: events,
+	})
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	// 失效通知按会话各发一次（一批可能跨多个会话）：从该会话首个新事件的 seq-1 起
+	// 发布，Hub 订阅者按 event_seq 去重；全批幂等重放（无新事件）的会话不发布。
+	firstNewSeqBySession := map[string]int64{}
+	for i, result := range results {
+		if result.Idempotent {
+			continue
+		}
+		sessionID := req.Events[i].SessionID
+		if existing, ok := firstNewSeqBySession[sessionID]; !ok || result.EventSeq < existing {
+			firstNewSeqBySession[sessionID] = result.EventSeq
+		}
+	}
+	for sessionID, firstNewSeq := range firstNewSeqBySession {
+		a.publishPersistedSessionEvents(c.Request.Context(), subj.AccountID, sessionID, firstNewSeq-1)
+	}
+	views := make([]daemonEventUploadView, len(results))
+	for i, result := range results {
+		views[i] = daemonEventUploadView{EventID: result.EventID, EventSeq: result.EventSeq, Idempotent: result.Idempotent}
+	}
+	writeOK(c, daemonEventBatchUploadView{Results: views})
+}
+
+type daemonEventBatchUploadView struct {
+	Results []daemonEventUploadView `json:"results"`
+}
+
 func daemonLastDeliverySeq(c *gin.Context) int64 {
 	raw := c.GetHeader("Last-Event-ID")
 	if raw == "" {

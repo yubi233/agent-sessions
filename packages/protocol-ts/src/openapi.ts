@@ -951,6 +951,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/daemon/events/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 目标 terminal 批量上传与命令绑定的 canonical event（v0.9.3 V093-02 吞吐收口）。 幂等与顺序契约与单条端点完全一致：event_id 重复上传返回同一 canonical 回执； event_seq 按数组顺序严格递增分配；任一事件校验失败则整批原子失败（不产生部分提交）， 客户端须回退单条上传以隔离确定性毒丸。批次上限 200 条。 */
+        post: operations["uploadDaemonEventBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1579,6 +1596,35 @@ export interface components {
             /** Format: int64 */
             event_seq: number;
             idempotent: boolean;
+        };
+        DaemonEventBatchUploadRequest: {
+            protocol_version: number;
+            /** @description 顺序即投递顺序；Relay 按数组顺序分配严格递增的 session-local event_seq。 */
+            events: {
+                event_id: string;
+                command_id: string;
+                session_id: string;
+                /** @enum {string} */
+                event_type: "session.lifecycle" | "session.aborted" | "turn.started" | "user.message" | "message.delta" | "message.thought_delta" | "message.completed" | "turn.completed" | "turn.phase" | "session.activity" | "tool.call" | "tool.result" | "usage.updated" | "file.changed" | "git.snapshot" | "command.updated";
+                /** Format: int64 */
+                created_at_unix_ms?: number;
+                /**
+                 * @description 仅 turn.completed 使用；Relay 只接受 idle 或 stopped，Provider stop_reason 不得放入此字段。
+                 * @enum {string}
+                 */
+                terminal_status?: "idle" | "stopped";
+                envelope: components["schemas"]["OpaqueCipherEnvelope"];
+            }[];
+            signature?: components["schemas"]["TerminalSignature"];
+        };
+        DaemonEventBatchUploadResponse: {
+            /** @description 与请求 events 等长且顺序一一对应。 */
+            results: {
+                event_id: string;
+                /** Format: int64 */
+                event_seq: number;
+                idempotent: boolean;
+            }[];
         };
         /** @description Terminal 签名认证的 additive 请求字段。canonical bytes 冻结为 protocol_version|device_id|request_method|request_path|timestamp_ms|nonce|sha256(body)|key_id。 body_hash 覆盖"删除顶层 signature 成员后的紧凑 UTF-8 JSON 原文字节"，两端都不得把 signature 字段纳入哈希（否则签名覆盖自身，构成循环依赖）。hello 的 nonce 必须是 /v1/daemon/challenge 预签发的一次性 challenge。字段在签名模式启用后由 Relay 强制校验； optional 兼容窗口内允许旧 bearer 客户端忽略。 */
         TerminalSignature: {
@@ -3457,6 +3503,34 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    uploadDaemonEventBatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DaemonEventBatchUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description batch accepted or idempotently replayed, in array order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DaemonEventBatchUploadResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
         };
     };
 }

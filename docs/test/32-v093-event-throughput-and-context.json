@@ -53,7 +53,7 @@
     {
       "id": "V093-02",
       "title": "万级 delta 回合的事件投递秒级追平且手机 UI 自动收敛到终态",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1",
       "category": "传输吞吐修复",
       "priority": "P0",
@@ -70,7 +70,13 @@
         "停止注入进程；清理本地 state；不重置既有 SQLite"
       ],
       "evidence": [
-        "待执行（计划阶段）。基线见 V093-01 的 R18 量化结论。"
+        "基线见 V093-01 的 R18 量化结论（逐条上传 31 条/秒@30ms RTT）。",
+        "批量上传落地（2026-09-18）：OpenAPI /v1/daemon/events/batch（≤200 条/批，1MB 字节分块）→ 三语言生成物 → domain.UploadEventBatch（单事务按序落库、幂等回执、整批原子回滚）→ httpapi handler（一次签名、按会话发布、413）→ daemon RelayClient.UploadEvents + Store.MarkRelayEventsDelivered（单事务批量 delivered）+ flushEvents 分块批量化；回滚开关 AGENT_SESSIONS_DAEMON_EVENT_BATCH_SIZE=1 完整还原逐条路径。冻结契约钉扎：event_seq 批内严格递增、重复投递整批幂等、终态顺序不变、批量 4xx 回退逐条隔离毒丸。",
+        "吞吐达标门 passed：TestV093EventThroughputBatched（AGENT_SESSIONS_V093_ATTRIB=1）10000 条 delta 在模拟 RTT=30ms 下 1702ms 追平（50 次批量请求、0 次单条），远优于 T3 的 30s 阈值；对比逐条基线同规模约 320s，提速约 190 倍。",
+        "契约回归 passed：internal/relay/v093_event_batch_contract_test.go（顺序+幂等+终态投影/原子拒绝/超限与空批拒绝）、internal/daemon/v093_event_batch_flush_test.go（分块顺序/字节分块/整批 4xx 回退毒丸隔离/瞬态退避重试/回滚开关）。",
+        "真实桥端到端复跑 passed（2026-09-18）：dsh-v084-overlay（真实 DSH 桥 + mock LLM 全旅程 13 项检查，报告 e2e-verify/reports/ADAPTER-DSH/v084-overlay-report-2026-09-17T16-55-03-238Z.json）与 v092-attribution-matrix --live（真实桥握手/生命周期，report e2e-verify/reports/2026-09-17T16-55-45-861Z/V092-ATTRIB/）均全绿。",
+        "Flutter 侧 passed：新增 test/v093_terminal_auto_converge_test.dart（终态经主动轮询到达后零操作收敛、无超时横幅、投影 idle）；既有 V086-11 迟到终态自动校正与 MOBILE-V06-TURN-COMPLETED 收口回归继续覆盖同族行为。",
+        "受影响既有回归同步修复：TestP2RelayDaemonRestartReplaysCommittedEventOutbox 的 drop 谓词覆盖批量端点（test_harness_defect）；relay_test/v088_readonly_chain 的 fake Relay stub 增加批量端点回执形状。口径：local_test=true、fixture_data=true、real_upstream=false（真实桥为本地子进程）、headless=false。"
       ]
     },
     {
