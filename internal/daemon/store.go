@@ -1007,6 +1007,19 @@ func (s *Store) requeueFailedRelayEventsWhere(where string) (int64, error) {
 	return result.RowsAffected()
 }
 
+// PendingRelayEventCount 返回当前世代 pending 事件的数量（不含内容）。
+// 供上传循环的吞吐埋点与诊断采样使用：COUNT 走主键扫描的轻量路径，
+// 只在 flush 摘要日志需要时调用，不在每条事件路径上触发。
+func (s *Store) PendingRelayEventCount() (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var count int64
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM relay_event_outbox WHERE status='pending'` + relayGenerationFilterSQL,
+	).Scan(&count)
+	return count, err
+}
+
 // RelayEventOutboxRow 是事件 outbox 的诊断/可观测性投影：只含状态元数据，
 // 不含密文 envelope，可安全用于日志、健康指标与测试断言。
 type RelayEventOutboxRow struct {

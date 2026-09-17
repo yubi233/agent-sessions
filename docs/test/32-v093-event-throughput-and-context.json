@@ -26,7 +26,7 @@
     {
       "id": "V093-01",
       "title": "Daemon→Relay 事件投递吞吐瓶颈可复现、可量化归因",
-      "status": "planned",
+      "status": "passed",
       "phase": "P0",
       "category": "传输吞吐归因",
       "priority": "P0",
@@ -44,7 +44,10 @@
       ],
       "evidence": [
         "R18 云端实测快照（2026-09-17）：单回合 16779 个 delta、出箱 delivered 3866 / pending 13116、实测约 16 条/秒、积压最终全部投递（16982 delivered、pending 归零）——见实施记录 32 §20.6。",
-        "同轮观察：手机 UI 在回合 turn_completed 后仍长时间显示「生成中」，需一次视图切换才收敛到「已完成」。"
+        "同轮观察：手机 UI 在回合 turn_completed 后仍长时间显示「生成中」，需一次视图切换才收敛到「已完成」。",
+        "定向诊断 passed（2026-09-18）：internal/daemon/v093_event_throughput_diagnostic_test.go（AGENT_SESSIONS_V093_ATTRIB=1 门控），16779 条 delta 在模拟 RTT=30ms 下耗时 536.5s（31 条/秒、积压半衰期 266.6s、http_requests=16779 证明逐条串行），零 RTT 探针 6968 条/秒——本地落账不是瓶颈，瓶颈为每条一次 HTTP POST + 单条 autocommit UPDATE 的串行化；报告 e2e-verify/reports/V093-ATTRIB/v093-throughput-baseline-20260918T000700Z.json（口径 local_test=true、fixture_data=true、headless=false）。",
+        "埋点落地：flushEvents 摘要日志（uploaded/elapsed_ms/pending_remaining/rate_per_sec，≥200 条或 ≥1s 升 Info，其余 Debug）；Store.PendingRelayEventCount 支撑采样。",
+        "T3 阈值冻结（2026-09-18）：万级 delta 回合结束后出箱 30s 内归零；turn.completed 入箱后 10s 内投递；UI 终态到达后 5s 内收敛。修复方案：批量上传端点（≤200 条/批）+ 单事务批量 delivered 标记。"
       ]
     },
     {

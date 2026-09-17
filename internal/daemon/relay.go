@@ -1966,10 +1966,12 @@ func (l *RelayLoop) flushOutboxes(ctx context.Context) error {
 }
 
 func (l *RelayLoop) flushEvents(ctx context.Context) error {
+	started := time.Now()
 	events, err := l.Store.PendingRelayEvents()
 	if err != nil {
 		return err
 	}
+	uploaded := 0
 	for _, event := range events {
 		if err := l.Client.UploadEvent(ctx, event); err != nil {
 			// 4xx（除 429）是 Relay 对该事件内容的确定性拒绝：重试永远不会成功。
@@ -1995,8 +1997,42 @@ func (l *RelayLoop) flushEvents(ctx context.Context) error {
 		if err := l.Store.MarkRelayEventDelivered(event.EventID); err != nil {
 			return err
 		}
+		uploaded++
 	}
+	l.logEventFlushSummary(started, uploaded)
 	return nil
+}
+
+// eventFlushSummaryThreshold 是 flush 摘要日志升 Info 的最小批量（v0.9.3 V093-01）。
+// 万级 delta 回合的追平必须可见；小批量常态走 Debug，避免日志刷屏。
+const eventFlushSummaryThreshold = 200
+
+// logEventFlushSummary 输出事件出箱 flush 的脱敏吞吐摘要（V093-01 埋点）。
+// 只含条数/耗时/剩余积压/速率四个整数，不含会话 ID、事件类型或 envelope：
+// 万级 delta 回合的追平过程（R18 云端实测约 16 条/秒的归因入口）由此可直接观测，
+// 不再依赖出箱表抽样推断。节流门控：单周期 ≥200 条或耗时 ≥1s 才升 Info。
+func (l *RelayLoop) logEventFlushSummary(started time.Time, uploaded int) {
+	if uploaded <= 0 {
+		return
+	}
+	elapsed := time.Since(started)
+	if uploaded < eventFlushSummaryThreshold && elapsed < time.Second {
+		l.Logger.Debug("daemon event outbox flush", "uploaded", uploaded, "elapsed_ms", elapsed.Milliseconds())
+		return
+	}
+	remaining := int64(-1)
+	if count, err := l.Store.PendingRelayEventCount(); err != nil {
+		l.Logger.Debug("daemon event outbox flush count unavailable", "error", err)
+	} else {
+		remaining = count
+	}
+	elapsedMS := elapsed.Milliseconds()
+	if elapsedMS <= 0 {
+		elapsedMS = 1
+	}
+	l.Logger.Info("daemon event outbox flush",
+		"uploaded", uploaded, "elapsed_ms", elapsedMS,
+		"pending_remaining", remaining, "rate_per_sec", int64(uploaded)*1000/elapsedMS)
 }
 
 // sanitizeRelayUploadError 把上传失败压缩为脱敏错误分类，只写入 outbox 的 last_error。
