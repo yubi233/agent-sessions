@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../crypto/box.dart';
 import '../domain/models.dart';
 
 abstract interface class SecureTokenStore {
@@ -228,9 +229,10 @@ class SecureDeviceIdentityStore implements DeviceIdentityStore {
     final identityPublicBytes = (await identity.extractPublicKey()).bytes;
     final encryptionPublicBytes = (await encryption.extractPublicKey()).bytes;
     return <String, String>{
-      _identityPublicKey: base64UrlEncode(identityPublicBytes),
+      // v0.9.2 §19.3：公钥上行统一 standard raw base64（与 Go EncodePublic 同构）。
+      _identityPublicKey: encodePublicKeyRawStd(identityPublicBytes),
       _identityPrivateKey: base64UrlEncode(generatedIdentityPrivate),
-      _encryptionPublicKey: base64UrlEncode(encryptionPublicBytes),
+      _encryptionPublicKey: encodePublicKeyRawStd(encryptionPublicBytes),
       _encryptionPrivateKey: base64UrlEncode(generatedEncryptionPrivate),
     };
   }
@@ -372,7 +374,7 @@ class InMemoryDeviceIdentityStore implements DeviceIdentityStore {
     final publicBytes = (await pair.extractPublicKey()).bytes;
     return _material = DeviceRegistrationMaterial(
       identityPublicKey: 'fixture-ed25519-public-key',
-      encryptionPublicKey: base64UrlEncode(publicBytes),
+      encryptionPublicKey: encodePublicKeyRawStd(publicBytes),
     );
   }
 

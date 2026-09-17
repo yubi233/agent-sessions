@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -189,5 +190,54 @@ func TestDecodePublicAcceptsUrlSafeAndPadded(t *testing.T) {
 
 	if _, err := DecodePublic("not-base64-!!"); err == nil {
 		t.Fatal("非法输入必须报错")
+	}
+}
+
+// v0.9.2 §19.3（跨端公钥编码契约）：Android/Flutter 侧编码统一为 **standard raw base64**
+// 之后，两侧对同一公钥必须产出逐字符相同的字符串。本用例用固定向量把该契约钉死。
+//
+// 为什么必须用固定向量而不是随机字节：字母表分歧只在公钥分组落到 '+'/'/'（即 url-safe
+// 的 '-'/'_'）时才暴露，随机 32 字节命中这些分组的概率不高，随机测试会时灵时不灵。
+const (
+	v092PublicKeyGoldenStd = "+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/s"
+	v092PublicKeyGoldenURL = "-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_v7-_s"
+)
+
+// v092GoldenPublicKey 返回跨端固定向量对应的 32 字节 X25519 公钥原文。
+func v092GoldenPublicKey() []byte { return bytes.Repeat([]byte{0xfb}, 32) }
+
+// TestV092PublicKeyEncodingContractStandardRaw 固化**编码侧**契约：
+//   - EncodePublic 产出 standard raw（不含 '-'/'_'/'='），与 Dart 的
+//     encodePublicKeyRawStd 同构（apps/mobile/lib/crypto/box.dart）；
+//   - Dart 侧写下的固定字符串在 Go 侧解码后必须回到同一份 32 字节。
+func TestV092PublicKeyEncodingContractStandardRaw(t *testing.T) {
+	raw := v092GoldenPublicKey()
+	encoded := EncodePublic(raw)
+	if encoded != v092PublicKeyGoldenStd {
+		t.Fatalf("EncodePublic 与跨端固定向量不一致: got %q want %q", encoded, v092PublicKeyGoldenStd)
+	}
+	for _, bad := range []string{"-", "_", "="} {
+		if strings.Contains(encoded, bad) {
+			t.Fatalf("standard raw 编码不应包含 %q: %q", bad, encoded)
+		}
+	}
+	decoded, err := DecodePublic(v092PublicKeyGoldenStd)
+	if err != nil {
+		t.Fatalf("解码跨端固定向量失败: %v", err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Fatalf("跨端固定向量解码不一致: %x != %x", decoded, raw)
+	}
+}
+
+// TestV092DecodePublicStillAcceptsLegacyUrlSafe 保证「编码侧统一」**不收紧解码侧**：
+// 历史设备记录仍是 url-safe，升级后必须继续可解，否则既有 owner 的 DEK wrap 会失效。
+func TestV092DecodePublicStillAcceptsLegacyUrlSafe(t *testing.T) {
+	decoded, err := DecodePublic(v092PublicKeyGoldenURL)
+	if err != nil {
+		t.Fatalf("历史 url-safe 公钥必须继续可解: %v", err)
+	}
+	if !bytes.Equal(decoded, v092GoldenPublicKey()) {
+		t.Fatalf("url-safe 解码结果不一致: %x", decoded)
 	}
 }

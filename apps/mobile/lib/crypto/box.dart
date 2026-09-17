@@ -5,6 +5,22 @@ import 'package:cryptography/cryptography.dart';
 
 const algorithmVersion = 'v1-aes256gcm-hkdfsha256';
 
+/// v0.9.2 §19.3（跨端公钥编码契约）：**设备公钥一律以 standard raw base64 上行**，
+/// 与 Go 侧 `crypto.EncodePublic`（`base64.RawStdEncoding`，无 padding）逐字符同构。
+///
+/// 背景（为什么必须统一）：Flutter 侧此前用 `base64UrlEncode`（url-safe 字母表），
+/// 而 Go 侧编码器产出 standard raw，且服务端部分校验器只认 standard 字母表——
+/// 例如 internal/domain 的 validX25519PublicKey 依次尝试 RawStd/Std，url-safe 编码
+/// 在公钥分组落到 '+'/'/'（即 url-safe 的 '-'/'_'）时会被判「非法公钥」，进而静默
+/// 摘掉依赖该公钥的通道。字母表分歧只在特定公钥取值上暴露，属于典型"偶发"缺陷，
+/// 因此编码侧统一、并用固定向量在两侧同时固化。
+///
+/// 解码侧不收紧：Go 的 crypto.DecodePublic 与 devices 校验器仍双字母表兼容，
+/// 历史设备记录（url-safe）继续可用。私钥是**本地存储格式**、不参与跨端契约，
+/// 仍用 base64Url 编码，避免破坏既有安装的已存密钥。
+String encodePublicKeyRawStd(List<int> bytes) =>
+    base64.encode(bytes).replaceAll('=', '');
+
 /// 跨端 envelope 的最小字段；Android 只在本地解密，Relay 永远不读取 plaintext。
 class CryptoEnvelope {
   const CryptoEnvelope({
