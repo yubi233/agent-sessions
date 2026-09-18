@@ -2018,8 +2018,78 @@ class SessionController extends ChangeNotifier {
     _settleSendTransaction(tx, terminal);
     _notifyListeners();
     // 回执已收敛（成功或未知）：驱动回合完成轮询——首拍合并 + 未完成转
-    // 后台轮询（与内联观察同口径，V086 A① 60s+60s 预算不变）。
+    // 后台轮询（与内联观察同口径）。
     await _driveTurnPollingForTransaction(tx);
+    // V094-23 真机回归修正（实施记录 34 §2.8）：回执窗口/后台轮询的有界
+    // 窗口可能短于真实回合（DSH send 阻塞到回合结束，65-90s+ 回合实测
+    // 存在）。事务观察器是后台任务，必须在 processing/verifying 期间
+    // 持续接力驱动快照直到回合终态，否则回合完成后 UI 永远停在「执行中」。
+    await _observeTurnUntilTerminal(tx);
+  }
+
+  /// 事务观察器的回合终态接力：拍长 [activePollInterval]，直到 canonical
+  /// 收口（_activeTurns 移除）或上限（1200 拍）。合并走既有代际守卫；
+  /// 传输 live（SSE wake 驱动）时跳过本拍拉取，避免双通道重复请求。
+  ///
+  /// 节拍等待是可取消的：页面/controller 销毁（dispose）时立即唤醒并退出，
+  /// 不在 widget 树拆除后留下 pending timer（V094 回归门要求）。
+  Future<void> _observeTurnUntilTerminal(SessionSendTransaction tx) async {
+    const attempts = 1200;
+    final authGenerationAtStart = _authGeneration;
+    final syncGenerationAtStart = _syncGenerations[tx.sessionId] ?? 0;
+    bool generationsStale() =>
+        _authGeneration != authGenerationAtStart ||
+        (_syncGenerations[tx.sessionId] ?? 0) != syncGenerationAtStart;
+    for (var i = 0; i < attempts; i++) {
+      if (_disposed || generationsStale()) return;
+      if (!_activeTurns.containsKey(tx.sessionId)) {
+        // 回合已由 canonical 终态收口：刷新 controls 并结束。
+        await _refreshControlsAfterTurn(tx.sessionId);
+        return;
+      }
+      await _waitTurnObserverTick();
+      if (_disposed || generationsStale()) return;
+      if (!_activeTurns.containsKey(tx.sessionId)) continue;
+      if (_transportSuppressesPolling(tx.sessionId)) continue;
+      try {
+        final latest = await _relay.getSessionSnapshot(
+          tx.sessionId,
+          afterSequence: _cursorFor(tx.sessionId),
+        );
+        if (_disposed || generationsStale()) return;
+        final authGenerationAtPoll = _authGeneration;
+        if (_authGeneration == authGenerationAtPoll &&
+            _selectedSessionId == tx.sessionId) {
+          _mergeSnapshot(latest, appendTimeline: true);
+          _evaluateTurnDeadlines(tx.sessionId);
+        }
+        if (_snapshotCompletesTurn(latest)) {
+          if (_selectedSessionId == tx.sessionId) {
+            await _refreshControlsAfterTurn(tx.sessionId);
+          }
+          return;
+        }
+      } catch (_) {
+        // 单拍失败不终止接力：下一拍继续（与后台轮询同口径）。
+      }
+    }
+  }
+
+  /// 可取消的接力节拍：dispose 时取消计时器并唤醒等待者，让接力循环立即
+  /// 退出（不遗留 pending timer）。
+  Future<void> _waitTurnObserverTick() {
+    if (_disposed) return Future<void>.value();
+    final completer = Completer<void>();
+    _turnObserverWaiter = completer;
+    _turnObserverTimer = Timer(activePollInterval, () {
+      _turnObserverTimer = null;
+      if (!completer.isCompleted) completer.complete();
+    });
+    return completer.future.whenComplete(() {
+      if (identical(_turnObserverWaiter, completer)) {
+        _turnObserverWaiter = null;
+      }
+    });
   }
 
   /// V094：事务观察器的回合完成轮询入口。defer 模式下 _submitCommand 在
@@ -3834,6 +3904,10 @@ class SessionController extends ChangeNotifier {
   Duration turnDeadlineTickInterval = const Duration(seconds: 5);
   Timer? _turnDeadlineTimer;
 
+  /// V094-23 终态接力的可取消节拍（dispose 时取消并唤醒等待者）。
+  Timer? _turnObserverTimer;
+  Completer<void>? _turnObserverWaiter;
+
   /// 202 锚定即武装节拍器（幂等）；测试经 [turnDeadlineTickArmed] 与
   /// [evaluateTurnDeadlineTick] 直接驱动。
   void _ensureTurnDeadlineTimer() {
@@ -4465,6 +4539,13 @@ class SessionController extends ChangeNotifier {
     _quietReconcileTimer = null;
     _turnDeadlineTimer?.cancel();
     _turnDeadlineTimer = null;
+    _turnObserverTimer?.cancel();
+    _turnObserverTimer = null;
+    final turnObserverWaiter = _turnObserverWaiter;
+    _turnObserverWaiter = null;
+    if (turnObserverWaiter != null && !turnObserverWaiter.isCompleted) {
+      turnObserverWaiter.complete();
+    }
     super.dispose();
   }
 

@@ -1,0 +1,59 @@
+{
+  "suite": "V094-DEVICE-SMOKE",
+  "title": "v0.9.4 P1/P2-mid 真机冒烟：新会话 UI 渲染、发送链路与收敛缺陷修复",
+  "date": "2026-09-19T04:50:00+08:00",
+  "build": "flutter run -d d723617 (debug, HEAD c3c7d60 + P2 进行中改动 + 收敛修复), --dart-define=RELAY_BASE_URL=http://127.0.0.1:8787, adb reverse tcp:8787",
+  "topology": "Mac restart.sh Relay(:8787, .task/restart/relay.db) + go run daemon(cordis.yml, state-dir=.task/restart/daemon) + 真机 23113RKC6C (d723617, Android 15, USB)",
+  "verification": {
+    "real_device": true,
+    "headless": false,
+    "local_test": true,
+    "real_model": true,
+    "real_upstream": false,
+    "fixture_data": false,
+    "note": "真实模型调用 2 次（deepseek-v4.1-flash，goat 渠道，DSH credentials-local 托管）：第 1 条触发完整回合（模型自主工具探索，65s+），第 2 条为收敛修复复测（回合在报告时点仍在执行，UI 显示「执行中」为正确状态）。符合计划 §5.2 精神内的最低限 smoke，未重启云端。"
+  },
+  "steps": [
+    "restart.sh start --no-flutter 重建本地拓扑（新 owner）→ 手机经一次性恢复码重新接管 owner（e2e-verify/helpers/issue-recovery-code，代码只落 600 文件已删除）",
+    "恢复后观察：工作区页短暂显示「home Terminal 未连接」（恢复接管后投影未自动刷新），冷启动应用后恢复为「V_YANBINYE-MB6 · 在线」——记录为恢复接管后投影刷新观察项",
+    "新建 DSH 会话（sess_1789762969859_d511e39591cacf17）并验证 V094 新 UI：composer 两行布局（全宽输入+工具行）、紧凑权限徽标、状态条「可发送 · 执行服务可用 · 可控制」",
+    "发送第一条消息：乐观回显、主状态「可发送」→「执行中」、状态槽「正在准备新一轮…/工具执行中…」参与布局不遮正文、发送键变停止键、草稿接管清空、等待期输入框可编辑（V094-23）",
+    "发现缺陷：回合 65s 完成（daemon terminal=turn_completed、Relay session=idle）但 UI 停留「执行中」不收敛",
+    "根因：send 回执 30s 窗口 + 后台轮询 60s 的有界覆盖短于真实回合时长，快照驱动全部停摆",
+    "修复：事务观察器新增 _observeTurnUntilTerminal 接力（500ms 增量快照直到 canonical 收口，上限 10 分钟，SSE live 时跳过拉取）",
+    "修复后全量发送路径回归绿（session_send_auto_start / v094_send_transaction / v094_send_correlation / v090_event_sync / v093_terminal_auto_converge 共 26 项）",
+    "重装复测：新 UI 与权限徽标「⚠ danger-full-access」红色警示正确渲染；第二条消息提交时上一回合仍在执行（执行中为正确状态），长回合收敛端到端验证移交 V094-21 完整旅程"
+  ],
+  "cases": [
+    {
+      "id": "V094-DEVICE-SMOKE-01",
+      "title": "新会话 UI 真机渲染（P2 进行中形态）",
+      "observed": "composer 两行布局、权限徽标（含 danger-full-access 红色警示态）、状态条新文案（可发送/执行中/可控制/执行服务可用）全部正确渲染；键盘弹起时 composer 正确避让且输入可编辑",
+      "evidence": ["08-session-created.png", "10-typed.png", "11-sent-pending.png", "18-retest-sent.png"],
+      "status": "passed"
+    },
+    {
+      "id": "V094-DEVICE-SMOKE-02",
+      "title": "发送链路（P1 事务）真机行为",
+      "observed": "乐观回显气泡即时出现；主状态单一投影切换（可发送→执行中）；状态槽参与布局；发送键即停止键；草稿接管；等待期可编辑",
+      "evidence": ["11-sent-pending.png", "12-reply.png"],
+      "status": "passed"
+    },
+    {
+      "id": "V094-DEVICE-SMOKE-03",
+      "title": "回合终态收敛（缺陷修复）",
+      "observed": "修复前：回合完成后 UI 不收敛（有界窗口短于真实回合）。修复后：观察器接力驱动逻辑由 26 项单测覆盖；真机端到端收敛复测因当前长回合（模型自主探索至报告时点未完成）未闭合，移交 V094-21 完整旅程验证",
+      "evidence": ["13-terminal.png", "14-converged.png", "daemon.log terminal=turn_completed 04:28:49"],
+      "status": "partially_verified",
+      "remaining_risk": "收敛修复的真机端到端证据待 V094-21 补齐"
+    }
+  ],
+  "incidental_observations": [
+    "Thought 节点重复渲染 ×2（真实链路 message.thought_delta 下划线事件类型的流式折叠待归因，localdev 点分类型不受影响）——列入 P2/P3 流式投影观察项",
+    "恢复码接管后工作区/终端投影未自动刷新，需冷启动恢复——列入恢复链路观察项",
+    "上回合残留 Think「运行中」节点：收敛缺陷的历史残留快照，重进会话后仍保留（thought 无 completed 投影），随 thought 折叠问题一并归因",
+    "Assistant 消息动作（复制）独立成行——UI-11 元信息收紧待 P2-e 实施"
+  ],
+  "remaining_risk": "收敛修复端到端证据、深链恢复旅程、熄屏场景移交 V094-21 完整真机验收；thought 折叠归因待办",
+  "artifacts": "e2e-verify/reports/v094-device-smoke/（01-19 截图 + 本报告）；敏感截图（含恢复码）已删除"
+}
