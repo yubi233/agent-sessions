@@ -42,6 +42,14 @@ enum LocalVisualScenario {
   // 恢复可发送；③ 会话时间线出现发送后的用户消息与终态。全部数据来自确定性
   // fixture，不连接真实 Relay、不调用模型。
   dshV092SendLoop,
+  // v0.9.4（V094，计划 P0 fixture 冻结 2026-09-19）：会话 UI 全面优化三场景。
+  // baseline：富 Markdown 历史（表格/代码/列表）；recovery：结构化错误 +
+  // 自动恢复历史；config：长模型名 + 完全访问权限目录（紧凑徽标 gate）。
+  // 录制环境基线：360×800 逻辑尺寸、textScale 1.0、亮/暗双主题、revision 见
+  // e2e-verify 报告 manifest；全部为公开 fixture 文本，不连接真实 Relay。
+  v094SessionUiBaseline,
+  v094SessionUiRecovery,
+  v094SessionUiConfig,
   pairingPending,
   sessionList,
   sessionDetail,
@@ -86,6 +94,9 @@ LocalVisualScenario localVisualScenarioFromEnvironment(
   'dsh-workspace-home' => LocalVisualScenario.dshWorkspaceHome,
   'terminal-presence-v091' => LocalVisualScenario.terminalPresenceV091,
   'dsh-v092-send-loop' => LocalVisualScenario.dshV092SendLoop,
+  'v094-session-ui-baseline' => LocalVisualScenario.v094SessionUiBaseline,
+  'v094-session-ui-recovery' => LocalVisualScenario.v094SessionUiRecovery,
+  'v094-session-ui-config' => LocalVisualScenario.v094SessionUiConfig,
   'dsh-session-tool-timeline' => LocalVisualScenario.dshSessionToolTimeline,
   'dsh-capability-gates' => LocalVisualScenario.dshCapabilityGates,
   'dsh-streaming-turn-phase' =>
@@ -361,7 +372,10 @@ class LocalVisualFixture {
         scenario == LocalVisualScenario.dshStreamingTurnPhase ||
         scenario == LocalVisualScenario.dshAbortTrajectory ||
         scenario == LocalVisualScenario.dshV085ReadonlyProjections ||
-        scenario == LocalVisualScenario.dshV087TypewriterStreaming;
+        scenario == LocalVisualScenario.dshV087TypewriterStreaming ||
+        scenario == LocalVisualScenario.v094SessionUiBaseline ||
+        scenario == LocalVisualScenario.v094SessionUiRecovery ||
+        scenario == LocalVisualScenario.v094SessionUiConfig;
     String? dshSessionId;
     if (scenario == LocalVisualScenario.dshV092SendLoop) {
       // v0.9.2（V092）：DSH 发送闭环可见场景（录屏内容先定 2026-09-16）。
@@ -470,6 +484,43 @@ class LocalVisualFixture {
         // 发送由 main.dart 场景协调器经 session controller 触发（'v087 timed'），
         // 在途轮询（250ms 收紧档）驱动气泡文本逐步生长并写入双门禁证据。
         relay.timedStreamSchedule = TimedStreamSchedule.gateDefault();
+      }
+      // V094（计划 P0 fixture 冻结）：会话 UI 三场景共用 DSH 基础设施，
+      // 经固定 marker 触发确定性时间线（见 _appendSendConversation 的
+      // v094 markdown / v094 recovery 分支），config 场景额外切长模型名。
+      if (scenario == LocalVisualScenario.v094SessionUiBaseline ||
+          scenario == LocalVisualScenario.v094SessionUiRecovery) {
+        final lease = await relay.acquireSessionLease(dshSession.id);
+        final marker = scenario == LocalVisualScenario.v094SessionUiBaseline
+            ? 'v094 markdown 演示：表格、代码块与行内代码。'
+            : 'v094 recovery 演示：发送失败后自动恢复。';
+        await relay.submitSessionCommand(
+          dshSession.id,
+          SessionCommandInput(
+            kind: SessionCommandKind.send,
+            idempotencyKey: scenario == LocalVisualScenario.v094SessionUiBaseline
+                ? 'visual-v094-baseline-send'
+                : 'visual-v094-recovery-send',
+            leaseEpoch: lease.epoch,
+            deviceId: ownerDeviceId,
+            ciphertext: {
+              'fixture_payload': {'message': marker},
+            },
+          ),
+        );
+      }
+      if (scenario == LocalVisualScenario.v094SessionUiConfig) {
+        // config 场景：长模型名 + 完全访问徽标的确定性投影（UI-15/16 gate）。
+        // 通过 fixture 的 controls 覆盖钩子注入目录外长名称，权限目录沿用
+        // 默认 controls（含展示目录说明）；不伪造切换命令回执。
+        final controls = await relay.getSessionControls(dshSession.id);
+        relay.applyVisualControlsOverride(
+          dshSession.id,
+          controls.copyWith(
+            model: 'deepseek-v4.1-flash-128k-context-preview',
+            permissionMode: 'danger-full-access',
+          ),
+        );
       }
       if (scenario == LocalVisualScenario.dshSessionToolTimeline) {
         // 时间线场景：fixture 发送一条消息，触发 fixture relay 生成完整的

@@ -926,11 +926,16 @@ func (r *sqliteRepo) AppendEvent(ctx context.Context, e SessionEventRow) (int64,
 }
 
 func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afterSeq int64) ([]SessionEventRow, error) {
+	// V094-06：LEFT JOIN daemon_event_receipts 回投事件的关联命令 ID。
+	// receipt 与事件同 session 且 event_seq 唯一（appendDaemonEventInTx 单点写入），
+	// 无 receipt 的旧事件/非命令事件保持空串，不放大可见面（命令 ID 无正文语义）。
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json,events.created_at_unix_ms
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json,events.created_at_unix_ms,COALESCE(receipt.command_id,'')
 		 FROM session_events AS events
 		 JOIN account_event_log AS event_log
 		   ON event_log.session_id=events.session_id AND event_log.event_seq=events.event_seq
+		 LEFT JOIN daemon_event_receipts AS receipt
+		   ON receipt.session_id=events.session_id AND receipt.event_seq=events.event_seq
 		 WHERE events.session_id=? AND events.event_seq>? ORDER BY events.event_seq`, sessionID, afterSeq)
 	if err != nil {
 		return nil, err
@@ -939,7 +944,7 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 	var out []SessionEventRow
 	for rows.Next() {
 		var e SessionEventRow
-		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON, &e.CreatedAtUnixMS); err != nil {
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON, &e.CreatedAtUnixMS, &e.CommandID); err != nil {
 			return nil, err
 		}
 		out = append(out, e)

@@ -588,6 +588,40 @@ String formatByteCount(int bytes) {
   return '$bytes B';
 }
 
+/// V094-26：权限展示目录条目（Relay 白名单投影，additive）。
+/// 只承载 id/name/description；name/description 允许为空（UI 显示「说明未提供」），
+/// 不得据此推断安全语义，风险确认仍按能力门与既有勾选确认执行。
+class SessionPermissionModeDetail {
+  const SessionPermissionModeDetail({
+    required this.id,
+    this.name = '',
+    this.description = '',
+  });
+
+  factory SessionPermissionModeDetail.fromRelayJson(Map<String, dynamic> json) {
+    // 长度上限与 Relay 侧投影一致（128/512 rune），防御异常数据撑爆 UI。
+    String capped(Object? value, int limit) {
+      if (value is! String) return '';
+      final trimmed = value.trim();
+      final runes = trimmed.runes.toList(growable: false);
+      if (runes.length <= limit) return trimmed;
+      return String.fromCharCodes(runes.take(limit));
+    }
+
+    return SessionPermissionModeDetail(
+      id: capped(json['id'], 128),
+      name: capped(json['name'], 128),
+      description: capped(json['description'], 512),
+    );
+  }
+
+  final String id;
+  final String name;
+
+  /// 缺失时 UI 必须显示「说明未提供」，不能用 ID 猜测权限含义。
+  final String description;
+}
+
 /// 会话控制面由已解密事件或 fixture 填充；空状态明确说明尚未获得该类事件。
 class SessionControlState {
   const SessionControlState({
@@ -607,6 +641,8 @@ class SessionControlState {
     // v0.3/P0：permission mode 选择器（Happy sessionSetAgentModes 对齐）。
     this.permissionMode,
     this.availablePermissionModes = const [],
+    // V094-26：可选权限展示目录（id/name/description 白名单投影）。
+    this.availablePermissionModeDetails = const [],
   });
 
   const SessionControlState.empty()
@@ -623,7 +659,8 @@ class SessionControlState {
       imageLimits = null,
       usage = null,
       permissionMode = null,
-      availablePermissionModes = const [];
+      availablePermissionModes = const [],
+      availablePermissionModeDetails = const [];
 
   factory SessionControlState.fromRelayJson(Map<String, dynamic> json) {
     final rawUsage = json['usage'];
@@ -642,6 +679,11 @@ class SessionControlState {
       permissionMode: _nullableControlString(json['permission_mode']),
       availablePermissionModes: _stringListFromControlJson(
         json['available_permission_modes'],
+      ),
+      // V094-26：展示目录是可选 additive 字段；旧 Relay 缺失时保持空列表，
+      // UI 回退为原 ID 展示 + 「说明未提供」，不臆测跨 Provider 权限语义。
+      availablePermissionModeDetails: _permissionModeDetailsFromControlJson(
+        json['available_permission_mode_details'],
       ),
     );
   }
@@ -663,6 +705,10 @@ class SessionControlState {
   final String? permissionMode;
   final List<String> availablePermissionModes;
 
+  /// V094-26：权限展示目录（id/name/description 白名单）。
+  /// name/description 允许为空；UI 按「缺说明回退原 ID」渲染。
+  final List<SessionPermissionModeDetail> availablePermissionModeDetails;
+
   SessionControlState copyWith({
     String? model,
     String? effort,
@@ -679,6 +725,7 @@ class SessionControlState {
     SessionUsageSummary? usage,
     String? permissionMode,
     List<String>? availablePermissionModes,
+    List<SessionPermissionModeDetail>? availablePermissionModeDetails,
   }) => SessionControlState(
     model: model ?? this.model,
     effort: effort ?? this.effort,
@@ -695,6 +742,8 @@ class SessionControlState {
     permissionMode: permissionMode ?? this.permissionMode,
     availablePermissionModes:
         availablePermissionModes ?? this.availablePermissionModes,
+    availablePermissionModeDetails:
+        availablePermissionModeDetails ?? this.availablePermissionModeDetails,
   );
 }
 
@@ -955,6 +1004,22 @@ List<String> _stringListFromControlJson(Object? value) => value is List
           .whereType<String>()
           .where((item) => item.trim().isNotEmpty)
           .map((item) => item.trim())
+          .toList(growable: false)
+    : const [];
+
+/// V094-26：权限展示目录解析。只接受 id/name/description 白名单字段；
+/// id 为空的条目丢弃，长度对齐 Relay 侧上限（防御性再截断，不信任上游）。
+List<SessionPermissionModeDetail> _permissionModeDetailsFromControlJson(
+  Object? value,
+) => value is List
+    ? value
+          .whereType<Map>()
+          .map(
+            (item) => SessionPermissionModeDetail.fromRelayJson(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .where((detail) => detail.id.isNotEmpty)
           .toList(growable: false)
     : const [];
 

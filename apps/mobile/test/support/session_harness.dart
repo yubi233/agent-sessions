@@ -27,6 +27,25 @@ Future<MobileAppHarness> openWritableSession(
   return harness;
 }
 
+/// V094 骨架/回归专用入口：与 [openWritableSession] 等价，但不等待"可操作"
+/// 文案——V094-02 会把该泛化承诺改为"可控制/只读"，等待旧文案会让骨架测试
+/// 在目标实现落地后反向失败。改为等待会话详情与 composer 就绪。
+Future<MobileAppHarness> openWritableSessionForV094(
+  WidgetTester tester,
+) async {
+  final harness = MobileAppHarness();
+  await harness.launchAsOwner();
+  final sessionId = await harness.seedSession();
+  await tester.pumpWidget(harness.build());
+  await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
+  await openSessionDetailFromRecent(tester, harness, sessionId);
+  await waitForVisible(
+    tester,
+    find.byKey(const Key('session-composer-input')),
+  );
+  return harness;
+}
+
 /// v0.8.1+ owner 引导已由 bootstrapLocalOwner 预置完成，无需再点击连接。
 Future<void> registerOwner(WidgetTester tester, String _) async {
   await waitForVisible(tester, find.byKey(const Key('session-home-screen')));

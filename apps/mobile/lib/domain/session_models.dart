@@ -477,6 +477,7 @@ class RelaySessionEvent {
     required this.eventType,
     required this.envelope,
     this.createdAt,
+    this.commandId,
   });
 
   factory RelaySessionEvent.fromRelayJson(Map<String, dynamic> json) {
@@ -490,6 +491,10 @@ class RelaySessionEvent {
       eventType: _requiredSessionString(json, 'event_type'),
       envelope: Map<String, dynamic>.from(envelope),
       createdAt: _dateTimeFromUnixMillis(json['created_at_unix_ms']),
+      // V094-06：可选命令关联投影（daemon_event_receipts 回投）。
+      // 旧 Relay/旧事件缺失时保持 null；关联缺失不得按文本猜测归属，
+      // 也不能把该 ID 当 Provider messageId 或借它开启 fork/feedback。
+      commandId: _nullableString(json['command_id']),
     );
   }
 
@@ -497,6 +502,9 @@ class RelaySessionEvent {
   final String eventType;
   final Map<String, dynamic> envelope;
   final DateTime? createdAt;
+
+  /// 同会话 receipt 关联的命令 ID；null 表示关联缺失（状态未确认降级）。
+  final String? commandId;
 }
 
 class SessionSnapshot {

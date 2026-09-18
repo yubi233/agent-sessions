@@ -693,6 +693,12 @@ func (a *API) handleSessionControls(c *gin.Context) {
 			if ids, err := permissionModeIDs(session.AvailablePermissionModesJSON); err == nil {
 				view["available_permission_modes"] = ids
 			}
+			// V094-26：兼容增加展示目录（id/name/description 白名单 + 长度限制）。
+			// 原 ID 字段保留，旧客户端不受影响；目录为空/解析失败时不下发，
+			// 客户端按旧 ID 回退 + 「说明未提供」处理，不臆测权限语义。
+			if catalog := permissionModeCatalog(session.AvailablePermissionModesJSON); len(catalog) > 0 {
+				view["available_permission_mode_details"] = catalog
+			}
 		}
 	}
 	writeOK(c, view)
@@ -818,6 +824,9 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 			EventSeq: event.EventSeq, EventType: event.EventType, TerminalStatus: event.TerminalStatus,
 			CreatedAtUnixMS: event.CreatedAtUnixMS,
 			Envelope:        json.RawMessage(event.EnvelopeJSON),
+			// V094-06：可选命令关联投影。只回同会话 receipt 关联的命令 ID，
+			// 不透出正文、跨会话关联或投影语义；缺失时客户端按未确认降级。
+			CommandID: event.CommandID,
 		})
 	}
 	writeOK(c, sessionSnapshotView{Session: a.sessionViewFor(c.Request.Context(), session), Events: views})
@@ -1075,6 +1084,62 @@ func permissionModeIDs(modesJSON string) ([]string, error) {
 		}
 	}
 	return ids, nil
+}
+
+// sessionPermissionModeDetail 是 V094-26 冻结的权限展示目录条目（additive、可选）。
+// 只允许 id/name/description 三个白名单字段，不透出存储行中的其它元数据；
+// name/description 缺失时客户端回退为原 ID 与「说明未提供」，不臆测语义。
+type sessionPermissionModeDetail struct {
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// 权限目录展示字段的长度上限（V094-26 白名单约束）。超过上限的值截断，
+// 保证 controls 响应体可控，不让异常上行数据撑爆移动端 UI。
+const (
+	permissionModeCatalogMaxItems      = 64
+	permissionModeIDMaxLength          = 128
+	permissionModeNameMaxLength        = 128
+	permissionModeDescriptionMaxLength = 512
+)
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit])
+}
+
+// permissionModeCatalog 把 Relay 存储的 mode 对象行 JSON 投影为展示目录：
+// 白名单字段 + 数量/长度限制；id 为空或目录超过条数上限的条目丢弃，
+// 保持与 available_permission_modes ID 数组同一事实来源、不新增存储。
+func permissionModeCatalog(modesJSON string) []sessionPermissionModeDetail {
+	var rows []struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal([]byte(modesJSON), &rows); err != nil {
+		return nil
+	}
+	catalog := make([]sessionPermissionModeDetail, 0, len(rows))
+	for _, row := range rows {
+		if len(catalog) >= permissionModeCatalogMaxItems {
+			break
+		}
+		id := truncateRunes(row.ID, permissionModeIDMaxLength)
+		if id == "" {
+			continue
+		}
+		catalog = append(catalog, sessionPermissionModeDetail{
+			ID:          id,
+			Name:        truncateRunes(row.Name, permissionModeNameMaxLength),
+			Description: truncateRunes(row.Description, permissionModeDescriptionMaxLength),
+		})
+	}
+	return catalog
 }
 
 func modelFromCommandCiphertext(raw json.RawMessage) string {
@@ -1919,6 +1984,9 @@ type cipherEventView struct {
 	TerminalStatus  string          `json:"terminal_status,omitempty"`
 	CreatedAtUnixMS int64           `json:"created_at_unix_ms,omitempty"`
 	Envelope        json.RawMessage `json:"envelope"`
+	// V094-06：daemon_event_receipts 关联的命令 ID（additive、可选）。
+	// 客户端用它做消息事务关联；旧事件缺失时为空，禁止按文本猜测归属。
+	CommandID string `json:"command_id,omitempty"`
 }
 
 type sessionSnapshotView struct {

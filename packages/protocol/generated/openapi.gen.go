@@ -1161,6 +1161,8 @@ type CipherEnvelopeMetadataState string
 
 // CipherEvent defines model for CipherEvent.
 type CipherEvent struct {
+	// CommandId 可选命令关联投影（V094-06）：daemon_event_receipts 关联的同会话命令 ID；旧事件或非命令路径事件缺失。客户端只用于消息事务状态关联，缺失时按「状态未确认」降级，不得按文本猜测归属，也不得把该 ID 当 Provider messageId 或开启 fork/feedback。
+	CommandId       *string                `json:"command_id,omitempty"`
 	CreatedAtUnixMs *int64                 `json:"created_at_unix_ms,omitempty"`
 	Envelope        map[string]interface{} `json:"envelope"`
 	EventSeq        int64                  `json:"event_seq"`
@@ -1178,9 +1180,11 @@ type CipherEventTerminalStatus string
 
 // Command defines model for Command.
 type Command struct {
-	Id             string `json:"id"`
-	IdempotencyKey string `json:"idempotency_key"`
-	Kind           string `json:"kind"`
+	// ErrorCode daemon delivery 收口的稳定错误码（V088-07 起，V094 冻结进 schema）；命令成功或 delivery 未建立时缺失。客户端据此区分失败原因，不得把受理 202 当作执行成功。
+	ErrorCode      *string `json:"error_code,omitempty"`
+	Id             string  `json:"id"`
+	IdempotencyKey string  `json:"idempotency_key"`
+	Kind           string  `json:"kind"`
 
 	// LeaseEpoch 0 仅用于受限 Web 只读请求；所有 Android 写控制命令必须大于 0 并通过 lease fencing。
 	LeaseEpoch       *int64  `json:"lease_epoch,omitempty"`

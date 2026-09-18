@@ -469,6 +469,10 @@ type SessionEventRow struct {
 	EnvelopeJSON   string
 	// CreatedAtUnixMS 是事件生成时间；旧事件缺失时为 0。
 	CreatedAtUnixMS int64
+	// CommandID 是 daemon_event_receipts 关联回投的命令 ID（V094-06 冻结投影）。
+	// 仅同一 session 内的事件 receipt 参与 JOIN；旧事件或非命令路径事件为空，
+	// 客户端必须按「关联缺失」降级，不得据此猜测消息归属或改写历史。
+	CommandID string
 }
 
 // CommandRow 是 commands 表的行投影。

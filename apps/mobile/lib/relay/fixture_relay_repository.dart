@@ -1141,6 +1141,14 @@ class FixtureRelayRepository implements RelayRepository {
     return _sessionState(sessionId).controls;
   }
 
+  /// V094 可见场景专用（计划 P0 fixture 冻结）：为指定会话覆盖确定性 controls
+  /// 投影（如长模型名、完全访问目录）。只注入无敏感演示值，不触碰命令链路，
+  /// 供布局/紧凑徽标 gate 构造稳定画面；真实 Relay 永远不接受客户端覆盖。
+  void applyVisualControlsOverride(String sessionId, SessionControlState controls) {
+    final state = _sessionState(sessionId);
+    state.controls = controls;
+  }
+
   @override
   Future<ConversationFeedbackItem?> getMessageFeedback(
     String sessionId,
@@ -1345,6 +1353,104 @@ class FixtureRelayRepository implements RelayRepository {
         : '';
     if (message.isEmpty) {
       throw const RelayFailure(RelayFailureKind.validation, '请输入要发送的消息。');
+    }
+    // v0.8.4（V084-10/VISUAL-MOBILE-36，ADR-015 §3/§5）：流式投影可见场景。
+    // 以固定、无敏感的本地 fixture 事件展示 phase 状态行 + thought 独立通道 +
+    // 打字机增量正文；时间线故意停在 streaming 中段，让可见窗口能同时捕捉
+    // 状态行、thought 节点与生长中的回答（终态收敛由组件与 overlay 测试覆盖）。
+    // V094（计划 P0 fixture 冻结）：确定性 Markdown 历史场景。发送包含
+    // 'v094 markdown' 的消息 → 生成用户消息 + 富 Markdown 助手回复
+    // （GFM 表格、围栏代码块、行内代码、列表），供布局/内容渲染 gate
+    // 使用；全部为公开 fixture 文本，不含敏感内容。
+    if (message.contains('v094 markdown')) {
+      final now = _clock();
+      final base = state.nextSequence;
+      state.append(
+        eventType: 'message.user',
+        payload: {
+          'kind': 'user_message',
+          'label': '你',
+          'text': message,
+          'copy_text': message,
+          'created_at': now.toIso8601String(),
+          'message_id': 'fixture-message-$base',
+        },
+        now: now,
+      );
+      const markdownReply = '这是 V094 fixture 的 Markdown 演示回复。\n\n'
+          '### 汇总表格\n\n'
+          '| 模块 | 状态 | 说明 |\n'
+          '| --- | --- | --- |\n'
+          '| 发送事务 | 已受理 | Relay 202 只代表受理 |\n'
+          '| 恢复 | 待机 | daemon 重启后自动 resume |\n\n'
+          '### 部署命令\n\n'
+          '```bash\n'
+          'task test:v094:local\n'
+          'flutter run -d <device-id>\n'
+          '```\n\n'
+          '行内代码使用 `flutter analyze` 检查，要点：\n\n'
+          '- 气泡不等于送达\n'
+          '- 202 不等于 Provider 成功\n';
+      state.append(
+        eventType: 'message.assistant',
+        payload: {
+          'kind': 'assistant_message',
+          'label': 'Assistant',
+          'text': markdownReply,
+          'copy_text': markdownReply,
+          'streaming': false,
+          'message_id': 'fixture-message-${base + 1}',
+        },
+        now: now,
+      );
+      state.updateSession(status: MobileSessionStatus.idle, now: now);
+      return;
+    }
+    // V094（计划 P0 fixture 冻结）：发送失败与自动恢复历史场景。发送包含
+    // 'v094 recovery' 的消息 → 用户消息 + 结构化错误 notice（local_state_missing）
+    // + 已恢复提示 + 恢复后的助手回复，供错误折叠/恢复链可见性 gate 使用。
+    if (message.contains('v094 recovery')) {
+      final now = _clock();
+      final base = state.nextSequence;
+      state.append(
+        eventType: 'message.user',
+        payload: {
+          'kind': 'user_message',
+          'label': '你',
+          'text': message,
+          'copy_text': message,
+          'created_at': now.toIso8601String(),
+          'message_id': 'fixture-message-$base',
+        },
+        now: now,
+      );
+      // 结构化错误事实（error_code）与用户语言提示分离：V094-03/18 的验收锚点。
+      state.append(
+        eventType: 'session.activity',
+        payload: {
+          'kind': 'system_notice',
+          'label': 'Provider 错误',
+          'text': '执行端实例已失效，正在自动恢复会话。',
+          'error_code': 'LOCAL_STATE_MISSING',
+          'created_at': now.toIso8601String(),
+        },
+        now: now,
+      );
+      const recoveredReply = '会话已自动恢复（自动重试 1/1），上一条消息已送达并完成处理。';
+      state.append(
+        eventType: 'message.assistant',
+        payload: {
+          'kind': 'assistant_message',
+          'label': 'Assistant',
+          'text': recoveredReply,
+          'copy_text': recoveredReply,
+          'streaming': false,
+          'message_id': 'fixture-message-${base + 1}',
+        },
+        now: now,
+      );
+      state.updateSession(status: MobileSessionStatus.idle, now: now);
+      return;
     }
     // v0.8.4（V084-10/VISUAL-MOBILE-36，ADR-015 §3/§5）：流式投影可见场景。
     // 以固定、无敏感的本地 fixture 事件展示 phase 状态行 + thought 独立通道 +
@@ -2127,6 +2233,30 @@ SessionControlState _fixtureControlsForProvider(String provider) =>
         'plan',
         'acceptEdits',
         'danger-full-access',
+      ],
+      // V094-26：展示目录（id/name/description 白名单投影），fixture 与真实
+      // Relay 同构注入；danger-full-access 保留说明，风险确认门不受展示名影响。
+      availablePermissionModeDetails: const [
+        SessionPermissionModeDetail(
+          id: 'default',
+          name: '默认模式',
+          description: '标准权限：执行常规操作前需要确认。',
+        ),
+        SessionPermissionModeDetail(
+          id: 'plan',
+          name: '计划模式',
+          description: '只制定计划，不执行修改。',
+        ),
+        SessionPermissionModeDetail(
+          id: 'acceptEdits',
+          name: '自动接受编辑',
+          description: '自动接受文件编辑，其余操作仍需确认。',
+        ),
+        SessionPermissionModeDetail(
+          id: 'danger-full-access',
+          name: '完整访问',
+          description: '无限制执行所有操作，风险自负。',
+        ),
       ],
     );
 
