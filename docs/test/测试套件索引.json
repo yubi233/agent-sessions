@@ -1,5 +1,5 @@
 {
-  "registry_version": 15,
+  "registry_version": 17,
   "status": "in_progress",
   "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
   "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
@@ -1333,6 +1333,25 @@
       "allow_real_upstream": true,
       "uniqueness_rule": "拥有 V093-01..05：v0.9.3 事件投递吞吐与 resume 上下文投影收口专项——投递吞吐归因与修复（V093-01/02）、resume 后上下文投影（V093-03）、daemon 重启后首条发送零手工（V093-04）、v0.9.2 收口回归（V093-05）。V092-10 仅消费不重定义；不重开 V092-01..09 已通过结论，不改版本门与代理信任设计。",
       "note": "来源计划 docs/zh/迭代计划/迭代计划v0.9.3.md；V093-01..05 全部 passed（2026-09-18）。V093-01 归因报告 e2e-verify/reports/V093-ATTRIB/；V093-04 真机报告 e2e-verify/reports/v093-device/v093-04-report.json（本地拓扑 real_device=true、headless=false，真实模型 2 次）。残余观察：云端形态复测受重启窗口约束未执行；熄屏-离线门控与 UI 收敛的交互列为观察项（实施记录 33 §7）。"
+    },
+    {
+      "plan_id": "V094",
+      "suite_path": "docs/test/33-v094-session-ui.json",
+      "owner": "Mobile/Relay/Daemon/Web/Protocol",
+      "id_prefix": ["V094-"],
+      "owned_ids": [
+        "V094-01", "V094-02", "V094-03", "V094-04", "V094-05", "V094-06",
+        "V094-07", "V094-08", "V094-09", "V094-10", "V094-11", "V094-12",
+        "V094-13", "V094-14", "V094-15", "V094-16", "V094-17", "V094-18",
+        "V094-19", "V094-20", "V094-21", "V094-22",
+        "V094-23", "V094-24", "V094-25", "V094-26", "V094-27", "V094-28"
+      ],
+      "consumed_ids": ["V093-04", "V092-06", "V092-08", "V092-10"],
+      "dependencies": ["V093", "V092", "V090", "ANDROID", "RELAY-REALTIME", "DAEMON-CORE", "PROTO-CRYPTO", "WEB"],
+      "status": "planned",
+      "allow_real_upstream": false,
+      "uniqueness_rule": "拥有V094-01..28：01..18逐项覆盖会话UI截图评审18项；19为事务关联与恢复竞态，20为组合布局与无障碍，21为物理Android旅程，22为最终全部需求及历史回归聚合；23..28为发送门控、配置确认、操作幂等、权限目录、Web同步及加密边界，必须先通过再聚合。既有恢复ID仅消费，不重定义；clientMessageId不替代Provider messageId。",
+      "note": "2026-09-18初稿、2026-09-19通信核查修订；产品实现/新增V094验收/真机旅程未执行。既有Relay定向回归与32项Flutter基线通过，不代表新增场景通过。计划 docs/zh/迭代计划/迭代计划v0.9.4.md；18项全部必交付。真实Provider/模型和云端重启须独立授权，不沿用v0.9.3授权。"
     }
   ]
 }
