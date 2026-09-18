@@ -194,6 +194,14 @@ class _ChatBubble extends StatelessWidget {
                       onOpenFile: onOpenFile,
                     ),
                   ],
+                  // V094-06：消息级状态行（正在提交/已受理/处理中/恢复中/
+                  // 正在重发/结果待确认/发送失败）。失败用语义错误色，
+                  // 状态不只靠颜色表达（同时有文字）；canonical 历史节点
+                  // 无该行（状态未确认降级，不给全历史补写状态）。
+                  if (node.deliveryStatus != null) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    _DeliveryStatusLine(node: node, foreground: foreground),
+                  ],
                 ],
               ),
             ),
@@ -205,6 +213,61 @@ class _ChatBubble extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// V094-06：用户气泡内的消息级状态行。
+/// 文案来自 SessionSendPhase.userLabel；补充说明承载失败原因/核验提示。
+/// 状态不以颜色单独表达：图标 + 文字同时呈现，并带 Semantics 标签。
+class _DeliveryStatusLine extends StatelessWidget {
+  const _DeliveryStatusLine({required this.node, required this.foreground});
+
+  final ConversationNode node;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // 状态词是 UI 契约（SessionSendPhase.userLabel 冻结值），这里按词匹配
+    // 语义色调，避免 UI 层直接依赖 controller 内部枚举类型。
+    const failedLabel = '发送失败';
+    const verifyLabel = '结果待确认';
+    final isFailed = node.deliveryStatus == failedLabel;
+    final isVerify = node.deliveryStatus == verifyLabel;
+    final statusColor = isFailed
+        ? scheme.error
+        : isVerify
+        ? context.appColors.warning
+        : foreground.withValues(alpha: 0.78);
+    return Semantics(
+      label: '消息状态：${node.deliveryStatus}',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isFailed
+                ? Icons.error_outline
+                : isVerify
+                ? Icons.help_outline
+                : Icons.schedule_outlined,
+            size: AppSizes.iconSm,
+            color: statusColor,
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Flexible(
+            child: Text(
+              node.deliveryDetail == null
+                  ? node.deliveryStatus!
+                  : '${node.deliveryStatus} · ${node.deliveryDetail}',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: statusColor,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }

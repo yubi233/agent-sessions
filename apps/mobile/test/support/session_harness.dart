@@ -23,7 +23,7 @@ Future<MobileAppHarness> openWritableSession(
   await tester.pumpWidget(harness.build());
   await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
   await openSessionDetailFromRecent(tester, harness, sessionId);
-  await waitForVisible(tester, find.text('可操作'));
+  await waitForVisible(tester, find.text('可控制'));
   return harness;
 }
 

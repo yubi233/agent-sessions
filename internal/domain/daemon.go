@@ -522,6 +522,28 @@ func (s *DaemonService) Acknowledge(ctx context.Context, accountID, deviceID, ro
 	return result, nil
 }
 
+// modelFromFixtureCiphertext 从 session.model_select 命令存储的 fixture envelope
+// 中提取模型（V094-24：仅供 daemon result 确认成功后的权威元数据写入）。
+// 真实 E2EE 密文不含可解析明文，返回空值；本地开发/fixture 路径用于同步会话展示模型。
+func modelFromFixtureCiphertext(raw string) string {
+	// 存储形状与 SubmitCommandRequest.Ciphertext 一致：
+	// {"session_id":..., "ciphertext":{"fixture_payload":{"model":...}}}
+	var envelope struct {
+		Ciphertext struct {
+			FixturePayload struct {
+				Model string `json:"model"`
+			} `json:"fixture_payload"`
+		} `json:"ciphertext"`
+	}
+	if raw == "" {
+		return ""
+	}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.Ciphertext.FixturePayload.Model)
+}
+
 // Resolve 把 Terminal 的终态写回命令。详细输出不能塞入 result API，必须走 event_id 幂等的
 // 密文 event 上传；这样 status 轮询不会扩大 Provider 文本可见范围。
 func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, status, errorCode string) (DaemonCommandReceipt, error) {
@@ -567,6 +589,17 @@ func (s *DaemonService) Resolve(ctx context.Context, accountID, deviceID, role, 
 		delivery.UpdatedAtUnixMS = s.now().UnixMilli()
 		if err := tx.UpdateDaemonDelivery(ctx, delivery); err != nil {
 			return err
+		}
+		// V094-24（计划 §2.5）：model_select 的会话模型元数据只在命令被执行端
+		// 确认成功后写入——受理阶段的乐观投影会把"请求值"冒充"生效值"。
+		// fixture_payload 与 localdev 明文路径可提取模型；真实 E2EE 密文保持
+		// 空值，元数据由 Daemon 的会话模式快照同步，语义不变。
+		if status == CommandSucceeded && cmd.Kind == "session.model_select" {
+			if model := modelFromFixtureCiphertext(cmd.CiphertextJSON); model != "" {
+				if err := tx.SetSessionModel(ctx, cmd.SessionID, model); err != nil {
+					return err
+				}
+			}
 		}
 		if err := tx.AppendAudit(ctx, cmd.AccountID, "daemon.command_resolved", `{"command_id":"`+cmd.ID+`","status":"`+status+`"}`); err != nil {
 			return err

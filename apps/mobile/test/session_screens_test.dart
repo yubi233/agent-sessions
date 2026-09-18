@@ -44,7 +44,7 @@ void main() {
     expect(find.textContaining('邮箱'), findsNothing);
     expect(find.textContaining('密码'), findsNothing);
     // 打开会话即自动获取单写者租约：composer 不再出现拦截提示，直接可发送。
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
     expect(
       find.byKey(const Key('session-composer-blocked-reason')),
       findsNothing,
@@ -257,7 +257,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')),
     );
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
     await _tapVisible(
       tester,
       find.byKey(const Key('session-quick-menu-button')),
@@ -357,7 +357,7 @@ void main() {
     await _openSessionDetailFromRecent(tester, harness, firstId);
 
     // 打开会话即自动获取 lease；输入草稿。
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
     await _enterVisible(
       tester,
       find.byKey(const Key('session-composer-input')),
@@ -2148,12 +2148,12 @@ void main() {
   ) async {
     final (harness, _) = await _openSeededWritableSession(tester);
 
-    // codex fixture 可用且带版本：展示「已连接 · v...」。
+    // V094-02：codex fixture 可用且带版本 → 展示「执行服务可用 · v...」（能力可用性，不再写“已连接”冒充实时连接）。
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-provider-version-chip')),
     );
-    expect(find.textContaining('已连接'), findsOneWidget);
+    expect(find.textContaining('执行服务可用'), findsOneWidget);
 
     // 探测失败路径：全部 Provider unavailable -> 状态条 fail-closed 展示。
     // force 绕过 15 秒节流（打开会话自动刷新即走 force 通道）。
@@ -2169,7 +2169,7 @@ void main() {
       tester,
       find.byKey(const Key('session-provider-version-chip')),
     );
-    expect(find.text('未连接'), findsOneWidget);
+    expect(find.text('执行服务不可用'), findsOneWidget);
     // 失败原因通过 chip 的 Tooltip 表达（白名单 reason）。
     final tooltip = tester.widget<Tooltip>(
       find
@@ -2272,7 +2272,7 @@ Future<MobileAppHarness> _openWritableSession(
   await tester.pumpWidget(harness.build());
   await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
   await _openSessionDetailFromRecent(tester, harness, sessionId);
-  await _waitForVisible(tester, find.text('可操作'));
+  await _waitForVisible(tester, find.text('可控制'));
   return harness;
 }
 
@@ -2358,7 +2358,7 @@ Future<(MobileAppHarness, String)> _openSeededWritableSession(
   await tester.pumpWidget(harness.build());
   await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
   await _openSessionDetailFromRecent(tester, harness, sessionId);
-  await _waitForVisible(tester, find.text('可操作'));
+  await _waitForVisible(tester, find.text('可控制'));
   return (harness, sessionId);
 }
 

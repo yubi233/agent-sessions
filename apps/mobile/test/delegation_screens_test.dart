@@ -50,7 +50,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
     expect(
       find.byKey(const Key('delegation-security-boundary')),
       findsOneWidget,
@@ -111,7 +111,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
     await _tapVisible(
       tester,
       find.byKey(Key('delegation-reject-${rejected.id}')),
@@ -136,7 +136,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
     final approve = tester.widget<IconButton>(
       find.byKey(Key('delegation-approve-${unsupported.id}')),
     );
@@ -217,7 +217,7 @@ void main() {
       tester,
       find.byKey(const Key('session-acquire-lease-button')).first,
     );
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
     await _tapVisible(
       tester,
       find.byKey(Key('delegation-approve-${proposal.id}')),
@@ -294,7 +294,7 @@ void main() {
       tester,
       find.byKey(const Key('delegation-propose-blocked')),
     );
-    expect(find.textContaining('可操作'), findsWidgets);
+    expect(find.textContaining('可控制'), findsWidgets);
     expect(
       await harness.relay.listSessionDelegations(parentId),
       isEmpty,
@@ -317,7 +317,7 @@ Future<void> _createAndAcquireParent(WidgetTester tester) async {
   );
   await _tapVisible(tester, find.byKey(Key('recent-session-$sessionId')));
   await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-  await _waitForVisible(tester, find.text('可操作'));
+  await _waitForVisible(tester, find.text('可控制'));
 }
 
 Future<void> _refreshSession(WidgetTester tester) async {

@@ -134,7 +134,7 @@ Future<void> _openComposer(WidgetTester tester) async {
   await _waitFor(tester, find.byKey(Key('recent-session-$sessionId')));
   await tester.tap(find.byKey(Key('recent-session-$sessionId')));
   await _waitFor(tester, find.byKey(const Key('session-detail-screen')));
-  await _waitFor(tester, find.text('可操作'));
+  await _waitFor(tester, find.text('可控制'));
   await tester.ensureVisible(find.byKey(const Key('session-composer-input')));
   await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('session-composer-input')));

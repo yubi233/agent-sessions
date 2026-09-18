@@ -1049,13 +1049,9 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	// model_select 是会话级偏好：受理后立即把新模型同步到 Relay 会话元数据，
-	// 避免 App 端显示仍停留在旧模型（真实模型调用失败时尤其明显）。
-	if req.Kind == "session.model_select" {
-		if model := modelFromCommandCiphertext(req.Ciphertext); model != "" {
-			_ = a.Repo.SetSessionModel(c.Request.Context(), cmd.SessionID, model)
-		}
-	}
+	// V094-24（计划 §2.5）：model_select 的会话模型元数据改由 daemon result
+	// 确认成功后写入（internal/domain Resolve）。受理阶段的乐观更新会把
+	// "请求值"冒充"生效值"，导致移动端把切换中当成已生效。
 	// 投递已经随命令事务提交；Hub 只缩短已连接 Daemon 的可见延迟，断线恢复仍读取 SQLite。
 	if cmd.TargetTerminalID != "" {
 		if delivery, deliveryErr := a.Sessions.DaemonDeliveryForCommand(c.Request.Context(), cmd.ID); deliveryErr == nil {
@@ -1065,8 +1061,6 @@ func (a *API) handleSubmitCommand(c *gin.Context) {
 	c.JSON(http.StatusAccepted, newCommandView(cmd))
 }
 
-// modelFromCommandCiphertext 从 session.model_select 命令的 fixture envelope 中提取模型。
-// 真实 E2EE 下 Relay 不解密，保留空值；本地开发/fixture 路径下用于同步会话展示模型。
 // permissionModeIDs 把 Relay 存储的 mode 对象行 JSON 压缩为 id 字符串数组（v0.8.5 §3.4）。
 // 存储格式来自 Daemon 上行（含 id/name/description），controls 下发只取 id，
 // 与能力矩阵 options / 移动端 List<String> 契约保持一致；解析失败返回空。
@@ -1140,23 +1134,6 @@ func permissionModeCatalog(modesJSON string) []sessionPermissionModeDetail {
 		})
 	}
 	return catalog
-}
-
-func modelFromCommandCiphertext(raw json.RawMessage) string {
-	var envelope struct {
-		Ciphertext struct {
-			FixturePayload struct {
-				Model string `json:"model"`
-			} `json:"fixture_payload"`
-		} `json:"ciphertext"`
-	}
-	if len(raw) == 0 {
-		return ""
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(envelope.Ciphertext.FixturePayload.Model)
 }
 
 // Delegation 请求只包含密文任务书/摘要、目标 Provider 与父会话 fencing；不接受正文、路径或 child 会话内容。

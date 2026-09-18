@@ -19,6 +19,7 @@ import '../state/delegation_controller.dart';
 import '../state/lifecycle_recovery_controller.dart';
 import '../state/session_composer_controller.dart';
 import '../state/session_controller.dart';
+import '../state/session_presentation_state.dart';
 import '../state/session_turn_runtime.dart';
 import '../state/session_message_feedback_controller.dart';
 import '../state/session_projection_controller.dart';
@@ -1970,7 +1971,14 @@ class _SessionChatView extends StatelessWidget {
     );
     // 乐观回显：canonical user.message 回传前，先把待确认的出站文本挂在时间线尾部，
     // 让发送的内容立刻可见；规范化事件合并后由 controller 清账，本节点随之消失。
+    // V094-06：气泡出现 ≠ 已送达——节点挂载事务的阶段状态（正在提交/已受理/
+    // 处理中/恢复中/正在重发/结果待确认/发送失败），canonical 历史节点保持无状态。
     final pendingOutgoing = sessions.pendingOutgoingMessage;
+    final activeTx = sessions.activeSendTransaction;
+    final pendingIsTxText =
+        activeTx != null &&
+        (pendingOutgoing ?? '').isNotEmpty &&
+        activeTx.text == pendingOutgoing;
     final chatNodes = [
       ...projection.chatNodes,
       if ((pendingOutgoing ?? '').isNotEmpty)
@@ -1981,7 +1989,11 @@ class _SessionChatView extends StatelessWidget {
           label: '你',
           text: pendingOutgoing,
           copyText: pendingOutgoing,
-          isStreaming: true,
+          isStreaming: activeTx == null || !activeTx.isTerminal,
+          // 消息级状态只在"回显属于当前事务"时展示；回显被其它来源
+          // 复用时不给节点安状态，避免把旧文本误标成新事务。
+          deliveryStatus: pendingIsTxText ? activeTx.phase.userLabel : null,
+          deliveryDetail: pendingIsTxText ? activeTx.errorDetail : null,
         ),
     ];
     // v0.5/P2：Chat 只消费 projection nodes；permission/question pending 已被投影层排除，
@@ -2297,6 +2309,12 @@ class _SessionDetailScreenState extends ConsumerState<SessionDetailScreen> {
             hasLease: sessions.hasSelectedLease,
             canWrite: app.canManageDevices,
             provider: sessions.selectedProviderCapabilities,
+            // V094-01/02：单一主状态与分维度事实标签由同一投影派生，
+            // 状态条/composer/状态槽不再各自拼状态。
+            presentation: sessions.buildPresentationState(
+              canWrite: app.canManageDevices,
+              hasLease: sessions.hasSelectedLease,
+            ),
             onAcquireLease: app.canManageDevices && !sessions.isBusy
                 ? () => sessions.acquireSelectedLease(
                     deviceId: app.currentDevice?.id,
@@ -5418,6 +5436,7 @@ class _SessionStatusStrip extends StatelessWidget {
     required this.hasLease,
     required this.canWrite,
     required this.provider,
+    required this.presentation,
     required this.onAcquireLease,
   });
 
@@ -5432,16 +5451,38 @@ class _SessionStatusStrip extends StatelessWidget {
 
   /// v0.3/P1：Provider 能力快照（version/available/reason 白名单），用于连接态与版本提示。
   final ProviderCapabilityProfile provider;
+
+  /// V094-01/02：单一主状态与分维度事实标签（可控制/只读、执行服务可用性、
+  /// 真实连接）。本组件不再自行拼接状态语义。
+  final SessionPresentationState presentation;
   final VoidCallback? onAcquireLease;
 
   @override
   Widget build(BuildContext context) {
-    final status = _sessionStatusPresentation(session, turnInFlight: turnInFlight);
+    // V094-01：主状态唯一来源是展示投影（不再与下方 Provider/角色/lease
+    // 标签各自表述）；V094-02：角色表述为"可控制/只读"，不承诺"可操作"。
+    final status = _SessionStatusPresentation(
+      label: presentation.primaryLabel,
+      // V094-17：状态图标随主状态语义（不只是颜色表达）。
+      icon: switch (presentation.tone) {
+        SessionPresentationTone.error => Icons.error_outline,
+        SessionPresentationTone.attention => Icons.priority_high_outlined,
+        SessionPresentationTone.busy => Icons.autorenew_outlined,
+        SessionPresentationTone.success => Icons.check_circle_outline,
+        SessionPresentationTone.neutral => Icons.radio_button_unchecked,
+      },
+      tone: switch (presentation.tone) {
+        SessionPresentationTone.neutral => _SessionStatusTone.neutral,
+        SessionPresentationTone.busy => _SessionStatusTone.info,
+        SessionPresentationTone.success => _SessionStatusTone.success,
+        SessionPresentationTone.attention => _SessionStatusTone.warning,
+        SessionPresentationTone.error => _SessionStatusTone.error,
+      },
+    );
     final statusColor = _sessionStatusColor(context, status.tone);
-    // v0.9：lease 在写操作时自动获取（见 SessionController._submitCommand），
-    // 不再是需要用户手动点按的前置状态；这里只区分只读与可写。
-    final leaseText = !canWrite ? '只读' : '可操作';
-    // v0.3/P1：Provider 连接态与版本只来自 capability 白名单；探测失败时展示 fail-closed 原因。
+    final leaseText = presentation.roleLabel;
+    // V094-02：provider.available 是执行能力可用性（探测结果），不是实时
+    // 连接；能力标签写"执行服务可用/不可用"，真实连接单独由投影表达。
     final providerConnected = provider.available;
     final providerVersion = provider.version.trim();
     final providerReason = provider.capabilities
@@ -5450,13 +5491,13 @@ class _SessionStatusStrip extends StatelessWidget {
         .whereType<String>()
         .firstOrNull;
     final providerLabel = !providerConnected
-        ? '未连接'
+        ? '执行服务不可用'
         : providerVersion.isNotEmpty
-        ? '已连接 · v$providerVersion'
-        : '已连接';
+        ? '执行服务可用 · v$providerVersion'
+        : '执行服务可用';
     final providerTooltip = !providerConnected
         ? (providerReason ?? 'Provider 当前不可用。')
-        : 'Provider 版本仅来自探测结果。';
+        : 'Provider 版本仅来自探测结果；实时连接单独显示。';
     return Container(
       key: const Key('session-status-strip'),
       width: double.infinity,
@@ -5480,11 +5521,29 @@ class _SessionStatusStrip extends StatelessWidget {
             ),
             const SizedBox(width: AppSpacing.sm),
             Expanded(
-              child: Text(
-                status.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.labelMedium,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      status.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelMedium,
+                    ),
+                  ),
+                  // V094 §2.1：stopped 可写时的行动提示，独立词渲染。
+                  if (presentation.actionHint != null) ...[
+                    const SizedBox(width: AppSpacing.xs),
+                    Text(
+                      presentation.actionHint!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             Flexible(

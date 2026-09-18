@@ -144,6 +144,12 @@ class ConversationNode {
     this.producedFiles = const [],
     this.feedbackAvailable = false,
     this.completedTurn = false,
+    // V094-06：消息级投递/事务状态（"已受理，等待执行"等）。
+    // 只允许 LocalSend 投影填充；canonical 历史节点保持 null（状态未确认降级），
+    // 不得把气泡出现解释成"已送达"。
+    this.deliveryStatus,
+    // V094-06：失败/待确认时的结构化补充（错误码/核验提示），随状态展示。
+    this.deliveryDetail,
   });
 
   /// 稳定 key 由投影层生成，后续 UI keyed renderer 只能依赖该 key。
@@ -195,6 +201,12 @@ class ConversationNode {
   /// host; a missing handler renders the controls unavailable.
   final bool feedbackAvailable;
   final bool completedTurn;
+
+  /// V094-06：消息级事务状态词；null 表示无本地事务事实（旧事件/历史节点）。
+  final String? deliveryStatus;
+
+  /// V094-06：状态补充说明（失败原因/结果待确认核验提示）。
+  final String? deliveryDetail;
 }
 
 enum ComposerPendingKind { approval, question }

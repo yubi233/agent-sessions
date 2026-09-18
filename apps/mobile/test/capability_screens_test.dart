@@ -222,7 +222,7 @@ Future<void> _openWritableFixtureSession(
   );
   await _tapVisible(tester, find.byKey(Key('recent-session-$sessionId')));
   await _waitForVisible(tester, find.byKey(const Key('session-detail-screen')));
-  await _waitForVisible(tester, find.text('可操作'));
+  await _waitForVisible(tester, find.text('可控制'));
 }
 
 Future<void> _waitForVisible(

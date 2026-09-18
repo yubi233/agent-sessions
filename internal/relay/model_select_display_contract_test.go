@@ -2,6 +2,7 @@ package relay
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -29,7 +30,44 @@ func TestModelSelectUpdatesRelaySessionModel(t *testing.T) {
 	if submit.Code != http.StatusAccepted {
 		t.Fatalf("model_select status=%d body=%s", submit.Code, submit.Body.String())
 	}
+	var submitted struct {
+		ID string `json:"id"`
+	}
+	decodeW1(t, submit.Body.Bytes(), &submitted)
+	if submitted.ID == "" {
+		t.Fatalf("command projection missing id")
+	}
 
+	// V094-24：受理阶段不得把请求值冒充生效值——controls 仍显示旧（权威）模型。
+	controlsBefore := env.do(t, http.MethodGet, "/v1/sessions/"+sessionID+"/controls", nil, owner.AccessToken)
+	if controlsBefore.Code != http.StatusOK {
+		t.Fatalf("controls before result status=%d", controlsBefore.Code)
+	}
+	if strings.Contains(controlsBefore.Body.String(), "opencode/mimo-v2.5-free") {
+		t.Fatalf("受理阶段 controls 泄漏请求值冒充生效值: %s", controlsBefore.Body.String())
+	}
+
+	// Daemon 生命周期：投递 → received/started ack → result succeeded。
+	streamBody := streamDaemonOnce(t, env, terminal.AccessToken, 0)
+	if !strings.Contains(streamBody, submitted.ID) {
+		t.Fatalf("daemon stream missing delivery: %s", streamBody)
+	}
+	for _, kind := range []string{"received", "started"} {
+		ack := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.ID+"/ack", map[string]any{
+			"protocol_version": 1, "delivery_seq": 1, "ack_kind": kind,
+		}, terminal.AccessToken)
+		if ack.Code != http.StatusOK {
+			t.Fatalf("ack %s status=%d body=%s", kind, ack.Code, ack.Body.String())
+		}
+	}
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+submitted.ID+"/result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 1, "status": "succeeded",
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("result status=%d body=%s", result.Code, result.Body.String())
+	}
+
+	// 执行端确认成功后，权威投影才更新模型（V094-24 冻结契约）。
 	controls := env.do(t, http.MethodGet, "/v1/sessions/"+sessionID+"/controls", nil, owner.AccessToken)
 	if controls.Code != http.StatusOK {
 		t.Fatalf("controls status=%d body=%s", controls.Code, controls.Body.String())

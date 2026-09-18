@@ -12,6 +12,8 @@ import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
 import '../relay/session_event_transport.dart';
 import '../relay/session_sse.dart';
+import 'session_send_transaction.dart';
+import 'session_presentation_state.dart';
 import '../storage/model_effort_preference_store.dart';
 import 'session_composer_controller.dart';
 import 'session_turn_runtime.dart';
@@ -130,6 +132,52 @@ class SessionController extends ChangeNotifier {
   /// 非空时该会话的 Chat 时间线尾部渲染乐观回显气泡；规范化事件合并后立即清账，
   /// 会话切换互不泄漏。
   final Map<String, String> _pendingOutgoingBySession = <String, String>{};
+
+  // ── V094（计划 §2.2/§2.4）：消息发送事务账本 ────────────────────────────
+  /// 每会话最新发送事务（一次显式发送一个逻辑事务）。
+  /// 失败/待确认事务保留在槽内作为"消息待处理项"（失败内容不回填草稿、
+  /// 不删除记录），新一次显式发送或"编辑后重试"会将其取代。
+  final Map<String, SessionSendTransaction> _sendTxBySession =
+      <String, SessionSendTransaction>{};
+  int _sendTxCounter = 0;
+
+  /// 草稿 revision 计数：输入内容变化即推进（V094 §2.4 结算身份之一）。
+  final Map<String, int> _draftRevisionsBySession = <String, int>{};
+
+  /// 当前会话的活动发送事务；无事务时为 null。
+  SessionSendTransaction? get activeSendTransaction => _selectedSessionId == null
+      ? null
+      : _sendTxBySession[_selectedSessionId!];
+
+  /// 当前会话最近一个失败/待确认的事务（手动重试与"编辑后重试"入口的事实来源）。
+  SessionSendTransaction? get lastInterruptedSendTransaction {
+    final tx = activeSendTransaction;
+    if (tx == null) return null;
+    if (tx.phase == SessionSendPhase.failed ||
+        tx.phase == SessionSendPhase.verifying) {
+      return tx;
+    }
+    return null;
+  }
+
+  /// "编辑后重试"：把失败事务正文转回草稿。仅当当前草稿为空时允许
+  /// （禁止覆盖新草稿，§2.4）；成功后失败事务记录让位。
+  /// 返回 null 表示不允许（当前草稿非空）；返回正文表示已接管。
+  String? consumeFailedSendForEdit() {
+    final sessionId = _selectedSessionId;
+    final tx = lastInterruptedSendTransaction;
+    if (sessionId == null || tx == null) return null;
+    final current = _composerDrafts[sessionId];
+    if (current != null && current.trim().isNotEmpty) {
+      return null;
+    }
+    _sendTxBySession.remove(sessionId);
+    if (_pendingOutgoingBySession[sessionId] == tx.text) {
+      _pendingOutgoingBySession.remove(sessionId);
+    }
+    _notifyListeners();
+    return tx.text;
+  }
   // v0.8.6 A①：会话级"回合超时"标记。客户端轮询窗口（前台+后台约 2 分钟）
   // 耗尽仍无终态时置位，UI 据此把"处理中"收敛为显式超时文案；迟到的
   // daemon 看门狗 / Provider 终态事件到达后按事件校正清除。
@@ -175,6 +223,155 @@ class SessionController extends ChangeNotifier {
 
   /// 当前自动恢复提示；非空时 Chat 视图渲染恢复提示行。
   String? get recoveryNotice => _recoveryNotice;
+
+  // ── V094（计划 §2.3）：结构化恢复阶段 ──────────────────────────────────
+  /// 恢复链当前步骤（resume → 必要时 start → send#recovered → 结果核验）。
+  /// 从执行路径写入，不在 resume 返回时提前清除；无确证 cause 时用
+  /// "正在恢复会话"，不断言"检测到终端已重启"。
+  SessionRecoveryStep? _recoveryStage;
+
+  /// 当前会话的结构化恢复阶段；null 表示无恢复活动。
+  SessionRecoveryStep? get recoveryStage => _selectedSessionId == null
+      ? _recoveryStage
+      : (_sendTxBySession[_selectedSessionId!]?.recoveryStep ?? _recoveryStage);
+
+  // ── V094-24/25：配置确认状态与操作幂等身份 ──────────────────────────
+  /// 每控制域（model/effort/permission）当前确认记录。
+  final Map<String, ControlDomainConfirmation> _configConfirmations =
+      <String, ControlDomainConfirmation>{};
+
+  /// 每控制域的串行锁：确认期间后续显式选择排队串行（§2.5）。
+  final Map<String, Future<void>> _configDomainLocks =
+      <String, Future<void>>{};
+
+  int _configActionCounter = 0;
+
+  /// 读取控制域确认状态（UI 摘要行显示"切换中/待确认/失败"的事实来源）。
+  ControlDomainConfirmation? configConfirmationFor(String domain) =>
+      _configConfirmations[domain];
+
+  /// 在指定控制域串行执行 [action]：前序确认未结束时等待其完成。
+  Future<T> _serializedConfigAction<T>(
+    String domain,
+    Future<T> Function() action,
+  ) {
+    final previous = _configDomainLocks[domain];
+    Future<T> run() async {
+      if (previous != null) {
+        try {
+          await previous;
+        } catch (_) {
+          // 前序失败不阻塞本次显式选择（失败已有独立错误面）。
+        }
+      }
+      return action();
+    }
+    final future = run();
+    _configDomainLocks[domain] = future.then(
+      (_) {},
+      onError: (_) {},
+    );
+    return future;
+  }
+
+  /// 记录确认状态并通知。
+  void _setConfigConfirmation(ControlDomainConfirmation confirmation) {
+    _configConfirmations[confirmation.domain] = confirmation;
+    _notifyListeners();
+  }
+
+  /// 命令成功后的权威投影核验：controls 值与请求值一致才标"已生效"；
+  /// 投影滞后时有界重查（3 拍），仍不一致进入"结果待确认"。
+  Future<void> _verifyConfigConfirmation(
+    String domain,
+    String requested,
+    String Function(SessionControlState controls) effectiveValueOf,
+  ) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final controls = await _relay.getSessionControls(_selectedSessionId!);
+        if (effectiveValueOf(controls) == requested) {
+          // 权威投影一致：刷新本地 controls 并标"已生效"。
+          if (_selectedSessionId != null) {
+            _controls = controls;
+          }
+          _setConfigConfirmation(
+            ControlDomainConfirmation(
+              domain: domain,
+              state: ControlConfirmState.applied,
+              requested: requested,
+            ),
+          );
+          return;
+        }
+      } catch (_) {
+        // 投影拉取失败按滞后处理，走重查。
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    _setConfigConfirmation(
+      ControlDomainConfirmation(
+        domain: domain,
+        state: ControlConfirmState.unknown,
+        requested: requested,
+        detail: '执行端已确认，但权威投影尚未一致，请稍后核验',
+      ),
+    );
+  }
+
+  /// V094：展示投影使用的网络事实。由应用层（恢复绑定/连接性事件）回报；
+  /// 默认 true 表示"无离线事实"，不伪造离线状态。
+  bool presentationNetworkAvailable = true;
+
+  /// V094-01/02：会话单一展示状态投影的唯一派生入口。
+  /// header 状态条、状态槽与 composer 门控都消费同一份投影，
+  /// widget 不得各自再写恢复/可发送判断（§2.1 冻结）。
+  SessionPresentationState buildPresentationState({
+    required bool canWrite,
+    required bool hasLease,
+  }) {
+    final sessionId = _selectedSessionId;
+    final tx = sessionId == null ? null : _sendTxBySession[sessionId];
+    return SessionPresentationState.fromFacts(
+      SessionPresentationFacts(
+        status: selectedSession?.status ?? MobileSessionStatus.unknown,
+        canWrite: canWrite,
+        hasLease: hasLease,
+        providerAvailable: selectedProviderCapabilities.available,
+        providerReason: selectedProviderCapabilities.capabilities
+            .where((entry) => entry.name == 'start')
+            .map((entry) => entry.reason)
+            .whereType<String>()
+            .firstOrNull,
+        transportLive:
+            sessionId != null &&
+            _sessionEventTransport != null &&
+            _sessionEventTransport!.sessionId == sessionId &&
+            _sessionEventTransport!.state == SessionEventTransportState.live,
+        networkAvailable: presentationNetworkAvailable,
+        turnInFlight: isTurnInFlight,
+        streaming: isStreaming,
+        timedOut: isTurnTimedOut(sessionId),
+        recoveryStage: recoveryStage,
+        transactionPhase: tx?.phase,
+        transactionDetail: tx?.errorDetail,
+        errorMessage: errorMessage,
+      ),
+    );
+  }
+
+  /// V094-05：取消尚未提交的自动后续步骤。
+  /// 已提交的命令不能被虚假标为已取消——它们按既有 abort 能力处理；
+  /// 本入口只设置事务取消 token，阻止 resume/start/resend 等未提交步骤。
+  bool cancelAutoRecovery() {
+    final sessionId = _selectedSessionId;
+    if (sessionId == null) return false;
+    final tx = _sendTxBySession[sessionId];
+    if (tx == null || tx.isTerminal) return false;
+    tx.cancelRequested = true;
+    _notifyListeners();
+    return true;
+  }
 
   /// 当前选中会话尚未被规范化事件确认的本机回显文本；null 表示无待确认出站消息。
   /// 该会话的回合是否已被客户端判定超时（V086-11）：UI 据此把"处理中"
@@ -1430,7 +1627,16 @@ class SessionController extends ChangeNotifier {
     if (!force && selectedSession?.status != MobileSessionStatus.stopped) {
       return true;
     }
-    _recoveryNotice = '检测到终端已重启，正在自动恢复会话并重发…';
+    // V094-05：结构化恢复阶段与可见提示同步写入。cause 无确证时不断言
+    // "检测到终端已重启"（§2.1），阶段从执行路径推进、结束即清除。
+    _recoveryNotice = '正在自动恢复会话…';
+    _recoveryStage = SessionRecoveryStep(
+      step: 'resume',
+      attempt: 1,
+      maxAttempts: 1,
+      detail: '正在恢复会话',
+      cancelable: true,
+    );
     _notifyListeners();
     try {
       return await _ensureSessionRunnableForSendInner(
@@ -1439,6 +1645,7 @@ class SessionController extends ChangeNotifier {
       );
     } finally {
       _recoveryNotice = null;
+      _recoveryStage = null;
       _notifyListeners();
     }
   }
@@ -1566,11 +1773,32 @@ class SessionController extends ChangeNotifier {
     // 与模型选择器同源：空模型会让 opencode 服务端回退到它的配置默认，
     // 可能命中付费订阅条目，所以发送时必须携带当前生效模型。
     final sessionModel = _controls.model ?? _controls.defaultModel ?? '';
+    // ── V094（§2.2）：一次显式发送 = 一个逻辑事务 ─────────────────────────
+    // clientMessageId 稳定标识本次发送（自动重发复用；两次显式发送必不同）；
+    // draftRevision 记录提交时刻的草稿版本（结算按身份，不按全文对账）。
+    final tx = SessionSendTransaction(
+      submissionId: 'sendtx-$sessionId-${_sendTxCounter += 1}',
+      sessionId: sessionId,
+      clientMessageId:
+          'cmsg-$sessionId-${_clock().microsecondsSinceEpoch}-${_sendTxCounter + 1}',
+      text: trimmed,
+      draftRevision: _draftRevisionsBySession[sessionId] ?? 0,
+      baseOperation: operation,
+      createdAt: _clock(),
+      deviceId: deviceId,
+      canWrite: canWrite,
+    );
+    _sendTxBySession[sessionId] = tx;
     // 乐观回显：不等 daemon 事件回传，先在本地挂出待确认的用户气泡。
     _pendingOutgoingBySession[sessionId] = trimmed;
     _notifyListeners();
     // 重试时只换幂等键，密文与意图保持一致（同一份用户输入不被重复引用附件）。
-    Future<bool> submitSend(String opKey) => _submitCommand(
+    // background=true（UI 路径）：202 受理即返回，回执观察/恢复链/回合轮询全部
+    // 转入后台事务观察器——提交锁不再锁住整个 composer（V094-23）。
+    Future<bool> submitSend(
+      String opKey, {
+      bool background = false,
+    }) => _submitCommand(
       sessionId: sessionId,
       operation: opKey,
       kind: SessionCommandKind.send,
@@ -1591,25 +1819,47 @@ class SessionController extends ChangeNotifier {
       },
       awaitTurnCompletion: awaitTurnCompletion,
       submissionIntent: intent,
+      // V094：受理后命令 ID 回填事务账本；background 时不再在 action 内
+      // 等待回执/回合，由 _observeSendTransaction 接管。
+      deferSendObservation: background,
+      onCommandAccepted: (commandId) => tx.currentCommandId = commandId,
     );
-    var accepted = await submitSend(operation);
+    // UI 路径（composer 的 awaitTurnCompletion=false）把观察转后台；
+    // 直调方（历史测试/恢复链内部）保持内联观察语义不变。
+    final observeInBackground = !awaitTurnCompletion;
+    var accepted = await submitSend(operation, background: observeInBackground);
     // v0.9.2 P2 修正（R14 真机暴露）：发送被执行侧以「本机没有该会话实例」拒绝时
     // 自动恢复并重试一次。触发条件是**执行侧错误**而不是客户端 status——
     // Daemon 重启/state 清理会丢失实例映射，但 Relay 的 session 投影往往仍是
     // idle/running，`_ensureSessionRunnableForSend` 的 status 短路因此不会触发，
     // 用户看到的现象是「显示空闲却发不出去」。
+    // V094：该链在后台观察器内执行（结构化阶段恢复中 → 正在重发 1/1）；
+    // 内联路径保持既有顺序。
     if (!accepted && _looksLikeMissingLocalInstance(_errorMessage)) {
       _errorMessage = null;
       _notifyListeners();
-      final recovered = await _ensureSessionRunnableForSend(
+      final recovered = await _recoverForSendTransaction(
+        tx,
         deviceId: deviceId,
         canWrite: canWrite,
-        force: true,
       );
       if (recovered) {
         // 幂等键必须变化：Relay 按 operation 去重，沿用旧键会直接返回上一次
-        // 失败的命令，重试形同虚设。
-        accepted = await submitSend('$operation#recovered');
+        // 失败的命令，重试形同虚设。clientMessageId 保持不变（同一逻辑消息）。
+        tx.resendCount += 1;
+        tx.phase = SessionSendPhase.resending;
+        tx.recoveryStep = SessionRecoveryStep(
+          step: 'resend',
+          attempt: tx.resendCount,
+          maxAttempts: tx.maxResends,
+          detail: '正在重发上一条消息',
+        );
+        _notifyListeners();
+        accepted = await submitSend(
+          '$operation#recovered',
+          background: observeInBackground,
+        );
+        tx.recoveryStep = null;
       }
     }
     if (accepted) {
@@ -1621,14 +1871,284 @@ class SessionController extends ChangeNotifier {
         _attachmentsBySession[sessionId] = const [];
         _attachments = const [];
       }
+      tx.phase = awaitTurnCompletion
+          ? tx.phase // 内联观察已在 _submitCommand 内完成收敛
+          : SessionSendPhase.accepted;
+      if (!awaitTurnCompletion) {
+        // UI 路径：受理即返回；回执窗口/恢复链/结果核验转后台事务观察器。
+        unawaited(_observeSendTransaction(tx));
+      }
+    } else {
+      // 提交被拒（验证失败/受理失败）：尚未形成消息事务事实，正文留在
+      // 输入框（既有错误面语义）；事务从账本移除，乐观回显清掉避免双气泡。
+      if (_sendTxBySession[sessionId] == tx) {
+        _sendTxBySession.remove(sessionId);
+      }
       _notifyListeners();
     }
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
       _pendingOutgoingBySession.remove(sessionId);
       _notifyListeners();
     }
-    // 发送成功后清除草稿，避免页面重建时把已发送内容重新填回输入框。
-    clearComposerDraft(sessionId);
+    if (accepted && awaitTurnCompletion) {
+      // 发送成功后清除草稿，避免页面重建时把已发送内容重新填回输入框。
+      // V094 §2.4：按事务结算——仅当草稿仍是本次提交的正文时才清空；
+      // 观察期间用户新写的草稿不允许被旧事务的迟到结算覆盖。
+      final currentDraft = _composerDrafts[sessionId];
+      if (currentDraft == null || currentDraft.trim() == trimmed) {
+        clearComposerDraft(sessionId);
+      }
+    }
+  }
+
+  /// 为发送事务执行恢复链（resume 优先 → 必要时 start），并把结构化阶段
+  /// 写入事务与全局恢复提示（V094-05：阶段真实、全程可见）。
+  Future<bool> _recoverForSendTransaction(
+    SessionSendTransaction tx, {
+    required String deviceId,
+    required bool canWrite,
+  }) async {
+    tx.phase = SessionSendPhase.recovering;
+    tx.recoveryStep = SessionRecoveryStep(
+      step: 'resume',
+      attempt: 1,
+      maxAttempts: tx.maxResends,
+      // cause 无确证时不断言"检测到终端已重启"（§2.1）。
+      detail: '正在恢复会话',
+      cancelable: true,
+    );
+    _notifyListeners();
+    final recovered = await _ensureSessionRunnableForSend(
+      deviceId: deviceId,
+      canWrite: canWrite,
+      force: true,
+    );
+    tx.recoveryStep = null;
+    return recovered;
+  }
+
+  /// V094（§2.5）：后台事务观察器——回执窗口、可信进展、恢复重发与结果核验。
+  ///
+  /// 口径冻结：
+  /// - 回执窗口 30s（sendReceiptPollAttempts，保留 V093-04）；失败回执优先于
+  ///   同步代际处理（V093-04b 不回退）；
+  /// - 窗口耗尽时：已有可信执行进展 → processing（结果仍在同步）；否则
+  ///   verifying（结果待确认）——均不等同失败；
+  /// - 自动重发最多 1 次，且尊重 cancelRequested（只取消尚未提交的步骤）；
+  /// - 事务按会话隔离：切会话/旧响应不影响其它会话事务，也不被其影响。
+  Future<void> _observeSendTransaction(SessionSendTransaction tx) async {
+    final commandId = tx.currentCommandId;
+    if (commandId == null) return;
+    final terminal = await _awaitCommandReceipt(
+      commandId,
+      maxAttempts: sendReceiptPollAttempts,
+      onPoll: () {
+        if (tx.hasTrustedProgress && tx.phase == SessionSendPhase.accepted) {
+          // 30s 窗口内已确认执行进展：状态槽从"已受理"升级为"处理中"，
+          // 但仍保留窗口继续等权威终态（不新发命令）。
+          tx.phase = SessionSendPhase.processing;
+          _notifyListeners();
+        }
+      },
+    );
+    if (tx.isTerminal) return;
+    if (terminal != null && terminal.status != 'succeeded') {
+      // 失败回执是本命令自己的结果，必须优先于代际/窗口处理（V093-04b）。
+      await _bestEffortRefreshAfterCommandFailure(tx.sessionId);
+      tx.errorCode = (terminal.errorCode ?? '').trim();
+      tx.errorDetail = terminal.errorCode == null || tx.errorCode!.isEmpty
+          ? '消息发送失败（命令 ${terminal.status}）'
+          : '消息发送失败（${tx.errorCode}）';
+      final recoverable = _looksLikeMissingLocalInstance(
+        tx.errorCode ?? tx.errorDetail,
+      );
+      if (recoverable &&
+          tx.resendCount < tx.maxResends &&
+          !tx.cancelRequested) {
+        // 事务观察器跟随提交时的设备身份，不依赖当前选中会话。
+        final recovered = await _recoverForSendTransaction(
+          tx,
+          deviceId: tx.deviceId,
+          canWrite: tx.canWrite,
+        );
+        if (recovered && !tx.cancelRequested) {
+          tx.resendCount += 1;
+          tx.phase = SessionSendPhase.resending;
+          tx.recoveryStep = SessionRecoveryStep(
+            step: 'resend',
+            attempt: tx.resendCount,
+            maxAttempts: tx.maxResends,
+            detail: '正在重发上一条消息',
+          );
+          _notifyListeners();
+          final retry = await _submitCommand(
+            sessionId: tx.sessionId,
+            operation: '${tx.baseOperation}#recovered',
+            kind: SessionCommandKind.send,
+            deviceId: tx.deviceId,
+            canWrite: tx.canWrite,
+            ciphertext: {
+              'fixture_payload': {'message': tx.text},
+            },
+            deferSendObservation: true,
+            onCommandAccepted: (id) => tx.currentCommandId = id,
+          );
+          tx.recoveryStep = null;
+          if (retry) {
+            final retryTerminal = await _awaitCommandReceipt(
+              tx.currentCommandId!,
+              maxAttempts: sendReceiptPollAttempts,
+            );
+            _settleSendTransaction(tx, retryTerminal);
+            _notifyListeners();
+            return;
+          }
+        }
+      }
+      // 不可恢复 / 已取消 / 重试后再次失败：保留失败事务（正文在内），
+      // 显示明确原因并提供一次手动重试入口（不盲目自动补发）。
+      tx.phase = tx.cancelRequested && tx.resendCount == 0
+          ? SessionSendPhase.cancelled
+          : SessionSendPhase.failed;
+      // 失败内容保留在消息事务槽内（失败节点接管展示），乐观回显不删除，
+      // 供手动重试/编辑后重试（§2.2 状态表：不盲目自动补发）。
+      _notifyListeners();
+      return;
+    }
+    _settleSendTransaction(tx, terminal);
+    _notifyListeners();
+    // 回执已收敛（成功或未知）：驱动回合完成轮询——首拍合并 + 未完成转
+    // 后台轮询（与内联观察同口径，V086 A① 60s+60s 预算不变）。
+    await _driveTurnPollingForTransaction(tx);
+  }
+
+  /// V094：事务观察器的回合完成轮询入口。defer 模式下 _submitCommand 在
+  /// 202 即返回，快照合并由这里接管；代际守卫由 _pollTurnCompletionInBackground
+  /// 自带（切换会话/认证切换后自动停止）。
+  Future<void> _driveTurnPollingForTransaction(SessionSendTransaction tx) async {
+    try {
+      // 首批快照已在 defer 收敛分支合并：若 canonical 终态已收口活动回合
+      // （_activeTurns 移除），无需再轮询——避免空转的后台轮询悬挂计时器。
+      if (!_activeTurns.containsKey(tx.sessionId)) {
+        return;
+      }
+      // 与内联路径同口径：全量回放（after_seq=0）+ replace 合并。
+      // 增量空快照会让 _snapshotCompletesTurn 丢失 question/审批等待等
+      // "非流式终局"证据，误判为回合在途并空转后台轮询。
+      final authGenerationAtDrive = _authGeneration;
+      final latest = await _relay.getSessionSnapshot(tx.sessionId);
+      if (_authGeneration == authGenerationAtDrive &&
+          _selectedSessionId == tx.sessionId) {
+        _mergeSnapshot(latest);
+      }
+      if (_snapshotCompletesTurn(latest)) {
+        await _refreshControlsAfterTurn(tx.sessionId);
+      } else if (_activeTurns.containsKey(tx.sessionId)) {
+        // 回合仍在途：转既有后台轮询（自带代际守卫，有界窗口）。
+        unawaited(_pollTurnCompletionInBackground(tx.sessionId, latest));
+      }
+    } catch (_) {
+      // 首拍失败不阻塞事务收敛：后台/前台刷新路径仍会补齐快照。
+    }
+  }
+
+  /// 按回执收敛事务：null（窗口耗尽/查询失败）按 §2.2 区分"处理中"与
+  /// "结果待确认"，绝不把未知结果假报为成功或失败。
+  void _settleSendTransaction(
+    SessionSendTransaction tx,
+    SessionCommandReceipt? terminal,
+  ) {
+    if (terminal == null) {
+      tx.phase = tx.hasTrustedProgress
+          ? SessionSendPhase.processing
+          : SessionSendPhase.verifying;
+      return;
+    }
+    switch (terminal.status) {
+      case 'succeeded':
+        tx.phase = SessionSendPhase.completed;
+        // 受理成功仅结算本次事务；回执等待期的新草稿/新附件一律不动（§2.4）。
+        final currentDraft = _composerDrafts[tx.sessionId];
+        if (currentDraft != null && currentDraft.trim() == tx.text) {
+          clearComposerDraft(tx.sessionId);
+        }
+      case 'failed':
+      case 'rejected':
+      case 'cancelled':
+      case 'expired':
+        tx.phase = SessionSendPhase.failed;
+        tx.errorCode = (terminal.errorCode ?? tx.errorCode)?.trim();
+        tx.errorDetail ??= '消息发送失败（命令 ${terminal.status}）';
+      default:
+        // accepted/running 等非终态：保持当前阶段，不伪造完成。
+        break;
+    }
+  }
+
+  /// V094-05/06：失败事务的手动重试——生成新的显式 attempt，与旧事务保持
+  /// 关联并串行；结果未知时必须先核验，不能用新幂等键盲目重复发出。
+  Future<bool> retryFailedSend({
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    final sessionId = _selectedSessionId;
+    final failed = lastInterruptedSendTransaction;
+    if (sessionId == null || failed == null) return false;
+    if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId) ||
+        !await _ensureSelectedLeaseAuto(
+          sessionId,
+          deviceId: deviceId,
+          canWrite: canWrite,
+        )) {
+      return false;
+    }
+    // 已核验前置：结果待确认的事务必须先核验，不允许直接补发。
+    if (failed.phase == SessionSendPhase.verifying) {
+      _setError('上一次发送结果尚未确认：请先在时间线核验结果后再重试。');
+      return false;
+    }
+    final retryOperation =
+        '${failed.baseOperation}:retry-${_sendTxCounter += 1}';
+    final tx = SessionSendTransaction(
+      submissionId: 'sendtx-$sessionId-${_sendTxCounter += 1}',
+      sessionId: sessionId,
+      // 新 attempt 的逻辑身份：重试关联旧事务（clientMessageId 带父标识），
+      // 两次用户主动发送不共享身份。
+      clientMessageId: '${failed.clientMessageId}-r$_sendTxCounter',
+      text: failed.text,
+      draftRevision: _draftRevisionsBySession[sessionId] ?? 0,
+      baseOperation: retryOperation,
+      createdAt: _clock(),
+      // _ensureWriteAccess 已确保 deviceId 非空（与既有 send 契约一致）。
+      deviceId: deviceId!,
+      canWrite: canWrite,
+    );
+    _sendTxBySession[sessionId] = tx;
+    _pendingOutgoingBySession[sessionId] = tx.text;
+    _notifyListeners();
+    final accepted = await _submitCommand(
+      sessionId: sessionId,
+      operation: retryOperation,
+      kind: SessionCommandKind.send,
+      deviceId: deviceId,
+      canWrite: canWrite,
+      ciphertext: {
+        'fixture_payload': {'message': tx.text},
+      },
+      deferSendObservation: true,
+      onCommandAccepted: (commandId) => tx.currentCommandId = commandId,
+    );
+    if (!accepted) {
+      // 手动重试提交被拒：事务保留失败态，正文仍在待处理项中可再次编辑。
+      tx.phase = SessionSendPhase.failed;
+      tx.errorDetail ??= _errorMessage;
+      _notifyListeners();
+      return false;
+    }
+    tx.phase = SessionSendPhase.accepted;
+    _notifyListeners();
+    unawaited(_observeSendTransaction(tx));
+    return true;
   }
 
   Future<void> stopStreaming({
@@ -2368,16 +2888,45 @@ class SessionController extends ChangeNotifier {
       _setError('目标模型不在当前目录中。');
       return;
     }
-    final accepted = await _submitCommand(
-      sessionId: sessionId,
-      operation: 'model:$sessionId:$model',
-      kind: SessionCommandKind.modelSelect,
-      deviceId: deviceId!,
-      ciphertext: {
-        'fixture_payload': {'model': model},
-      },
-      onAccepted: () => _controls = controls.copyWith(model: model),
-    );
+    // V094-24/25：每次显式操作独立幂等身份（同次传输重试复用该 key），
+    // A→B→A→B 每次真实变更都必须到执行端，不再命中第一次 B 的旧命令；
+    // 202 只标"切换中"，成功且权威投影一致才标已生效，null 不假报成功。
+    final operation = 'model:$sessionId:$model:act-${_configActionCounter += 1}';
+    final accepted = await _serializedConfigAction('model', () async {
+      _setConfigConfirmation(
+        ControlDomainConfirmation(
+          domain: 'model',
+          state: ControlConfirmState.confirming,
+          requested: model,
+        ),
+      );
+      return _submitCommand(
+        sessionId: sessionId,
+        operation: operation,
+        kind: SessionCommandKind.modelSelect,
+        deviceId: deviceId!,
+        ciphertext: {
+          'fixture_payload': {'model': model},
+        },
+        onTerminal: (terminal) {
+          if (terminal == null) {
+            _setConfigConfirmation(
+              ControlDomainConfirmation(
+                domain: 'model',
+                state: ControlConfirmState.unknown,
+                requested: model,
+                detail: '确认结果未知，请稍后核验',
+              ),
+            );
+            return;
+          }
+          // 成功：异步核验权威投影（不乐观写本地 effective）。
+          unawaited(
+            _verifyConfigConfirmation('model', model, (c) => c.model ?? ''),
+          );
+        },
+      );
+    });
     if (!accepted) return;
     // v0.8.6：自动带回该模型上次使用的推理等级，避免用户重复选择。
     // 校验双目录（新模型声明的 efforts + 会话当前目录）都包含该等级才回带；
@@ -2419,16 +2968,41 @@ class SessionController extends ChangeNotifier {
       _setError('目标 effort 不在当前目录中。');
       return;
     }
-    final accepted = await _submitCommand(
-      sessionId: sessionId,
-      operation: 'effort:$sessionId:$effort',
-      kind: SessionCommandKind.effortSelect,
-      deviceId: deviceId!,
-      ciphertext: {
-        'fixture_payload': {'effort': effort},
-      },
-      onAccepted: () => _controls = controls.copyWith(effort: effort),
-    );
+    // V094-24/25：独立幂等身份 + 确认状态机（与 selectModel 同构）。
+    final accepted = await _serializedConfigAction('effort', () async {
+      _setConfigConfirmation(
+        ControlDomainConfirmation(
+          domain: 'effort',
+          state: ControlConfirmState.confirming,
+          requested: effort,
+        ),
+      );
+      return _submitCommand(
+        sessionId: sessionId,
+        operation: 'effort:$sessionId:$effort:act-${_configActionCounter += 1}',
+        kind: SessionCommandKind.effortSelect,
+        deviceId: deviceId!,
+        ciphertext: {
+          'fixture_payload': {'effort': effort},
+        },
+        onTerminal: (terminal) {
+          if (terminal == null) {
+            _setConfigConfirmation(
+              ControlDomainConfirmation(
+                domain: 'effort',
+                state: ControlConfirmState.unknown,
+                requested: effort,
+                detail: '确认结果未知，请稍后核验',
+              ),
+            );
+            return;
+          }
+          unawaited(
+            _verifyConfigConfirmation('effort', effort, (c) => c.effort ?? ''),
+          );
+        },
+      );
+    });
     if (!accepted) return;
     // v0.8.6：把等级记到当前模型名下，下次选回该模型时自动带回。
     final currentModel =
@@ -2463,16 +3037,57 @@ class SessionController extends ChangeNotifier {
       _setError('目标 permission mode 不在当前目录中。');
       return;
     }
-    await _submitCommand(
-      sessionId: sessionId,
-      operation: 'permission-mode:$sessionId:$mode',
-      kind: SessionCommandKind.permissionModeSelect,
-      deviceId: deviceId!,
-      ciphertext: {
-        'fixture_payload': {'mode_id': mode},  // v0.8.5 §3.5：payload key 与 runner 对齐
-      },
-      onAccepted: () => _controls = controls.copyWith(permissionMode: mode),
-    );
+    // V094-24/25：独立幂等身份 + 确认状态机（风险确认门在上游，展示名
+    // 不影响确认语义）。权限生效以 daemon 模式快照同步为准。
+    await _serializedConfigAction('permission', () async {
+      _setConfigConfirmation(
+        ControlDomainConfirmation(
+          domain: 'permission',
+          state: ControlConfirmState.confirming,
+          requested: mode,
+        ),
+      );
+      final accepted = await _submitCommand(
+        sessionId: sessionId,
+        operation:
+            'permission-mode:$sessionId:$mode:act-${_configActionCounter += 1}',
+        kind: SessionCommandKind.permissionModeSelect,
+        deviceId: deviceId!,
+        ciphertext: {
+          'fixture_payload': {'mode_id': mode}, // v0.8.5 §3.5：payload key 与 runner 对齐
+        },
+        onTerminal: (terminal) {
+          if (terminal == null) {
+            _setConfigConfirmation(
+              ControlDomainConfirmation(
+                domain: 'permission',
+                state: ControlConfirmState.unknown,
+                requested: mode,
+                detail: '确认结果未知，请稍后核验',
+              ),
+            );
+            return;
+          }
+          unawaited(
+            _verifyConfigConfirmation(
+              'permission',
+              mode,
+              (c) => c.permissionMode ?? '',
+            ),
+          );
+        },
+      );
+      if (!accepted) {
+        _setConfigConfirmation(
+          ControlDomainConfirmation(
+            domain: 'permission',
+            state: ControlConfirmState.failed,
+            requested: mode,
+            detail: _errorMessage,
+          ),
+        );
+      }
+    });
   }
 
   /// v0.3/P0：编辑当前目标文本（goal capability 门控；不泄漏密文正文）。
@@ -2718,6 +3333,8 @@ class SessionController extends ChangeNotifier {
   Future<SessionCommandReceipt?> _awaitCommandReceipt(
     String commandId, {
     int? maxAttempts,
+    // V094：每拍回调——事务观察器用它把"已受理"升级为"处理中"（可信进展）。
+    void Function()? onPoll,
   }) async {
     final attempts = maxAttempts ?? receiptPollAttempts;
     for (var attempt = 0; attempt < attempts; attempt += 1) {
@@ -2735,6 +3352,7 @@ class SessionController extends ChangeNotifier {
       } on RelayFailure {
         return null;
       }
+      onPoll?.call();
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     return null;
@@ -2759,6 +3377,17 @@ class SessionController extends ChangeNotifier {
     // v0.9.0 C1：send 的本地提交意图（newTurn/steer），在 202 受理分支用于
     // 决定回合锚点是重置还是继承。
     TurnSubmissionIntent submissionIntent = TurnSubmissionIntent.newTurn,
+    // V094-23：send 提交/观察解耦。true 时 202 受理后立即返回 true，
+    // 回执窗口与回合轮询由后台事务观察器接管；提交锁（全局 busy）不再
+    // 覆盖整个 30s 回执窗口。非 send 命令忽略该参数。
+    bool deferSendObservation = false,
+    // V094-06：命令受理（拿到 Relay 命令 ID）即回调，供事务账本登记
+    // currentCommandId；onAccepted（终态确认后回调）语义不变。
+    void Function(String commandId)? onCommandAccepted,
+    // V094-24：配置命令的终态回调——terminal 为 null（查询失败/超时）时也
+    // 会回调，调用方据此进入"结果待确认"，绝不假报成功。提供本回调时
+    // onAccepted 不再生效。
+    void Function(SessionCommandReceipt? terminal)? onTerminal,
   }) async {
     // 写命令统一在这里自动确保 lease：调用方可能刚从前台/断网恢复，
     // 本地 lease 已作废，此刻静默补获取一次，避免把“暂不可操作”抛给用户。
@@ -2802,12 +3431,49 @@ class SessionController extends ChangeNotifier {
         // v0.8.7 门禁 2：send 受理即新回合埋点基线——首字延迟起点，同时清掉
         // 上一回合未对账的帧状态，避免跨回合长度串账。
         streamingTelemetry.observeSendAccepted();
+        // V094-06：受理即登记命令 ID（事务账本），供消息级状态与关联展示。
+        onCommandAccepted?.call(receipt.id);
+        // V094-23：defer 模式下受理即收敛——30s 回执窗口/回合轮询由事务
+        // 观察器接管，本 action 不再持有全局 busy。但保留旧
+        // awaitTurnCompletion=false 的返回契约：「受理 + 首批快照」后就绪，
+        // 用户发送的内容立即可见，不出现时间线空窗。
+        if (deferSendObservation) {
+          try {
+            final authGenerationAtSubmit = _authGeneration;
+            final first = await _relay.getSessionSnapshot(
+              sessionId,
+              afterSequence: _cursorFor(sessionId),
+            );
+            // 与 inline generationsStale 同口径三重守卫（认证/同步/会话归属）：
+            // dispose/注销/切会话后的迟到回包必须安全丢弃（C7/C2 契约）。
+            if (_authGeneration == authGenerationAtSubmit &&
+                _selectedSessionId == sessionId &&
+                _syncGenerations[sessionId] == syncGeneration) {
+              _mergeSnapshot(first);
+            }
+          } catch (_) {
+            // 首批快照失败不阻塞受理返回：观察器与前台刷新路径会补齐。
+          }
+          return true;
+        }
       }
       if (_syncGenerations[sessionId] != syncGeneration) {
         // 提交等待期间代际已被推进（如并发 abort）：本链按正常取消收敛。
         return true;
       }
-      if (onAccepted != null) {
+      if (onTerminal != null) {
+        // V094-24：配置命令走显式终态回调。null（查询失败/超时）不触发
+        // 成功回调，由调用方进入"结果待确认"；failed 抛错保留原值。
+        final terminal = await _awaitCommandReceipt(receipt.id);
+        if (terminal != null && terminal.status != 'succeeded') {
+          onTerminal(terminal);
+          throw const RelayFailure(
+            RelayFailureKind.protocol,
+            '操作未被会话执行端接受，请重试。',
+          );
+        }
+        onTerminal(terminal);
+      } else if (onAccepted != null) {
         // 执行端异步收口命令：受理（202）不代表成功。带乐观更新面的命令必须等
         // 终态确认，failed 视为失败浮出错误；确认链路不可用时退回受理即确认的
         // 旧行为，不放大故障。
@@ -3545,14 +4211,30 @@ class SessionController extends ChangeNotifier {
     _timeline = List.unmodifiable(_coalesceStreaming(merged));
     // 规范化 user.message 已合并进时间线时，该会话的乐观回显完成使命，立即清账
     // 避免同一条消息渲染两个气泡。
+    // V094 §2.2：失败/待确认事务的回显是"消息待处理项"，不因 Runner 在执行前
+    // 写出的 canonical user.message 而清账——失败记录必须留在气泡上直到
+    // 用户重试/编辑或新一轮发送取代。
     final pending = _pendingOutgoingBySession[snapshot.session.id];
+    final activeTx = _sendTxBySession[snapshot.session.id];
+    final pendingIsFailureRecord =
+        activeTx != null &&
+        activeTx.text == pending &&
+        (activeTx.phase == SessionSendPhase.failed ||
+            activeTx.phase == SessionSendPhase.verifying);
     if (pending != null &&
+        !pendingIsFailureRecord &&
         merged.any(
           (event) =>
               event.kind == SessionTimelineKind.userMessage &&
               event.text == pending,
         )) {
       _pendingOutgoingBySession.remove(snapshot.session.id);
+    }
+    // V094 §2.5：窗口内出现流式投影 = 可信执行进展（30s 耗尽后保持"处理中"）。
+    if (activeTx != null &&
+        activeTx.phase == SessionSendPhase.accepted &&
+        snapshot.session.status == MobileSessionStatus.streaming) {
+      activeTx.hasTrustedProgress = true;
     }
   }
 

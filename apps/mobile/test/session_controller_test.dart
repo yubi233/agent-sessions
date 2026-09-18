@@ -1370,6 +1370,11 @@ class _FailingCommandRelay extends FixtureRelayRepository {
 
   final String terminalStatus;
 
+  // V094-24：模拟真实 Relay 投影语义——model_select 命令被结果确认 succeeded
+  // 后，会话元数据（权威投影）才反映目标模型；failed 不更新。
+  String? _confirmedModel;
+
+
   @override
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
@@ -1401,10 +1406,27 @@ class _FailingCommandRelay extends FixtureRelayRepository {
   }
 
   @override
+  Future<SessionCommandReceipt> submitSessionCommand(
+    String sessionId,
+    SessionCommandInput input,
+  ) async {
+    if (terminalStatus == 'succeeded' &&
+        input.kind == SessionCommandKind.modelSelect) {
+      final payload = input.ciphertext?['fixture_payload'];
+      if (payload is Map && payload['model'] is String) {
+        _confirmedModel = payload['model'] as String;
+      }
+    }
+    return super.submitSessionCommand(sessionId, input);
+  }
+
+  @override
   Future<SessionControlState> getSessionControls(String sessionId) async {
     // 与 fixture 会话目录对齐，让命令通过受理、拒绝集中到终态链路。
+    // V094-24：模型值只在命令被确认成功后由权威投影携带。
     return SessionControlState.empty().copyWith(
       models: const ['fixture-model-a', 'fixture-model-b'],
+      model: _confirmedModel,
     );
   }
 }

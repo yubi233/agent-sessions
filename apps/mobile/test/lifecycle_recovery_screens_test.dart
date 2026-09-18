@@ -27,7 +27,7 @@ void main() {
       tester,
       find.byKey(const Key('session-detail-screen')),
     );
-    await _waitForVisible(tester, find.text('可操作'));
+    await _waitForVisible(tester, find.text('可控制'));
 
     final container = ProviderScope.containerOf(
       tester.element(find.byKey(const Key('session-detail-screen'))),

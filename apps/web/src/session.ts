@@ -246,3 +246,116 @@ export function startAccountEventStream(options: AccountEventStreamOptions): Acc
     },
   };
 }
+
+// ── V094-27（计划 §2.6）：会话只读增量同步状态机 ────────────────────────────
+// 契约冻结：
+// 1. 收到账号通知不等于本会话 snapshot 已合并——在途期间到达的通知记为
+//    pending，本轮合并完成后必须再补一轮，最后一条通知绝不丢弃；
+// 2. 增量失败保留最后可信内容，进入"同步失败"态并有界重试；连接恢复
+//    （SSE live）时主动补拉一次，不依赖下一次事件；
+// 3. 连接状态（SSE）与数据同步状态分开表达，连接 live 不冒充同步完成。
+export type DetailSyncState = "synced" | "syncing" | "error";
+
+export interface DetailSyncCallbacks {
+  /** 拉取指定 after_seq 之后的增量；由视图执行白名单解码与合并。 */
+  loadIncremental(): Promise<void>;
+  /** 是否具备同步前提（已就绪且已登录）。 */
+  isReady(): boolean;
+  maxRetries?: number;
+  retryBaseMs?: number;
+  setTimeoutImpl?: (fn: () => void, ms: number) => unknown;
+  clearTimeoutImpl?: (handle: unknown) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+}
+
+export interface DetailSyncController {
+  /** 账号 SSE 通知入口（幂等；在途期间标记 pending）。 */
+  onInvalidate(): void;
+  /** SSE 重连恢复为 live 时的主动补拉入口。 */
+  onReconnected(): void;
+  /** 手动核验入口。 */
+  refresh(): void;
+  /** 当前数据同步状态。 */
+  state(): DetailSyncState;
+  /** 视图卸载时取消挂起的重试定时器。 */
+  dispose(): void;
+}
+
+export function createDetailSync(callbacks: DetailSyncCallbacks): DetailSyncController {
+  const maxRetries = callbacks.maxRetries ?? 3;
+  const retryBaseMs = callbacks.retryBaseMs ?? 500;
+  const setTimeoutImpl = callbacks.setTimeoutImpl ?? ((fn, ms) => window.setTimeout(fn, ms));
+  const clearTimeoutImpl = callbacks.clearTimeoutImpl ?? ((handle: unknown) => window.clearTimeout(handle as number));
+
+  let inFlight = false;
+  let pendingInvalidation = false;
+  let retries = 0;
+  let syncState: DetailSyncState = "synced";
+  let retryHandle: unknown;
+
+  const clearRetry = (): void => {
+    if (retryHandle !== undefined) {
+      clearTimeoutImpl(retryHandle);
+      retryHandle = undefined;
+    }
+  };
+
+  const drain = async (): Promise<void> => {
+    if (inFlight) return;
+    if (!callbacks.isReady()) {
+      pendingInvalidation = false;
+      return;
+    }
+    inFlight = true;
+    pendingInvalidation = false;
+    syncState = "syncing";
+    try {
+      await callbacks.loadIncremental();
+      syncState = "synced";
+      retries = 0;
+    } catch {
+      syncState = "error";
+      retries += 1;
+      if (retries <= maxRetries) {
+        const delay = retryBaseMs * 2 ** (retries - 1);
+        retryHandle = setTimeoutImpl(() => {
+          retryHandle = undefined;
+          void drain();
+        }, delay);
+      }
+      // 超过有界重试后保持"同步失败"态，等待下一次事件或手动核验；
+      // 旧内容已保留，不因此清空页面。
+    } finally {
+      inFlight = false;
+    }
+    // 在途期间到达的通知绝不丢弃：本轮合并完成后继续消化 pending。
+    if (pendingInvalidation) {
+      pendingInvalidation = false;
+      void drain();
+    }
+  };
+
+  return {
+    onInvalidate(): void {
+      pendingInvalidation = true;
+      void drain();
+    },
+    onReconnected(): void {
+      // 重连/重新进入必须主动补拉：SSE 游标推进不代表本会话 snapshot 已合并。
+      pendingInvalidation = true;
+      retries = 0;
+      clearRetry();
+      void drain();
+    },
+    refresh(): void {
+      pendingInvalidation = true;
+      retries = 0;
+      clearRetry();
+      void drain();
+    },
+    state: () => syncState,
+    dispose(): void {
+      clearRetry();
+    },
+  };
+}

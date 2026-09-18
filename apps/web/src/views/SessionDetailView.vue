@@ -5,6 +5,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
+  createDetailSync,
   decodeSessionSnapshot,
   mergeSessionEventMeta,
   readOnlyGet,
@@ -12,6 +13,8 @@ import {
   startAccountEventStream,
   type AccountEventStream,
   type AccountEventStreamStatus,
+  type DetailSyncController,
+  type DetailSyncState,
   type SessionEventMeta,
 } from "../session";
 
@@ -26,8 +29,27 @@ const provider = ref("");
 const lastSeq = ref(0);
 const events = ref<SessionEventMeta[]>([]);
 const streamStatus = ref<AccountEventStreamStatus>("stopped");
+// V094-27：数据同步状态与 SSE 连接状态分开表达；连接 live 不冒充同步完成。
+const syncState = ref<DetailSyncState>("synced");
 let stream: AccountEventStream | undefined;
-let incrementalLoadInFlight = false;
+let sync: DetailSyncController | undefined;
+
+async function loadIncremental(): Promise<void> {
+  const raw = await readOnlyGet<unknown>(`/v1/sessions/${sessionId}/snapshot?after_seq=${lastSeq.value}`);
+  const snapshot = decodeSessionSnapshot(raw);
+  status.value = snapshot.session.status;
+  provider.value = snapshot.session.provider;
+  lastSeq.value = snapshot.session.last_seq;
+  events.value = mergeSessionEventMeta(events.value, snapshot.events);
+}
+
+function ensureSync(): DetailSyncController {
+  sync ??= createDetailSync({
+    loadIncremental: () => loadIncremental(),
+    isReady: () => state.value === "ready",
+  });
+  return sync;
+}
 
 async function load(afterSeq = 0): Promise<void> {
   const initialLoad = afterSeq === 0;
@@ -45,21 +67,23 @@ async function load(afterSeq = 0): Promise<void> {
     state.value = "ready";
     message.value = "";
   } catch {
-    state.value = "error";
-    message.value = "无法读取会话详情，请检查 Relay 或重新登录。";
+    if (initialLoad) {
+      state.value = "error";
+      message.value = "无法读取会话详情，请检查 Relay 或重新登录。";
+    } else {
+      // V094-27：增量失败保留最后可信内容，标记同步失败（有界重试由
+      // DetailSyncController 驱动），绝不清空页面。
+      syncState.value = "error";
+    }
   }
 }
 
 function refresh(): void {
-  void load();
+  ensureSync().refresh();
 }
 
 function refreshAfterInvalidation(): void {
-  if (incrementalLoadInFlight || state.value !== "ready") return;
-  incrementalLoadInFlight = true;
-  void load(lastSeq.value).finally(() => {
-    incrementalLoadInFlight = false;
-  });
+  ensureSync().onInvalidate();
 }
 
 function startStream(): void {
@@ -68,9 +92,24 @@ function startStream(): void {
     token: () => sessionState.token,
     onInvalidate: refreshAfterInvalidation,
     onStatus: (nextStatus) => {
+      const previous = streamStatus.value;
       streamStatus.value = nextStatus;
+      // V094-27：重连恢复 live 时主动补拉一次——已推进的 SSE 游标不代表
+      // 本会话 snapshot 已合并，不能仅靠下一次事件兜底。
+      if (nextStatus === "live" && previous !== "live") {
+        ensureSync().onReconnected();
+      }
     },
   });
+}
+
+function syncStatusLabel(syncValue: DetailSyncState): string {
+  const labels: Record<DetailSyncState, string> = {
+    synced: "数据已同步",
+    syncing: "正在同步",
+    error: "同步失败 · 保留最近内容",
+  };
+  return labels[syncValue];
 }
 
 function streamStatusLabel(statusValue: AccountEventStreamStatus): string {
@@ -97,7 +136,10 @@ onMounted(() => {
   }
 });
 
-onUnmounted(() => stream?.stop());
+onUnmounted(() => {
+  stream?.stop();
+  sync?.dispose();
+});
 </script>
 
 <template>
@@ -140,7 +182,7 @@ onUnmounted(() => stream?.stop());
           <div><dt>事件序号</dt><dd>{{ lastSeq }}</dd></div>
         </dl>
         <p class="status" role="status" aria-live="polite" data-testid="session-detail-stream-status">
-          实时更新：{{ streamStatusLabel(streamStatus) }}
+          实时更新：{{ streamStatusLabel(streamStatus) }} · {{ syncStatusLabel(syncState) }}
         </p>
 
         <h3>事件时间线</h3>

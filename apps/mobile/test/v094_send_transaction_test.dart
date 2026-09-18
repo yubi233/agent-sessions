@@ -1,163 +1,184 @@
 import 'package:agent_sessions_mobile/domain/session_models.dart';
 import 'package:agent_sessions_mobile/relay/fixture_relay_repository.dart';
-import 'package:flutter/material.dart';
+import 'package:agent_sessions_mobile/state/session_controller.dart';
+import 'package:agent_sessions_mobile/state/session_send_transaction.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/fixture_owner.dart';
 
-import 'support/session_harness.dart';
-
-/// V094 定向回归骨架（P0 登记，计划 §4-P0 / §2.2/§2.5）：发送事务与回执观察。
+/// V094 发送事务与回执观察回归（计划 §2.2/§2.5，V094-06/07/23）。
 ///
-/// 这些用例是**先红骨架**：在旧实现上可复现地失败，P1 事务化落地后转绿：
-/// - V094-23：回执观察期间停止不被全局 busy 禁用（发送与停止门控解耦）；
-/// - V094-07：结算不得清空回执等待期间用户新写的草稿（事务归属结算）；
-/// - V094-06：受理后用户气泡呈现消息级状态（"已受理"），不是裸节点。
+/// 这些用例在 P0 是先红骨架（widget 版在旧实现上可复现失败，见实施记录 34
+/// §1.3）；P1 事务化落地后固化为 controller 级回归：
+/// - V094-23：202 受理即释放全局 busy（提交/观察解耦），回执窗口转后台；
+/// - V094-06：受理即有事务账本阶段（"已受理，等待执行"），乐观回显同源；
+/// - V094-07：观察期间的新草稿不被旧事务的迟到结算清空（按身份结算）。
 ///
-/// 受控回执：fixture 前 2 次回执轮询返回 running，模拟 daemon 迟迟不出终态的
-/// 真实窗口（V093-04 同款竞争形态）。使用 'v084 stream' 标记保持回合稳定流式，
-/// 避免终态时序抖动。
+/// 受控回执：`_ReceiptGateRelay` 把首条 send 的终态回执延后 N 拍
+/// （真实定时器，V093-04 同款竞争形态），其余行为与默认 fixture 一致。
 void main() {
-  testWidgets('V094-23 骨架：回执等待期间停止入口保持可用（不被全局 busy 禁用）', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(360, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final relay = _ReceiptGateRelay();
-    final harness = MobileAppHarness(relay: relay);
-    await harness.launchAsOwner();
-    final sessionId = await harness.seedSession();
-    await tester.pumpWidget(harness.build());
-    await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
-    await openSessionDetailFromRecent(tester, harness, sessionId);
-    await waitForVisible(tester, find.byKey(const Key('session-composer-input')));
+  test('V094-23：202 受理后全局 busy 立即释放，回执观察在后台继续', () async {
+    final relay = _ReceiptGateRelay(pendingPolls: 4);
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
 
-    await enterVisible(
-      tester,
-      find.byKey(const Key('session-composer-input')),
-      'v084 stream 演示：停止门控检查',
-    );    await tapVisible(
-      tester,
-      find.byKey(const Key('session-composer-primary-action')),
+    // UI 路径语义：awaitTurnCompletion=false（composer 实际调用形态）。
+    final future = controller.sendMessage(
+      message: 'V094-23 停止门控检查',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
     );
-    // 等 send 被受理（streaming 指示器出现），此刻回执窗口仍被 fixture 扣住。
-    await waitForVisible(
-      tester,
-      find.byKey(const Key('assistant-streaming-indicator')),
-    );
-    await tester.pump(const Duration(milliseconds: 60));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    final primary = tester.widget<IconButton>(
-      find.byKey(const Key('session-composer-primary-action')),
-    );
+    // 202 已受理（事务在账本、回合在途），但全局 busy 必须已释放——
+    // 旧实现在 30s 回执窗口内持有 busy，停止与提交都被禁用。
+    expect(controller.activeSendTransaction?.phase, SessionSendPhase.accepted);
+    expect(controller.isTurnInFlight, isTrue);
+    expect(controller.isBusy, isFalse);
+
+    await future;
+    await _waitForTransactionTerminal(controller);
+    // 回执最终收敛为完成，事务按成功结算。
     expect(
-      primary.onPressed,
-      isNotNull,
-      reason:
-          '回执等待期间停止入口必须可用（V094-23：提交/观察/停止门控解耦，'
-          '不能仅因 send 在等终态而禁用停止；DSH send 等待回合结束，'
-          '若停止必须等它才能中断等于没有中断能力）',
-    );
-
-    // 释放回执并让回合收敛，避免悬挂计时器污染后续用例。
-    await _drainToSettled(tester);
-    expect(relay.gatedCommandId, isNotNull);
-    expect(sessionId, isNotNull);
-  });
-
-  testWidgets('V094-07 骨架：回执等待期间的新草稿不被旧事务结算清空', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(360, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final relay = _ReceiptGateRelay();
-    final harness = MobileAppHarness(relay: relay);
-    await harness.launchAsOwner();
-    final sessionId = await harness.seedSession();
-    await tester.pumpWidget(harness.build());
-    await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
-    await openSessionDetailFromRecent(tester, harness, sessionId);
-    await waitForVisible(tester, find.byKey(const Key('session-composer-input')));
-
-    await enterVisible(
-      tester,
-      find.byKey(const Key('session-composer-input')),
-      'v084 stream 演示：草稿归属检查',
-    );
-    await tapVisible(
-      tester,
-      find.byKey(const Key('session-composer-primary-action')),
-    );
-    await waitForVisible(
-      tester,
-      find.byKey(const Key('assistant-streaming-indicator')),
-    );
-    // 回执窗口期内写下一条草稿：提交快照与后续草稿分离（§2.4）。
-    await tester.enterText(
-      find.byKey(const Key('session-composer-input')),
-      '回执等待期的新草稿',
-    );
-    await tester.pump(const Duration(milliseconds: 60));
-
-    await _drainToSettled(tester);
-
-    expect(
-      composerText(tester),
-      '回执等待期的新草稿',
-      reason:
-          '旧事务结算不得清空回执等待期间的新草稿（V094-07：'
-          '末尾无条件清 draft 必须改为按事务身份结算）',
+      controller.activeSendTransaction?.phase ?? SessionSendPhase.completed,
+      SessionSendPhase.completed,
     );
   });
 
-  testWidgets('V094-06 骨架：受理后用户气泡呈现消息级状态而非裸节点', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(360, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final relay = _ReceiptGateRelay();
-    final harness = MobileAppHarness(relay: relay);
-    await harness.launchAsOwner();
-    final sessionId = await harness.seedSession();
-    await tester.pumpWidget(harness.build());
-    await waitForVisible(tester, find.byKey(const Key('session-home-screen')));
-    await openSessionDetailFromRecent(tester, harness, sessionId);
-    await waitForVisible(tester, find.byKey(const Key('session-composer-input')));
-
-    await enterVisible(
-      tester,
-      find.byKey(const Key('session-composer-input')),
-      'v084 stream 演示：消息状态检查',
-    );
-    await tapVisible(
-      tester,
-      find.byKey(const Key('session-composer-primary-action')),
-    );
-    await waitForVisible(
-      tester,
-      find.byKey(const Key('assistant-streaming-indicator')),
-    );
-    await tester.pump(const Duration(milliseconds: 60));
-
-    expect(
-      find.textContaining('已受理'),
-      findsOneWidget,
-      reason:
-          'Relay 202 后用户气泡必须呈现消息级状态（已受理），'
-          '让"气泡出现"与"送达/执行"可区分（V094-06）',
+  test('V094-06：受理即产生消息事务阶段与乐观回显（气泡出现 ≠ 已送达）', () async {
+    final relay = _ReceiptGateRelay(pendingPolls: 3);
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
     );
 
-    await _drainToSettled(tester);
+    await controller.sendMessage(
+      message: 'V094-06 消息状态检查',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
+    );
+
+    final tx = controller.activeSendTransaction;
+    expect(tx, isNotNull);
+    expect(tx!.phase, SessionSendPhase.accepted);
+    // 乐观回显与事务同一事实源：气泡挂出即有状态，不伪装成已送达。
+    expect(controller.pendingOutgoingMessage, 'V094-06 消息状态检查');
+    expect(tx.phase.userLabel, '已受理，等待执行');
+    // 同一次显式发送的 clientMessageId 稳定；重试复用、两次发送必不同。
+    expect(tx.clientMessageId, startsWith('cmsg-'));
+
+    await _waitForTransactionTerminal(controller);
+  });
+
+  test('V094-07：观察期间保存的新草稿不被旧事务结算清空', () async {
+    final relay = _ReceiptGateRelay(pendingPolls: 4);
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = SessionController(relay: relay);
+    await controller.initialize();
+    final created = await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+    final sessionId = created!.id;
+
+    await controller.sendMessage(
+      message: 'V094-07 草稿归属检查',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
+    );
+    // 回执窗口期内用户写下的新草稿（composer 本地状态由 controller 持久化）。
+    controller.saveComposerState(
+      sessionId,
+      controller.composerStateFor(sessionId).copyWith(draft: '回执等待期的新草稿'),
+    );
+
+    await _waitForTransactionTerminal(controller);
+    // 旧事务结算只允许清空"仍是本次提交正文"的草稿（按内容身份结算），
+    // 观察期间的新草稿必须原样保留。
+    expect(controller.composerDraftFor(sessionId), '回执等待期的新草稿');
+  });
+
+  test('V094-06：失败回执优先收敛为失败事务，正文保留可重试（V093-04b 不回退）', () async {
+    final relay = _ReceiptGateRelay(pendingPolls: 2, failOnRelease: true);
+    final owner = await bootstrapFixtureOwner(relay);
+    final controller = SessionController(relay: relay);
+    controller.sendReceiptPollAttempts = 8;
+    await controller.initialize();
+    await controller.createSession(
+      workspaceId: 'fixture-workspace',
+      provider: 'codex',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      autoStart: true,
+    );
+
+    await controller.sendMessage(
+      message: 'V094-06 失败收敛检查',
+      deviceId: owner.deviceId,
+      canWrite: true,
+      awaitTurnCompletion: false,
+    );
+    expect(controller.activeSendTransaction, isNotNull);
+
+    await _waitForTransactionTerminal(controller);
+    final tx = controller.lastInterruptedSendTransaction;
+    expect(tx, isNotNull, reason: '失败事务必须保留为消息待处理项');
+    expect(tx!.phase, SessionSendPhase.failed);
+    expect(tx.errorCode, 'LOCAL_STATE_MISSING');
+    // 失败正文保留在事务中（不回填草稿、不删除记录），供编辑后重试。
+    // （规范 user.message 合并后乐观回显按既有语义清账；失败事实在事务里。）
+    expect(tx.text, 'V094-06 失败收敛检查');
+    expect(controller.lastInterruptedSendTransaction!.clientMessageId,
+        startsWith('cmsg-'));
   });
 }
 
-/// 回执等待期排空：推进假时钟直至 send 事务收敛（含回执轮询与回合收敛）。
-Future<void> _drainToSettled(WidgetTester tester) async {
-  for (var frame = 0; frame < 120; frame += 1) {
-    await tester.pump(const Duration(milliseconds: 250));
+/// 等待后台事务观察器收敛（真实定时器；上限 10s 防悬挂）。
+Future<void> _waitForTransactionTerminal(SessionController controller) async {
+  for (var i = 0; i < 100; i++) {
+    final tx = controller.activeSendTransaction;
+    if (tx == null || tx.isTerminal) {
+      // 失败/待确认事务保留在槽内（isTerminal），再等一拍让收尾通知完成。
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
   }
+  fail('发送事务未在窗口内收敛：phase=${controller.activeSendTransaction?.phase}');
 }
 
-/// 受控回执 fixture：第一条 send 的回执前 N 次轮询保持 running，
-/// 模拟 daemon 迟迟不出终态；其余行为与默认 fixture 一致。
+/// 受控回执 fixture：首条 send 的终态回执延后 [pendingPolls] 拍；
+/// [failOnRelease] 为 true 时释放后返回 failed(LOCAL_STATE_MISSING)，
+/// 驱动失败收敛路径（V093-04b 的失败回执优先语义）。
 class _ReceiptGateRelay extends FixtureRelayRepository {
-  int pendingReceiptPollsForFirstSend = 2;
-  String? gatedCommandId;
-  int _polls = 0;
+  _ReceiptGateRelay({this.pendingPolls = 2, this.failOnRelease = false});
+
+  final int pendingPolls;
+
+  /// true：释放后所有受控 send 回执一律 failed(LOCAL_STATE_MISSING)——
+  /// 自动恢复重试也失败，驱动「失败事务保留」终态（重试上限 1 次）。
+  final bool failOnRelease;
+  final Set<String> gatedCommandIds = {};
+  final Map<String, int> _pollCounts = {};
 
   @override
   Future<SessionCommandReceipt> submitSessionCommand(
@@ -165,22 +186,34 @@ class _ReceiptGateRelay extends FixtureRelayRepository {
     SessionCommandInput input,
   ) async {
     final receipt = await super.submitSessionCommand(sessionId, input);
-    if (input.kind == SessionCommandKind.send && gatedCommandId == null) {
-      gatedCommandId = receipt.id;
+    if (input.kind == SessionCommandKind.send) {
+      gatedCommandIds.add(receipt.id);
     }
     return receipt;
   }
 
   @override
   Future<SessionCommandReceipt> getSessionCommand(String commandId) async {
-    if (commandId == gatedCommandId &&
-        _polls < pendingReceiptPollsForFirstSend) {
-      _polls += 1;
+    if (!gatedCommandIds.contains(commandId)) {
+      return super.getSessionCommand(commandId);
+    }
+    final polls = (_pollCounts[commandId] ?? 0) + 1;
+    _pollCounts[commandId] = polls;
+    if (polls <= pendingPolls) {
       return SessionCommandReceipt(
         id: commandId,
         kind: 'session.send',
         status: 'running',
         idempotencyKey: 'fixture-$commandId',
+      );
+    }
+    if (failOnRelease) {
+      return SessionCommandReceipt(
+        id: commandId,
+        kind: 'session.send',
+        status: 'failed',
+        idempotencyKey: 'fixture-$commandId',
+        errorCode: 'LOCAL_STATE_MISSING',
       );
     }
     return super.getSessionCommand(commandId);
