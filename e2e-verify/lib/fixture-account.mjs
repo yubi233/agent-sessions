@@ -1,4 +1,4 @@
-// headed 浏览器 suite 共用单租户 fixture owner；避免每个场景各自注册而违反首账号 bootstrap 门禁。
+// 每个隔离 Relay 内只注册一次 fixture owner；不同套件/尝试使用独立工厂与数据库。
 // owner 写 token 只用于套件预置数据（建会话/终端），绝不写入浏览器或报告；
 // 浏览器仍走各自可见的密码登录流程。
 export function createFixtureAccountFactory(relayBase) {

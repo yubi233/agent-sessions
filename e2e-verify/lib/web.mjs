@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stopProcess } from "./process.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const viteBin = join(ROOT, "apps", "web", "node_modules", "vite", "bin", "vite.js");
@@ -18,19 +19,18 @@ async function startVite({ appDir, port, relayBase }) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let logs = "";
+  let spawnError;
+  child.on("error", (error) => { spawnError = error; });
   child.stdout.on("data", (chunk) => (logs += chunk.toString()));
   child.stderr.on("data", (chunk) => (logs += chunk.toString()));
   const base = `http://127.0.0.1:${port}`;
-  await waitForReady(base, child, () => logs);
-  return {
-    base,
-    child,
-    async stop() {
-      if (child.exitCode !== null) return;
-      child.kill("SIGTERM");
-      await new Promise((resolveStop) => child.once("exit", resolveStop));
-    },
-  };
+  try {
+    await waitForReady(base, child, () => logs, () => spawnError);
+  } catch (error) {
+    if (child.pid) await stopProcess(child);
+    throw error;
+  }
+  return { base, child, logs: () => logs, stop: () => stopProcess(child) };
 }
 
 // startWeb 启动 Web 只读客户端。
@@ -43,15 +43,16 @@ export async function startAdmin({ port = 15174, relayBase } = {}) {
   return startVite({ appDir: "admin-web", port, relayBase });
 }
 
-async function waitForReady(base, child, logs) {
+async function waitForReady(base, child, logs, spawnError) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
+    if (spawnError()) throw spawnError();
+    if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`web server exited early: ${logs()}`);
     }
     try {
-      const response = await fetch(base);
-      if (response.ok) return;
+      const response = await fetch(base, { signal: AbortSignal.timeout(1000) });
+      if (response.ok && /Local:.*127\.0\.0\.1:/.test(logs())) return;
     } catch {
       // Vite 尚在启动，继续轮询明确的 HTTP 状态。
     }

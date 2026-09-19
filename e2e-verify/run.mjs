@@ -1,78 +1,80 @@
 #!/usr/bin/env node
-// 回归测试统一入口：启动隔离 Relay，按注册表运行 headed 真实浏览器场景，
-// 汇总结果写入 e2e-verify/reports/<timestamp>/<plan_id>/。
-// 用法：node e2e-verify/run.mjs [--suite <id>] [--headless]
-import { startRelay } from "./lib/relay.mjs";
-import { startWeb, startAdmin } from "./lib/web.mjs";
+// 默认 headed、无自动重试；--suite 可重复指定，最终全量门与定向诊断共用同一隔离方式。
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { buildRelay } from "./lib/relay.mjs";
 import { writeReport, baseReport } from "./lib/report.mjs";
-import { createFixtureAccountFactory } from "./lib/fixture-account.mjs";
+import { openSuiteEnvironment } from "./lib/suite-environment.mjs";
+import { runSuites } from "./lib/runner.mjs";
 import { registry } from "./lib/suites.mjs";
 
 function parseArgs(argv) {
-  const args = { headless: false, suite: null };
+  const args = { headless: false, suites: [], retryLimit: 0 };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--headless") args.headless = true;
-    else if (argv[i] === "--suite") args.suite = argv[++i];
+    else if (argv[i] === "--suite" && argv[i + 1]) args.suites.push(argv[++i]);
+    else if (argv[i] === "--retry-environment-once") args.retryLimit = 1;
+    else throw new Error(`未知或缺值参数：${argv[i]}`);
   }
   return args;
 }
 
 async function main() {
-  const { headless, suite } = parseArgs(process.argv.slice(2));
-  const selected = registry.filter((s) => !suite || s.id === suite);
-  if (selected.length === 0) {
-    console.error(`no suite matched: ${suite}`);
-    process.exit(2);
+  const { headless, suites, retryLimit } = parseArgs(process.argv.slice(2));
+  for (const id of suites) {
+    if (!registry.some((suite) => suite.id === id)) throw new Error(`no suite matched: ${id}`);
   }
-
-  // 套件级 Relay 环境变量：某些场景需要复现特定的**部署形态**（例如 v092 要复现
-  // 云端 Relay 是 scratch 单二进制、进程内没有 node/DSH 检出的形态），这类差异
-  // 只能通过 Relay 进程自身的环境体现。合并 selected 中声明的 relayEnv，
-  // 未声明的套件行为保持不变（仍继承当前进程环境）。
-  const relayEnv = Object.assign({}, ...selected.map((s) => s.relayEnv || {}));
-
-  // 启动动态端口的隔离 Relay，避免误连用户已有本地服务。
-  const relay = await startRelay({ env: relayEnv });
-  const web = await startWeb({ relayBase: relay.base });
-  const admin = await startAdmin({ port: 15174, relayBase: relay.base });
-  const fixtureAccount = createFixtureAccountFactory(relay.base);
-  const results = [];
-
-  const report = (payload) => {
-    const base = baseReport(payload);
-    // 场景自定义字段（如 opencode_observed 探测快照）原样透传，不作为敏感正文处理；
-    // 字段由 report.mjs 的 sanitizeReport 统一脱敏后再落盘。
-    const extras = Object.fromEntries(
-      Object.entries(payload).filter(([key]) => !(key in base) && key !== "planId"),
-    );
-    // 将运行元信息与真实浏览器口径写入报告。
-    // relay_base 优先采用场景自带的专用 Relay（如接真实 opencode serve 的实例），
-    // 未提供时回退到共享 Relay，保证报告不误标本轮实际验证的服务地址。
-    const full = { ...base, ...extras, relay_base: payload.relay_base || relay.base };
-    writeReport({ planId: payload.planId || "PROTO-CRYPTO", name: payload.suite, report: full });
-    results.push({ id: payload.suite, status: payload.status });
-    return full;
-  };
-
+  const selected = registry.filter((suite) => suites.length === 0 || suites.includes(suite.id));
+  const runId = new Date().toISOString().replace(/[:.]/g, "-");
+  const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const diff = execFileSync("git", ["diff", "HEAD", "--", "apps", "internal", "packages", "e2e-verify", "Taskfile.yml"]);
+  const source = { revision, dirty: diff.length > 0, diff_sha256: createHash("sha256").update(diff).digest("hex") };
+  const started = Date.now();
+  const build = await buildRelay();
+  let summary;
   try {
-    for (const scene of selected) {
-      process.stdout.write(`[run] ${scene.id} (${scene.title})\n`);
-      const r = await scene.run({ relay, web, admin, report, headless, fixtureAccount });
-      process.stdout.write(`[run] ${scene.id} -> ${r.status}\n`);
-    }
+    summary = await runSuites({
+      suites: selected,
+      headless,
+      retryLimit,
+      openEnvironment: (suite) => openSuiteEnvironment(suite, build.path),
+      log: (text) => process.stdout.write(`${text}\n`),
+      saveAttempt(payload) {
+        const { planId, service_logs, ...rest } = payload;
+        const path = writeReport({
+          planId: planId || "E2E",
+          name: `${payload.suite}-attempt-${payload.attempt}`,
+          report: { ...baseReport(rest), ...rest, timestamp: runId, run_id: runId, source },
+        });
+        payload.report_path = path;
+        if (service_logs) {
+          // 日志也经过统一脱敏；不直接转储裸 stdout，避免报告旁路泄漏凭据。
+          writeReport({ planId: planId || "E2E", name: `${payload.suite}-attempt-${payload.attempt}-services`, report: { timestamp: runId, run_id: runId, service_logs } });
+          delete payload.service_logs;
+        }
+      },
+    });
   } finally {
-    await admin.stop();
-    await web.stop();
-    await relay.stop();
+    build.stop();
   }
-
-  const failed = results.filter((r) => r.status !== "passed");
+  const reportPath = writeReport({
+    planId: "E2E",
+    name: "summary",
+    report: {
+      timestamp: runId, run_id: runId, source,
+      command: `node e2e-verify/run.mjs ${process.argv.slice(2).join(" ")}`.trim(),
+      headless, local_test: true, real_model: false,
+      retry_limit: retryLimit, duration_ms: Date.now() - started,
+      ...summary,
+    },
+  });
   process.stdout.write(`\n== summary ==\n`);
-  for (const r of results) process.stdout.write(`  ${r.id}: ${r.status}\n`);
-  if (failed.length > 0) process.exit(1);
+  for (const result of summary.results) process.stdout.write(`  ${result.id}: ${result.status}${result.flaky ? " (retried/flaky)" : ""}\n`);
+  process.stdout.write(`report: ${reportPath}\n`);
+  process.exitCode = summary.status === "passed" ? 0 : 1;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
 });

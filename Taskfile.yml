@@ -510,9 +510,8 @@ tasks:
   test:v094:local:
     desc: v0.9.4 本地统一回归入口（V094 唯一聚合门：文档/生成物、V094 Go 契约、全仓、restart、全量 Flutter、Web 单测+构建、headed 真实浏览器全套件（含 V094-27 同步旅程）、diff 检查；不调用真实模型、不运行 Android 实机；任何子项失败即 gate failed）
     cmds:
-      - task: docs:verify
       - task: check
-      - go test ./internal/relay ./internal/domain ./internal/daemon ./internal/httpapi -run 'TestV094|TestModelSelect|TestV085|TestV093' -count=1
+      - task: test:e2e:harness
       - go test ./... -count=1
       - task: test:restart
       - cmd: cd apps/mobile && flutter analyze && flutter test --machine --concurrency=1
@@ -736,7 +735,7 @@ tasks:
   test:e2e:harness:
     desc: headed E2E runner 的生命周期、隔离端口与外部凭据阻塞分类回归
     cmds:
-      - node --test e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs
+      - node --test e2e-verify/suites/runner.test.mjs e2e-verify/suites/p5-opencode-capabilities.test.mjs e2e-verify/suites/relay-isolation.test.mjs
 
   test:record:
     desc: headed 录屏演示，必须在回归清单通过后执行
