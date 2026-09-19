@@ -162,11 +162,13 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
     return [widget.modelCapability, widget.effortCapability];
   }
 
+  // V094-15（UI-15）：无推理能力档位时不占位——返回空串由渲染层隐藏
+  // 斜杠与档位文本，不再显示无意义的「—」。
   String get _displayEffort {
     final effort = widget.catalog.effort?.trim();
     if (effort != null && effort.isNotEmpty) return effort;
     if (_usesAutomaticReasoning) return '自动';
-    return _hasSelectableEfforts ? '默认' : '—';
+    return _hasSelectableEfforts ? '默认' : '';
   }
 
   SessionUsageSummary? get _effectiveUsage {
@@ -369,12 +371,9 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
             size: AppSizes.iconSm,
             color: theme.colorScheme.onSurfaceVariant,
           ),
-          const SizedBox(width: AppSpacing.xs),
-          const SizedBox(
-            width: AppLayout.modelSelectorRow,
-            child: Text('main', maxLines: 1, overflow: TextOverflow.ellipsis),
-          ),
           const SizedBox(width: AppSpacing.sm),
+          // V094-15（UI-15）：移除硬编码的「main」分支列——没有真实分支
+          // 事实就不显示，不再伪造 main；分支事实由会话投影提供后另立展示位。
           Expanded(
             child: Tooltip(
               message: _pickerHint,
@@ -411,21 +410,24 @@ class _SessionModelSeatState extends State<SessionModelSeat> {
                               style: theme.textTheme.labelSmall,
                             ),
                           ),
-                          Text(
-                            ' / ',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
+                          // V094-15：effort 缺失时不渲染斜杠（无能力不占位）。
+                          if (_displayEffort.isNotEmpty)
+                            Text(
+                              ' / ',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
                             ),
-                          ),
-                          Flexible(
-                            flex: 2,
-                            child: Text(
-                              _displayEffort,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.labelSmall,
+                          if (_displayEffort.isNotEmpty)
+                            Flexible(
+                              flex: 2,
+                              child: Text(
+                                _displayEffort,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelSmall,
+                              ),
                             ),
-                          ),
                           const SizedBox(width: AppSpacing.micro),
                           Icon(
                             Icons.expand_more,

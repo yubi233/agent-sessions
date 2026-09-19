@@ -72,13 +72,13 @@ void main() {
       tester,
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    // 打开权限下拉并选择 danger-full-access。
+    // 打开权限选择面板并选择完整访问（V094-16：徽标直达面板）。
     await _tapVisible(
       tester,
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    await _waitForVisible(tester, find.text('danger-full-access').last);
-    await _tapVisible(tester, find.text('danger-full-access').last);
+    await _waitForVisible(tester, find.text('完整访问').last);
+    await _tapVisible(tester, find.text('完整访问').last);
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-permission-risk-confirm')),
@@ -104,8 +104,8 @@ void main() {
       tester,
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    await _waitForVisible(tester, find.text('danger-full-access').last);
-    await _tapVisible(tester, find.text('danger-full-access').last);
+    await _waitForVisible(tester, find.text('完整访问').last);
+    await _tapVisible(tester, find.text('完整访问').last);
     await _waitForVisible(
       tester,
       find.byKey(const Key('session-permission-risk-confirm')),
@@ -351,7 +351,7 @@ void main() {
     final harness = await _launchSeededOwner(tester);
     await _createAndAcquireLease(tester);
 
-    // 控制条第二行出现权限下拉。
+    // 控制条出现权限徽标（V094-16：紧凑徽标替代整行下拉）。
     await _waitForVisible(
       tester,
       find.byKey(const Key('composer-permission-mode-select')),
@@ -360,9 +360,13 @@ void main() {
       tester,
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    await _waitForVisible(tester, find.text('acceptEdits').last);
-    await tester.tap(find.text('acceptEdits').last);
-    await _waitForVisible(tester, find.textContaining('已切换 permission mode'));
+    await _tapVisible(tester, find.text('自动接受编辑').last);
+    // V094：两行 composer 让 chat 视口变矮，切换事件落在懒加载列表末尾；
+    // 先滚动到该节点再断言 UI 反馈，保持"切换必须可见"的验证语义。
+    await _scrollChatUntilVisible(
+      tester,
+      find.textContaining('已切换 permission mode'),
+    );
 
     final snapshot = await harness.relay.getSessionSnapshot(
       (await harness.relay.listSessions()).single.id,
@@ -386,10 +390,12 @@ void main() {
       tester,
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    final dropdown = tester.widget<DropdownButtonFormField<String>>(
+    // V094-16/26：权限入口已是紧凑徽标（InkWell），不再是整行下拉表单；
+    // 禁用语义等价于原 DropdownButtonFormField.onChanged == null。
+    final permissionBadge = tester.widget<InkWell>(
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    expect(dropdown.onChanged, isNull);
+    expect(permissionBadge.onTap, isNull);
     // capability 锁定时菜单不可打开，也不会有 danger-full-access 风险确认残留。
     await tester.tap(
       find.byKey(const Key('composer-permission-mode-select')),
@@ -419,10 +425,12 @@ void main() {
       tester,
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    final dropdown = tester.widget<DropdownButtonFormField<String>>(
+    // V094-16/26：权限入口已是紧凑徽标（InkWell），不再是整行下拉表单；
+    // 禁用语义等价于原 DropdownButtonFormField.onChanged == null。
+    final permissionBadge = tester.widget<InkWell>(
       find.byKey(const Key('composer-permission-mode-select')),
     );
-    expect(dropdown.onChanged, isNull);
+    expect(permissionBadge.onTap, isNull);
     await tester.tap(
       find.byKey(const Key('composer-permission-mode-select')),
       warnIfMissed: false,
@@ -581,6 +589,46 @@ Future<void> _waitForVisible(
   for (var frame = 0; frame < maxFrames; frame += 1) {
     await tester.pump(const Duration(milliseconds: 50));
     if (finder.evaluate().isNotEmpty) return;
+  }
+  expect(finder, findsOneWidget);
+}
+
+Future<void> _scrollChatUntilVisible(WidgetTester tester, Finder finder) async {
+  final scrollable = find
+      .descendant(
+        of: find.byKey(const Key('session-chat-view')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  await _waitForVisible(tester, scrollable);
+  final state = tester.state<ScrollableState>(scrollable);
+  final start = state.position.pixels;
+  state.position.jumpTo(0);
+  await tester.pump();
+  for (var attempt = 0; attempt < 24; attempt += 1) {
+    if (finder.evaluate().isNotEmpty) {
+      await tester.ensureVisible(finder);
+      for (var frame = 0; frame < 3; frame += 1) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      if (finder.evaluate().isNotEmpty) return;
+    }
+    if (!state.position.hasContentDimensions) {
+      await tester.pump(const Duration(milliseconds: 50));
+      continue;
+    }
+    final next = (state.position.pixels + 120)
+        .clamp(0, state.position.maxScrollExtent)
+        .toDouble();
+    if (next == state.position.pixels) break;
+    state.position.jumpTo(next);
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  if (state.position.hasContentDimensions) {
+    state.position.jumpTo(
+      start.clamp(0, state.position.maxScrollExtent).toDouble(),
+    );
+    await tester.pump();
   }
   expect(finder, findsOneWidget);
 }

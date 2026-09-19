@@ -274,14 +274,25 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('session-message-time-12')), findsNothing);
+      // V094-11：分支/反馈收进「更多」菜单。节点 12 只有 copy/time 资格
+      // → 连「更多」按钮都不渲染；节点 13 forkUnavailable → 菜单内有禁用项。
+      expect(
+        find.byKey(const Key('session-message-more-12')),
+        findsNothing,
+      );
       expect(
         find.byKey(const Key('session-message-fork-unavailable-12')),
         findsNothing,
       );
+      await tester.tap(find.byKey(const Key('session-message-more-13')));
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('session-message-fork-unavailable-13')),
         findsOneWidget,
       );
+      // 点击屏障关闭菜单。
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('session-message-copy-12')));
       await tester.pump();
@@ -328,6 +339,9 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 220));
 
+      // V094-11：分支入口在「更多」菜单内。
+      await tester.tap(find.byKey(const Key('session-message-more-14')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('session-message-fork-14')));
       await tester.pump();
 
@@ -613,6 +627,10 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 220));
 
+        // V094-11：反馈动作收进「更多」菜单——打开菜单即触发懒加载
+        // ensure，菜单项保持原 key。
+        await tester.tap(find.byKey(const Key('session-message-more-21')));
+        await tester.pumpAndSettle();
         expect(
           find.byKey(const Key('session-message-like-21')),
           findsOneWidget,
@@ -621,6 +639,7 @@ void main() {
           find.byKey(const Key('session-message-dislike-21')),
           findsOneWidget,
         );
+        // note 项仅在已有反馈 item 时出现（首次 ensure 后存在）。
         expect(
           find.byKey(const Key('session-message-note-21')),
           findsOneWidget,
@@ -630,6 +649,9 @@ void main() {
         await tester.pump();
         expect(writes.last, 'assistant-feedback:null:null:1');
 
+        // 重新打开菜单再操作（菜单选择后关闭）。
+        await tester.tap(find.byKey(const Key('session-message-more-21')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('session-message-dislike-21')));
         await tester.pump();
         expect(
@@ -637,6 +659,8 @@ void main() {
           'assistant-feedback:ConversationFeedbackRating.negative:null:null',
         );
 
+        await tester.tap(find.byKey(const Key('session-message-more-21')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('session-message-note-21')));
         await tester.pump();
         expect(
@@ -658,6 +682,8 @@ void main() {
           'assistant-feedback:ConversationFeedbackRating.negative:需要保留这个结果:2',
         );
 
+        await tester.tap(find.byKey(const Key('session-message-more-21')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('session-message-note-21')));
         await tester.pump();
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
@@ -715,6 +741,9 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 220));
+      // V094-11：备注入口在「更多」菜单内（item 已预置 → note 项可见）。
+      await tester.tap(find.byKey(const Key('session-message-more-22')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('session-message-note-22')));
       await tester.pump();
       await tester.enterText(

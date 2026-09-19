@@ -507,12 +507,15 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
         node.feedbackAvailable;
     if (!hasActions) return const SizedBox.shrink();
 
+    // V094-11/14（UI-11/14 冻结口径）：元信息单行——时间 + 复制（常用直出）
+    // + 「更多」菜单（分支/点赞/点踩/备注收进展开区），默认可见动作区最多
+    // 一行；按钮命中区扩到 ≥48×48dp（图形可小、命中不缩）。备注浮层锚定
+    // 在「更多」按钮上（CompositedTransformTarget），行为与原独立按钮一致。
     return Padding(
       padding: const EdgeInsets.only(top: AppSpacing.xs),
-      child: Wrap(
+      child: Row(
         key: Key('session-message-actions-${node.sequence}'),
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 4,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (node.showTimestamp && node.createdAt != null)
             Padding(
@@ -528,96 +531,189 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
               key: Key('session-message-copy-${node.sequence}'),
               tooltip: '复制',
               iconSize: AppSizes.iconMd,
-              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
               padding: EdgeInsets.zero,
               onPressed: () => _copy(node),
               icon: const Icon(Icons.copy_outlined),
             ),
-          if (node.canFork || node.forkUnavailable)
-            IconButton(
-              key: Key(
-                node.canFork && widget.onFork != null
-                    ? 'session-message-fork-${node.sequence}'
-                    : 'session-message-fork-unavailable-${node.sequence}',
-              ),
-              iconSize: AppSizes.iconMd,
-              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-              padding: EdgeInsets.zero,
-              tooltip: node.canFork && widget.onFork != null
-                  ? '从这里分支'
-                  : '当前 Relay 未提供分支写入能力',
-              onPressed: node.canFork && widget.onFork != null
-                  ? () => unawaited(widget.onFork!(node.messageId!))
-                  : null,
-              icon: const Icon(Icons.call_split_outlined),
-            ),
-          if (node.feedbackAvailable && messageId != null) ...[
-            _FeedbackButton(
-              key: Key(_sequenceKey('session-message-like-', node.sequence)),
-              label: '喜欢',
-              icon: Icons.thumb_up_outlined,
-              active: item?.rating == ConversationFeedbackRating.positive,
-              enabled: feedback != null && !feedbackBusy,
-              onEnsure: () async => feedback?.ensure(messageId),
-              onPressed: () => unawaited(
-                feedback!.toggle(
-                  messageId,
-                  ConversationFeedbackRating.positive,
-                ),
-              ),
-            ),
-            _FeedbackButton(
-              key: Key(_sequenceKey('session-message-dislike-', node.sequence)),
-              label: '不喜欢',
-              icon: Icons.thumb_down_outlined,
-              active: item?.rating == ConversationFeedbackRating.negative,
-              enabled: feedback != null && !feedbackBusy,
-              onEnsure: () async => feedback?.ensure(messageId),
-              onPressed: () => unawaited(
-                feedback!.toggle(
-                  messageId,
-                  ConversationFeedbackRating.negative,
-                ),
-              ),
-            ),
-            if (item != null)
-              CompositedTransformTarget(
-                link: _noteLink,
-                child: IconButton(
-                  key: Key(
-                    _sequenceKey('session-message-note-', node.sequence),
-                  ),
-                  focusNode: _noteTriggerFocus,
-                  tooltip: item.note?.isNotEmpty == true ? '编辑反馈备注' : '添加反馈备注',
+          if (node.canFork ||
+              node.forkUnavailable ||
+              (node.feedbackAvailable && messageId != null))
+            CompositedTransformTarget(
+              link: _noteLink,
+              child: Focus(
+                focusNode: _noteTriggerFocus,
+                child: PopupMenuButton<String>(
+                  key: Key('session-message-more-${node.sequence}'),
+                  tooltip: '更多动作',
                   iconSize: AppSizes.iconMd,
-                  constraints: const BoxConstraints.tightFor(
-                    width: 32,
-                    height: 32,
-                  ),
+                  constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
                   padding: EdgeInsets.zero,
-                  onPressed: feedbackBusy ? null : _toggleNote,
-                  icon: Icon(
-                    item.note?.isNotEmpty == true
-                        ? Icons.sticky_note_2
-                        : Icons.note_add_outlined,
-                  ),
+                  color: item != null
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                  // 打开菜单即懒加载反馈状态（原按钮 Focus/MouseRegion 的
+                  // onEnsure 语义等价迁移，幂等）。
+                  onOpened:
+                      messageId == null || feedback == null
+                          ? null
+                          : () => unawaited(feedback.ensure(messageId)),
+                  itemBuilder:
+                      (_) => [
+                    if (node.canFork || node.forkUnavailable)
+                      PopupMenuItem<String>(
+                        value: 'fork',
+                        enabled: node.canFork && widget.onFork != null,
+                        key: Key(
+                          node.canFork && widget.onFork != null
+                              ? 'session-message-fork-${node.sequence}'
+                              : 'session-message-fork-unavailable-${node.sequence}',
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.call_split_outlined, size: AppSizes.iconSm),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              node.canFork && widget.onFork != null
+                                  ? '从这里分支'
+                                  : '当前 Relay 未提供分支写入能力',
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (node.feedbackAvailable && messageId != null) ...[
+                      PopupMenuItem<String>(
+                        value: 'like',
+                        enabled: feedback != null && !feedbackBusy,
+                        key: Key(
+                          _sequenceKey('session-message-like-', node.sequence),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.thumb_up_outlined,
+                              size: AppSizes.iconSm,
+                              color: item?.rating ==
+                                      ConversationFeedbackRating.positive
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              item?.rating ==
+                                      ConversationFeedbackRating.positive
+                                  ? '喜欢（已选择）'
+                                  : '喜欢',
+                            ),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem<String>(
+                        value: 'dislike',
+                        enabled: feedback != null && !feedbackBusy,
+                        key: Key(
+                          _sequenceKey(
+                            'session-message-dislike-',
+                            node.sequence,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.thumb_down_outlined,
+                              size: AppSizes.iconSm,
+                              color: item?.rating ==
+                                      ConversationFeedbackRating.negative
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                            ),
+                            const SizedBox(width: AppSpacing.sm),
+                            Text(
+                              item?.rating ==
+                                      ConversationFeedbackRating.negative
+                                  ? '不喜欢（已选择）'
+                                  : '不喜欢',
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (item != null)
+                        PopupMenuItem<String>(
+                          value: 'note',
+                          enabled: !feedbackBusy,
+                          key: Key(
+                            _sequenceKey('session-message-note-', node.sequence),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                item.note?.isNotEmpty == true
+                                    ? Icons.sticky_note_2
+                                    : Icons.note_add_outlined,
+                                size: AppSizes.iconSm,
+                              ),
+                              const SizedBox(width: AppSpacing.sm),
+                              Text(
+                                item.note?.isNotEmpty == true
+                                    ? '编辑反馈备注'
+                                    : '添加反馈备注',
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ],
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'fork':
+                        if (node.canFork && widget.onFork != null) {
+                          unawaited(widget.onFork!(node.messageId!));
+                        }
+                      case 'like':
+                        if (feedback != null && messageId != null) {
+                          unawaited(
+                            feedback.toggle(
+                              messageId,
+                              ConversationFeedbackRating.positive,
+                            ),
+                          );
+                        }
+                      case 'dislike':
+                        if (feedback != null && messageId != null) {
+                          unawaited(
+                            feedback.toggle(
+                              messageId,
+                              ConversationFeedbackRating.negative,
+                            ),
+                          );
+                        }
+                      case 'note':
+                        _toggleNote();
+                    }
+                  },
                 ),
               ),
-          ],
+            ),
           if (_feedback != null)
-            Text(
-              _feedback!,
-              key: Key('session-message-action-feedback-${node.sequence}'),
-              style: Theme.of(context).textTheme.labelSmall,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+              child: Text(
+                _feedback!,
+                key: Key('session-message-action-feedback-${node.sequence}'),
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
             ),
           if (feedbackError != null)
-            Text(
-              _feedbackErrorText(feedbackError),
-              key: Key(
-                _sequenceKey('session-message-feedback-error-', node.sequence),
-              ),
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.error,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+              child: Text(
+                _feedbackErrorText(feedbackError),
+                key: Key(
+                  _sequenceKey('session-message-feedback-error-', node.sequence),
+                ),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
               ),
             ),
         ],
@@ -765,49 +861,6 @@ class _MessageActionsRowState extends State<_MessageActionsRow> {
   }
 
   String _sequenceKey(String prefix, int sequence) => '$prefix$sequence';
-}
-
-class _FeedbackButton extends StatelessWidget {
-  const _FeedbackButton({
-    required this.label,
-    required this.icon,
-    required this.active,
-    required this.enabled,
-    required this.onEnsure,
-    required this.onPressed,
-    super.key,
-  });
-
-  final String label;
-  final IconData icon;
-  final bool active;
-  final bool enabled;
-  final Future<void> Function() onEnsure;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) => Focus(
-    onFocusChange: (focused) {
-      if (focused) unawaited(onEnsure());
-    },
-    child: Semantics(
-      button: true,
-      toggled: active,
-      label: active ? '$label（已选择）' : label,
-      child: MouseRegion(
-        onEnter: (_) => unawaited(onEnsure()),
-        child: IconButton(
-          tooltip: label,
-          iconSize: AppSizes.iconMd,
-          constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-          padding: EdgeInsets.zero,
-          color: active ? Theme.of(context).colorScheme.primary : null,
-          onPressed: enabled ? onPressed : null,
-          icon: Icon(icon),
-        ),
-      ),
-    ),
-  );
 }
 
 class _ReasoningRow extends StatelessWidget {

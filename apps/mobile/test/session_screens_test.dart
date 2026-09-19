@@ -2370,6 +2370,18 @@ Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
   for (var frame = 0; frame < 3; frame += 1) {
     await tester.pump(const Duration(milliseconds: 50));
   }
+  // V094：composer 改为两行（全宽输入 + 工具行）后，takeover 面板会在
+  // composer seat（maxHeight 300 的 SingleChildScrollView）内滚动定位；
+  // 滚动落位后还需额外帧才更新命中面，否则 tap 会被 seat 视口吞掉。
+  // 这里以"可命中"为收敛条件重试，而不是无脑增加固定帧数。
+  for (var attempt = 0;
+      attempt < 4 && finder.hitTestable().evaluate().isEmpty;
+      attempt += 1) {
+    await tester.ensureVisible(finder);
+    for (var frame = 0; frame < 3; frame += 1) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
   await tester.tap(finder);
 }
 

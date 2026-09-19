@@ -253,6 +253,19 @@ Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
   await _waitForVisible(tester, finder);
   await tester.ensureVisible(finder);
   await tester.pump();
+  // V094：composer/设置面板在同一屏内变高后，控件可能先落在视口边缘；
+  // 以"可命中"为收敛条件重试滚动定位，而不是只 pump 一帧就点击。
+  for (var frame = 0; frame < 3; frame += 1) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  for (var attempt = 0;
+      attempt < 4 && finder.hitTestable().evaluate().isEmpty;
+      attempt += 1) {
+    await tester.ensureVisible(finder);
+    for (var frame = 0; frame < 3; frame += 1) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
   await tester.tap(finder);
 }
 

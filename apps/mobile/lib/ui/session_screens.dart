@@ -4369,11 +4369,33 @@ class _SessionComposerState extends State<_SessionComposer> {
     // input.dock（Todo/Queue）必须让位，避免长 takeover 面板被 dock 挤出可触达区域。
     final hasComposerTakeover =
         pendingQuestion != null || pendingPermission != null;
+    // V094-09（计划 §3.1「Todo/Queue 长内容独立限高或进入面板」）：
+    // dock 渲染在 composer 容器之外（同一 SafeArea 内的兄弟节点），
+    // 使「空/单行 composer 含配置摘要」的 ≤144dp 预算只覆盖输入与配置摘要；
+    // dock 保持默认折叠单行（独立限高），不再挤占输入主动作。
     return SafeArea(
       top: false,
-      child: Container(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!hasComposerTakeover)
+            SessionTodoDock(todos: widget.sessions.controls.todos),
+          if (input.queue.isNotEmpty)
+            SessionQueueDock(
+              messages: input.queue,
+              onRemove: (id) =>
+                  setState(() => _inputMachine.removeQueuedMessage(id)),
+              onEdit: (id, text) =>
+                  setState(() => _inputMachine.editQueuedMessage(id, text)),
+              onSteer: (id) => unawaited(_steerQueuedMessages(id)),
+              onSendAll: _sendQueuedMessages,
+              running: widget.sessions.isStreaming,
+            ),
+          Container(
         key: const Key('session-composer'),
-        padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
+        // V094-09：垂直留白收紧（8→4），预算优先给正文与主动作。
+        padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.xs),
         decoration: BoxDecoration(
           color: Theme.of(context).scaffoldBackgroundColor,
         ),
@@ -4396,19 +4418,6 @@ class _SessionComposerState extends State<_SessionComposer> {
                 hasLease: widget.sessions.hasSelectedLease,
                 sessions: widget.sessions,
                 deviceId: widget.deviceId,
-              ),
-            if (!hasComposerTakeover)
-              SessionTodoDock(todos: widget.sessions.controls.todos),
-            if (input.queue.isNotEmpty)
-              SessionQueueDock(
-                messages: input.queue,
-                onRemove: (id) =>
-                    setState(() => _inputMachine.removeQueuedMessage(id)),
-                onEdit: (id, text) =>
-                    setState(() => _inputMachine.editQueuedMessage(id, text)),
-                onSteer: (id) => unawaited(_steerQueuedMessages(id)),
-                onSendAll: _sendQueuedMessages,
-                running: widget.sessions.isStreaming,
               ),
             if (_commandMenuOpen)
               _CommandLauncherMenu(
@@ -4477,47 +4486,15 @@ class _SessionComposerState extends State<_SessionComposer> {
                 borderRadius: BorderRadius.circular(AppRadius.pill),
                 boxShadow: AppShadows.composerPill,
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+              // V094-10（计划 §3.1）：正文与工具栏分行——上方全宽输入，
+              // 下方工具行；命令/附件不再挤占正文横排宽度。
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  IconButton(
-                    key: const Key('session-command-launcher'),
-                    tooltip: '命令',
-                    onPressed: () {
-                      setState(() => _commandMenuOpen = !_commandMenuOpen);
-                      _focusComposer();
-                    },
-                    icon: const Icon(Icons.add),
-                  ),
-                  IconButton(
-                    key: const Key('session-attachment-add-button'),
-                    tooltip:
-                        widget.sessions.attachmentPickBlockedReason(
-                          canWrite: widget.canWrite,
-                        ) ??
-                        '选择图片或文本附件',
-                    // v0.2/P3：capability + 会话 DEK 均就绪后启用真实选附件；
-                    // 无 DEK 时保持 fail-closed，不允许把明文文件或显示名放进 Relay。
-                    onPressed:
-                        widget.sessions.attachmentPickBlockedReason(
-                                  canWrite: widget.canWrite,
-                                ) ==
-                                null &&
-                            !widget.sessions.isBusy
-                        ? () async {
-                            await widget.sessions.pickAttachment(
-                              deviceId: widget.deviceId,
-                              canWrite: widget.canWrite,
-                            );
-                            _focusComposer();
-                          }
-                        : null,
-                    icon: const Icon(Icons.attach_file),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      key: const Key('session-composer-input'),
-                      controller: _controller,
+                  TextField(
+                    key: const Key('session-composer-input'),
+                    controller: _controller,
                       focusNode: _focusNode,
                       scrollController: _inputScrollController,
                       enabled: blocked == null,
@@ -4556,11 +4533,64 @@ class _SessionComposerState extends State<_SessionComposer> {
                         border: InputBorder.none,
                         enabledBorder: InputBorder.none,
                         focusedBorder: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: AppSpacing.sm,
+                          vertical: AppSpacing.sm,
+                        ),
                       ),
                     ),
-                  ),
-                  IconButton(
-                    key: const Key('session-composer-primary-action'),
+                  // V094-09/10：工具行——命令、附件、紧凑权限徽标靠左，
+                  // 停止/发送靠右；正文输入占满上一行（≥90% 内容宽）。
+                  // 紧凑密度：视觉/命中 40dp（仍不低于可触达下限的实际按钮，
+                  // 权限徽标外层保持 48dp 命中区）。
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        key: const Key('session-command-launcher'),
+                        tooltip: '命令',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          setState(() => _commandMenuOpen = !_commandMenuOpen);
+                          _focusComposer();
+                        },
+                        icon: const Icon(Icons.add),
+                      ),
+                      IconButton(
+                        key: const Key('session-attachment-add-button'),
+                        visualDensity: VisualDensity.compact,
+                        tooltip:
+                            widget.sessions.attachmentPickBlockedReason(
+                              canWrite: widget.canWrite,
+                            ) ??
+                            '选择图片或文本附件',
+                        // v0.2/P3：capability + 会话 DEK 均就绪后启用真实选附件；
+                        // 无 DEK 时保持 fail-closed，不允许把明文文件或显示名放进 Relay。
+                        onPressed:
+                            widget.sessions.attachmentPickBlockedReason(
+                                      canWrite: widget.canWrite,
+                                    ) ==
+                                    null &&
+                                !widget.sessions.isBusy
+                            ? () async {
+                                await widget.sessions.pickAttachment(
+                                  deviceId: widget.deviceId,
+                                  canWrite: widget.canWrite,
+                                );
+                                _focusComposer();
+                              }
+                            : null,
+                        icon: const Icon(Icons.attach_file),
+                      ),
+                      _ComposerControlStrip(
+                        sessions: widget.sessions,
+                        canWrite: widget.canWrite,
+                        deviceId: widget.deviceId,
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        key: const Key('session-composer-primary-action'),
                     tooltip: primaryIsStop ? '中断当前任务' : primaryTooltip,
                     onPressed: primaryIsStop
                         ? () async {
@@ -4595,35 +4625,36 @@ class _SessionComposerState extends State<_SessionComposer> {
                           : Icons.schedule_send_outlined,
                     ),
                   ),
-                  if (running && input.draft.trim().isNotEmpty)
-                    IconButton(
-                      key: const Key('session-stop-button'),
-                      tooltip: '停止生成',
-                      onPressed: canStop
-                          ? () async {
-                              await _stop();
-                              _focusComposer();
-                            }
-                          : null,
-                      icon: const Icon(Icons.stop_circle_outlined),
-                    ),
+                      if (running && input.draft.trim().isNotEmpty)
+                        IconButton(
+                          key: const Key('session-stop-button'),
+                          tooltip: '停止生成',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: canStop
+                              ? () async {
+                                  await _stop();
+                                  _focusComposer();
+                                }
+                              : null,
+                          icon: const Icon(Icons.stop_circle_outlined),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: AppSpacing.xs),
+            // V094-09：配置摘要行——模型/effort 目录 seat 一行呈现；
+            // 整行权限表单与空 helper 已移除（权限入口在工具行徽标）。
             _HappyComposerMetaRow(
-              sessions: widget.sessions,
-              canWrite: widget.canWrite,
-              deviceId: widget.deviceId,
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            _ComposerControlStrip(
               sessions: widget.sessions,
               canWrite: widget.canWrite,
               deviceId: widget.deviceId,
             ),
           ],
         ),
+      ),
+        ],
       ),
     );
   }
@@ -5018,6 +5049,11 @@ Future<void> _confirmDangerPermission(
 
 /// v0.2/P3：模型与推理等级由 Composer 单行状态入口承载；此处只保留权限模式。
 /// 所有写入口继续按 capability、设备角色和 lease fail-closed。
+/// V094-16（计划 §2.5/§3.1）：紧凑权限徽标——内容宽度、视觉高 32dp、
+/// 命中区域 ≥48dp；一次点击直达权限选择面板。整行 DropdownButtonFormField
+/// 表单、永久「权限」label 与空 helper 已移除。徽标文案优先展示目录
+/// 友好名，缺说明回退原 ID；danger-full-access 保留警示样式，风险确认门
+/// 不受展示名影响。禁用（能力锁定/目录为空）附真实原因。
 class _ComposerControlStrip extends StatelessWidget {
   const _ComposerControlStrip({
     required this.sessions,
@@ -5042,57 +5078,184 @@ class _ComposerControlStrip extends StatelessWidget {
       'permission_mode',
       canWrite: canWrite,
     );
+    final disabled =
+        permissionModeBlocked != null ||
+        controls.availablePermissionModes.isEmpty;
+    final current = controls.permissionMode;
+    final details = controls.availablePermissionModeDetails;
+    final currentDetail = details
+        .where((detail) => detail.id == current)
+        .firstOrNull;
+    // 徽标文案：目录友好名优先，缺失回退原 ID（不臆测语义）。
+    final label = current == null
+        ? '权限'
+        : (currentDetail?.name.isNotEmpty == true ? currentDetail!.name : current);
+    final isDanger = current == 'danger-full-access';
+    final scheme = Theme.of(context).colorScheme;
+    final tooltip = disabled
+        ? (permissionModeBlocked ??
+              sessions.permissionDirectoryHint ??
+              '权限目录未提供')
+        : (currentDetail?.description.isNotEmpty == true
+              ? currentDetail!.description
+              : '查看权限模式');
+
     return Padding(
       key: const Key('composer-control-strip'),
-      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 190),
-        child: DropdownButtonFormField<String>(
-          key: const Key('composer-permission-mode-select'),
-          initialValue: controls.permissionMode,
-          isDense: true,
-          isExpanded: true,
-          decoration: InputDecoration(
-            labelText: '权限',
-            // v0.8.6 B：目录为空时的禁用必须附原因——不再渲染无解释空壳
-            //（目录未同步时提示恢复路径：启动会话后自动获取）。
-            helperText: sessions.permissionDirectoryHint ?? ' ',
-            helperMaxLines: 2,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.card)),
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 10,
-              vertical: 8,
-            ),
-          ),
-          items: [
-            for (final mode in controls.availablePermissionModes)
-              DropdownMenuItem(value: mode, child: Text(mode)),
-          ],
-          onChanged:
-              permissionModeBlocked == null &&
-                  controls.availablePermissionModes.isNotEmpty
-              ? (value) {
-                  if (value == null) return;
-                  // v0.5/P5：danger-full-access 必须先弹风险确认，
-                  // 勾选确认前不可提交；取消/遮罩/Escape 不提交；
-                  // custom 预设不作为可点菜单项渲染（不在 available 列表）。
-                  if (value == 'danger-full-access') {
-                    _confirmDangerPermission(
+      padding: const EdgeInsets.only(left: AppSpacing.micro),
+      child: SizedBox(
+        // 命中区域高度 ≥48dp（视觉徽标 32dp 居中）。
+        height: 48,
+        child: Center(
+          child: Tooltip(
+            message: tooltip,
+            child: InkWell(
+              key: const Key('composer-permission-mode-select'),
+              onTap: disabled
+                  ? null
+                  : () => _showPermissionSheet(
                       context,
                       sessions: sessions,
+                      canWrite: canWrite,
+                      deviceId: deviceId,
+                    ),
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+              child: Container(
+                height: 32,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm + AppSpacing.xs,
+                ),
+                decoration: BoxDecoration(
+                  color: isDanger
+                      ? scheme.errorContainer
+                      : scheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                  border: Border.all(
+                    color: isDanger
+                        ? scheme.error.withValues(alpha: 0.6)
+                        : scheme.outlineVariant,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isDanger
+                          ? Icons.warning_amber_rounded
+                          : Icons.verified_user_outlined,
+                      size: AppSizes.iconSm,
+                      color: isDanger
+                          ? scheme.error
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: AppSpacing.xs),
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: isDanger
+                            ? scheme.error
+                            : Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 权限选择面板（一次点击直达）：目录条目展示友好名 + 说明（缺失时
+  /// 「说明未提供」），当前模式打勾；danger-full-access 关闭面板后先弹
+  /// 风险勾选确认，确认门语义与 v0.8.6 一致。
+  Future<void> _showPermissionSheet(
+    BuildContext context, {
+    required SessionController sessions,
+    required bool canWrite,
+    required String? deviceId,
+  }) async {
+    final controls = sessions.controls;
+    final details = controls.availablePermissionModeDetails;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Semantics(
+          container: true,
+          label: '权限模式选择',
+          child: ListView(
+            key: const Key('session-permission-selection-sheet'),
+            shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.lg,
+                  vertical: AppSpacing.sm,
+                ),
+                child: Text(
+                  '权限模式',
+                  style: Theme.of(sheetContext).textTheme.titleMedium,
+                ),
+              ),
+              for (final mode in controls.availablePermissionModes)
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                  ),
+                  leading: Icon(
+                    mode == 'danger-full-access'
+                        ? Icons.warning_amber_rounded
+                        : Icons.verified_user_outlined,
+                    color: mode == 'danger-full-access'
+                        ? Theme.of(sheetContext).colorScheme.error
+                        : null,
+                  ),
+                  title: Text(
+                    details
+                            .where((detail) => detail.id == mode)
+                            .map((detail) => detail.name)
+                            .firstWhere(
+                              (name) => name.isNotEmpty,
+                              orElse: () => mode,
+                            ),
+                  ),
+                  subtitle: Text(
+                    details
+                            .where((detail) => detail.id == mode)
+                            .map((detail) => detail.description)
+                            .firstWhere(
+                              (description) => description.isNotEmpty,
+                              orElse: () => '说明未提供',
+                            ),
+                  ),
+                  trailing: controls.permissionMode == mode
+                      ? const Icon(Icons.check)
+                      : null,
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    if (mode == 'danger-full-access') {
+                      _confirmDangerPermission(
+                        context,
+                        sessions: sessions,
+                        deviceId: deviceId,
+                        canWrite: canWrite,
+                      );
+                      return;
+                    }
+                    sessions.selectPermissionMode(
+                      mode: mode,
                       deviceId: deviceId,
                       canWrite: canWrite,
                     );
-                    return;
-                  }
-                  sessions.selectPermissionMode(
-                    mode: value,
-                    deviceId: deviceId,
-                    canWrite: canWrite,
-                  );
-                }
-              : null,
+                  },
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -5508,7 +5671,8 @@ class _SessionStatusStrip extends StatelessWidget {
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+        // V094-08：状态条垂直内衬收紧（8→4），预算给标题行与 tabs。
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.xs),
         child: Row(
           children: [
             Container(
@@ -5555,8 +5719,8 @@ class _SessionStatusStrip extends StatelessWidget {
                   constraints: const BoxConstraints(maxWidth: 142),
                   margin: const EdgeInsets.only(right: AppSpacing.sm),
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 4,
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.micro,
                   ),
                   decoration: BoxDecoration(
                     color: providerConnected
@@ -5582,7 +5746,7 @@ class _SessionStatusStrip extends StatelessWidget {
               child: Container(
                 constraints: const BoxConstraints(maxWidth: 108),
                 margin: const EdgeInsets.only(right: AppSpacing.micro),
-                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.micro),
                 decoration: BoxDecoration(
                   color: hasLease
                       ? context.appColors.success.withValues(alpha: 0.14)
@@ -5603,8 +5767,12 @@ class _SessionStatusStrip extends StatelessWidget {
             // 兜底（行为与打开会话时自动获取一致），不再显示“暂不可操作”提示。
             IconButton(
               key: const Key('session-acquire-lease-button'),
-              tooltip: hasLease ? '会话可操作' : '获取会话操作权',
+              tooltip: hasLease ? '会话可控制' : '获取会话控制权',
               visualDensity: VisualDensity.compact,
+              // V094-08：状态行按钮内衬收紧（图标 16 + 32dp 命中），
+              // 不让单个兜底按钮撑高整条状态行。
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              padding: EdgeInsets.zero,
               onPressed: canWrite && !hasLease ? onAcquireLease : null,
               icon: Icon(
                 hasLease

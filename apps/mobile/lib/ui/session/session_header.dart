@@ -37,13 +37,16 @@ class SessionHeader extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // V094-08：紧凑标题行（44dp，返回/动作按钮 compact 命中），
+            // 预算让给主状态与 tabs。
             SizedBox(
-              height: kToolbarHeight,
+              height: 44,
               child: Row(
                 children: [
                   IconButton(
                     key: const Key('session-detail-back-button'),
                     tooltip: '返回会话列表',
+                    visualDensity: VisualDensity.compact,
                     onPressed: onBack,
                     icon: const Icon(Icons.arrow_back),
                   ),
@@ -91,7 +94,8 @@ class SessionViewTabs extends StatelessWidget {
       label: '会话视图切换',
       child: Container(
         key: const Key('session-view-tabs'),
-        height: 42,
+        // V094-08：tabs 紧凑化（42→30），保留 2dp 指示条与可读标签。
+        height: 30,
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(color: Theme.of(context).dividerColor),
@@ -146,13 +150,13 @@ class _SessionViewTab extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-              // tab 标签挂 labelLarge 角色（15/w600），不再继承环境正文字号。
+              padding: const EdgeInsets.only(bottom: AppSpacing.micro),
+              // tab 标签挂 labelMedium 角色；V094-08 收紧 tabs 内衬。
               child: Text(
                 label,
                 style: Theme.of(
                   context,
-                ).textTheme.labelLarge?.copyWith(color: color),
+                ).textTheme.labelMedium?.copyWith(color: color),
               ),
             ),
             AnimatedContainer(

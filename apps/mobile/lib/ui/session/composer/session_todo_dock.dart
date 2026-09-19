@@ -39,14 +39,22 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
   Widget build(BuildContext context) {
     if (widget.todos.isEmpty) return const SizedBox.shrink();
     final theme = Theme.of(context);
+    // V094-09（计划 §3.1「Todo/Queue 长内容独立限高」）：折叠态不再渲染
+    // 卡片容器（约 47dp），改为紧凑单行 chip（视觉高约 28dp），默认折叠
+    // 不挤压发送主动作；展开态保持列表 + 限高滚动。
     return Container(
       key: const Key('session-todo-dock'),
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border.all(color: theme.dividerColor),
-        borderRadius: BorderRadius.circular(AppRadius.card),
-      ),
+      margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+      decoration: _collapsed
+          ? BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+            )
+          : BoxDecoration(
+              color: theme.colorScheme.surface,
+              border: Border.all(color: theme.dividerColor),
+              borderRadius: BorderRadius.circular(AppRadius.card),
+            ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -56,19 +64,27 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
             borderRadius: BorderRadius.circular(AppRadius.card),
             onTap: () => setState(() => _collapsed = !_collapsed),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
+              padding: _collapsed
+                  ? const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm + AppSpacing.xs,
+                      vertical: AppSpacing.xs + 2,
+                    )
+                  : const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm,
+                      vertical: AppSpacing.sm,
+                    ),
               child: Row(
                 children: [
-                  const Icon(Icons.checklist_outlined, size: AppSizes.iconMd),
-                  const SizedBox(width: AppSpacing.sm),
-                  Text('Todo', style: theme.textTheme.labelLarge),
-                  const SizedBox(width: AppSpacing.sm),
+                  const Icon(Icons.checklist_outlined, size: AppSizes.iconSm),
+                  const SizedBox(width: AppSpacing.xs),
+                  Text('Todo', style: theme.textTheme.labelMedium),
+                  const SizedBox(width: AppSpacing.xs),
                   Expanded(
                     child: Text(
                       _progressLabel,
                       key: const Key('session-todo-dock-progress'),
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelMedium?.copyWith(
+                      style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
@@ -77,7 +93,7 @@ class _SessionTodoDockState extends State<SessionTodoDock> {
                     _collapsed
                         ? Icons.keyboard_arrow_up
                         : Icons.keyboard_arrow_down,
-                    size: AppSizes.iconMd,
+                    size: AppSizes.iconSm,
                   ),
                 ],
               ),

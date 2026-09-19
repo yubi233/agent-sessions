@@ -263,70 +263,62 @@ class _SessionChatViewState extends State<SessionChatView> {
         ),
       ...widget.footer,
     ];
-    return Stack(
+    // V094-04（计划 §3.1）：状态槽参与布局——恢复/超时/生成提示放在消息列表
+    // 下方（Column 兄弟节点），不再以 Positioned overlay 覆盖正文；无活动提示
+    // 时不占位。状态行仍在常驻树中（不再是懒加载列表项），测试与用户都能
+    // 稳定找到；回到底部按钮与文件打开状态保留浮层语义。
+    return Column(
       children: [
-        ListView.separated(
-          key: const Key('session-chat-view'),
-          controller: _controller,
-          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.xxl),
-          itemCount: children.length,
-          separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
-          itemBuilder: (context, index) => children[index],
-        ),
-        // v0.5/回归修复：streaming 状态行固定为一个可见 overlay，而不是懒加载列表项。
-        // 这样即使滚动到底部时 footer（如子会话面板）较高，streaming indicator 也始终在树中，
-        // 不会因为 ListView 未 build 视口外的行而被测试或用户跳过。
-        // v0.9.3 P2（T4）：自动恢复提示占底部提示槽的最高优先级——恢复是
-        // 用户当前最需要知道的事实；其余状态（超时/生成中）在恢复期间退让。
-        if (widget.recoveryNotice != null)
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 12,
-            child: _RecoveryNoticeRow(text: widget.recoveryNotice!),
-          )
-        else if (widget.turnTimedOut)
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 12,
-            child: _TurnTimeoutRow(
-              freshnessText: widget.timeoutFreshnessText,
-              onViewResult: widget.onViewResult,
+        Expanded(
+          child: Stack(
+            children: [
+              ListView.separated(
+                key: const Key('session-chat-view'),
+                controller: _controller,
+                padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.lg),
+                itemCount: children.length,
+                separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
+                itemBuilder: (context, index) => children[index],
+              ),
+              if (!_readerPinnedToBottom)
+            Positioned(
+              right: 18,
+              bottom: 18,
+              child: FloatingActionButton.small(
+                key: const Key('session-chat-to-bottom-button'),
+                tooltip: '回到底部',
+                onPressed: _scrollToBottom,
+                child: const Icon(Icons.keyboard_arrow_down),
+              ),
             ),
+            if (_fileOpenBusyPath != null)
+              Positioned(
+                left: 18,
+                bottom: 18,
+                child: _FileOpenStatus(path: _fileOpenBusyPath!),
+              ),
+            if (_fileOpenError != null)
+              Positioned.fill(
+                child: _FileOpenErrorDialog(
+                  error: _fileOpenError!,
+                  onClose: _closeFileOpenError,
+                  onRetry: () => _requestOpenFile(_fileOpenError!.path),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // v0.9.3 P2（T4）延续 + V094-04：提示槽优先级——恢复 > 超时 > 生成中；
+        // 参与布局，高度随内容变化，正文可完整滚入可视区域。
+        if (widget.recoveryNotice != null)
+          _RecoveryNoticeRow(text: widget.recoveryNotice!)
+        else if (widget.turnTimedOut)
+          _TurnTimeoutRow(
+            freshnessText: widget.timeoutFreshnessText,
+            onViewResult: widget.onViewResult,
           )
         else if (widget.running)
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 12,
-            child: _TurnStatusRow(phase: widget.turnPhase),
-          ),
-        if (!_readerPinnedToBottom)
-          Positioned(
-            right: 18,
-            bottom: 18,
-            child: FloatingActionButton.small(
-              key: const Key('session-chat-to-bottom-button'),
-              tooltip: '回到底部',
-              onPressed: _scrollToBottom,
-              child: const Icon(Icons.keyboard_arrow_down),
-            ),
-          ),
-        if (_fileOpenBusyPath != null)
-          Positioned(
-            left: 18,
-            bottom: 18,
-            child: _FileOpenStatus(path: _fileOpenBusyPath!),
-          ),
-        if (_fileOpenError != null)
-          Positioned.fill(
-            child: _FileOpenErrorDialog(
-              error: _fileOpenError!,
-              onClose: _closeFileOpenError,
-              onRetry: () => _requestOpenFile(_fileOpenError!.path),
-            ),
-          ),
+          _TurnStatusRow(phase: widget.turnPhase),
       ],
     );
   }
