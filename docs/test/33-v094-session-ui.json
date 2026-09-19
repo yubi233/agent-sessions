@@ -494,7 +494,8 @@
         "恢复设备和窗口显示参数"
       ],
       "evidence": [
-        "已执行（2026-09-20）：同版本 14/14 全绿矩阵 e2e-verify/reports/2026-09-19T16-52-26-769Z/v094-mobile-visual/report.json（run_id 2026-09-19T16-52-26-769Z-5286af4b，revision ba4b0c8、dirty=false、diff_sha256 绑定，每格 owned_pids 归属+进程退出核验）；主执行者逐场景视检：200% 状态条「可发送/执行服务可用/可控制」两行堆叠无截断（5.6-3 观察项关闭）、横屏紧凑 header 无溢出、恢复格结构化错误 LOCAL_STATE_MISSING 与自动重试 1/1 可见、配置格完整访问红警示徽标正确；不使用子代理"
+        "已执行（2026-09-20）：同版本 14/14 全绿矩阵 e2e-verify/reports/2026-09-19T16-52-26-769Z/v094-mobile-visual/report.json（run_id 2026-09-19T16-52-26-769Z-5286af4b，revision ba4b0c8、dirty=false、diff_sha256 绑定，每格 owned_pids 归属+进程退出核验）；主执行者逐场景视检：200% 状态条「可发送/执行服务可用/可控制」两行堆叠无截断（5.6-3 观察项关闭）、横屏紧凑 header 无溢出、恢复格结构化错误 LOCAL_STATE_MISSING 与自动重试 1/1 可见、配置格完整访问红警示徽标正确；不使用子代理",
+        "补充（2026-09-20）：视检发现 composer 底部 flex 份额留白（§6.4 第 5 项缺陷）并修复（seat flex:0 自然高贴底）；复跑 14/14 全绿 e2e-verify/reports/2026-09-19T17-56-13-954Z/v094-mobile-visual/report.json（run_id …b36bad5a，diff_sha256 绑定修复后状态）；新增 composer 贴底布局断言"
       ]
     },
     {

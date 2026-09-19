@@ -31,19 +31,19 @@ class SessionConversationRoot extends StatelessWidget {
                 constraints: const BoxConstraints(maxWidth: 640),
                 child: Column(
                   children: [
-                    // V094-20（收口）：conversation 滚动区与 composer seat 弹性
-                    // 共享剩余高度——基准字号下 seat 自然高（≤144 预算）优先，
-                    // conversation 拿走其余；大字/重 dock 下 seat 自然高超过
-                    // 分配额时 seat 内部滚动（loose flex 收缩），不再溢出。
+                    // V094-20（2026-09-20 纠偏）：composer seat 按内容自然高，
+                    // 不与滚动区瓜分剩余高度——此前 flex 3:2 让 seat 在内容
+                    // 不足时也拿走份额，底部堆出大片空白。flex:0 的 loose
+                    // 约束 = 自然高优先，仅当超过剩余空间时收缩（seat 内部
+                    // 滚动兜底），大字/重 dock 不再溢出。
                     Expanded(
-                      flex: 3,
                       child: KeyedSubtree(
                         key: const Key('session-conversation-scroll-owner'),
                         child: activeView,
                       ),
                     ),
                     Flexible(
-                      flex: 2,
+                      flex: 0,
                       child: KeyedSubtree(
                         key: const Key('session-composer-seat'),
                         child: ConstrainedBox(

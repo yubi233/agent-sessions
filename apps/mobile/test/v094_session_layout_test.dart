@@ -112,6 +112,26 @@ void main() {
         reason: '"可操作"不等于可发送（V094-02）：角色应表述为可控制/只读',
       );
     });
+
+    testWidgets('V094-20 骨架：composer seat 按内容自然高，底部无 flex 份额留白', (tester) async {
+      await _openSession(tester);
+
+      final seatRect = tester.getRect(find.byKey(const Key('session-composer-seat')));
+      final composerRect = tester.getRect(find.byKey(const Key('session-composer')));
+      // seat 曾用 flex 3:2 瓜分剩余高度，内容不足时底部堆出大片空白。
+      // composer（输入+工具行）是 seat 内最后的内容：其底边必须贴住 seat 底边；
+      // 若回退成 flex 份额，内容顶对齐，composer.bottom 将明显小于 seat.bottom。
+      // （基线 textScale 1.0 下 seat 内容不滚动，该等式成立；大字滚动场景由矩阵覆盖。）
+      // 注意不直接断言 seat.bottom==surface 高：harness 经 MacBook 手机画布
+      //（480x960 逻辑画布）渲染，getRect 返回画布坐标，贴底由矩阵截图人工视检。
+      expect(
+        seatRect.bottom - composerRect.bottom,
+        lessThan(1),
+        reason:
+            'composer 必须贴住 seat 底部（seat 按内容自然高，flex:0 loose），'
+            'seat.bottom=${seatRect.bottom} composer.bottom=${composerRect.bottom}',
+      );
+    });
   });
 }
 
