@@ -479,7 +479,7 @@ func (h *handle) request(ctx context.Context, method string, params any) (json.R
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
-		return nil, errors.New("bridge 已关闭")
+		return nil, adapter.ErrBridgeClosed
 	}
 	h.nextID++
 	id := h.nextID
@@ -791,10 +791,11 @@ func (h *handle) readLoop() {
 	defer func() {
 		h.mu.Lock()
 		h.closed = true
-		// 桥断开后不可能再有响应，释放所有在途 RPC，避免握手/发送等待完整超时。
+		// 桥断开后不可能再有响应，释放所有在途 RPC，避免握手/发送等待完整超时；
+		// 错误链携带哨兵，调用方可识别为桥关闭（而非普通传输抖动）。
 		for id, req := range h.pending {
 			delete(h.pending, id)
-			req.ch <- rpcResult{err: fmt.Errorf("dsh bridge disconnected: %w", readErr)}
+			req.ch <- rpcResult{err: fmt.Errorf("dsh bridge disconnected: %w(%v)", adapter.ErrBridgeClosed, readErr)}
 		}
 		h.mu.Unlock()
 		// 桥退出（EOF/崩溃）时未决权限请求无法再获得决策：fail-closed 收口 cancelled。

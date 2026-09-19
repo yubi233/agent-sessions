@@ -3,11 +3,12 @@ package dsh
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
 // 桥已 EOF 时响应永远不会到达，不能等到握手超时才向能力查询返回失败。
@@ -35,8 +36,8 @@ func TestV094BridgeEOFReleasesPendingRequests(t *testing.T) {
 	for range 2 {
 		select {
 		case err := <-result:
-			if !errors.Is(err, io.EOF) {
-				t.Fatalf("预期桥断开，不能等待 context 超时: %v", err)
+			if !errors.Is(err, adapter.ErrBridgeClosed) {
+				t.Fatalf("预期桥关闭哨兵，不能等待 context 超时: %v", err)
 			}
 		case <-time.After(200 * time.Millisecond):
 			t.Fatal("桥退出未立即释放 pending 请求")
@@ -82,7 +83,7 @@ func TestV094EOFDisposeReapsRealProcessAndTemporaryRoot(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err := h.request(ctx, "initialize", nil)
-	if !errors.Is(err, io.EOF) {
+	if !errors.Is(err, adapter.ErrBridgeClosed) {
 		t.Fatalf("桥退出应释放请求: %v", err)
 	}
 	_ = h.Dispose(context.Background())

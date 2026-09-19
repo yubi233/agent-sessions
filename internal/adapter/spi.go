@@ -4,6 +4,12 @@
 package adapter
 
 import "context"
+import "errors"
+
+// ErrBridgeClosed 是 Provider 传输已退出（桥进程 EOF/句柄已关闭）的哨兵错误。
+// Daemon 据此把同步 send 失败归类为 local_state_missing 语义：清除死亡句柄并让
+// 客户端恢复链（resume→start→send）重建实例，而不是让每次发送都撞同一座死桥。
+var ErrBridgeClosed = errors.New("bridge 已关闭")
 
 // 能力三态。未知能力必须按 unsupported 处理，不得推断为可用。
 const (

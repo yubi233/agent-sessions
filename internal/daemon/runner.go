@@ -647,6 +647,13 @@ func (r *SessionRunner) sendMessage(ctx context.Context, cmd Command) error {
 		return nil
 	}
 	if err := rs.handle.Send(ctx, text); err != nil {
+		// 桥已退出（长时间空闲/传输断开）时句柄是死的：清除登记并按
+		// local_state_missing 语义 fail-closed，让客户端恢复链重建实例；
+		// 否则每次 send 都撞同一座死桥，恢复链永远不会启动。
+		if errors.Is(err, adapter.ErrBridgeClosed) {
+			r.removeHandle(sessionID)
+			err = fmt.Errorf("%w: %w", ErrSessionInstanceMissing, err)
+		}
 		// 传输层同步失败不会产生 Provider SSE 事件；若只回写命令回执，时间线里的
 		// user_message 之后没有任何失败痕迹，客户端会停留在生成中。这里补发脱敏
 		// 错误与失败终态，传输细节只保留在本机回执错误码，不进入公共协议。

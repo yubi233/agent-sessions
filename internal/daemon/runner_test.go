@@ -2512,3 +2512,72 @@ func TestSessionRunnerRespondPermission(t *testing.T) {
 		t.Fatal("无运行 handle 的权限决策必须失败")
 	}
 }
+
+// V094（2026-09-20 真机发现）：会话长时间闲置后 Provider 桥已退出（EOF/关闭），
+// 但运行句柄仍登记在册。此时 session.send 撞上死桥只能得到传输错误，客户端把它
+// 当作普通执行失败而不触发恢复链。正确语义：识别桥关闭 → 清除死亡句柄 → 按
+// local_state_missing fail-closed，客户端恢复链（resume→start→send）重建实例。
+func TestV094SendOnClosedBridgeFailsAsInstanceMissing(t *testing.T) {
+	_, runner, fake := newRunnerFixture(t, "opencode")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	h.sendErr = adapter.ErrBridgeClosed
+	h.mu.Unlock()
+	err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"hi"}}}`,
+	})
+	if !errors.Is(err, ErrSessionInstanceMissing) {
+		t.Fatalf("死桥 send 应按 local_state_missing 语义 fail-closed, got %v", err)
+	}
+	if !errors.Is(err, adapter.ErrBridgeClosed) {
+		t.Fatalf("错误链应保留 bridge closed 根因, got %v", err)
+	}
+	if _, err := runner.lookupSession("s1"); !errors.Is(err, ErrSessionInstanceMissing) {
+		t.Fatalf("死桥句柄必须被清除以便重建, err=%v", err)
+	}
+}
+
+// 死桥句柄被 send 清除后，重建路径必须可行：start 建新句柄，重发成功。
+// （生产 dsh 实现流式恢复 ResumeStreaming，resume 同样重建句柄；fixture adapter
+// 未实现该接口，故此处以 start 表达重建。恢复链 resume→start→send 已由真机
+// 冒烟端到端验证，见实施记录 34 §5.1。）
+func TestV094RecoveryChainRebuildsAfterClosedBridge(t *testing.T) {
+	s, runner, fake := newRunnerFixture(t, "opencode")
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	h := fake.lastHandle()
+	h.mu.Lock()
+	h.sendErr = adapter.ErrBridgeClosed
+	h.mu.Unlock()
+	_ = runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"hi"}}}`,
+	})
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind: "session.start", PayloadJSON: `{"session_id":"s1","workspace_root":"/tmp/ws","provider":"opencode"}`,
+	}); err != nil {
+		t.Fatalf("重建 start 应成功: %v", err)
+	}
+	h2 := fake.lastHandle()
+	h2.mu.Lock()
+	h2.sendErr = nil
+	h2.mu.Unlock()
+	if err := runner.ConsumeCommand(context.Background(), Command{
+		Kind:        "session.send",
+		PayloadJSON: `{"session_id":"s1","ciphertext":{"fixture_payload":{"message":"again"}}}`,
+	}); err != nil {
+		t.Fatalf("重建后重发应成功: %v", err)
+	}
+	if _, err := s.Get(instanceKey("s1")); err != nil {
+		t.Fatalf("重建后 instance 映射应存在: %v", err)
+	}
+}
