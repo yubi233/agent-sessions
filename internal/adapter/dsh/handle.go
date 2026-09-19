@@ -450,12 +450,6 @@ func (h *handle) Abort(ctx context.Context) error {
 // ForceKill 立即终止本会话的桥进程组（session.kill 语义；不等宽限）。
 func (h *handle) ForceKill(ctx context.Context) error {
 	_ = ctx
-	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return nil
-	}
-	h.mu.Unlock()
 	return h.transport.ForceKill()
 }
 
@@ -467,10 +461,7 @@ func (h *handle) Events() <-chan adapter.Event { return h.events }
 func (h *handle) Dispose(ctx context.Context) error {
 	_ = ctx
 	h.mu.Lock()
-	if h.closed {
-		h.mu.Unlock()
-		return nil
-	}
+	// EOF 仅标记协议关闭；仍须调用幂等 transport.Close 回收 OS 进程与临时目录。
 	h.closed = true
 	h.mu.Unlock()
 	// 关闭前先把所有未决权限请求 fail-closed 收口为 cancelled（断线不泄漏）。
@@ -795,10 +786,16 @@ func (m *rpcMessage) idInt() (int64, error) {
 // session_error/turn_completed 终止事件，必须让 pushEvent 看到一致的关闭状态（Dispose 等待
 // readDone 后返回，保证不向已关闭通道写事件）。
 func (h *handle) readLoop() {
+	readErr := error(io.EOF)
 	defer close(h.readDone)
 	defer func() {
 		h.mu.Lock()
 		h.closed = true
+		// 桥断开后不可能再有响应，释放所有在途 RPC，避免握手/发送等待完整超时。
+		for id, req := range h.pending {
+			delete(h.pending, id)
+			req.ch <- rpcResult{err: fmt.Errorf("dsh bridge disconnected: %w", readErr)}
+		}
 		h.mu.Unlock()
 		// 桥退出（EOF/崩溃）时未决权限请求无法再获得决策：fail-closed 收口 cancelled。
 		h.cancelPendingPermissions()
@@ -817,6 +814,7 @@ func (h *handle) readLoop() {
 	for {
 		raw, err := h.transport.ReadFrame()
 		if err != nil {
+			readErr = err
 			if !errors.Is(err, io.EOF) {
 				// 传输级错误（如 scanner 超限）同样视为桥不可用，终止读循环。
 				h.countDrop("transport_error")
