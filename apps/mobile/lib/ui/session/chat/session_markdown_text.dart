@@ -10,6 +10,7 @@
 // - 流式安全：partial 文本（未闭合 `**`、未完成表格行）按普通段落降级，
 //   不会抛错；上层以 ~2Hz 快照合并频率重渲染，无需额外节流。
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app_theme.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -42,7 +43,12 @@ class SessionMarkdownText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final style = baseStyle ?? theme.textTheme.bodyMedium;
+    // V094-17（UI-17）：前景色参数必须参与默认 style——旧实现 color 参数被
+    // 忽略，深色气泡（用户消息 primaryContainer）里的 Markdown 回退主题
+    // 默认前景色，暗色主题下对比度错误。
+    final style = (baseStyle ?? theme.textTheme.bodyMedium)?.copyWith(
+      color: color ?? (baseStyle ?? theme.textTheme.bodyMedium)?.color,
+    );
     final nodes = _document.parseLines(text.split('\n'));
     return Column(
       key: const Key('session-assistant-markdown'),
@@ -110,9 +116,20 @@ class SessionMarkdownText extends StatelessWidget {
           ),
         );
       case 'pre':
-        // 围栏代码块：AST 中 pre 的唯一子节点是 code element。
+        // 围栏代码块：AST 中 pre 的唯一子节点是 code element；
+        // V094-13（UI-13）：语言信息在 code.attributes['class']
+        // （形如 language-bash）——只展示该可信来源，缺失时显示「代码」。
         final code = _inlinePlainText(node);
-        return _MarkdownCodeBlock(text: code);
+        var language = '';
+        for (final child in node.children ?? const <md.Node>[]) {
+          if (child is md.Element && child.tag == 'code') {
+            final cssClass = child.attributes['class'] ?? '';
+            if (cssClass.startsWith('language-')) {
+              language = cssClass.substring('language-'.length).trim();
+            }
+          }
+        }
+        return _MarkdownCodeBlock(text: code, language: language);
       case 'hr':
         return const Padding(
           padding: EdgeInsets.symmetric(vertical: AppSpacing.sm),
@@ -121,7 +138,11 @@ class SessionMarkdownText extends StatelessWidget {
       case 'table':
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-          child: _buildTable(context, node, style),
+          // V094-12（UI-12）：表格宽度从 LayoutBuilder 的实际可用宽度派生
+          // （不再固定 640），仅在真正溢出时显示横滚提示。
+          child: _OverflowAwareTable(
+            buildTable: (maxWidth) => _buildTable(context, node, style, maxWidth: maxWidth),
+          ),
         );
       default:
         // 未知块级节点（含 raw HTML）：只渲染其纯文本子节点，标签与属性
@@ -200,7 +221,15 @@ class SessionMarkdownText extends StatelessWidget {
   }
 
   /// GFM 表格：首行 thead，其后 tbody 行；列数以表头为准。
-  Widget _buildTable(BuildContext context, md.Element node, TextStyle? style) {
+  /// V094-12（UI-12）：列内容按实际可用宽度换行；单元格含长无空格 token
+  /// （TextPainter 单行测量超过列上限）时该 cell 内部横向滚动（maxLines 1，
+  /// 不靠视觉折行改变内容），并在表格下方显示仅溢出时出现的滚动提示。
+  Widget _buildTable(
+    BuildContext context,
+    md.Element node,
+    TextStyle? style, {
+    required double maxWidth,
+  }) {
     final head = node.children?.whereType<md.Element>().firstOrNull;
     final body = node.children
             ?.whereType<md.Element>()
@@ -219,14 +248,62 @@ class SessionMarkdownText extends StatelessWidget {
             .toList() ??
         const <md.Element>[];
     if (headerCells.isEmpty) return const SizedBox.shrink();
-    final headerStyle = (style ?? Theme.of(context).textTheme.bodyMedium)
+    final theme = Theme.of(context);
+    final headerStyle = (style ?? theme.textTheme.bodyMedium)
         ?.copyWith(fontWeight: FontWeight.w700);
-    final borderWidth = BorderSide(color: Theme.of(context).dividerColor);
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(minWidth: maxWidth * 0.6, maxWidth: maxWidth),
-        child: Table(
+    final borderWidth = BorderSide(color: theme.dividerColor);
+    // 每列内容宽上限：可用宽度 / 列数（下限 96dp，防极窄列完全不可读）。
+    final cellMax = (maxWidth / headerCells.length).clamp(96.0, maxWidth);
+
+    // 溢出判定：单行自然宽度超过列上限 → 该 cell 单行横滚。
+    bool overflows(String plainText, TextStyle? effectiveStyle) {
+      if (plainText.isEmpty) return false;
+      final painter = TextPainter(
+        text: TextSpan(text: plainText, style: effectiveStyle),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      final width = painter.width;
+      painter.dispose();
+      return width > cellMax - AppSpacing.sm * 2;
+    }
+
+    Widget cellContent(
+      md.Element cell, {
+      required TextStyle? effectiveStyle,
+    }) {
+      final plain = cell.textContent;
+      if (overflows(plain, effectiveStyle)) {
+        // 长无空格内容：单行 + 内部横向滚动（不换行、不裁切语义）。
+        return SizedBox(
+          width: cellMax - AppSpacing.sm * 2,
+          child: SingleChildScrollView(
+            key: const Key('session-table-cell-scroll'),
+            scrollDirection: Axis.horizontal,
+            child: Text(plain, style: effectiveStyle, maxLines: 1),
+          ),
+        );
+      }
+      return _buildInline(context, cell, effectiveStyle);
+    }
+
+    final hasOverflow = headerCells.any(
+          (cell) => overflows(cell.textContent, headerStyle),
+        ) ||
+        body.any(
+          (row) => (row.children ?? const <md.Node>[]).any(
+            (cell) => overflows(
+              cell is md.Element ? cell.textContent : '',
+              style,
+            ),
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Table(
           border: TableBorder(
             horizontalInside: borderWidth,
             verticalInside: borderWidth,
@@ -236,16 +313,20 @@ class SessionMarkdownText extends StatelessWidget {
             right: borderWidth,
           ),
           defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          columnWidths: {
+            for (var i = 0; i < headerCells.length; i++)
+              i: FixedColumnWidth(cellMax),
+          },
           children: [
             TableRow(
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                color: theme.colorScheme.surfaceContainerHigh,
               ),
               children: [
                 for (final cell in headerCells)
                   Padding(
                     padding: const EdgeInsets.all(AppSpacing.sm),
-                    child: _buildInline(context, cell, headerStyle),
+                    child: cellContent(cell, effectiveStyle: headerStyle),
                   ),
               ],
             ),
@@ -255,17 +336,38 @@ class SessionMarkdownText extends StatelessWidget {
                   for (final cell in row.children ?? const <md.Node>[])
                     Padding(
                       padding: const EdgeInsets.all(AppSpacing.sm),
-                      child: _buildInline(
-                        context,
+                      child: cellContent(
                         cell is md.Element ? cell : md.Element('p', [cell]),
-                        style,
+                        effectiveStyle: style,
                       ),
                     ),
                 ],
               ),
           ],
         ),
-      ),
+        // 仅溢出时出现的滚动提示（计划 §3.3：不修改表格语义）。
+        if (hasOverflow)
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpacing.micro),
+            child: Row(
+              key: const Key('session-table-overflow-hint'),
+              children: [
+                Icon(
+                  Icons.swipe_left_outlined,
+                  size: AppSizes.iconSm,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: AppSpacing.micro),
+                Text(
+                  '表格超宽，左右滑动查看',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 
@@ -367,27 +469,140 @@ bool _looksLikeRawHtml(String text) {
 /// 提取节点内全部纯文本（忽略标签与属性），供标题/未知块降级渲染。
 String _inlinePlainText(md.Element node) => node.textContent;
 
-/// 围栏代码块容器：等宽字体 + 可滚动 + 可选择，限高防止长代码占满气泡。
-class _MarkdownCodeBlock extends StatelessWidget {
-  const _MarkdownCodeBlock({required this.text});
+/// V094-12（UI-12）：表格容器。表格本体按实际可用宽度换行布局；
+/// 仅当存在无法断行的超宽内容（长无空格 token）时该列内部横向滚动，
+/// 并显示「左右滑动查看」提示（不修改表格语义）。
+class _OverflowAwareTable extends StatelessWidget {
+  const _OverflowAwareTable({required this.buildTable});
+
+  final Widget Function(double maxWidth) buildTable;
+
+  @override
+  Widget build(BuildContext context) {
+    // 宽度约束来自 bubble 内实际可用宽度；无界约束（极窄场景）回退保守值。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : 320.0;
+        return buildTable(maxWidth);
+      },
+    );
+  }
+}
+
+/// V094-13（UI-13）围栏代码块：可信语言标签（缺失显示「代码」）+ 一键复制
+/// 原始文本（保留换行/缩进）+ 长代码展开/收起；长行内部横向滚动，
+/// 不靠视觉折行改变复制值。display-safe 边界不变（不执行、不导航）。
+class _MarkdownCodeBlock extends StatefulWidget {
+  const _MarkdownCodeBlock({required this.text, required this.language});
 
   final String text;
 
+  /// 来自 fence info string 的可信语言名；空串表示未声明。
+  final String language;
+
   @override
-  Widget build(BuildContext context) => Container(
-    width: double.infinity,
-    constraints: const BoxConstraints(maxHeight: 240),
-    margin: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-    padding: const EdgeInsets.all(AppSpacing.sm),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(AppRadius.card),
-    ),
-    child: SingleChildScrollView(
-      child: SelectableText(
-        text,
-        style: AppTypography.mono.copyWith(color: Theme.of(context).colorScheme.onSurface),
+  State<_MarkdownCodeBlock> createState() => _MarkdownCodeBlockState();
+}
+
+class _MarkdownCodeBlockState extends State<_MarkdownCodeBlock> {
+  static const _maxHeight = 240.0;
+  bool _expanded = false;
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // 长代码判定：估算行数 × 单行高（mono 13/1.3 ≈ 18dp）超过限高即提供展开。
+    final lineCount = '\n'.allMatches(widget.text).length + 1;
+    final needsExpand = lineCount * 18 > _maxHeight;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(AppRadius.card),
       ),
-    ),
-  );
+      child: Column(
+        key: const Key('session-code-block'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 头部：语言标签（缺失显示「代码」）+ 复制 + 展开/收起。
+          Padding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.sm, AppSpacing.micro, AppSpacing.xs, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.language.isEmpty ? '代码' : widget.language,
+                    key: const Key('session-code-language'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  key: const Key('session-code-copy'),
+                  tooltip: '复制代码',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: AppSizes.iconSm,
+                  onPressed: () async {
+                    // 复制原始文本：保留换行/缩进，不因渲染折行改变内容。
+                    await Clipboard.setData(ClipboardData(text: widget.text));
+                    if (!mounted) return;
+                    setState(() => _copied = true);
+                    await Future<void>.delayed(const Duration(seconds: 2));
+                    if (mounted) setState(() => _copied = false);
+                  },
+                  icon: Icon(
+                    _copied ? Icons.check_outlined : Icons.copy_outlined,
+                    size: AppSizes.iconSm,
+                    color: _copied ? theme.colorScheme.primary : null,
+                  ),
+                ),
+                if (needsExpand)
+                  IconButton(
+                    key: const Key('session-code-expand'),
+                    tooltip: _expanded ? '收起代码' : '展开全部代码',
+                    visualDensity: VisualDensity.compact,
+                    iconSize: AppSizes.iconSm,
+                    onPressed: () => setState(() => _expanded = !_expanded),
+                    icon: Icon(
+                      _expanded
+                          ? Icons.unfold_less_outlined
+                          : Icons.unfold_more_outlined,
+                      size: AppSizes.iconSm,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Flexible(
+            child: Container(
+              constraints: _expanded
+                  ? const BoxConstraints(maxHeight: 600)
+                  : const BoxConstraints(maxHeight: _maxHeight - 32),
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              child: SingleChildScrollView(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  // 长行内部横向滚动：不靠视觉折行改变复制值（计划 §3.3）。
+                  child: SelectableText(
+                    widget.text,
+                    style: AppTypography.mono.copyWith(
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

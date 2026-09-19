@@ -6014,7 +6014,9 @@ class _HappySessionHeaderTitle extends StatelessWidget {
           ],
           Flexible(
             child: Text(
-              '新对话',
+              // V094-18（UI-18）：标题消费真实数据——displayName 优先
+              // （MobileSession.title 内置 id 短码回退），不再硬编码「新对话」。
+              session?.title ?? '新对话',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(
@@ -6024,13 +6026,10 @@ class _HappySessionHeaderTitle extends StatelessWidget {
           ),
         ],
       ),
-      // v0.8.5 §1.3 修复：副标题第二行显示真实工作区显示名（Relay 下发的
-      // workspace_name）。workspace 缺失/为空时显示占位文案，绝不回退到写死的
-      // 'agent-sessions' 或伪造本地路径（旧版恒显示错误名字的根因）。
+      // V094-18：副标题带「工作区 ·」语义前缀；显示名来自 Relay 下发的
+      // workspace_name，缺失时占位（绝不伪造本地路径）。
       Text(
-        session?.workspaceName?.trim().isNotEmpty == true
-            ? session!.workspaceName!.trim()
-            : '未知工作区',
+        '工作区 · ${session?.workspaceName?.trim().isNotEmpty == true ? session!.workspaceName!.trim() : '未知'}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
