@@ -14,6 +14,8 @@ import { copyFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "no
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
@@ -49,9 +51,22 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const reportDir = join(repoRoot, "e2e-verify/reports", stamp, "v094-mobile-visual");
 mkdirSync(reportDir, { recursive: true });
 
-// flutter run 的 PID 是 flutter 工具进程，不是应用进程；窗口按进程名
-// agent_sessions_mobile 匹配（runner 逐格串行，同屏只有一个应用窗口）。
-function probeWindow(_pid) {
+// run_id 与源码指纹绑定证据版本：矩阵结论只对"这一份工作区状态"负责。
+const runId = `${stamp}-${randomUUID().slice(0, 8)}`;
+const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+const diffText = execFileSync(
+  "git",
+  ["diff", "HEAD", "--", "apps", "internal", "packages", "e2e-verify", "Taskfile.yml"],
+  { cwd: repoRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+);
+const source = {
+  revision,
+  dirty: diffText.length > 0,
+  diff_sha256: createHash("sha256").update(diffText).digest("hex"),
+};
+
+// probeWindow 只在本轮已确认 PID 中检索，且校验进程名，绝不误配同屏同名窗口。
+function probeWindow(pids) {
   const compile = spawnSync("swift", [windowInfoSwift, "--process-name", "agent_sessions_mobile"], {
     encoding: "utf8",
     timeout: 60000,
@@ -59,11 +74,26 @@ function probeWindow(_pid) {
   if (compile.status !== 0) return null;
   try {
     const payload = JSON.parse(compile.stdout);
-    const windows = [...payload.windows].sort((a, b) => b.id - a.id);
+    const windows = [...payload.windows]
+      .filter((win) => pids == null || pids.includes(win.pid))
+      .sort((a, b) => b.id - a.id);
     return windows.length > 0 ? windows[0] : null;
   } catch {
     return null;
   }
+}
+
+// collectOwnedPids 按可执行完整路径锚定（结尾 $），只匹配 App 主进程；
+// flutter 工具进程与 pgrep 自身参数都不含该路径结尾，不会被误收。
+function collectOwnedPids() {
+  const pidInfo = spawnSync("pgrep", ["-f", "agent_sessions_mobile.app/Contents/MacOS/agent_sessions_mobile$"], {
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  return (pidInfo.status === 0 ? pidInfo.stdout.trim() : "")
+    .split(/\s+/)
+    .map(Number)
+    .filter((value) => Number.isInteger(value) && value > 1);
 }
 
 // 渲染帧不可得时回退窗口裁剪（显示器解锁场景）。
@@ -131,6 +161,12 @@ async function runCell(cell, index) {
   ];
   const logFile = join(reportDir, `${cell.id}.flutter.log`);
   const logStream = [];
+  // 任一失败分支都先落 flutter 日志再返回，保证失败可诊断。
+  const fail = (reason) => {
+    child.kill("SIGKILL");
+    writeFileSync(logFile, logStream.join(""));
+    return { ...cell, status: "failed", reason, screenshot: null, frames: [], owned_pids: [] };
+  };
   const child = spawn("flutter", args, { cwd: mobileRoot, env });
   child.stdout.on("data", (d) => logStream.push(d.toString()));
   child.stderr.on("data", (d) => logStream.push(d.toString()));
@@ -148,20 +184,27 @@ async function runCell(cell, index) {
     child.stderr.on("data", onData);
   });
   if (!ready) {
-    child.kill("SIGKILL");
-    return { ...cell, status: "failed", reason: "flutter run 未在 240s 内就绪", screenshot: null, frames: [] };
+    return fail("flutter run 未在 240s 内就绪");
   }
 
+  // App 进程就绪可能晚于 VM Service 输出：轮询期间持续刷新本轮 PID 集合，
+  // 窗口只在这些 PID 里找（进程名+PID 双重校验，不认领同屏其他同名窗口）。
+  let ownedPids = [];
   let window = null;
   for (let attempt = 0; attempt < 30 && !window; attempt += 1) {
     await new Promise((r) => setTimeout(r, 1000));
-    window = probeWindow(child.pid);
+    ownedPids = collectOwnedPids();
+    window = ownedPids.length > 0 ? probeWindow(ownedPids) : null;
   }
   if (!window) {
-    child.kill("SIGKILL");
-    return { ...cell, status: "failed", reason: "未定位到 Flutter 窗口", screenshot: null, frames: [] };
+    return fail("未定位到本轮 App 进程的 Flutter 窗口");
   }
   await new Promise((r) => setTimeout(r, 4000)); // 等首帧与 fixture 数据落定
+  // settle 后再刷新一次：排除期间闪退导致的僵尸 PID 集合。
+  ownedPids = collectOwnedPids();
+  if (ownedPids.length === 0) {
+    return fail("settle 后未发现本轮 App 进程");
+  }
 
   // render-tree 帧：app 按 frameCount × interval 依次写入 frame-000N.png。
   // soak 格的第二帧在 ~95s 落盘（覆盖 90 秒前台停留 + ≥1 个 safety reconcile 周期）。
@@ -181,13 +224,16 @@ async function runCell(cell, index) {
       frames.push({ frame: frameIndex, path: out, bytes: statSync(out).size });
     }
   }
+  // 证据通过 app 内 RepaintBoundary 落帧；窗口裁剪 fallback 也以本轮 PID 校验归属，
+  // 找不到本轮进程时按失败处理，不再回退到"屏上任意同名窗口"。
   const screenshot = join(reportDir, `${cell.id}.png`);
   let captured = false;
   if (frames.length > 0) {
     copyFileSync(frames[0].path, screenshot);
     captured = true;
   } else {
-    captured = capture(window, screenshot);
+    const scoped = probeWindow(ownedPids);
+    if (scoped) captured = capture(scoped, screenshot);
   }
   const logText = logStream.join("");
   const overflow = /RenderFlex overflow|OVERFLOWED BY/.test(logText);
@@ -195,24 +241,53 @@ async function runCell(cell, index) {
   const frameOk = frames.length === frameCount;
 
   child.kill("SIGKILL");
+  // 退出只针对本轮 PID：flutter 工具进程退出会连带 VM，但这里不依赖该行为，
+  // 对残余 App 进程按 PID 显式 SIGKILL，完成后校验全部消失才判定该格通过。
+  for (const pid of ownedPids) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* 进程可能已随 flutter 工具进程退出 */
+    }
+  }
+  const exited = await new Promise((resolveExit) => {
+    let remaining = [...ownedPids];
+    const started = Date.now();
+    const tick = () => {
+      remaining = remaining.filter((pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (remaining.length === 0 || Date.now() - started > 5000) resolveExit(remaining);
+      else setTimeout(tick, 200);
+    };
+    tick();
+  });
   writeFileSync(logFile, logStream.join(""));
   await new Promise((r) => setTimeout(r, 2000));
 
   return {
     ...cell,
-    status: captured && frameOk && !overflow && !exceptions ? "passed" : "failed",
-    reason: !frameOk
-      ? `render-tree 帧缺失（${frames.length}/${frameCount}）`
-      : overflow
-        ? "检测到 RenderFlex overflow"
-        : exceptions
-          ? "检测到渲染异常"
-          : captured
-            ? null
-            : "截图失败",
+    status: captured && frameOk && !overflow && !exceptions && exited.length === 0 ? "passed" : "failed",
+    reason: exited.length > 0
+      ? `本轮进程未完全退出：${exited.join(",")}`
+      : !frameOk
+        ? `render-tree 帧缺失（${frames.length}/${frameCount}）`
+        : overflow
+          ? "检测到 RenderFlex overflow"
+          : exceptions
+            ? "检测到渲染异常"
+            : captured
+              ? null
+              : "截图失败",
     screenshot: captured ? screenshot : null,
     frames,
-    windowId: window.id,
+    owned_pids: ownedPids,
+    window_id: window.id,
   };
 }
 
@@ -235,6 +310,8 @@ const failed = results.filter((r) => r.status !== "passed");
 const report = {
   suite: "V094-flutter-visible",
   case: "V094-20",
+  run_id: runId,
+  source,
   generated_at: new Date().toISOString(),
   real_visible_flutter: true,
   headless: false,
