@@ -507,6 +507,20 @@ tasks:
       - node e2e-verify/run.mjs
       - git diff --check
 
+  test:v094:local:
+    desc: v0.9.4 本地统一回归入口（V094 唯一聚合门：文档/生成物、V094 Go 契约、全仓、restart、全量 Flutter、Web 单测+构建、headed 真实浏览器全套件（含 V094-27 同步旅程）、diff 检查；不调用真实模型、不运行 Android 实机；任何子项失败即 gate failed）
+    cmds:
+      - task: docs:verify
+      - task: check
+      - go test ./internal/relay ./internal/domain ./internal/daemon ./internal/httpapi -run 'TestV094|TestModelSelect|TestV085|TestV093' -count=1
+      - go test ./... -count=1
+      - task: test:restart
+      - cmd: cd apps/mobile && flutter analyze && flutter test --machine --concurrency=1
+      - pnpm --filter @agent-sessions/web test
+      - pnpm --filter @agent-sessions/web build
+      - node e2e-verify/run.mjs
+      - git diff --check
+
   test:v092:cloud:
     desc: v0.9.2 云端定向复测（V092-01 只读探针 + 能力事实源 header 级复测）：需要 deploy/acceptance.env 的端点与 TLS 指纹，以及本地 600 权限令牌文件；只做 GET/登录，不修改服务端业务状态
     cmds:
@@ -548,6 +562,12 @@ tasks:
     cmds:
       - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
       - node e2e-verify/mobile/run-macos-v091.mjs
+
+  test:v094:flutter:
+    desc: v0.9.4 可见 Flutter gate（V094-20：真实 macOS Flutter 窗口 headless=false；场景 v094-session-ui-baseline/-recovery/-config × 360x800/430x932/1280x800 亮暗 + 320dp 窄屏 + 200% 文本 + 800x360 横屏；render-tree 落帧截图与结构化报告必需；本地 fixture 口径，不做 Android 实机；需先关闭用户正在使用的 Agent Sessions 窗口）
+    cmds:
+      - node --test e2e-verify/mobile/macos.test.mjs e2e-verify/mobile/macos-screenshot.test.mjs
+      - node e2e-verify/mobile/run-macos-v094.mjs
 
   test:v085:real:
     desc: v0.8.5 真实模型图片 gate（V085-15，已授权留档=实施记录 24 §4.23；必须显式 AGENT_SESSIONS_V085_REAL=1 并注入 AGENT_SESSIONS_V085_REAL_API_KEY；消耗真实中转额度。默认 grok-4.6 @ api.aabsv.sbs；可切 gpt-5.6-terra @ api.paktf.sbs：AGENT_SESSIONS_V085_REAL_PROVIDER=real-terra AGENT_SESSIONS_V085_REAL_MODEL=gpt-5.6-terra）

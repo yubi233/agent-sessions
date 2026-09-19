@@ -5671,8 +5671,8 @@ class _SessionStatusStrip extends StatelessWidget {
         ),
       ),
       child: Padding(
-        // V094-08：状态条垂直内衬收紧（8→4），预算给标题行与 tabs。
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.xs),
+        // V094-08：状态条垂直内衬收紧（基准 2dp），预算给标题行与 tabs。
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.micro),
         child: Row(
           children: [
             Container(
@@ -5698,12 +5698,15 @@ class _SessionStatusStrip extends StatelessWidget {
                   // V094 §2.1：stopped 可写时的行动提示，独立词渲染。
                   if (presentation.actionHint != null) ...[
                     const SizedBox(width: AppSpacing.xs),
-                    Text(
-                      presentation.actionHint!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    Flexible(
+                      child: Text(
+                        presentation.actionHint!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall
+                            ?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                   ],

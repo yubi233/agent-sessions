@@ -47,6 +47,11 @@ function ensureSync(): DetailSyncController {
   sync ??= createDetailSync({
     loadIncremental: () => loadIncremental(),
     isReady: () => state.value === "ready",
+    // V094-27：状态机变化必须反映到视图 ref——否则增量失败时页面
+    // 仍显示「数据已同步」（真实缺陷：状态与 UI 脱钩）。
+    onStateChange: (next) => {
+      syncState.value = next;
+    },
   });
   return sync;
 }
@@ -182,7 +187,11 @@ onUnmounted(() => {
           <div><dt>事件序号</dt><dd>{{ lastSeq }}</dd></div>
         </dl>
         <p class="status" role="status" aria-live="polite" data-testid="session-detail-stream-status">
-          实时更新：{{ streamStatusLabel(streamStatus) }} · {{ syncStatusLabel(syncState) }}
+          实时更新：{{ streamStatusLabel(streamStatus) }}
+        </p>
+        <!-- V094-27：数据同步状态独立于 SSE 连接状态展示。 -->
+        <p class="status" role="status" aria-live="polite" data-testid="session-detail-sync-status">
+          {{ syncStatusLabel(syncState) }}
         </p>
 
         <h3>事件时间线</h3>

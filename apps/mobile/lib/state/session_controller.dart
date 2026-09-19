@@ -4446,6 +4446,13 @@ class SessionController extends ChangeNotifier {
     _skillConfirmation = null;
     _attachments = const [];
     _attachmentRejections = const [];
+    // V094 真机回归修复（实施记录 34 §5.1）：会话切换必须清空上一会话的
+    // 错误面——否则 A 会话的「Relay 暂时不可用」等历史加载错误会残留到
+    // B 会话（快照 200 正常却仍显示失败横幅），违反"错误属于其会话事务"。
+    // 此时 _selectedSessionId 已置空，事务/回显按会话键整表清理由
+    // resetForAuthBoundary 与各切换路径自行负责；这里只清跨会话残留面。
+    _errorMessage = null;
+    _historyErrorMessage = null;
   }
 
   /// v0.9.0 C2：每会话快照刷新单航班入口。同会话已有在途刷新时只置 pending

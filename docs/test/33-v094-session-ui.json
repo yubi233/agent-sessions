@@ -1,8 +1,8 @@
 {
   "suite": "V094",
   "plan_id": "V094",
-  "status": "planned",
-  "description": "v0.9.4 会话 UI 全面优化：18项截图问题全部纳入，并保留事务竞态、组合布局、物理Android和完整聚合4项门，追加发送门控、配置确认、幂等身份、权限目录、Web同步和加密边界6项，共28项验收。来源 docs/zh/迭代计划/迭代计划v0.9.4.md。所有用例仅为计划定义，未实现、未执行。",
+  "status": "in_progress",
+  "description": "v0.9.4 会话 UI 全面优化：18项截图问题全部纳入，并保留事务竞态、组合布局、物理Android和完整聚合4项门，追加发送门控、配置确认、幂等身份、权限目录、Web同步和加密边界6项，共28项验收。来源 docs/zh/迭代计划/迭代计划v0.9.4.md。P0..P4 本地口径已实施（2026-09-19）：V094-01..19/23..28 有分层自动化与真机/headed 证据（passed）；V094-20/21/22 因多视口矩阵与聚合门逐项核对未完整执行保持 planned（残余风险见实施记录 34 §5.6）。",
   "environment": {
     "local": "隔离 fixture 与本地 Relay/Daemon，使用自有测试进程和临时状态；不得重置用户数据库或重启云端服务",
     "flutter": "apps/mobile；单元/widget以单worker运行，可见fixture覆盖360x800、430x932、1280x800、320dp窄屏、亮暗主题和密集页面200%字号",
@@ -10,172 +10,547 @@
     "evidence": "e2e-verify/reports/<timestamp>/V094/；报告含revision、测试ID、拓扑、尺寸和断言，不含token、正文、diff或解密附件"
   },
   "verification": {
-    "execution_status": "not_run",
+    "execution_status": "partial_run",
     "allow_real_upstream": false,
     "allow_real_model": false,
-    "required_gates": ["local_controller_widget_contract", "visible_flutter", "physical_android", "historical_regression", "relay_protocol_contract", "web_readonly_sync"],
+    "required_gates": [
+      "local_controller_widget_contract",
+      "visible_flutter",
+      "physical_android",
+      "historical_regression",
+      "relay_protocol_contract",
+      "web_readonly_sync"
+    ],
     "note": "以上为未来执行要求，不是已运行事实。通信核查已通过既有Relay定向回归与32项Flutter基线，不代表V094已执行。真实Provider/模型和云端重启必须独立授权；旧版本证据不能替代本版结果。"
   },
   "cases": [
     {
-      "id": "V094-01", "requirement": "UI-01", "title": "会话主状态统一且不同维度事实不互相覆盖", "status": "planned", "phase": "P1", "category": "状态模型", "priority": "P0", "test_layer": "unit_widget",
+      "id": "V094-01",
+      "requirement": "UI-01",
+      "title": "会话主状态统一且不同维度事实不互相覆盖",
+      "status": "passed",
+      "phase": "P1",
+      "category": "状态模型",
+      "priority": "P0",
+      "test_layer": "unit_widget",
       "precondition": "构造stopped、Provider可用、可写设备、恢复在途及审批等待组合。",
-      "steps": ["逐项改变连接、会话、角色、lease和事务状态", "在对话与轨迹页核对header、状态槽和composer", "切换会话并让旧响应迟到"],
+      "steps": [
+        "逐项改变连接、会话、角色、lease和事务状态",
+        "在对话与轨迹页核对header、状态槽和composer",
+        "切换会话并让旧响应迟到"
+      ],
       "expected": "同一时刻仅一个明确主状态，各组件使用同一投影；详情保留底层事实；A会话状态不泄漏到B；不伪改canonical状态。",
-      "cleanup": ["释放fixture controller与计时器"], "evidence": ["待执行：保存状态矩阵断言与受控截图"]
+      "cleanup": [
+        "释放fixture controller与计时器"
+      ],
+      "evidence": [
+        "已执行：投影/状态条/真机状态切换证据（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-02", "requirement": "UI-02", "title": "角色、能力可用性、连接和发送门控准确区分", "status": "planned", "phase": "P1", "category": "状态文案", "priority": "P0", "test_layer": "unit_widget",
+      "id": "V094-02",
+      "requirement": "UI-02",
+      "title": "角色、能力可用性、连接和发送门控准确区分",
+      "status": "passed",
+      "phase": "P1",
+      "category": "状态文案",
+      "priority": "P0",
+      "test_layer": "unit_widget",
       "precondition": "具有canWrite真假、lease有无、Provider可用性及网络状态fixture。",
-      "steps": ["可写但无lease时编辑并提交消息", "切换只读、服务不可用和网络断开", "设置stopped但可自动恢复并发送"],
+      "steps": [
+        "可写但无lease时编辑并提交消息",
+        "切换只读、服务不可用和网络断开",
+        "设置stopped但可自动恢复并发送"
+      ],
       "expected": "不把canWrite写成保证可发送的可操作；Provider available不冒充实时连接；仍按旧规则自动获取lease与恢复；禁用说明真实且草稿可编辑性独立判断。",
-      "cleanup": ["清理临时会话"], "evidence": ["待执行：门控与命令次数断言"]
+      "cleanup": [
+        "清理临时会话"
+      ],
+      "evidence": [
+        "已执行：骨架+真机文案（可控制/执行服务可用）（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-03", "requirement": "UI-03", "title": "错误与自动恢复在同一消息事务中连续呈现", "status": "planned", "phase": "P1", "category": "错误恢复", "priority": "P0", "test_layer": "unit_widget_contract",
+      "id": "V094-03",
+      "requirement": "UI-03",
+      "title": "错误与自动恢复在同一消息事务中连续呈现",
+      "status": "passed",
+      "phase": "P1",
+      "category": "错误恢复",
+      "priority": "P0",
+      "test_layer": "unit_widget_contract",
       "precondition": "准备有关联ID的实例缺失错误、无关联历史错误、认证和配额错误。",
-      "steps": ["触发实例缺失后自动恢复并成功", "另一次让恢复最终失败", "插入不相关历史错误和不可自动恢复错误"],
+      "steps": [
+        "触发实例缺失后自动恢复并成功",
+        "另一次让恢复最终失败",
+        "插入不相关历史错误和不可自动恢复错误"
+      ],
       "expected": "恢复中无请先手动启动的竞争指令；已处理错误折叠且可查看；失败保留真实原因；未关联历史不被吞掉；配额/认证错误不触发实例恢复。",
-      "cleanup": ["清理错误注入"], "evidence": ["待执行：错误分类、投影断言及连续状态截图"]
+      "cleanup": [
+        "清理错误注入"
+      ],
+      "evidence": [
+        "已执行：错误恢复折叠单测+fixture recovery 场景（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-04", "requirement": "UI-04", "title": "恢复、超时和生成状态槽不覆盖消息正文", "status": "planned", "phase": "P2", "category": "布局", "priority": "P0", "test_layer": "widget_visible_flutter",
+      "id": "V094-04",
+      "requirement": "UI-04",
+      "title": "恢复、超时和生成状态槽不覆盖消息正文",
+      "status": "passed",
+      "phase": "P2",
+      "category": "布局",
+      "priority": "P0",
+      "test_layer": "widget_visible_flutter",
       "precondition": "长错误说明置于消息尾部，状态槽可切换恢复/超时/生成；读者分别位于底部和历史中段。",
-      "steps": ["切换状态槽并测量正文与状态槽矩形", "开启200%字号和软键盘", "切换对话/轨迹并再次查看提示"],
+      "steps": [
+        "切换状态槽并测量正文与状态槽矩形",
+        "开启200%字号和软键盘",
+        "切换对话/轨迹并再次查看提示"
+      ],
       "expected": "状态槽参与布局且高度随内容变化；正文可完整滚入可视区域、无交叠；读者上滚时不被强拉到底；两个视图均可见会话恢复状态。",
-      "cleanup": ["恢复窗口与字号"], "evidence": ["待执行：几何断言、可见截图与主执行者视觉验收记录"]
+      "cleanup": [
+        "恢复窗口与字号"
+      ],
+      "evidence": [
+        "已执行：布局骨架绿+真机状态槽参与布局（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-05", "requirement": "UI-05", "title": "恢复覆盖到重发核验且具有真实边界与退出语义", "status": "planned", "phase": "P1", "category": "恢复过程", "priority": "P0", "test_layer": "unit_widget",
+      "id": "V094-05",
+      "requirement": "UI-05",
+      "title": "恢复覆盖到重发核验且具有真实边界与退出语义",
+      "status": "passed",
+      "phase": "P1",
+      "category": "恢复过程",
+      "priority": "P0",
+      "test_layer": "unit_widget",
       "precondition": "可控制resume/start/send回执延迟和结果；假时钟支持10s/30s。",
-      "steps": ["逐阶段推进resume、必要start、send#recovered及核验", "超过10s检查长等待说明并耗尽30s回执窗口", "在后续命令未提交及已提交两个时点取消", "让重试再次失败"],
+      "steps": [
+        "逐阶段推进resume、必要start、send#recovered及核验",
+        "超过10s检查长等待说明并耗尽30s回执窗口",
+        "在后续命令未提交及已提交两个时点取消",
+        "让重试再次失败"
+      ],
       "expected": "阶段真实，提示不在resume结束时提前消失；自动重发最多一次；未知结果进入核验而非盲重发；取消只阻止未来步骤，已发命令不伪报取消；不改2/60分钟回合预算。",
-      "cleanup": ["取消fixture计时器与自有在途任务"], "evidence": ["待执行：阶段轨迹、命令计数及取消守卫断言"]
+      "cleanup": [
+        "取消fixture计时器与自有在途任务"
+      ],
+      "evidence": [
+        "已执行：恢复链结构化阶段单测+真机零手工恢复（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-06", "requirement": "UI-06", "title": "消息级状态关联可靠且不把气泡或202视为送达", "status": "planned", "phase": "P1", "category": "消息事务", "priority": "P0", "test_layer": "unit_widget_go_contract",
+      "id": "V094-06",
+      "requirement": "UI-06",
+      "title": "消息级状态关联可靠且不把气泡或202视为送达",
+      "status": "passed",
+      "phase": "P1",
+      "category": "消息事务",
+      "priority": "P0",
+      "test_layer": "unit_widget_go_contract",
       "precondition": "Runner可先发user事件后返回失败；现有receipt含CommandID；准备新可选关联DTO及旧无关联fixture，生产编码器单独验证。",
-      "steps": ["发送后先注入user事件，再返回LOCAL_STATE_MISSING", "自动重发复用逻辑消息ID并更换命令幂等键", "注入回执未知、成功执行、旧无关联事件", "验证Provider messageId及fork/feedback资格"],
+      "steps": [
+        "发送后先注入user事件，再返回LOCAL_STATE_MISSING",
+        "自动重发复用逻辑消息ID并更换命令幂等键",
+        "注入回执未知、成功执行、旧无关联事件",
+        "验证Provider messageId及fork/feedback资格"
+      ],
       "expected": "消息状态贴近对应气泡；202只显示受理；失败/未知不会被误标送达；同事务只显示一个逻辑消息；关联ID不冒充Provider messageId，不错误开启动作。",
-      "cleanup": ["关闭隔离测试栈"], "evidence": ["待执行：receipt到snapshot关联、localdev到UI状态及独立编码器兼容断言；不宣称生产聊天E2EE贯通"]
+      "cleanup": [
+        "关闭隔离测试栈"
+      ],
+      "evidence": [
+        "已执行：事务单测+真机气泡消息状态（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-07", "requirement": "UI-07", "title": "待发送事务与新草稿分离且不丢正文附件", "status": "planned", "phase": "P1", "category": "输入事务", "priority": "P0", "test_layer": "unit_widget",
+      "id": "V094-07",
+      "requirement": "UI-07",
+      "title": "待发送事务与新草稿分离且不丢正文附件",
+      "status": "passed",
+      "phase": "P1",
+      "category": "输入事务",
+      "priority": "P0",
+      "test_layer": "unit_widget",
       "precondition": "准备带引用附件的草稿A、可延迟回执和下一条草稿B。",
-      "steps": ["提交A，事务接管后立即输入B并添加新附件", "依次返回A成功、失败、旧响应及切会话响应", "失败后点击编辑并保持B非空", "验证提交前图片/slash能力校验失败"],
+      "steps": [
+        "提交A，事务接管后立即输入B并添加新附件",
+        "依次返回A成功、失败、旧响应及切会话响应",
+        "失败后点击编辑并保持B非空",
+        "验证提交前图片/slash能力校验失败"
+      ],
       "expected": "A接管后不再作为普通可发草稿残留；B与新附件不被A结果清除；失败A可从消息找回但不能覆盖B；验证失败保留原草稿；queue/steer不被改成自动发送。",
-      "cleanup": ["清理fixture草稿和附件引用"], "evidence": ["待执行：attempt/revision/session隔离与附件归属断言"]
+      "cleanup": [
+        "清理fixture草稿和附件引用"
+      ],
+      "evidence": [
+        "已执行：草稿结算单测+真机草稿接管（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-08", "requirement": "UI-08", "title": "顶部紧凑且标题状态具有实际信息", "status": "planned", "phase": "P2", "category": "顶部布局", "priority": "P1", "test_layer": "widget_visible_flutter",
+      "id": "V094-08",
+      "requirement": "UI-08",
+      "title": "顶部紧凑且标题状态具有实际信息",
+      "status": "passed",
+      "phase": "P2",
+      "category": "顶部布局",
+      "priority": "P1",
+      "test_layer": "widget_visible_flutter",
       "precondition": "360x800、字号1.0，提供长标题与工作区；准备子会话。",
-      "steps": ["测量含tabs的header高度", "打开更多与连接详情", "切换对话/轨迹、返回父会话", "切换200%字号"],
+      "steps": [
+        "测量含tabs的header高度",
+        "打开更多与连接详情",
+        "切换对话/轨迹、返回父会话",
+        "切换200%字号"
+      ],
       "expected": "基准header≤124dp；版本不常驻竞争空间；关键导航可达且切tab不发命令；大字不截断重要动作。",
-      "cleanup": ["恢复显示参数"], "evidence": ["待执行：几何数据与亮暗截图"]
+      "cleanup": [
+        "恢复显示参数"
+      ],
+      "evidence": [
+        "已执行：布局骨架 123dp（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-09", "requirement": "UI-09", "title": "权限入口紧凑直达且输入与高优先级操作始终可达", "status": "planned", "phase": "P2", "category": "输入坞布局", "priority": "P1", "test_layer": "widget_visible_flutter",
+      "id": "V094-09",
+      "requirement": "UI-09",
+      "title": "权限入口紧凑直达且输入与高优先级操作始终可达",
+      "status": "passed",
+      "phase": "P2",
+      "category": "输入坞布局",
+      "priority": "P1",
+      "test_layer": "widget_visible_flutter",
       "precondition": "单行输入、恢复提示、长Todo/Queue/附件、审批与问答分别可注入。",
-      "steps": ["测量默认composer和会话视口", "点击权限摘要一次直达选择分区，测量视觉高度和命中框，再打开通用设置", "开启键盘和审批/问答takeover", "在低高度下展开长dock"],
+      "steps": [
+        "测量默认composer和会话视口",
+        "点击权限摘要一次直达选择分区，测量视觉高度和命中框，再打开通用设置",
+        "开启键盘和审批/问答takeover",
+        "在低高度下展开长dock"
+      ],
       "expected": "基准单行composer≤144dp，会话视口正常≥55%/恢复≥45%可用安全区；设置默认折叠；移除整行权限表单和空helper，权限徽标普通字号视觉高28–32dp、命中框≥48×48dp且不被父列拉满；输入主动作不滚出可达范围，高风险摘要可见，焦点正确返回。",
-      "cleanup": ["关闭临时面板并恢复窗口"], "evidence": ["待执行：空间预算、takeover和焦点断言"]
+      "cleanup": [
+        "关闭临时面板并恢复窗口"
+      ],
+      "evidence": [
+        "已执行：布局骨架 136dp（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-10", "requirement": "UI-10", "title": "全宽多行输入不被工具按钮挤压", "status": "planned", "phase": "P2", "category": "输入布局", "priority": "P1", "test_layer": "widget_device",
+      "id": "V094-10",
+      "requirement": "UI-10",
+      "title": "全宽多行输入不被工具按钮挤压",
+      "status": "passed",
+      "phase": "P2",
+      "category": "输入布局",
+      "priority": "P1",
+      "test_layer": "widget_device",
       "precondition": "中英混排三行与五行草稿、IME composing、引用和补全候选。",
-      "steps": ["输入截图同长度文本并测量正文宽度", "使用命令、附件、发送、停止", "验证Enter、Shift+Enter、IME确认、queue/steer和引用编辑"],
+      "steps": [
+        "输入截图同长度文本并测量正文宽度",
+        "使用命令、附件、发送、停止",
+        "验证Enter、Shift+Enter、IME确认、queue/steer和引用编辑"
+      ],
       "expected": "正文宽度≥容器内容宽度90%；按钮位于独立工具行；原输入语义不变；键盘弹出时输入和主动作均可见。",
-      "cleanup": ["清除fixture输入并关闭键盘"], "evidence": ["待执行：输入回归与真机触摸截图"]
+      "cleanup": [
+        "清除fixture输入并关闭键盘"
+      ],
+      "evidence": [
+        "已执行：布局骨架 99% 宽（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-11", "requirement": "UI-11", "title": "消息元信息紧凑但动作触达和功能不缩水", "status": "planned", "phase": "P2", "category": "消息动作", "priority": "P1", "test_layer": "widget_accessibility",
+      "id": "V094-11",
+      "requirement": "UI-11",
+      "title": "消息元信息紧凑但动作触达和功能不缩水",
+      "status": "passed",
+      "phase": "P2",
+      "category": "消息动作",
+      "priority": "P1",
+      "test_layer": "widget_accessibility",
       "precondition": "消息含时间、完成状态、复制、分支及反馈，另有无时间/无ID节点。",
-      "steps": ["检查默认元信息一行布局", "复制并打开更多执行分支/反馈", "测量每个点击目标并用键盘和语义导航"],
+      "steps": [
+        "检查默认元信息一行布局",
+        "复制并打开更多执行分支/反馈",
+        "测量每个点击目标并用键盘和语义导航"
+      ],
       "expected": "默认辅助区不过度占行；常用复制可达，次要功能未移除；点击框≥48dp；缺时间不伪造时间、缺身份不开放分支。",
-      "cleanup": ["清理fixture反馈和分支会话"], "evidence": ["待执行：动作断言、目标尺寸与语义树"]
+      "cleanup": [
+        "清理fixture反馈和分支会话"
+      ],
+      "evidence": [
+        "已执行：更多菜单迁移测试（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-12", "requirement": "UI-12", "title": "表格宽度按真实约束且横滚可发现", "status": "planned", "phase": "P3", "category": "Markdown", "priority": "P1", "test_layer": "widget_visible_flutter",
+      "id": "V094-12",
+      "requirement": "UI-12",
+      "title": "表格宽度按真实约束且横滚可发现",
+      "status": "passed",
+      "phase": "P3",
+      "category": "Markdown",
+      "priority": "P1",
+      "test_layer": "widget_visible_flutter",
       "precondition": "两列、多列、长中文、无空格token和流式不完整表格fixture。",
-      "steps": ["在320/360/430dp与桌面宽度渲染", "检查溢出提示并横向拖动表格", "逐帧补齐流式表格"],
+      "steps": [
+        "在320/360/430dp与桌面宽度渲染",
+        "检查溢出提示并横向拖动表格",
+        "逐帧补齐流式表格"
+      ],
       "expected": "实际约束决定宽度，不依赖无条件640dp；仅内部滚动，溢出时有提示；所有列可访问，页面无横向溢出，表头语义未改写且流式无异常。",
-      "cleanup": ["释放滚动控制器"], "evidence": ["待执行：渲染回归与横滚前后截图"]
+      "cleanup": [
+        "释放滚动控制器"
+      ],
+      "evidence": [
+        "已执行：表格溢出提示单测（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-13", "requirement": "UI-13", "title": "代码块可复制展开且原始命令不被改写", "status": "planned", "phase": "P3", "category": "Markdown", "priority": "P1", "test_layer": "widget",
+      "id": "V094-13",
+      "requirement": "UI-13",
+      "title": "代码块可复制展开且原始命令不被改写",
+      "status": "passed",
+      "phase": "P3",
+      "category": "Markdown",
+      "priority": "P1",
+      "test_layer": "widget",
       "precondition": "带语言/无语言围栏、长行长块、行内代码、普通段落命令和恶意HTML fixture。",
-      "steps": ["复制代码块并比对换行缩进", "展开长代码与滚动长行", "逐帧注入未闭合围栏", "检查普通文本、HTML、图片、外链行为"],
+      "steps": [
+        "复制代码块并比对换行缩进",
+        "展开长代码与滚动长行",
+        "逐帧注入未闭合围栏",
+        "检查普通文本、HTML、图片、外链行为"
+      ],
       "expected": "复制值保持原文；长代码完整可读；普通段落不被猜成可执行代码；不执行命令、不加载远程图片、不放开外跳，流式稳定。",
-      "cleanup": ["恢复测试剪贴板适配器"], "evidence": ["待执行：原文复制与安全边界断言"]
+      "cleanup": [
+        "恢复测试剪贴板适配器"
+      ],
+      "evidence": [
+        "已执行：代码块语言/复制/展开单测（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-14", "requirement": "UI-14", "title": "图标操作与静态状态角色清楚", "status": "planned", "phase": "P2", "category": "可理解性", "priority": "P1", "test_layer": "widget_accessibility_device",
+      "id": "V094-14",
+      "requirement": "UI-14",
+      "title": "图标操作与静态状态角色清楚",
+      "status": "passed",
+      "phase": "P2",
+      "category": "可理解性",
+      "priority": "P1",
+      "test_layer": "widget_accessibility_device",
       "precondition": "打开含Provider菜单、状态标记、消息更多和设置入口的会话。",
-      "steps": ["按可见语义打开会话更多", "遍历Semantics按钮、tooltip与禁用原因", "真机触摸并检查关闭后焦点"],
+      "steps": [
+        "按可见语义打开会话更多",
+        "遍历Semantics按钮、tooltip与禁用原因",
+        "真机触摸并检查关闭后焦点"
+      ],
       "expected": "Provider标识不再冒充无说明菜单；静态成功状态不是禁用按钮；所有图标动作有准确名称且至少48dp；不靠桌面hover才可理解。",
-      "cleanup": ["关闭面板"], "evidence": ["待执行：语义断言与触摸旅程"]
+      "cleanup": [
+        "关闭面板"
+      ],
+      "evidence": [
+        "已执行：更多菜单+48dp 命中（无障碍语义沿用）（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-15", "requirement": "UI-15", "title": "模型友好名、推理摘要与分支遵循事实", "status": "planned", "phase": "P2", "category": "配置摘要", "priority": "P1", "test_layer": "unit_widget",
+      "id": "V094-15",
+      "requirement": "UI-15",
+      "title": "模型友好名、推理摘要与分支遵循事实",
+      "status": "passed",
+      "phase": "P2",
+      "category": "配置摘要",
+      "priority": "P1",
+      "test_layer": "unit_widget",
       "precondition": "模型有/无目录友好名、超长ID、无effort能力和空分支事实。",
-      "steps": ["切换各类模型目录并查看摘要和详情", "选择同名不同value模型", "刷新目录失败后再次打开", "检查无分支数据时显示"],
+      "steps": [
+        "切换各类模型目录并查看摘要和详情",
+        "选择同名不同value模型",
+        "刷新目录失败后再次打开",
+        "检查无分支数据时显示"
+      ],
       "expected": "目录友好名优先，fallback可辨识且详情完整；无推理能力不画斜线加破折号；无分支不显示main；提交value及默认路由完全不变。",
-      "cleanup": ["恢复fixture模型配置"], "evidence": ["待执行：显示映射、未知态与命令value断言"]
+      "cleanup": [
+        "恢复fixture模型配置"
+      ],
+      "evidence": [
+        "已执行：模型 seat 去伪单测（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-16", "requirement": "UI-16", "title": "紧凑权限直达、真实目录说明与完全访问安全确认", "status": "planned", "phase": "P2", "category": "权限交互", "priority": "P0", "test_layer": "widget_contract",
+      "id": "V094-16",
+      "requirement": "UI-16",
+      "title": "紧凑权限直达、真实目录说明与完全访问安全确认",
+      "status": "passed",
+      "phase": "P2",
+      "category": "权限交互",
+      "priority": "P0",
+      "test_layer": "widget_contract",
       "precondition": "多个Provider权限目录、未知模式、空目录及不支持能力fixture。",
-      "steps": ["点击紧凑权限摘要一次进入权限面板，查看真实目录名称/说明和原ID详情", "选择danger-full-access，分别取消/遮罩/Escape", "未勾选和勾选后尝试提交", "切换未知模式、空目录和unsupported"],
+      "steps": [
+        "点击紧凑权限摘要一次进入权限面板，查看真实目录名称/说明和原ID详情",
+        "选择danger-full-access，分别取消/遮罩/Escape",
+        "未勾选和勾选后尝试提交",
+        "切换未知模式、空目录和unsupported"
+      ],
       "expected": "高风险摘要可见且命中框≥48dp；切换中/待确认与effective分开，目录缺失显示原ID/说明未提供，不虚构跨Provider能力；取消零命令，未勾选不可提交，确认只提交一次原value；空目录/不支持仍fail-closed且有原因。",
-      "cleanup": ["恢复fixture权限模式"], "evidence": ["待执行：确认门、取消零写入及未知模式断言"]
+      "cleanup": [
+        "恢复fixture权限模式"
+      ],
+      "evidence": [
+        "已执行：徽标/面板/确认门测试+真机红色警示（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-17", "requirement": "UI-17", "title": "消息、状态、选中态语义色和正文对比度统一", "status": "planned", "phase": "P3", "category": "主题", "priority": "P1", "test_layer": "widget_visible_accessibility",
+      "id": "V094-17",
+      "requirement": "UI-17",
+      "title": "消息、状态、选中态语义色和正文对比度统一",
+      "status": "passed",
+      "phase": "P3",
+      "category": "主题",
+      "priority": "P1",
+      "test_layer": "widget_visible_accessibility",
       "precondition": "亮暗主题下用户/助手、恢复、失败、警告、选中tabs及Markdown。",
-      "steps": ["检查各组件token与实际前景背景", "计算正文和图形对比度", "关闭颜色识别依赖检查图标文字", "运行style_guard及主题回归"],
+      "steps": [
+        "检查各组件token与实际前景背景",
+        "计算正文和图形对比度",
+        "关闭颜色识别依赖检查图标文字",
+        "运行style_guard及主题回归"
+      ],
       "expected": "正文≥4.5:1，大字/必要图形≥3:1；Markdown前景色正确传递；状态不只靠颜色；没有业务硬编码色值或新allowlist规避。",
-      "cleanup": ["恢复主题设置"], "evidence": ["待执行：对比度数据、守卫结果及亮暗截图"]
+      "cleanup": [
+        "恢复主题设置"
+      ],
+      "evidence": [
+        "已执行：前景色单测+真机暗色对比（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-18", "requirement": "UI-18", "title": "真实标题与用户语言文案不泄露正文元数据", "status": "planned", "phase": "P3", "category": "标题文案", "priority": "P1", "test_layer": "unit_widget",
+      "id": "V094-18",
+      "requirement": "UI-18",
+      "title": "真实标题与用户语言文案不泄露正文元数据",
+      "status": "passed",
+      "phase": "P3",
+      "category": "标题文案",
+      "priority": "P1",
+      "test_layer": "unit_widget",
       "precondition": "有displayName、仅真实用户正文、空会话、隐藏注入、长工作区和未知错误fixture。",
-      "steps": ["检查各层标题回退与会话切换", "添加新消息确认标题不无意义跳变", "打开故障详情与工作区信息", "检查网络请求和日志白名单"],
+      "steps": [
+        "检查各层标题回退与会话切换",
+        "添加新消息确认标题不无意义跳变",
+        "打开故障详情与工作区信息",
+        "检查网络请求和日志白名单"
+      ],
       "expected": "优先真实displayName，再本地安全摘要和session.title；非空历史不恒为新对话；工作区有明确前缀；技术详情可查但不泄密；不新增模型调用或上传明文摘要。",
-      "cleanup": ["清理fixture标题与请求记录"], "evidence": ["待执行：标题回退、术语和隐私断言"]
+      "cleanup": [
+        "清理fixture标题与请求记录"
+      ],
+      "evidence": [
+        "已执行：标题真实数据真机证据（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-19", "requirement": "CROSS-TRANSACTION", "title": "发送关联、恢复竞态与旧版本兼容聚合", "status": "planned", "phase": "P1/P4", "category": "事务回归", "priority": "P0", "test_layer": "integration_go_flutter",
+      "id": "V094-19",
+      "requirement": "CROSS-TRANSACTION",
+      "title": "发送关联、恢复竞态与旧版本兼容聚合",
+      "status": "passed",
+      "phase": "P1/P4",
+      "category": "事务回归",
+      "priority": "P0",
+      "test_layer": "integration_go_flutter",
       "precondition": "新旧两版事件载荷，SSE和轮询可控；失败回执与canonical终态顺序可交换。",
-      "steps": ["复跑V093-04b及晚到回执/一次重试上限", "注入202后查询超时、同文两次、重发回放和断线重连", "分别在切会话、注销、取消、输入新草稿和附件后返回旧结果", "验证receipt关联、localdev链路及send/steer/abort并发归属；独立验证生产事件编码器兼容，非fixture聊天仍占位"],
+      "steps": [
+        "复跑V093-04b及晚到回执/一次重试上限",
+        "注入202后查询超时、同文两次、重发回放和断线重连",
+        "分别在切会话、注销、取消、输入新草稿和附件后返回旧结果",
+        "验证receipt关联、localdev链路及send/steer/abort并发归属；独立验证生产事件编码器兼容，非fixture聊天仍占位"
+      ],
       "expected": "失败优先守卫不回退；最多一次自动重发；未知不补发；逻辑ID与命令ID不串账；同文新发送不误去重；旧无ID不猜；无权限/加密/回合预算变化。",
-      "cleanup": ["关闭隔离进程、fixture时钟和测试数据库；不触真实状态"], "evidence": ["待执行：端到端关联报告与既有恢复测试输出"]
+      "cleanup": [
+        "关闭隔离进程、fixture时钟和测试数据库；不触真实状态"
+      ],
+      "evidence": [
+        "已执行：竞态护栏 6 项单测（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
+      ]
     },
     {
-      "id": "V094-20", "requirement": "CROSS-LAYOUT", "title": "组合布局、滚动与无障碍矩阵", "status": "planned", "phase": "P4", "category": "视觉验收", "priority": "P0", "test_layer": "widget_visible_flutter",
+      "id": "V094-20",
+      "requirement": "CROSS-LAYOUT",
+      "title": "组合布局、滚动与无障碍矩阵",
+      "status": "planned",
+      "phase": "P4",
+      "category": "视觉验收",
+      "priority": "P0",
+      "test_layer": "widget_visible_flutter",
       "precondition": "同revision构建，固定fixture消息与恢复过程；规定视口、主题与字号可配置。",
-      "steps": ["运行360x800、430x932、1280x800亮暗矩阵", "补320dp与密集页200%字号、键盘和横屏", "组合恢复、错误、多行输入、长代码表格、审批问答和dock", "检查历史滚动锚点、触达、Semantics和焦点返回", "由主执行者逐场景检视截图"],
+      "steps": [
+        "运行360x800、430x932、1280x800亮暗矩阵",
+        "补320dp与密集页200%字号、键盘和横屏",
+        "组合恢复、错误、多行输入、长代码表格、审批问答和dock",
+        "检查历史滚动锚点、触达、Semantics和焦点返回",
+        "由主执行者逐场景检视截图"
+      ],
       "expected": "普通字号达到计划空间预算；其余矩阵无溢出/遮挡/不可达；状态改变不抢历史滚动；截图视觉通过，不能仅凭脚本几何PASS。",
-      "cleanup": ["恢复设备和窗口显示参数"], "evidence": ["待执行：每场景截图、尺寸数据、语义检查及主执行者视觉结论；不使用子代理"]
+      "cleanup": [
+        "恢复设备和窗口显示参数"
+      ],
+      "evidence": [
+        "待执行：每场景截图、尺寸数据、语义检查及主执行者视觉结论；不使用子代理"
+      ]
     },
     {
-      "id": "V094-21", "requirement": "CROSS-DEVICE", "title": "物理Android会话完整旅程", "status": "planned", "phase": "P4", "category": "真机验收", "priority": "P0", "test_layer": "physical_android",
+      "id": "V094-21",
+      "requirement": "CROSS-DEVICE",
+      "title": "物理Android会话完整旅程",
+      "status": "planned",
+      "phase": "P4",
+      "category": "真机验收",
+      "priority": "P0",
+      "test_layer": "physical_android",
       "precondition": "物理Android连接且安装本版构建；隔离本地Relay/Daemon与受控响应端；重启仅针对测试自有进程；默认不调用真实模型。",
-      "steps": ["用触摸发送带长内容的消息并输入下一条草稿，流式时停止；点击权限摘要直达面板，复制代码、横滚表格", "对权限升级取消并确认零提交", "在测试daemon进程重启后只发送一次，观察自动恢复到终态", "fixture分别注入最终失败、结果未知、取消和失败后编辑", "记录软键盘、安全区、状态槽和新草稿全过程"],
+      "steps": [
+        "用触摸发送带长内容的消息并输入下一条草稿，流式时停止；点击权限摘要直达面板，复制代码、横滚表格",
+        "对权限升级取消并确认零提交",
+        "在测试daemon进程重启后只发送一次，观察自动恢复到终态",
+        "fixture分别注入最终失败、结果未知、取消和失败后编辑",
+        "记录软键盘、安全区、状态槽和新草稿全过程"
+      ],
       "expected": "真实设备交互可完成，至少一个恢复旅程零人工补发；已知失败有正确出口、未知结果先核验；无正文遮挡和草稿丢失；fixture与真实服务拓扑分开记录，不把受控响应当真实模型证据。",
-      "cleanup": ["停止本次拥有的测试进程，移除测试临时会话；不重置手机用户数据或真实SQLite"], "evidence": ["待执行：real_device=true的报告、构建revision、脱敏截图和必要录屏；real_model如实为false"]
+      "cleanup": [
+        "停止本次拥有的测试进程，移除测试临时会话；不重置手机用户数据或真实SQLite"
+      ],
+      "evidence": [
+        "待执行：real_device=true的报告、构建revision、脱敏截图和必要录屏；real_model如实为false"
+      ]
     },
     {
-      "id": "V094-22", "requirement": "CROSS-RELEASE", "title": "全部18项与历史回归、文档证据闭环", "status": "planned", "phase": "P4", "category": "聚合门", "priority": "P0", "test_layer": "aggregate",
+      "id": "V094-22",
+      "requirement": "CROSS-RELEASE",
+      "title": "全部18项与历史回归、文档证据闭环",
+      "status": "planned",
+      "phase": "P4",
+      "category": "聚合门",
+      "priority": "P0",
+      "test_layer": "aggregate",
       "precondition": "V094-01..21及V094-23..28均有同版实现与验证报告；拟新增test:v094:local/visual/device入口已实现。",
-      "steps": ["运行docs校验、静态与生成物检查、受影响Go、Web同步单元、全量Flutter及样式守卫", "运行与test:v093:local等效的完整历史门，包括restart/Web/headed", "核对18项需求映射和28项用例状态、报告revision与拓扑", "回填实施记录、项目文档、测试文档、计划及索引"],
+      "steps": [
+        "运行docs校验、静态与生成物检查、受影响Go、Web同步单元、全量Flutter及样式守卫",
+        "运行与test:v093:local等效的完整历史门，包括restart/Web/headed",
+        "核对18项需求映射和28项用例状态、报告revision与拓扑",
+        "回填实施记录、项目文档、测试文档、计划及索引"
+      ],
       "expected": "所有必选用例passed才可delivered；任何未运行或blocked明示，不以文档PASS代替产品验收；Web只读、安全边界与既有能力无回退。",
-      "cleanup": ["停止本次gate拥有的临时服务，保留脱敏报告"], "evidence": ["待执行：聚合报告与完整性核对记录；当前只完成规划"]
+      "cleanup": [
+        "停止本次gate拥有的临时服务，保留脱敏报告"
+      ],
+      "evidence": [
+        "待执行：聚合报告与完整性核对记录；当前只完成规划"
+      ]
     },
     {
       "id": "V094-23",
       "requirement": "COMM-SEND-GATING",
       "title": "长回执观察不锁输入与停止",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P4",
       "category": "通信与交互契约",
       "priority": "P0",
@@ -192,14 +567,14 @@
         "释放测试controller、计时器与自有隔离进程；不触碰真实用户状态"
       ],
       "evidence": [
-        "待执行：控制时钟状态轨迹、send/abort次数及新草稿归属断言"
+        "已执行：busy 释放单测+真机等待期可编辑（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
       ]
     },
     {
       "id": "V094-24",
       "requirement": "COMM-CONFIG-CONFIRM",
       "title": "权限模型推理配置区分请求值与已生效值",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P4",
       "category": "通信与交互契约",
       "priority": "P0",
@@ -216,14 +591,14 @@
         "释放测试controller、计时器与自有隔离进程；不触碰真实用户状态"
       ],
       "evidence": [
-        "待执行：requested/effective状态矩阵、后端投影与核验零写入断言"
+        "已执行：配置确认状态机+Relay 生命周期契约（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
       ]
     },
     {
       "id": "V094-25",
       "requirement": "COMM-OPERATION-IDENTITY",
       "title": "配置新意图独立幂等而同次重试复用",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P4",
       "category": "通信与交互契约",
       "priority": "P0",
@@ -240,14 +615,14 @@
         "释放测试controller、计时器与自有隔离进程；不触碰真实用户状态"
       ],
       "evidence": [
-        "待执行：operation/key/command映射及执行计数（不记录正文或token）"
+        "已执行：独立幂等键单测（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
       ]
     },
     {
       "id": "V094-26",
       "requirement": "COMM-PERMISSION-CATALOG",
       "title": "权限目录安全投影兼容旧客户端与旧Relay",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P4",
       "category": "通信与交互契约",
       "priority": "P0",
@@ -264,14 +639,14 @@
         "释放测试controller、计时器与自有隔离进程；不触碰真实用户状态"
       ],
       "evidence": [
-        "待执行：目录DTO兼容、白名单、长度与风险门断言"
+        "已执行：目录白名单 Go+Flutter 契约（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
       ]
     },
     {
       "id": "V094-27",
       "requirement": "COMM-WEB-SYNC",
       "title": "Web只读详情不丢失补拉且同步失败可恢复",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P4",
       "category": "通信与交互契约",
       "priority": "P0",
@@ -288,14 +663,14 @@
         "释放测试controller、计时器与自有隔离进程；不触碰真实用户状态"
       ],
       "evidence": [
-        "待执行：Web单元输出及主执行者headed旅程截图/网络方法白名单；不用子代理"
+        "已执行：Web 单测 6 项+headed 旅程 passed（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
       ]
     },
     {
       "id": "V094-28",
       "requirement": "COMM-CRYPTO-BOUNDARY",
       "title": "当前聊天链路与生产事件编码器分层验收",
-      "status": "planned",
+      "status": "passed",
       "phase": "P1/P4",
       "category": "通信与交互契约",
       "priority": "P0",
@@ -312,7 +687,7 @@
         "释放测试controller、计时器与自有隔离进程；不触碰真实用户状态"
       ],
       "evidence": [
-        "待执行：分层契约报告、fail-closed/占位/隐私断言，不提供虚假生产端到端结论"
+        "已执行：编码器隔离+真机加密占位（分层证据见 docs/zh/实施记录/34-v0.9.4-会话UI全面优化与发送恢复反馈闭环.md 对应章节）"
       ]
     }
   ]

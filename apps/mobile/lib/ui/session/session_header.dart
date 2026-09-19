@@ -37,10 +37,11 @@ class SessionHeader extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // V094-08：紧凑标题行（44dp，返回/动作按钮 compact 命中），
-            // 预算让给主状态与 tabs。
-            SizedBox(
-              height: 44,
+            // V094-08：紧凑标题行基准 44dp；V094-20 大字（200%）下自适应
+            // 撑高（ConstrainedBox minHeight），优先不截字——预算断言只在
+            // textScale 1.0 生效。
+            ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
               child: Row(
                 children: [
                   IconButton(
@@ -94,8 +95,8 @@ class SessionViewTabs extends StatelessWidget {
       label: '会话视图切换',
       child: Container(
         key: const Key('session-view-tabs'),
-        // V094-08：tabs 紧凑化（42→30），保留 2dp 指示条与可读标签。
-        height: 30,
+        // V094-08：tabs 基准 30dp；V094-20 大字下自适应撑高（minHeight）。
+        constraints: const BoxConstraints(minHeight: 28),
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(color: Theme.of(context).dividerColor),
@@ -146,8 +147,11 @@ class _SessionViewTab extends StatelessWidget {
       label: label,
       child: InkWell(
         onTap: onTap,
+        // V094-20：minHeight 容器内自适应——文字撑高 tab（大字不截字），
+        // 指示条紧贴文字下方；基准字号下由外层 minHeight 兜底 30dp。
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.micro),

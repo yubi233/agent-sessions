@@ -12,6 +12,7 @@ import { v082DshCapabilityWeb } from "../suites/v082-dsh-capability-web.mjs";
 import { v085AbortTrajectoryWeb } from "../suites/v085-abort-trajectory-web.mjs";
 import { v085ReadonlyWorkspacesWeb } from "../suites/v085-readonly-workspaces-web.mjs";
 import { v092CapabilityFactsWeb } from "../suites/v092-capability-facts-web.mjs";
+import { v094WebDetailSync } from "../suites/v094-web-detail-sync.mjs";
 
 // registry 是本仓库 headed 浏览器回归的唯一事实源。
 export const registry = [
@@ -27,4 +28,5 @@ export const registry = [
   v085AbortTrajectoryWeb,
   v085ReadonlyWorkspacesWeb,
   v092CapabilityFactsWeb,
+  v094WebDetailSync,
 ];

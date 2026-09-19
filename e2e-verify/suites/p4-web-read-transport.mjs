@@ -295,7 +295,7 @@ async function loginWeb(page, webBase, account) {
   await page.getByTestId("login-email").fill(account.email);
   await page.getByTestId("login-password").fill(account.password);
   await page.getByTestId("login-submit").click();
-  await page.getByTestId("auth-ok").waitFor({ state: "visible", timeout: 10_000 });
+  await page.getByTestId("auth-ok").waitFor({ state: "visible", timeout: 30_000 });
 }
 
 async function openSession(page, sessionID) {

@@ -261,6 +261,8 @@ export interface DetailSyncCallbacks {
   loadIncremental(): Promise<void>;
   /** 是否具备同步前提（已就绪且已登录）。 */
   isReady(): boolean;
+  /** V094-27：状态变更回调——视图据此把响应式 ref 与状态机对齐。 */
+  onStateChange?(state: DetailSyncState): void;
   maxRetries?: number;
   retryBaseMs?: number;
   setTimeoutImpl?: (fn: () => void, ms: number) => unknown;
@@ -293,6 +295,11 @@ export function createDetailSync(callbacks: DetailSyncCallbacks): DetailSyncCont
   let syncState: DetailSyncState = "synced";
   let retryHandle: unknown;
 
+  const setState = (next: DetailSyncState): void => {
+    syncState = next;
+    callbacks.onStateChange?.(next);
+  };
+
   const clearRetry = (): void => {
     if (retryHandle !== undefined) {
       clearTimeoutImpl(retryHandle);
@@ -308,13 +315,13 @@ export function createDetailSync(callbacks: DetailSyncCallbacks): DetailSyncCont
     }
     inFlight = true;
     pendingInvalidation = false;
-    syncState = "syncing";
+    setState("syncing");
     try {
       await callbacks.loadIncremental();
-      syncState = "synced";
+      setState("synced");
       retries = 0;
     } catch {
-      syncState = "error";
+      setState("error");
       retries += 1;
       if (retries <= maxRetries) {
         const delay = retryBaseMs * 2 ** (retries - 1);
