@@ -5661,19 +5661,126 @@ class _SessionStatusStrip extends StatelessWidget {
     final providerTooltip = !providerConnected
         ? (providerReason ?? 'Provider 当前不可用。')
         : 'Provider 版本仅来自探测结果；实时连接单独显示。';
-    return Container(
-      key: const Key('session-status-strip'),
-      width: double.infinity,
-      padding: EdgeInsets.zero,
-      decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Theme.of(context).dividerColor),
+    // V094-20（收口）：状态条主体按文本缩放二选一（局部函数以闭包捕获 build 事实）。
+    final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
+    Widget leaseButton() {    return IconButton(
+              key: const Key('session-acquire-lease-button'),
+              tooltip: hasLease ? '会话可控制' : '获取会话控制权',
+              visualDensity: VisualDensity.compact,
+              // V094-08：状态行按钮内衬收紧（图标 16 + 32dp 命中），
+              // 不让单个兜底按钮撑高整条状态行。
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              padding: EdgeInsets.zero,
+              onPressed: canWrite && !hasLease ? onAcquireLease : null,
+              icon: Icon(
+                hasLease
+                    ? Icons.check_circle_outline
+                    : canWrite
+                    ? Icons.autorenew
+                    : Icons.lock_outline,
+                size: AppSizes.iconMd,
+                color: hasLease
+                    ? context.appColors.success
+                    : Theme.of(context).colorScheme.outline,
+              ),
+            );
+    }
+
+
+    Widget largeTextLayout() {    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: AppSizes.statusDot,
+              height: AppSizes.statusDot,
+              decoration: BoxDecoration(
+                color: statusColor,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(
+                status.label,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
+          ],
         ),
-      ),
-      child: Padding(
-        // V094-08：状态条垂直内衬收紧（基准 2dp），预算给标题行与 tabs。
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.micro),
-        child: Row(
+        Row(
+          children: [
+            Expanded(
+              child: Wrap(
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.micro,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (presentation.actionHint != null)
+                    Text(
+                      presentation.actionHint!,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  Tooltip(
+                    message: providerTooltip,
+                    child: Container(
+                      key: const Key('session-provider-version-chip'),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.sm,
+                        vertical: AppSpacing.micro,
+                      ),
+                      decoration: BoxDecoration(
+                        color: providerConnected
+                            ? Theme.of(context).colorScheme.surfaceContainerHigh
+                            : Theme.of(context).colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(AppRadius.small),
+                      ),
+                      child: Text(
+                        providerLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: providerConnected
+                              ? null
+                              : Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm,
+                      vertical: AppSpacing.micro,
+                    ),
+                    decoration: BoxDecoration(
+                      color: hasLease
+                          ? context.appColors.success.withValues(alpha: 0.14)
+                          : Theme.of(context).colorScheme.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(AppRadius.small),
+                    ),
+                    child: Text(
+                      leaseText,
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: hasLease ? context.appColors.success : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            leaseButton(),
+          ],
+        ),
+      ],
+    );
+    }
+
+    Widget compactLayout() {    return Row(
           children: [
             Container(
               width: AppSizes.statusDot,
@@ -5766,34 +5873,31 @@ class _SessionStatusStrip extends StatelessWidget {
                 ),
               ),
             ),
-            // v0.9：写权（lease）在提交命令时自动获取；此处保留可点入口仅作
-            // 兜底（行为与打开会话时自动获取一致），不再显示“暂不可操作”提示。
-            IconButton(
-              key: const Key('session-acquire-lease-button'),
-              tooltip: hasLease ? '会话可控制' : '获取会话控制权',
-              visualDensity: VisualDensity.compact,
-              // V094-08：状态行按钮内衬收紧（图标 16 + 32dp 命中），
-              // 不让单个兜底按钮撑高整条状态行。
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              padding: EdgeInsets.zero,
-              onPressed: canWrite && !hasLease ? onAcquireLease : null,
-              icon: Icon(
-                hasLease
-                    ? Icons.check_circle_outline
-                    : canWrite
-                    ? Icons.autorenew
-                    : Icons.lock_outline,
-                size: AppSizes.iconMd,
-                color: hasLease
-                    ? context.appColors.success
-                    : Theme.of(context).colorScheme.outline,
-              ),
-            ),
+            leaseButton(),
           ],
+        );
+    }
+
+    return Container(
+      key: const Key('session-status-strip'),
+      width: double.infinity,
+      padding: EdgeInsets.zero,
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: Theme.of(context).dividerColor),
         ),
+      ),
+      child: Padding(
+        // V094-08：状态条垂直内衬收紧（基准 2dp），预算给标题行与 tabs。
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.micro),
+        // V094-20（收口）：大字（textScale > 1.3）切换为两行堆叠布局——
+        // 主状态允许两行不截字（计划 §3.2「大字优先不截字」，预算仅在
+        // textScale 1.0 断言）；chips 沉到第二行保持完整可读。
+        child: largeText ? largeTextLayout() : compactLayout(),
       ),
     );
   }
+
 }
 
 /// 生命周期恢复状态只展示脱敏计数和连接阶段；不把通知正文、密文或 Relay 错误原文画入界面。

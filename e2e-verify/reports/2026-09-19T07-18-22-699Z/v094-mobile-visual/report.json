@@ -1,0 +1,121 @@
+{
+  "suite": "V094-flutter-visible",
+  "case": "V094-20",
+  "generated_at": "2026-09-19T07:24:02.642Z",
+  "real_visible_flutter": true,
+  "headless": false,
+  "fixture_data": true,
+  "local_test": true,
+  "real_model": false,
+  "real_upstream": false,
+  "real_browser": false,
+  "real_device": false,
+  "scenarios": [
+    "v094-session-ui-baseline",
+    "v094-session-ui-recovery",
+    "v094-session-ui-config"
+  ],
+  "matrix": [
+    {
+      "scenario": "v094-session-ui-baseline",
+      "id": "V094-20-baseline-dark-430x932",
+      "theme": "dark",
+      "width": 430,
+      "height": 932,
+      "textScale": 1,
+      "status": "passed",
+      "reason": null,
+      "screenshot": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-baseline-dark-430x932.png",
+      "frames": [
+        {
+          "frame": 1,
+          "path": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-baseline-dark-430x932-frame-1.png",
+          "bytes": 169053
+        }
+      ],
+      "windowId": 68788
+    },
+    {
+      "scenario": "v094-session-ui-baseline",
+      "id": "V094-20-baseline-dark-430x932-200pct",
+      "theme": "dark",
+      "width": 430,
+      "height": 932,
+      "textScale": 2,
+      "status": "failed",
+      "reason": "检测到 RenderFlex overflow",
+      "screenshot": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-baseline-dark-430x932-200pct.png",
+      "frames": [
+        {
+          "frame": 1,
+          "path": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-baseline-dark-430x932-200pct-frame-1.png",
+          "bytes": 183663
+        }
+      ],
+      "windowId": 68793
+    },
+    {
+      "scenario": "v094-session-ui-recovery",
+      "id": "V094-20-recovery-dark-430x932",
+      "theme": "dark",
+      "width": 430,
+      "height": 932,
+      "textScale": 1,
+      "status": "passed",
+      "reason": null,
+      "screenshot": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-recovery-dark-430x932.png",
+      "frames": [
+        {
+          "frame": 1,
+          "path": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-recovery-dark-430x932-frame-1.png",
+          "bytes": 127684
+        }
+      ],
+      "windowId": 68798
+    },
+    {
+      "scenario": "v094-session-ui-recovery",
+      "id": "V094-20-recovery-dark-430x932-200pct",
+      "theme": "dark",
+      "width": 430,
+      "height": 932,
+      "textScale": 2,
+      "status": "passed",
+      "reason": null,
+      "screenshot": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-recovery-dark-430x932-200pct.png",
+      "frames": [
+        {
+          "frame": 1,
+          "path": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-recovery-dark-430x932-200pct-frame-1.png",
+          "bytes": 157951
+        }
+      ],
+      "windowId": 68803
+    },
+    {
+      "scenario": "v094-session-ui-config",
+      "id": "V094-20-config-dark-430x932",
+      "theme": "dark",
+      "width": 430,
+      "height": 932,
+      "textScale": 1,
+      "status": "passed",
+      "reason": null,
+      "screenshot": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-config-dark-430x932.png",
+      "frames": [
+        {
+          "frame": 1,
+          "path": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T07-18-22-699Z/v094-mobile-visual/V094-20-config-dark-430x932-frame-1.png",
+          "bytes": 101708
+        }
+      ],
+      "windowId": 68808
+    }
+  ],
+  "summary": {
+    "total": 5,
+    "passed": 4,
+    "failed": 1
+  },
+  "remaining_risk": "存在失败格；逐格核查失败原因。"
+}

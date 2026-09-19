@@ -4053,6 +4053,21 @@ class SessionController extends ChangeNotifier {
         }
       }
 
+      // V094 收口（真机观察项）：思考流的跨节点累积。localdev/真实桥的
+      // thought_delta 不携带 messageId（全量已收文本语义），且思考流中间
+      // 会穿插 assistant completed 消息——相邻折叠判不到。同回合内
+      // （中间无 user message / turn 终态）最后一条 streaming thought 就是
+      // 同一思考流的演进，直接整体替换，不再产生第二个「思考中」节点。
+      if (event.kind == SessionTimelineKind.assistantThought &&
+          event.isStreaming &&
+          (event.messageId?.trim().isEmpty ?? true)) {
+        final thoughtIndex = _findLastStreamingThoughtIndexInTurn(out);
+        if (thoughtIndex != null) {
+          out[thoughtIndex] = event;
+          continue;
+        }
+      }
+
       final last = out.isEmpty ? null : out.last;
       final lastMessageIndex =
           _isCoalescibleStreamMessage(event) && event.isStreaming
@@ -4088,6 +4103,33 @@ class SessionController extends ChangeNotifier {
       out.add(event);
     }
     return out;
+  }
+
+  /// 从列表尾向回找同回合内最后一条 streaming 思考节点。
+  /// 回合边界：canonical user message（新一轮输入）或 completedTurn 终态——
+  /// 越过边界说明上一回合的思考流已终结，不得合并。
+  /// V094 收口测试辅助：直接合并一次快照（公开折叠行为给 widget/单测）。
+  @visibleForTesting
+  void debugMergeSnapshotForTest(String sessionId, SessionSnapshot snapshot) {
+    _selectedSessionId ??= sessionId;
+    _mergeSnapshot(snapshot, appendTimeline: true);
+  }
+
+  int? _findLastStreamingThoughtIndexInTurn(
+    List<SessionTimelineEvent> events,
+  ) {
+    for (var index = events.length - 1; index >= 0; index -= 1) {
+      final event = events[index];
+      if (event.kind == SessionTimelineKind.userMessage ||
+          event.completedTurn) {
+        return null;
+      }
+      if (event.kind == SessionTimelineKind.assistantThought &&
+          event.isStreaming) {
+        return index;
+      }
+    }
+    return null;
   }
 
   bool _isCoalescibleStreamMessage(SessionTimelineEvent event) =>

@@ -31,6 +31,13 @@ import 'ui/session_screens.dart' show SessionDetailScreen;
 import 'ui/code_viewer_screens.dart';
 
 const _compileTimeLocalFixtureMode = bool.fromEnvironment('LOCAL_FIXTURE_MODE');
+
+/// V094-20：场景落定等待（毫秒）。V094 场景的 fixture seeding（terminal/
+/// workspace/session + 时间线命令）比早期场景重，默认 3s 不够；可见 runner
+/// 按 dart-define 注入更长等待，生产 Android/Web 不设置该值。
+const _localVisualFrameSettleMs = int.fromEnvironment(
+  'LOCAL_VISUAL_FRAME_SETTLE_MS',
+);
 const _compileTimeLocalVisualScenarioValue = String.fromEnvironment(
   'LOCAL_VISUAL_SCENARIO',
 );
@@ -325,7 +332,15 @@ class _LocalVisualFrameRecorderState extends State<_LocalVisualFrameRecorder> {
 
   Future<void> _captureAfterScenarioSettles() async {
     // Coordinator 需要完成认证、选会话和 lease；真实本地 session 还需要一次 Relay snapshot 拉取。
-    await Future<void>.delayed(const Duration(milliseconds: 3000));
+    // V094-20：等待时长可由 LOCAL_VISUAL_FRAME_SETTLE_MS 注入（默认 3s），
+    // 重 seeding 场景（v094 三场景）在 runner 侧注入 12s，保证拍到会话页而非首屏。
+    await Future<void>.delayed(
+      Duration(
+        milliseconds: _localVisualFrameSettleMs > 0
+            ? _localVisualFrameSettleMs
+            : 3000,
+      ),
+    );
     final boundary = _boundaryKey.currentContext?.findRenderObject();
     if (boundary is! RenderRepaintBoundary) return;
     // 预热 raster 与 PNG 编码；严格采样从预热后开始，避免首帧初始化拖慢 200ms 节拍。

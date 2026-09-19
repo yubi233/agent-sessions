@@ -1325,6 +1325,10 @@ class FixtureRelayRepository implements RelayRepository {
       _sessions[sessionId] ??
       (throw const RelayFailure(RelayFailureKind.protocol, '找不到会话。'));
 
+  /// V094 收口测试辅助：暴露会话内部状态以便测试直接构造 canonical 事件
+  /// 序列（仅测试通道使用，真实调用面不暴露内部状态）。
+  dynamic debugSessionState(String sessionId) => _sessionState(sessionId);
+
   void _requireFixtureOwner() {
     if (!_devices.any((device) => device.isOwner)) {
       throw const RelayFailure(

@@ -1,0 +1,45 @@
+{
+  "suite": "V094-flutter-visible",
+  "case": "V094-20",
+  "generated_at": "2026-09-19T05:13:35.137Z",
+  "real_visible_flutter": true,
+  "headless": false,
+  "fixture_data": true,
+  "local_test": true,
+  "real_model": false,
+  "real_upstream": false,
+  "real_browser": false,
+  "real_device": false,
+  "scenarios": [
+    "v094-session-ui-baseline",
+    "v094-session-ui-recovery",
+    "v094-session-ui-config"
+  ],
+  "matrix": [
+    {
+      "scenario": "v094-session-ui-baseline",
+      "id": "V094-20-baseline-light-360x800",
+      "theme": "light",
+      "width": 360,
+      "height": 800,
+      "textScale": 1,
+      "status": "passed",
+      "reason": null,
+      "screenshot": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T05-12-45-791Z/v094-mobile-visual/V094-20-baseline-light-360x800.png",
+      "frames": [
+        {
+          "frame": 1,
+          "path": "/Users/yubi/code/agentProject/agent-sessions/e2e-verify/reports/2026-09-19T05-12-45-791Z/v094-mobile-visual/V094-20-baseline-light-360x800-frame-1.png",
+          "bytes": 75498
+        }
+      ],
+      "windowId": 68571
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0
+  },
+  "remaining_risk": "键盘避让、横屏软键盘与物理 Android 矩阵不在本报告范围（分别属 V094-20 真机项与 V094-21 完整旅程）。"
+}
