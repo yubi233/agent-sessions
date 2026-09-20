@@ -201,3 +201,60 @@ func TestTerminalRoleLiteralMatchesAuthzTTLSelection(t *testing.T) {
 		t.Fatalf("AccessTTLOf(%q) must return TerminalAccessTTL", RoleTerminal)
 	}
 }
+
+// V094（2026-09-21 用户报告）：本地开发拓扑里 Mac 侧 `restart.sh` bootstrap 的
+// owner（platform=local）与手机 owner 同账号共存。恢复码接管曾把 local 桌面 owner
+// 一并撤销，导致下次 `restart.sh start` 缓存刷新 401 → 自愈重置 Relay DB → 手机
+// 令牌随之失效，每次都要恢复码重新接管。修复：接管的撤销范围收窄为**移动平台**
+// 的 Android 写设备；platform=local 的桌面开发 owner 保留活跃（私钥在本机 0600
+// state 目录，不扩大移动 key-admin 风险面）。未知/空 platform 的历史设备保持
+// fail-safe：仍按 Android 写设备撤销。
+func TestRestoreOwnerKeepsLocalDesktopOwnerActive(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 21, 3, 0, 0, 0, time.UTC)
+	repo := newRepo(t)
+	if err := repo.CreateAccount(ctx, "acct-local", "local@example.test", []byte("hash"), now); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	// 旧设备两台：手机 Android owner（应被撤销）+ Mac 桌面开发 owner（应保留）。
+	if err := repo.CreateDevice(ctx, store.DeviceRow{
+		ID: "dev-phone-owner", AccountID: "acct-local", Role: RoleAndroidOwner, Status: DeviceActive,
+		DisplayName: "phone", Platform: "android", IdentityPublicKey: "phone-identity", EncryptionPublicKey: "phone-encryption",
+	}); err != nil {
+		t.Fatalf("create phone owner: %v", err)
+	}
+	if err := repo.CreateDevice(ctx, store.DeviceRow{
+		ID: "dev-mac-local", AccountID: "acct-local", Role: RoleAndroidOwner, Status: DeviceActive,
+		DisplayName: "mac localdev", Platform: "local", IdentityPublicKey: "mac-identity", EncryptionPublicKey: "mac-encryption",
+	}); err != nil {
+		t.Fatalf("create mac local owner: %v", err)
+	}
+	const recoveryCode = "recovery-code-local-desktop-test"
+	if err := repo.UpsertRecoveryCode(ctx, store.RecoveryRow{
+		AccountID: "acct-local", CodeHash: authz.HashToken(recoveryCode), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("store recovery code: %v", err)
+	}
+
+	auth := NewAuthService(repo)
+	pairing := NewPairingService(repo)
+	auth.now = func() time.Time { return now }
+	pairing.now = func() time.Time { return now }
+	restored, _, err := auth.RestoreOwnerWithRecoveryCode(ctx, pairing, "local@example.test", recoveryCode, Device{
+		DisplayName: "restored phone", Platform: "android", IdentityPublicKey: "new-phone-identity", EncryptionPublicKey: "new-phone-encryption",
+	})
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if restored.Platform != "android" {
+		t.Fatalf("restored device platform=%q, want android", restored.Platform)
+	}
+	phone, err := repo.DeviceByID(ctx, "dev-phone-owner")
+	if err != nil || phone.Status != DeviceRevoked {
+		t.Fatalf("旧手机 owner 必须被撤销: status=%q err=%v", phone.Status, err)
+	}
+	local, err := repo.DeviceByID(ctx, "dev-mac-local")
+	if err != nil || local.Status != DeviceActive {
+		t.Fatalf("platform=local 桌面开发 owner 必须保留活跃: status=%q err=%v", local.Status, err)
+	}
+}

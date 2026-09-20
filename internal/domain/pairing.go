@@ -433,9 +433,18 @@ func (s *PairingService) restoreOwnerForRecoveryRowInTx(ctx context.Context, rep
 		IdentityPublicKey: d.IdentityPublicKey, EncryptionPublicKey: d.EncryptionPublicKey,
 	}
 	// 恢复码恢复的是唯一 Android key-admin：先撤销旧 Android 写设备。
+	// 撤销范围限移动平台（android/ios）：本地开发拓扑的桌面 owner
+	// （restart.sh bootstrap，platform=local）与手机共存同一账号，若被一并撤销，
+	// 下次 `restart.sh start` 缓存刷新必然 401，自愈逻辑会重置 Relay DB，手机
+	// 令牌随之失效——每次重启都强迫恢复码重新接管（2026-09-21 用户报告）。
+	// 桌面 owner 私钥仅存本机 0600 state 目录，保留它不扩大移动端风险面。
+	// 未知/空 platform 的历史设备保持 fail-safe：仍按 Android 写设备撤销。
 	// 旧 bearer/refresh 会在 RequireAuth/Refresh 时按设备状态拒绝，历史密文与 key-wrap 不改写。
 	for _, existing := range devices {
 		if existing.Status != DeviceActive || (existing.Role != RoleAndroidOwner && existing.Role != RoleAndroid) {
+			continue
+		}
+		if existing.Platform == "local" {
 			continue
 		}
 		if err := repo.SetDeviceStatus(ctx, existing.ID, DeviceRevoked); err != nil {
