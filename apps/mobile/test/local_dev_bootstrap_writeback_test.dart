@@ -61,9 +61,15 @@ void main() {
     expect(File('$path.tmp').existsSync(), isFalse);
   });
 
-  test('路径为 null 或文件不存在时为 no-op', () {
+  test('路径为 null 时为 no-op；文件不存在时自动创建缓存目录与文件', () {
     writeLocalDevOwnerBootstrapTokens(null, tokens());
-    writeLocalDevOwnerBootstrapTokens('${tmp.path}/missing.json', tokens());
-    expect(File('${tmp.path}/missing.json').existsSync(), isFalse);
+    // 首次回写（缓存文件尚未存在）也要能落盘：目录自动创建、文件 0600。
+    final nested = '${tmp.path}/nested/localdev-owner-cache.json';
+    writeLocalDevOwnerBootstrapTokens(nested, tokens());
+    final body = jsonDecode(File(nested).readAsStringSync()) as Map<String, dynamic>;
+    expect(body['tokens']['refresh_token'], 'refresh-v2');
+    final stat = FileStat.statSync(nested);
+    // 0600 = rw-------（可复用凭据，不放宽权限）。
+    expect(stat.mode, 33152);
   });
 }

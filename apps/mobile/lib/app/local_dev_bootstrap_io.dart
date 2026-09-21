@@ -77,35 +77,48 @@ Future<LocalDevOwnerBootstrap?> readLocalDevOwnerBootstrap() async {
   return LocalDevOwnerBootstrap(tokens: tokens, device: device);
 }
 
-/// localdev 调试壳的 owner bootstrap 缓存文件路径；未注入（生产/Android/Release）
-/// 时返回 null。
+/// 桌面调试壳的刷新令牌缓存路径：`~/.agent-sessions/localdev-owner-cache.json`。
+/// 放在用户域而非 restart.sh 的 state 目录——macOS 的 provenance 数据隔离会把
+/// restart.sh 创建的文件绑定到创建者进程，Flutter 打开会得到 EPERM（2026-09-21
+/// 实测 PathAccessException）；restart.sh 刷新失败时回退读取本文件。
 String? localDevOwnerBootstrapFilePath() {
   final compileTime = _localDevOwnerBootstrapFile;
   if (compileTime.isNotEmpty) {
     return compileTime;
   }
   final fromEnv = Platform.environment['LOCAL_DEV_OWNER_BOOTSTRAP_FILE'] ?? '';
-  return fromEnv.isEmpty ? null : fromEnv;
+  if (fromEnv.isNotEmpty) {
+    return fromEnv;
+  }
+  final home = Platform.environment['HOME'] ?? '';
+  return home.isEmpty ? null : '$home/.agent-sessions/localdev-owner-cache.json';
 }
 
-/// 桌面调试壳刷新令牌后把最新 tokens 回写 restart.sh 的 owner bootstrap 缓存。
-/// refresh token 为一次性轮换：Flutter 消费后若不回写，`restart.sh start` 的缓存
-/// 刷新必然失败并触发 Relay DB 自愈重置，手机令牌随之失效——这是「每次服务重启
-/// 都要恢复码重新接管」的残留根因（2026-09-21 用户报告）。回写任何异常都静默：
-/// 它是调试便利，不得影响认证主流程；文件不存在（生产/Android）时为 no-op。
+/// 桌面调试壳刷新令牌后把最新 tokens 回写用户域缓存。refresh token 为一次性
+/// 轮换：Flutter 消费后若不落盘，`restart.sh start` 的缓存刷新必然失败——
+/// v0.9.4 起该失败会回退读取本缓存（不再直接重置 Relay DB），手机令牌因此
+/// 跨重启保持有效。回写任何异常都静默：它是调试便利，不得影响认证主流程。
 void writeLocalDevOwnerBootstrapTokens(String? path, AuthTokens tokens) {
   if (path == null || path.isEmpty) return;
   try {
     final file = File(path);
-    if (!file.existsSync()) return;
-    final body = Map<String, dynamic>.from(
-      jsonDecode(file.readAsStringSync()) as Map,
-    );
-    body['tokens'] = tokens.toSecureJson();
-    // 原子替换：先写临时文件再 rename，避免 restart.sh 读到半截 JSON。
+    file.parent.createSync(recursive: true);
+    final body = <String, dynamic>{
+      // 保留旧缓存的 device 等字段（若有）；tokens 始终以最新轮换为准。
+      if (file.existsSync())
+        ...Map<String, dynamic>.from(jsonDecode(file.readAsStringSync()) as Map),
+      'tokens': tokens.toSecureJson(),
+    };
+    // 原子替换 + 0600：文件承载可复用凭据，绝不放宽权限。
     final tmp = File('$path.tmp');
     tmp.writeAsStringSync(jsonEncode(body), flush: true);
     tmp.rename(path);
+    Process.runSync('chmod', ['600', path]);
+    assert(() {
+      // ignore: avoid_print
+      print('localdev owner bootstrap 回写成功: $path');
+      return true;
+    }());
   } on Object catch (error) {
     // 回写失败不影响主流程，但保持可诊断：调试环境打印，release 无输出。
     assert(() {
