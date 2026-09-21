@@ -1054,6 +1054,34 @@ ensure_local_owner_bootstrap() {
       echo "owner: refreshed cached local dev owner session"
       return 0
     fi
+    # v0.9.4 回退（2026-09-21）：桌面调试壳轮换 refresh 后写在用户域缓存
+    # （~/.agent-sessions/...；沙箱容器形态下为其 Data/.agent-sessions/...，
+    # 见 local_dev_bootstrap_io.dart）。owner 缓存滞留旧值时优先回退读取
+    # 桌面壳的最新 refresh，避免走到下面的重置分支。
+    local fallback_refresh fallback_file
+    for fallback_file in \
+      "$HOME/Library/Containers/com.agentsessions.agentSessionsMobile/Data/.agent-sessions/localdev-owner-cache.json" \
+      "$HOME/.agent-sessions/localdev-owner-cache.json"; do
+      [[ -s "$fallback_file" ]] || continue
+      fallback_refresh="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("tokens", {}).get("refresh_token", ""))
+except Exception:
+    print("")' "$fallback_file" 2>/dev/null || true)"
+      [[ -n "$fallback_refresh" ]] && break
+    done
+    if [[ -n "$fallback_refresh" ]] && response="$(http_request owner.refresh \
+      -H 'Content-Type: application/json' \
+      -d "$(python3 -c 'import json,sys; print(json.dumps({"refresh_token":sys.argv[1]}))' "$fallback_refresh")" \
+      "http://$RELAY_ADDR/v1/auth/refresh")"; then
+      printf '%s' "$response" | json_set_tokens "$owner_file"
+      LOCAL_OWNER_ACCESS_TOKEN="$(printf '%s' "$response" | json_get access_token)"
+      printf '%s\n' "$LOCAL_OWNER_ACCESS_TOKEN" > "$(local_token_file local-owner-token)"
+      chmod 600 "$owner_file" "$(local_token_file local-owner-token)"
+      stage_local_owner_bootstrap_for_flutter "$owner_file"
+      echo "owner: refreshed from desktop shell cache"
+      return 0
+    fi
     echo "owner: cached local dev owner expired; rebuilding" >&2
     # v0.9.4 防呆（2026-09-21）：缓存 refresh 失效曾直接重置 Relay DB，导致接入的
     # 手机设备连同令牌一起消失（用户被迫反复恢复码接管）。DB 里存在活跃 Android
@@ -1284,12 +1312,9 @@ start_flutter() {
   if [[ -n "$LOCAL_OWNER_BOOTSTRAP_B64" && "$FLUTTER_MODE" == "mac" ]]; then
     args+=("--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=$LOCAL_OWNER_BOOTSTRAP_B64")
   fi
-  # v0.9.4（2026-09-21）：把 owner bootstrap 缓存文件路径交给 Flutter——桌面调试壳
-  # 轮换 refresh 后回写该文件（WriteThroughLocalDevTokenStore），保证 restart.sh
-  # 下次 start 的缓存刷新永远拿到最新 refresh，不再触发 DB 自愈重置。
-  if [[ -n "${OWNER_BOOTSTRAP_FILE:-}" && "$FLUTTER_MODE" == "mac" ]]; then
-    args+=("--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_FILE=$OWNER_BOOTSTRAP_FILE")
-  fi
+  # v0.9.4（2026-09-21）：桌面壳轮换 refresh 后自行回写用户域缓存
+  # （~/.agent-sessions/localdev-owner-cache.json，见 local_dev_bootstrap_io.dart）；
+  # 不再经 dart-define 传 state 目录路径——provenance 隔离会让 Flutter 打开该文件 EPERM。
   # v0.8.8 P1：localdev owner X25519 私钥播种（迭代计划 §9.2）——仅 localdev 调试壳；
   # 与 owner.bootstrap 的真实公钥配对，使 daemon 会话 DEK wrap 可被本机 unwrap。
   if [[ -n "$LOCAL_DEV_ENCRYPTION_PRIVATE_KEY_B64" && "$FLUTTER_MODE" == "mac" ]]; then
