@@ -117,7 +117,15 @@ Future<void> main() async {
       : null;
   final localDevTokens = localDevOwnerBootstrap == null
       ? null
-      : InMemorySecureTokenStore();
+      // v0.9.4 收口（2026-09-21）：刷新落盘直通——Flutter 每次轮换 refresh 后
+      // 回写 restart.sh 的 owner bootstrap 缓存；否则该文件里的 refresh 已被
+      // 消费，下次 `restart.sh start` 缓存刷新必然失败并重置 Relay DB，手机
+      // 令牌随之失效（每次重启都要恢复码接管的残留根因）。
+      : WriteThroughLocalDevTokenStore(
+          InMemorySecureTokenStore(),
+          localDevOwnerBootstrapFilePath(),
+          localDevOwnerBootstrap.device.id,
+        );
   // v0.8.8 P1（迭代计划 §9.2）：localdev owner X25519 私钥种子播种——与
   // restart.sh owner.bootstrap 的真实公钥配对，附件 DEK unwrap 前置；未注入时
   // 身份库维持占位公钥（附件入口 fail-closed）。生产 Android 走 Keystore 路径。

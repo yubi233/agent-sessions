@@ -2,9 +2,15 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../domain/models.dart';
+import '../storage/secure_token_store.dart';
 
 const _localDevOwnerBootstrapB64 = String.fromEnvironment(
   'LOCAL_DEV_OWNER_BOOTSTRAP_B64',
+);
+
+/// restart.sh 的 owner bootstrap 缓存文件路径（mac 模式经 dart-define 注入）。
+const _localDevOwnerBootstrapFile = String.fromEnvironment(
+  'LOCAL_DEV_OWNER_BOOTSTRAP_FILE',
 );
 
 /// v0.8.8 P1（迭代计划 §9.2）：localdev owner X25519 私钥种子——restart.sh 经
@@ -69,4 +75,68 @@ Future<LocalDevOwnerBootstrap?> readLocalDevOwnerBootstrap() async {
     );
   }
   return LocalDevOwnerBootstrap(tokens: tokens, device: device);
+}
+
+/// localdev 调试壳的 owner bootstrap 缓存文件路径；未注入（生产/Android/Release）
+/// 时返回 null。
+String? localDevOwnerBootstrapFilePath() {
+  final compileTime = _localDevOwnerBootstrapFile;
+  if (compileTime.isNotEmpty) {
+    return compileTime;
+  }
+  final fromEnv = Platform.environment['LOCAL_DEV_OWNER_BOOTSTRAP_FILE'] ?? '';
+  return fromEnv.isEmpty ? null : fromEnv;
+}
+
+/// 桌面调试壳刷新令牌后把最新 tokens 回写 restart.sh 的 owner bootstrap 缓存。
+/// refresh token 为一次性轮换：Flutter 消费后若不回写，`restart.sh start` 的缓存
+/// 刷新必然失败并触发 Relay DB 自愈重置，手机令牌随之失效——这是「每次服务重启
+/// 都要恢复码重新接管」的残留根因（2026-09-21 用户报告）。回写任何异常都静默：
+/// 它是调试便利，不得影响认证主流程；文件不存在（生产/Android）时为 no-op。
+void writeLocalDevOwnerBootstrapTokens(String? path, AuthTokens tokens) {
+  if (path == null || path.isEmpty) return;
+  try {
+    final file = File(path);
+    if (!file.existsSync()) return;
+    final body = Map<String, dynamic>.from(
+      jsonDecode(file.readAsStringSync()) as Map,
+    );
+    body['tokens'] = tokens.toSecureJson();
+    // 原子替换：先写临时文件再 rename，避免 restart.sh 读到半截 JSON。
+    final tmp = File('$path.tmp');
+    tmp.writeAsStringSync(jsonEncode(body), flush: true);
+    tmp.rename(path);
+  } on Object catch (error) {
+    // 回写失败不影响主流程，但保持可诊断：调试环境打印，release 无输出。
+    assert(() {
+      // ignore: avoid_print
+      print('localdev owner bootstrap 回写失败: $error');
+      return true;
+    }());
+  }
+}
+
+/// 刷新落盘直通：localdev 调试壳把新 tokens 写入内存 store 的同时回写
+/// restart.sh 缓存文件，形成「Flutter 消费 refresh → 回写」闭环。
+/// 只回写与注入设备同 deviceId 的 tokens，避免把其他设备的凭据覆盖进缓存。
+class WriteThroughLocalDevTokenStore implements SecureTokenStore {
+  WriteThroughLocalDevTokenStore(this._inner, this._bootstrapFile, this._deviceId);
+
+  final SecureTokenStore _inner;
+  final String? _bootstrapFile;
+  final String _deviceId;
+
+  @override
+  Future<void> clear() => _inner.clear();
+
+  @override
+  Future<AuthTokens?> read() => _inner.read();
+
+  @override
+  Future<void> write(AuthTokens tokens) {
+    if (tokens.deviceId == null || tokens.deviceId == _deviceId) {
+      writeLocalDevOwnerBootstrapTokens(_bootstrapFile, tokens);
+    }
+    return _inner.write(tokens);
+  }
 }

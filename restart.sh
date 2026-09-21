@@ -1022,6 +1022,8 @@ ensure_local_owner_bootstrap() {
 
   local owner_file response refresh_token
   owner_file="$(local_token_file local-owner-bootstrap.json)"
+  # 供 start_flutter 把缓存文件路径注入 Flutter（刷新后回写，见 local_dev_bootstrap_io.dart）。
+  OWNER_BOOTSTRAP_FILE="$owner_file"
   # v0.8.8 P1（迭代计划 §9.2 冻结决策）：owner 设备使用真实 X25519 密钥对 bootstrap。
   # 此前为占位公钥，daemon 会话 DEK wrap 上行必失败（owner 公钥非法），移动端附件
   # 入口因此恒禁用。密钥文件幂等（encryption-keygen 回放公钥）；私钥仅落本机 state
@@ -1053,6 +1055,23 @@ ensure_local_owner_bootstrap() {
       return 0
     fi
     echo "owner: cached local dev owner expired; rebuilding" >&2
+    # v0.9.4 防呆（2026-09-21）：缓存 refresh 失效曾直接重置 Relay DB，导致接入的
+    # 手机设备连同令牌一起消失（用户被迫反复恢复码接管）。DB 里存在活跃 Android
+    # 设备时拒绝静默重置，明确指引处理路径；无移动设备（纯桌面开发）才维持自愈。
+    local active_android
+    active_android="$(python3 -c "
+import sqlite3, sys
+try:
+    conn = sqlite3.connect('file:' + sys.argv[1] + '?mode=ro', uri=True)
+    print(conn.execute(\"SELECT count(*) FROM devices WHERE status='active' AND platform IN ('android','ios')\").fetchone()[0])
+except Exception:
+    print(0)
+" "$RELAY_DB_PATH" 2>/dev/null || echo 0)"
+    if [[ "$active_android" != "0" ]]; then
+      echo "owner: refresh failed but $active_android active Android device(s) depend on this Relay DB; refusing silent reset" >&2
+      echo "  处理选项：① 在手机 App 用恢复码重新接管后重试；② 确认放弃手机连接时手动删除 $RELAY_DB_PATH 后重试。" >&2
+      return 1
+    fi
     rm -f "$owner_file" "$(local_token_file local-owner-token)" "$(local_token_file local-daemon-token)" "$(local_token_file local-daemon-approval.json)"
     reset_default_local_relay_db || true
   fi
@@ -1264,6 +1283,12 @@ start_flutter() {
   local args=("$FLUTTER_BIN" run -d "$FLUTTER_TARGET" --no-pub "--dart-define=RELAY_BASE_URL=$FLUTTER_RELAY_BASE")
   if [[ -n "$LOCAL_OWNER_BOOTSTRAP_B64" && "$FLUTTER_MODE" == "mac" ]]; then
     args+=("--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_B64=$LOCAL_OWNER_BOOTSTRAP_B64")
+  fi
+  # v0.9.4（2026-09-21）：把 owner bootstrap 缓存文件路径交给 Flutter——桌面调试壳
+  # 轮换 refresh 后回写该文件（WriteThroughLocalDevTokenStore），保证 restart.sh
+  # 下次 start 的缓存刷新永远拿到最新 refresh，不再触发 DB 自愈重置。
+  if [[ -n "${OWNER_BOOTSTRAP_FILE:-}" && "$FLUTTER_MODE" == "mac" ]]; then
+    args+=("--dart-define=LOCAL_DEV_OWNER_BOOTSTRAP_FILE=$OWNER_BOOTSTRAP_FILE")
   fi
   # v0.8.8 P1：localdev owner X25519 私钥播种（迭代计划 §9.2）——仅 localdev 调试壳；
   # 与 owner.bootstrap 的真实公钥配对，使 daemon 会话 DEK wrap 可被本机 unwrap。
