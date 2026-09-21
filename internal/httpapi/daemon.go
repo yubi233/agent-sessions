@@ -595,12 +595,30 @@ type daemonDSHWorkspaceResultRequest struct {
 }
 
 type daemonDSHImportResultRequest struct {
-	ProtocolVersion int                     `json:"protocol_version"`
-	DeliverySeq     int64                   `json:"delivery_seq"`
-	SessionIDs      []string                `json:"session_ids"`
-	Status          string                  `json:"status"`
-	ErrorCode       string                  `json:"error_code"`
-	Signature       authz.TerminalSignature `json:"signature"`
+	ProtocolVersion int      `json:"protocol_version"`
+	DeliverySeq     int64    `json:"delivery_seq"`
+	SessionIDs      []string `json:"session_ids"`
+	// SessionTitles 与 session_ids 按顺序对齐的展示标题（v0.9.4：来自本地会话
+	// 标题/首条用户消息截断）；缺失或越界时对应会话无标题，客户端按 id 回退。
+	SessionTitles []string `json:"session_titles"`
+	// SessionContext 携带导入会话的最近上下文事件（已编码 envelope；v0.9.4 用户
+	// 需求：每个历史会话保留十几条上下文）。数据只在用户本地两端之间传输。
+	SessionContext []daemonDSHImportSessionContextRequest `json:"session_context,omitempty"`
+	Status         string                                 `json:"status"`
+	ErrorCode      string                                 `json:"error_code"`
+	Signature      authz.TerminalSignature                `json:"signature"`
+}
+
+// daemonDSHImportSessionContextRequest 是单会话的导入上下文条目。
+type daemonDSHImportSessionContextRequest struct {
+	SessionID string `json:"session_id"`
+	Events    []struct {
+		EventID         string          `json:"event_id"`
+		EventType       string          `json:"event_type"`
+		TerminalStatus  string          `json:"terminal_status,omitempty"`
+		Envelope        json.RawMessage `json:"envelope"`
+		CreatedAtUnixMS int64           `json:"created_at_unix_ms,omitempty"`
+	} `json:"events"`
 }
 
 func (a *API) handleDaemonCommandResult(c *gin.Context) {
@@ -671,7 +689,8 @@ func (a *API) handleDaemonDSHWorkspaceResult(c *gin.Context) {
 }
 
 // handleDaemonDSHImportResult 是 session.import_dsh 的专用路径回执入口。
-// session ids 只用于 Relay 内部登记 Session，响应不包含任何本地路径或正文。
+// session ids、展示标题与最近上下文事件只用于 Relay 内部登记 Session，响应不包含
+// 任何本地路径或正文。
 func (a *API) handleDaemonDSHImportResult(c *gin.Context) {
 	var req daemonDSHImportResultRequest
 	raw, err := bindJSONBody(c, &req)
@@ -684,8 +703,29 @@ func (a *API) handleDaemonDSHImportResult(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
+	// v0.9.4：session_context 携带导入会话的最近上下文事件（已编码 envelope），
+	// Relay 在登记会话的同一事务内落库，客户端打开导入会话即可见历史正文。
+	sessionContext := make([]domain.DaemonDSHImportSessionContext, 0, len(req.SessionContext))
+	for _, item := range req.SessionContext {
+		events := make([]domain.DaemonEventInput, 0, len(item.Events))
+		for _, event := range item.Events {
+			events = append(events, domain.DaemonEventInput{
+				EventID: event.EventID, CommandID: c.Param("id"),
+				SessionID: item.SessionID, EventType: event.EventType,
+				TerminalStatus: event.TerminalStatus, EnvelopeJSON: string(event.Envelope),
+				CreatedAtUnixMS: event.CreatedAtUnixMS,
+			})
+		}
+		sessionContext = append(sessionContext, domain.DaemonDSHImportSessionContext{
+			SessionID: item.SessionID, Events: events,
+		})
+	}
+	if debugProbe := len(req.SessionContext); true {
+		// ignore: avoid_print
+		println("PROBE session_context_len=", debugProbe, "titles=", len(req.SessionTitles))
+	}
 	result, err := a.Daemons.ResolveDSHImport(c.Request.Context(), subj.AccountID, subj.DeviceID, subj.Role,
-		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.SessionIDs, req.Status, req.ErrorCode)
+		c.Param("id"), req.DeliverySeq, req.ProtocolVersion, req.SessionIDs, req.SessionTitles, sessionContext, req.Status, req.ErrorCode)
 	if err != nil {
 		writeError(c, err)
 		return

@@ -445,6 +445,9 @@ type SessionRow struct {
 	// ContentDEKID 是会话内容 DEK 的 opaque id（v0.8.5 §3.2 / ADR-016）；空串表示
 	// 尚无内容密钥（附件 fail-closed）。wrapped blob 在 device_key_wraps 表，不在此列。
 	ContentDEKID string
+	// DisplayName 是会话展示标题（v0.9.4：DSH 导入时从本地会话标题/首条用户消息
+	// 提取的脱敏元数据）；空串表示无标题，客户端按 id 短码回退。
+	DisplayName string
 }
 
 // InstanceRow 是 session_instances 表的行投影。

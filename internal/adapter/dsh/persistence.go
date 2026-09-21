@@ -136,6 +136,138 @@ func isSessionArtifactName(name string) bool {
 	return name == "session.jsonl" || name == "session.jsonl.zstd"
 }
 
+// SessionContextMessage 是导入上下文里的单条对话消息（本机从 artifact 提取，
+// 只进入用户自己的 Relay 事件流，绝不进入日志或报告）。
+type SessionContextMessage struct {
+	Role   string // user | assistant
+	Text   string
+	TimeMS int64
+	Seq    int64
+}
+
+// SessionContext 是 DSH 会话的本地上下文投影：标题 + 最近对话消息。
+type SessionContext struct {
+	// Title 是 DSH 侧会话标题（session/title 行）；缺失时由调用方回退首条用户消息。
+	Title string
+	// Messages 按时间升序（seq 升序），至多 limit 条——即「每个历史会话保留十几条
+	// 上下文」的载体；导入后随 canonical 事件流入用户自己的 Relay。
+	Messages []SessionContextMessage
+}
+
+// ReadSessionContext 读取 session.jsonl 的标题与最近 limit 条 user/assistant 正文：
+//   - 标题：首个 session/title 行；缺失时回退首条用户消息截断（≤40 rune）。
+//   - 正文：user/message 与 assistant/message 行内 type=text 的内容拼接；
+//     reasoning、工具、权限等非对话行一律跳过。
+//
+// 容错：坏行/超长行跳过不致命，尽力返回已解析部分；文件无法打开才返回错误。
+// 读取只发生在导入命令的本机执行内（用户数据不出用户机器）。
+func ReadSessionContext(path string, limit int) (SessionContext, error) {
+	ctx := SessionContext{}
+	if limit <= 0 {
+		limit = 1
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ctx, err
+	}
+	defer file.Close()
+	var input io.Reader = file
+	if strings.HasSuffix(path, ".zstd") {
+		decoder, decodeErr := zstd.NewReader(file)
+		if decodeErr != nil {
+			return ctx, fmt.Errorf("zstd artifact 无法解压: %w", decodeErr)
+		}
+		defer decoder.Close()
+		input = decoder
+	}
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var messages []SessionContextMessage
+	var firstUserText string
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var row struct {
+			Type string `json:"type"`
+			Seq  int64  `json:"seq"`
+			Time int64  `json:"time"`
+			Data struct {
+				Title   string `json:"title"`
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+				Message struct {
+					Content []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"message"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(line, &row); err != nil {
+			continue // 坏行容错：跳过，不影响其余上下文。
+		}
+		switch row.Type {
+		case "session/title":
+			if ctx.Title == "" {
+				ctx.Title = strings.TrimSpace(row.Data.Title)
+			}
+		case "user/message":
+			text := concatTextParts(row.Data.Content)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			messages = append(messages, SessionContextMessage{Role: "user", Text: text, TimeMS: row.Time, Seq: row.Seq})
+			if firstUserText == "" {
+				firstUserText = text
+			}
+		case "assistant/message":
+			text := concatTextParts(row.Data.Message.Content)
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			messages = append(messages, SessionContextMessage{Role: "assistant", Text: text, TimeMS: row.Time, Seq: row.Seq})
+		}
+	}
+	// 尽力而为：超长坏行导致的 scanner 错误不覆盖已解析内容。
+	_ = scanner.Err()
+	// 只保留最近 limit 条（保持时间升序，客户端按 seq/时间渲染）。
+	if len(messages) > limit {
+		messages = messages[len(messages)-limit:]
+	}
+	ctx.Messages = messages
+	if ctx.Title == "" && firstUserText != "" {
+		ctx.Title = truncateRunes(strings.TrimSpace(firstUserText), 40)
+	}
+	return ctx, nil
+}
+
+// concatTextParts 拼接 content 数组里 type=text 的文本段（跳过 reasoning 等非正文段）。
+func concatTextParts(parts []struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}) string {
+	var b strings.Builder
+	for _, part := range parts {
+		if part.Type == "text" && part.Text != "" {
+			b.WriteString(part.Text)
+		}
+	}
+	return b.String()
+}
+
+// truncateRunes 按 rune 截断并加省略号，保证中文标题不截出半个字。
+func truncateRunes(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "…"
+}
+
 func readArtifact(root, path string) (SessionArtifact, error) {
 	info, err := os.Stat(path)
 	if err != nil {

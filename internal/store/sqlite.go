@@ -730,10 +730,10 @@ func (r *sqliteRepo) CreateSession(ctx context.Context, s SessionRow) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO sessions(
 			id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
-			parent_session_id,forked_from_message_id,fork_idempotency_key
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			parent_session_id,forked_from_message_id,fork_idempotency_key,display_name
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		s.ID, s.WorkspaceID, s.AccountID, s.Status, s.Provider, s.Model, s.LastSeq, s.CurrentInstanceID,
-		s.ParentSessionID, s.ForkedFromMessageID, s.ForkIdempotencyKey)
+		s.ParentSessionID, s.ForkedFromMessageID, s.ForkIdempotencyKey, s.DisplayName)
 	return err
 }
 
@@ -742,11 +742,11 @@ func (r *sqliteRepo) SessionByID(ctx context.Context, id string) (SessionRow, er
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
 		   FROM sessions WHERE id=?`, id).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil
@@ -763,7 +763,7 @@ func (r *sqliteRepo) ListArchivedSessions(ctx context.Context, accountID string)
 func (r *sqliteRepo) ListRunningSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
 	const query = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,last_activity_at_unix_ms,
-		permission_mode,available_permission_modes,agent_preset_id,content_dek_id
+		permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
 		FROM sessions WHERE account_id=? AND status='running' ORDER BY last_activity_at_unix_ms ASC, id ASC`
 	return r.scanSessions(ctx, query, accountID)
 }
@@ -771,7 +771,7 @@ func (r *sqliteRepo) ListRunningSessions(ctx context.Context, accountID string) 
 func (r *sqliteRepo) listSessions(ctx context.Context, accountID string, archived bool) ([]SessionRow, error) {
 	const selectSessions = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
 		 FROM sessions`
 	var query string
 	if archived {
@@ -795,7 +795,7 @@ func (r *sqliteRepo) scanSessions(ctx context.Context, query string, args ...any
 		var s SessionRow
 		if err := rows.Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -875,12 +875,12 @@ func (r *sqliteRepo) SessionByParentForkKey(ctx context.Context, parentSessionID
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
 		   FROM sessions WHERE parent_session_id=? AND fork_idempotency_key=?`,
 		parentSessionID, idempotencyKey).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil

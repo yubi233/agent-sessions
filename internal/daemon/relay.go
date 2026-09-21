@@ -337,14 +337,26 @@ func (c *RelayClient) ResolveDSHWorkspace(ctx context.Context, commandID string,
 	return out, nil
 }
 
-// ResolveDSHImport 上传 session.import_dsh 的受控结果。session ids 只存在于该专用请求，
-// 普通 ack/result 端点永远不接受或返回它们。
-func (c *RelayClient) ResolveDSHImport(ctx context.Context, commandID string, deliverySeq int64, sessionIDs []string, status, errorCode string) (DSHImportCommandReceipt, error) {
+// DSHImportSessionResult 是单个导入会话的上报载荷：opaque Relay 会话 id、展示标题
+// 与最近上下文事件（已编码 envelope；v0.9.4 用户需求：标题+十几条上下文）。
+type DSHImportSessionResult struct {
+	SessionID string
+	Title     string
+	Events    []RelayEvent
+}
+
+// ResolveDSHImport 上传 session.import_dsh 的受控结果。session ids 与上下文事件只存在
+// 于该专用请求，普通 ack/result 端点永远不接受或返回它们。标题与事件由 Relay 在登记
+// 会话时一并落库，因此导入上下文不走「命令↔会话绑定」的普通事件通道（导入命令是
+// workspace 级，commands.session_id 为空，普通通道会以归属校验 403 拒绝）。
+func (c *RelayClient) ResolveDSHImport(ctx context.Context, commandID string, deliverySeq int64, sessions []DSHImportSessionResult, status, errorCode string) (DSHImportCommandReceipt, error) {
 	var out DSHImportCommandReceipt
 	err := c.postJSON(ctx, "/v1/daemon/commands/"+commandID+"/dsh-import-result", map[string]any{
 		"protocol_version": daemonProtocolVersion,
 		"delivery_seq":     deliverySeq,
-		"session_ids":      sessionIDs,
+		"session_ids":      dshImportSessionIDs(sessions),
+		"session_titles":   dshImportSessionTitles(sessions),
+		"session_context":  dshImportSessionContexts(sessions),
 		"status":           status,
 		"error_code":       errorCode,
 	}, &out)
@@ -355,6 +367,39 @@ func (c *RelayClient) ResolveDSHImport(ctx context.Context, commandID string, de
 		return DSHImportCommandReceipt{}, errors.New("relay dsh import result receipt incomplete")
 	}
 	return out, nil
+}
+
+func dshImportSessionIDs(sessions []DSHImportSessionResult) []string {
+	out := make([]string, 0, len(sessions))
+	for _, item := range sessions {
+		out = append(out, item.SessionID)
+	}
+	return out
+}
+
+func dshImportSessionTitles(sessions []DSHImportSessionResult) []string {
+	out := make([]string, 0, len(sessions))
+	for _, item := range sessions {
+		out = append(out, item.Title)
+	}
+	return out
+}
+
+func dshImportSessionContexts(sessions []DSHImportSessionResult) []map[string]any {
+	out := make([]map[string]any, 0, len(sessions))
+	for _, item := range sessions {
+		events := make([]map[string]any, 0, len(item.Events))
+		for _, event := range item.Events {
+			events = append(events, map[string]any{
+				"event_id":           event.EventID,
+				"event_type":         event.EventType,
+				"envelope":           json.RawMessage(event.EnvelopeJSON),
+				"created_at_unix_ms": event.CreatedAtUnixMS,
+			})
+		}
+		out = append(out, map[string]any{"session_id": item.SessionID, "events": events})
+	}
+	return out
 }
 
 // UploadWebReadResponse 把只属于浏览器临时公钥的响应 envelope 回写 Relay。Relay 只保存密文和
@@ -1545,6 +1590,7 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 		// 扫描 JSONL 元数据并回传 opaque Relay session ids。
 		status, errorCode := "succeeded", ""
 		var sessionIDs []string
+		var sessions []DSHImportSessionResult
 		if l.WorkspaceManager == nil {
 			status, errorCode = "failed", protocol.ErrCapabilityUnsupported
 		} else {
@@ -1560,12 +1606,50 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 					l.Logger.Warn("daemon dsh session import failed", "command", command.CommandID, "error_code", errorCode)
 				} else {
 					for _, item := range imported {
+						// v0.9.4（用户需求：标题+十几条上下文）：标题与最近上下文事件
+						// 随导入回执上报，Relay 登记会话时一并落库。
+						result := DSHImportSessionResult{
+							SessionID: item.RelaySessionID, Title: item.Title,
+						}
+						for _, message := range item.Messages {
+							var eventType adapter.EventType
+							payload := map[string]any{"instance_id": item.DSHSessionID}
+							switch message.Role {
+							case "user":
+								eventType = adapter.EventUserMessage
+								payload["text"] = message.Text
+							case "assistant":
+								eventType = adapter.EventMessageCompleted
+								payload["text"] = message.Text
+								payload["message_id"] = fmt.Sprintf("imported-%d", message.Seq)
+							default:
+								continue
+							}
+							event := adapter.Event{
+								Type: eventType, Seq: message.Seq, Payload: payload,
+								CreatedAtUnixMS: message.TimeMS,
+							}
+							if l.Encoder == nil {
+								break
+							}
+							envelope, encodeErr := l.Encoder.Encode(item.RelaySessionID, event)
+							if encodeErr != nil || envelope == "" {
+								continue
+							}
+							result.Events = append(result.Events, RelayEvent{
+								EventID: id.New("evt"), CommandID: command.CommandID,
+								SessionID: item.RelaySessionID, EventType: relayEventType(eventType),
+								TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
+								CreatedAtUnixMS: event.CreatedAtUnixMS,
+							})
+						}
 						sessionIDs = append(sessionIDs, item.RelaySessionID)
+						sessions = append(sessions, result)
 					}
 				}
 			}
 		}
-		receipt, resolveErr := l.Client.ResolveDSHImport(ctx, command.CommandID, command.DeliverySeq, sessionIDs, status, errorCode)
+		receipt, resolveErr := l.Client.ResolveDSHImport(ctx, command.CommandID, command.DeliverySeq, sessions, status, errorCode)
 		if resolveErr != nil {
 			// 专用 result 404 且带世代证据：按 §3.3 本地收口，不再重试（V089-05）。
 			if reason, stale := l.staleGeneration404(command, resolveErr); stale {

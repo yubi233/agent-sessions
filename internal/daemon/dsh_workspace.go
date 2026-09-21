@@ -262,15 +262,23 @@ func (m *WorkspaceManager) ConfirmExistingDSHWorkspace(ctx context.Context, work
 }
 
 // DSHImportedSession 是一次按需导入的本机映射结果。Relay 只接收 opaque relay session id。
+// Title/Messages 来自本机 JSONL 提取（v0.9.4 用户需求：每个历史会话保留十几条上下文与
+// 真实标题），仅经用户自己的 Relay 事件流回流，不进入任何第三方或日志。
 type DSHImportedSession struct {
 	RelaySessionID string
 	DSHSessionID   string
 	WorkspaceRoot  string
+	Title          string
+	Messages       []dsh.SessionContextMessage
 }
 
+// importContextLimit 是每个导入会话保留的最近上下文条数（用户口径「十几条」取 14）。
+const importContextLimit = 14
+
 // ImportDSHSessions 扫描已确认 DSH 工作区下的 JSONL artifact，为每个有效会话生成
-// opaque Relay session id 并写入本机 instance/replay 映射。它不读取 JSONL 正文，
-// 不把 DSH session id、cwd 或路径上传到 Relay。
+// opaque Relay session id 并写入本机 instance/replay 映射；同时提取真实标题与最近
+// 上下文消息（v0.9.4：客户端打开导入会话即可见最近十几条正文）。DSH session id、
+// cwd 或路径仍不上传到 Relay；正文只进入用户自己的事件流。
 func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID string, store *Store) ([]DSHImportedSession, error) {
 	if m == nil || store == nil {
 		return nil, ErrWorkspaceRootInvalid
@@ -304,6 +312,11 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 		}
 		seen[artifact.ID] = true
 		relaySessionID := id.New("sess")
+		// v0.9.4：提取真实标题与最近上下文。读取失败不阻断导入（上下文尽力而为）。
+		artifactContext, ctxErr := dsh.ReadSessionContext(artifact.Path, importContextLimit)
+		if ctxErr != nil {
+			artifactContext = dsh.SessionContext{}
+		}
 		// 写本机 instance 映射：Relay session -> DSH session + workspace root。
 		mapping, err := json.Marshal(providerThread{
 			Provider:      "dsh",
@@ -324,6 +337,8 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 			RelaySessionID: relaySessionID,
 			DSHSessionID:   artifact.ID,
 			WorkspaceRoot:  confirmed.Root,
+			Title:          artifactContext.Title,
+			Messages:       artifactContext.Messages,
 		})
 	}
 	return out, nil

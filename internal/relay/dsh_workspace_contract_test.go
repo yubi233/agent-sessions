@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -513,5 +515,135 @@ func TestV085SessionViewCarriesWorkspaceDisplayName(t *testing.T) {
 	decodeW1(t, snapshot.Body.Bytes(), &snap)
 	if snap.Session.WorkspaceName != "money" {
 		t.Fatalf("snapshot workspace_name=%q, want money", snap.Session.WorkspaceName)
+	}
+}
+
+// V094（2026-09-21 用户需求：对齐 DSH 实际会话——标题+十几条上下文）：导入回执
+// 携带展示标题与最近上下文事件（已编码 envelope），Relay 登记会话时一并落库；
+// 客户端打开导入会话即可见真实标题与历史正文，不再只是元数据空壳。
+func TestV094DSHImportCarriesTitleAndContextEvents(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v094-import-context@test.dev")
+	terminal := env.pairTerminal(t, owner, "v094-import-context-terminal")
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync", "dsh_session_import"})
+
+	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	var syncState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, sync.Body.Bytes(), &syncState)
+	_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncState.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 1,
+		"candidates": []map[string]string{{"canonical_root": "/Users/test/code/import-proj", "display_name": "import-proj"}},
+		"status":     "succeeded",
+	}, terminal.AccessToken)
+	var list struct {
+		Workspaces []struct {
+			ID string `json:"id"`
+		} `json:"workspaces"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken).Body.Bytes(), &list)
+	wsID := list.Workspaces[0].ID
+
+	importReq := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID}, owner.AccessToken)
+	var importState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, importReq.Body.Bytes(), &importState)
+	_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+importState.CommandID+"/ack", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2, "ack_kind": "started",
+	}, terminal.AccessToken)
+
+	// localdev fixture envelope：与 daemon 本地明文链路同构，客户端可直接渲染。
+	envelope := func(text string) string {
+		payload := map[string]any{"kind": "user_message", "label": "你", "text": text, "copy_text": text}
+		inner, _ := json.Marshal(map[string]any{"fixture_payload": payload})
+		// 顶层 fixture_payload 与 ciphertext 内层保持同一载荷（与 LocalDevEventEncoder 一致）。
+		raw, _ := json.Marshal(map[string]any{
+			"alg": "local-dev-fixture", "key_id": "local-dev", "nonce": "local-dev",
+			"ciphertext": base64.StdEncoding.EncodeToString(inner), "aad_hash": "local-dev", "payload_version": 1,
+			"fixture_payload": payload,
+		})
+		return string(raw)
+	}
+
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+importState.CommandID+"/dsh-import-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2,
+		"session_ids":    []string{"sess_v094_ctx_1", "sess_v094_ctx_2"},
+		"session_titles": []string{"真实标题：统计脚本", ""},
+		"session_context": []map[string]any{
+			{"session_id": "sess_v094_ctx_1", "events": []map[string]any{
+				{"event_id": "evt-ctx-1", "event_type": "user.message",
+					"envelope": envelope("第一条历史消息"), "created_at_unix_ms": 1789965000000},
+				{"event_id": "evt-ctx-2", "event_type": "message.completed",
+					"envelope": envelope("已完成的历史回答"), "created_at_unix_ms": 1789965001000},
+			}},
+		},
+		"status": "succeeded",
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("import result status=%d body=%s", result.Code, result.Body.String())
+	}
+
+	// 会话列表：display_name 必须下发（标题回退链首选），无标题会话缺省。
+	sessions := env.do(t, http.MethodGet, "/v1/sessions", nil, owner.AccessToken)
+	var sessionList struct {
+		Sessions []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"sessions"`
+	}
+	decodeW1(t, sessions.Body.Bytes(), &sessionList)
+	titles := map[string]string{}
+	for _, sess := range sessionList.Sessions {
+		titles[sess.ID] = sess.DisplayName
+	}
+	if titles["sess_v094_ctx_1"] != "真实标题：统计脚本" {
+		t.Fatalf("会话标题应随导入落库: %q", titles["sess_v094_ctx_1"])
+	}
+	if titles["sess_v094_ctx_2"] != "" {
+		t.Fatalf("无标题会话应为空串（客户端 id 回退）: %q", titles["sess_v094_ctx_2"])
+	}
+
+	// 上下文事件落在导入会话的 snapshot 事件流里，正文可渲染。
+	snapshot := env.do(t, http.MethodGet, "/v1/sessions/sess_v094_ctx_1/snapshot?after_seq=0", nil, owner.AccessToken)
+	if snapshot.Code != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", snapshot.Code, snapshot.Body.String())
+	}
+	var snapView struct {
+		Events []struct {
+			EventType string `json:"event_type"`
+			// envelope 在快照投影中是字符串化 JSON，需要二次解析。
+			Envelope string `json:"envelope"`
+		} `json:"events"`
+	}
+	decodeW1(t, snapshot.Body.Bytes(), &snapView)
+	texts := map[string]string{}
+	for _, event := range snapView.Events {
+		var envelope struct {
+			FixturePayload struct {
+				Kind string `json:"kind"`
+				Text string `json:"text"`
+			} `json:"fixture_payload"`
+		}
+		if err := json.Unmarshal([]byte(event.Envelope), &envelope); err != nil {
+			t.Fatalf("解析 envelope: %v", err)
+		}
+		texts[event.EventType] = envelope.FixturePayload.Text
+	}
+	if texts["user.message"] != "第一条历史消息" {
+		t.Fatalf("上下文 user.message 正文缺失: %+v", texts)
+	}
+	if texts["message.completed"] != "已完成的历史回答" {
+		t.Fatalf("上下文 message.completed 正文缺失: %+v", texts)
+	}
+	// 无上下文的导入会话（sess_v094_ctx_2）事件流保持为空，不得串写。
+	emptySnapshot := env.do(t, http.MethodGet, "/v1/sessions/sess_v094_ctx_2/snapshot?after_seq=0", nil, owner.AccessToken)
+	var emptyView struct {
+		Events []struct{} `json:"events"`
+	}
+	decodeW1(t, emptySnapshot.Body.Bytes(), &emptyView)
+	if len(emptyView.Events) != 0 {
+		t.Fatalf("无上下文会话不得串入事件: %+v", emptyView.Events)
 	}
 }

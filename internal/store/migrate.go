@@ -320,6 +320,8 @@ var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN forked_from_message_id TEXT NOT NULL DEFAULT '';`,
 	`ALTER TABLE sessions ADD COLUMN fork_idempotency_key TEXT NOT NULL DEFAULT '';`,
 	`ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT '';`,
+	// v0.9.4：DSH 导入会话的展示标题（display_name），客户端标题回退链的首选来源。
+	`ALTER TABLE sessions ADD COLUMN display_name TEXT NOT NULL DEFAULT '';`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS sessions_parent_fork_key_idx
 		ON sessions(parent_session_id, fork_idempotency_key)
 		WHERE parent_session_id <> '' AND fork_idempotency_key <> '';`,

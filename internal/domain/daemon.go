@@ -775,7 +775,14 @@ func dshSyncResultFromRow(ctx context.Context, repo store.Repository, row store.
 
 // ResolveDSHImport 收口 session.import_dsh 的 daemon 回执，并在同一事务内登记 Relay Session。
 // sessionIDs 是 Relay opaque session id 白名单；cwd、DSH id、路径和正文都不进入该回执。
-func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, sessionIDs []string, status, errorCode string) (WorkspaceDSHImportResult, error) {
+// DaemonDSHImportSessionContext 是导入回执携带的单会话上下文：Relay 会话 id 与
+// 最近对话事件（已编码 envelope，来自终端本地的 DSH 存储；v0.9.4 用户需求）。
+type DaemonDSHImportSessionContext struct {
+	SessionID string
+	Events    []DaemonEventInput
+}
+
+func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, sessionIDs []string, sessionTitles []string, sessionContext []DaemonDSHImportSessionContext, status, errorCode string) (WorkspaceDSHImportResult, error) {
 	if err := validateDaemonProtocol(protocolVersion); err != nil {
 		return WorkspaceDSHImportResult{}, err
 	}
@@ -815,13 +822,19 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 			return ErrScopeDenied
 		}
 		if status == CommandSucceeded {
-			for _, sessionID := range sessionIDs {
+			for i, sessionID := range sessionIDs {
 				if strings.TrimSpace(sessionID) == "" {
 					return ErrScopeDenied
 				}
+				// v0.9.4（用户需求：标题+上下文）：daemon 从本地会话标题/首条用户消息
+				// 提取的展示标题随回执上报，按 session_ids 顺序对齐（越界安全）。
+				title := ""
+				if i < len(sessionTitles) {
+					title = strings.TrimSpace(sessionTitles[i])
+				}
 				if err := tx.CreateSession(ctx, store.SessionRow{
 					ID: sessionID, WorkspaceID: payload.WorkspaceID, AccountID: accountID,
-					Status: SessionIdle, Provider: "dsh",
+					Status: SessionIdle, Provider: "dsh", DisplayName: title,
 				}); err != nil {
 					// 已存在的同 id 会话视为幂等确认，不覆盖归属。
 					if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "constraint") {
@@ -831,6 +844,23 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 				// 导入成功是可审计的会话状态写入，记录其真实写入时间以便列表排序。
 				if err := tx.SetSessionStatusAt(ctx, sessionID, SessionIdle, s.now().UnixMilli()); err != nil {
 					return err
+				}
+				// v0.9.4（用户需求：标题+十几条上下文）：回执携带的最近上下文事件在
+				// 登记会话的同一事务内落库——客户端打开导入会话即可见历史正文。
+				for _, importCtx := range sessionContext {
+					if importCtx.SessionID != sessionID {
+						continue
+					}
+					for _, event := range importCtx.Events {
+						// AppendEvent 返回 (seq, error)：seq 与 normal 事件同源，无额外含义。
+						if _, appendErr := tx.AppendEvent(ctx, store.SessionEventRow{
+							SessionID: sessionID, EventType: event.EventType,
+							TerminalStatus: event.TerminalStatus, EnvelopeJSON: event.EnvelopeJSON,
+							CreatedAtUnixMS: event.CreatedAtUnixMS,
+						}); appendErr != nil {
+							return appendErr
+						}
+					}
 				}
 			}
 		}

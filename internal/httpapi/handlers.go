@@ -1814,6 +1814,9 @@ type sessionView struct {
 	// LastActivityAtUnixMS 是最后一次状态/事件写入的可审计活动时间；0 表示旧数据未知。
 	// 客户端用它做「最后消息时间」展示和列表排序，禁止改作状态推断。
 	LastActivityAtUnixMS int64 `json:"last_activity_at_unix_ms,omitempty"`
+	// DisplayName 是会话展示标题（v0.9.4：DSH 导入时从本地会话标题/首条用户消息
+	// 提取的脱敏元数据）；空串表示无标题，客户端按 id 短码回退，不编造正文摘要。
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 func newSessionView(session store.SessionRow) sessionView {
@@ -1822,7 +1825,7 @@ func newSessionView(session store.SessionRow) sessionView {
 		Provider: session.Provider, Model: session.Model, LastSeq: session.LastSeq,
 		ParentSessionID: session.ParentSessionID, ForkedFromMessageID: session.ForkedFromMessageID,
 		ArchivedAtUnixMS: session.ArchivedAtUnixMS, LastActivityAtUnixMS: session.LastActivityAtUnixMS,
-		AgentPresetID: session.AgentPresetID,
+		AgentPresetID: session.AgentPresetID, DisplayName: session.DisplayName,
 	}
 }
 
