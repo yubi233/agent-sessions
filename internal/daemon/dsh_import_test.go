@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 )
 
@@ -201,5 +202,71 @@ func TestImportDSHSessionsIdempotentEmpty(t *testing.T) {
 	}
 	if len(first) != 0 || len(second) != 0 {
 		t.Fatalf("expected both empty, got %+v vs %+v", first, second)
+	}
+}
+
+// V094（2026-09-21 用户需求：只加载最近三天还在更新的会话）：活跃窗口外的 DSH
+// artifact 不导入、不产生投影；窗口内的会话正常导入且 LastActivity 取真实文件时间。
+func TestImportDSHSessionsFiltersStaleSessionsByActiveWindow(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	state, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer state.Close()
+	manager, err := NewWorkspaceManager(state, root)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	// fresh 工作区：artifact 修改时间在 72h 窗口内，应被导入。
+	freshProject := dshImportFixtureProject(t, filepath.Join(root, "fresh"))
+	freshCanonical, err := filepath.EvalSymlinks(freshProject)
+	if err != nil {
+		t.Fatalf("resolve fresh: %v", err)
+	}
+	freshRoot := filepath.Join(freshProject, ".dsh-sessions")
+	freshPath := writeDSHSessionArtifactForTest(t, freshRoot, freshCanonical, "fresh-id", `{"type":"user/message"}`)
+	freshTime := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(freshPath, freshTime, freshTime); err != nil {
+		t.Fatalf("chtimes fresh: %v", err)
+	}
+	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-dsh-fresh", freshCanonical); err != nil {
+		t.Fatalf("confirm fresh: %v", err)
+	}
+
+	// stale 工作区：artifact 修改时间在 72h 窗口外，应被跳过。
+	staleProject := dshImportFixtureProject(t, filepath.Join(root, "stale"))
+	staleCanonical, err := filepath.EvalSymlinks(staleProject)
+	if err != nil {
+		t.Fatalf("resolve stale: %v", err)
+	}
+	staleRoot := filepath.Join(staleProject, ".dsh-sessions")
+	stalePath := writeDSHSessionArtifactForTest(t, staleRoot, staleCanonical, "stale-id", `{"type":"user/message"}`)
+	staleTime := time.Now().Add(-10 * 24 * time.Hour)
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatalf("chtimes stale: %v", err)
+	}
+	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-dsh-stale", staleCanonical); err != nil {
+		t.Fatalf("confirm stale: %v", err)
+	}
+
+	freshImported, err := manager.ImportDSHSessions(ctx, "ws-dsh-fresh", state)
+	if err != nil {
+		t.Fatalf("import fresh: %v", err)
+	}
+	if len(freshImported) != 1 || freshImported[0].DSHSessionID != "fresh-id" {
+		t.Fatalf("窗口内会话应导入: %+v", freshImported)
+	}
+	if freshImported[0].LastActivityUnixMS != freshTime.UnixMilli() {
+		t.Fatalf("LastActivity 应取 DSH artifact 修改时间: %d", freshImported[0].LastActivityUnixMS)
+	}
+
+	staleImported, err := manager.ImportDSHSessions(ctx, "ws-dsh-stale", state)
+	if err != nil {
+		t.Fatalf("import stale: %v", err)
+	}
+	if len(staleImported) != 0 {
+		t.Fatalf("窗口外的老会话不得导入: %+v", staleImported)
 	}
 }

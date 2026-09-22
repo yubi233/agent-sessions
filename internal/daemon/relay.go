@@ -343,6 +343,9 @@ type DSHImportSessionResult struct {
 	SessionID string
 	Title     string
 	Events    []RelayEvent
+	// LastActivityUnixMS 是 DSH artifact 的最后修改时间（会话真实活动时间），
+	// Relay 以它作为导入会话的 last_activity（v0.9.4 活跃会话语义）。
+	LastActivityUnixMS int64
 }
 
 // ResolveDSHImport 上传 session.import_dsh 的受控结果。session ids 与上下文事件只存在
@@ -397,7 +400,11 @@ func dshImportSessionContexts(sessions []DSHImportSessionResult) []map[string]an
 				"created_at_unix_ms": event.CreatedAtUnixMS,
 			})
 		}
-		out = append(out, map[string]any{"session_id": item.SessionID, "events": events})
+		out = append(out, map[string]any{
+			"session_id":            item.SessionID,
+			"events":                events,
+			"last_activity_unix_ms": item.LastActivityUnixMS,
+		})
 	}
 	return out
 }
@@ -1610,6 +1617,7 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 						// 随导入回执上报，Relay 登记会话时一并落库。
 						result := DSHImportSessionResult{
 							SessionID: item.RelaySessionID, Title: item.Title,
+							LastActivityUnixMS: item.LastActivityUnixMS,
 						}
 						for _, message := range item.Messages {
 							var eventType adapter.EventType

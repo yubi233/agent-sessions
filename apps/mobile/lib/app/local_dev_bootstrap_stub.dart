@@ -19,13 +19,21 @@ String? localDevOwnerBootstrapFilePath() => null;
 /// stub 平台为 no-op；与 io 版本保持同名同形状。
 void writeLocalDevOwnerBootstrapTokens(String? path, AuthTokens tokens) {}
 
-/// stub 平台直通 no-op；与 io 版本保持同名同形状。
+/// stub 平台直通 no-op；与 io 版本保持同名同形状（缓存路径/设备 id 仅 io 版消费）。
 class WriteThroughLocalDevTokenStore implements SecureTokenStore {
-  WriteThroughLocalDevTokenStore(this._inner, this._bootstrapFile, this._deviceId);
+  WriteThroughLocalDevTokenStore(
+    this._inner,
+    String? bootstrapFile,
+    String? deviceId,
+  ) : _bootstrapFile = bootstrapFile,
+      _deviceId = deviceId;
 
   final SecureTokenStore _inner;
+  // stub 平台不回写文件；字段保留以维持与 io 版本一致的构造签名。
+  // ignore: unused_field
   final String? _bootstrapFile;
-  final String _deviceId;
+  // ignore: unused_field
+  final String? _deviceId;
 
   @override
   Future<void> clear() => _inner.clear();

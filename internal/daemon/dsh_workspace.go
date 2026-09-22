@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
@@ -270,15 +271,31 @@ type DSHImportedSession struct {
 	WorkspaceRoot  string
 	Title          string
 	Messages       []dsh.SessionContextMessage
+	// LastActivityUnixMS 是 DSH artifact 的最后修改时间（会话真实活动时间），
+	// Relay 以它作为导入会话的 last_activity 而不是导入时刻——「最近三天还在
+	// 更新」的判定对用户是真实语义。
+	LastActivityUnixMS int64
 }
 
-// importContextLimit 是每个导入会话保留的最近上下文条数（用户口径「十几条」取 14）。
-const importContextLimit = 14
+const (
+	// importContextLimit 是每个导入会话保留的最近上下文条数（用户口径「十几条」取 14）。
+	importContextLimit = 14
+	// dshImportActiveWindow 是「活跃会话」的判定窗口（用户口径：最近三天还在更新
+	// 的会话）。只有 DSH artifact 的最后修改时间落在窗口内的会话才会被导入——
+	// 老会话不产生投影，客户端列表因此只加载活跃工作集；会话重新活跃（DSH 更新
+	// 其 JSONL）后，下一次导入会自动把它带回。
+	dshImportActiveWindow = 72 * time.Hour
+)
 
-// ImportDSHSessions 扫描已确认 DSH 工作区下的 JSONL artifact，为每个有效会话生成
-// opaque Relay session id 并写入本机 instance/replay 映射；同时提取真实标题与最近
-// 上下文消息（v0.9.4：客户端打开导入会话即可见最近十几条正文）。DSH session id、
-// cwd 或路径仍不上传到 Relay；正文只进入用户自己的事件流。
+// importActiveCutoff 返回活跃窗口的截止时间（now-72h），独立变量便于测试注入。
+var importActiveCutoff = func() time.Time { return time.Now().Add(-dshImportActiveWindow) }
+
+// ImportDSHSessions 扫描已确认 DSH 工作区下的 JSONL artifact，为每个**活跃**会话
+// （用户口径：最近三天还在更新，即 artifact ModTime 在 72h 窗口内）生成 opaque
+// Relay session id 并写入本机 instance/replay 映射；同时提取真实标题与最近上下文
+// 消息（v0.9.4：客户端打开导入会话即可见最近十几条正文）。窗口外的历史会话不导入、
+// 不产生投影，客户端列表因此只加载活跃工作集。DSH session id、cwd 或路径仍不上传
+// 到 Relay；正文只进入用户自己的事件流。
 func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID string, store *Store) ([]DSHImportedSession, error) {
 	if m == nil || store == nil {
 		return nil, ErrWorkspaceRootInvalid
@@ -311,6 +328,11 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 			continue
 		}
 		seen[artifact.ID] = true
+		// 活跃过滤：只导入最近三天还在更新的会话（ModTime 即会话最后活动时间）。
+		// 老会话跳过；一旦 DSH 侧再次更新它，下一次导入会自动带回来。
+		if artifact.ModTime.Before(importActiveCutoff()) {
+			continue
+		}
 		relaySessionID := id.New("sess")
 		// v0.9.4：提取真实标题与最近上下文。读取失败不阻断导入（上下文尽力而为）。
 		artifactContext, ctxErr := dsh.ReadSessionContext(artifact.Path, importContextLimit)
@@ -334,11 +356,12 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 			return nil, err
 		}
 		out = append(out, DSHImportedSession{
-			RelaySessionID: relaySessionID,
-			DSHSessionID:   artifact.ID,
-			WorkspaceRoot:  confirmed.Root,
-			Title:          artifactContext.Title,
-			Messages:       artifactContext.Messages,
+			RelaySessionID:     relaySessionID,
+			DSHSessionID:       artifact.ID,
+			WorkspaceRoot:      confirmed.Root,
+			Title:              artifactContext.Title,
+			Messages:           artifactContext.Messages,
+			LastActivityUnixMS: artifact.ModTime.UnixMilli(),
 		})
 	}
 	return out, nil

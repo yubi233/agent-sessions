@@ -612,7 +612,9 @@ type daemonDSHImportResultRequest struct {
 // daemonDSHImportSessionContextRequest 是单会话的导入上下文条目。
 type daemonDSHImportSessionContextRequest struct {
 	SessionID string `json:"session_id"`
-	Events    []struct {
+	// LastActivityUnixMS 是 DSH artifact 的最后修改时间（会话真实活动时间）。
+	LastActivityUnixMS int64 `json:"last_activity_unix_ms,omitempty"`
+	Events             []struct {
 		EventID         string          `json:"event_id"`
 		EventType       string          `json:"event_type"`
 		TerminalStatus  string          `json:"terminal_status,omitempty"`
@@ -718,6 +720,7 @@ func (a *API) handleDaemonDSHImportResult(c *gin.Context) {
 		}
 		sessionContext = append(sessionContext, domain.DaemonDSHImportSessionContext{
 			SessionID: item.SessionID, Events: events,
+			LastActivityUnixMS: item.LastActivityUnixMS,
 		})
 	}
 	if debugProbe := len(req.SessionContext); true {

@@ -129,6 +129,9 @@ class _DSHWorkspaceHome extends StatefulWidget {
 class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
   final Set<String> _expandedWorkspaceIds = <String>{};
   final TextEditingController _searchController = TextEditingController();
+
+  // v0.9.4（用户需求）：默认只加载活跃会话；「显示全部」解除过滤。
+  bool _showAllDshSessions = false;
   String _workspaceSearch = '';
   String? _selectedWorkspaceId;
 
@@ -191,6 +194,8 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
           final sessionItems = _dshSessionsForWorkspace(
             sessions.sessions,
             workspace.id,
+            // 搜索时显示全部匹配（找历史会话不需要先切开关）。
+            activeOnly: !_showAllDshSessions && _workspaceSearch.isEmpty,
           );
           return _matchesWorkspaceSearch(
             workspace: workspace,
@@ -231,6 +236,9 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
         _DSHWorkspaceToolbar(
           searchController: _searchController,
           onSearchChanged: (value) => setState(() => _workspaceSearch = value),
+          showAll: _showAllDshSessions,
+          onToggleShowAll: () =>
+              setState(() => _showAllDshSessions = !_showAllDshSessions),
         ),
         const SizedBox(height: AppSpacing.md),
         if (sessions.workspaceSyncState != null ||
@@ -393,6 +401,10 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                           searchController: _searchController,
                           onSearchChanged: (value) =>
                               setState(() => _workspaceSearch = value),
+                          showAll: _showAllDshSessions,
+                          onToggleShowAll: () => setState(
+                            () => _showAllDshSessions = !_showAllDshSessions,
+                          ),
                         ),
                         const SizedBox(height: AppSpacing.md),
                         if (sessions.workspaceSyncState != null ||
@@ -452,6 +464,7 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
                         sessions: _dshSessionsForWorkspace(
                           sessions.sessions,
                           visibleSelection.id,
+                          activeOnly: !_showAllDshSessions,
                         ),
                         unseenCompletedSessionIds:
                             sessions.unseenCompletedSessionIds,
@@ -625,15 +638,29 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
   }
 }
 
+/// v0.9.4（用户需求：每个工作区只加载最近三天还在更新的会话）：默认只显示
+/// 活跃窗口内的会话；与 daemon 导入侧的 72h 过滤窗口保持一致。
+const Duration dshActiveSessionWindow = Duration(hours: 72);
+
 List<MobileSession> _dshSessionsForWorkspace(
   List<MobileSession> sessions,
-  String workspaceId,
-) => sessions
-    .where(
-      (session) =>
-          session.workspaceId == workspaceId && session.provider == 'dsh',
-    )
-    .toList(growable: false);
+  String workspaceId, {
+  bool activeOnly = false,
+  DateTime? now,
+}) {
+  final cutoff = (now ?? DateTime.now()).subtract(dshActiveSessionWindow);
+  return sessions.where((session) {
+    if (session.workspaceId != workspaceId || session.provider != 'dsh') {
+      return false;
+    }
+    if (activeOnly) {
+      // 无活动时间的会话（旧数据未知）按不活跃处理；「显示全部」可解除过滤。
+      final last = session.lastActivityAt;
+      if (last == null || last.isBefore(cutoff)) return false;
+    }
+    return true;
+  }).toList(growable: false);
+}
 
 bool _matchesWorkspaceSearch({
   required MobileWorkspace workspace,
@@ -670,22 +697,42 @@ class _DSHWorkspaceToolbar extends StatelessWidget {
   const _DSHWorkspaceToolbar({
     required this.searchController,
     required this.onSearchChanged,
+    required this.showAll,
+    required this.onToggleShowAll,
   });
 
   final TextEditingController searchController;
   final ValueChanged<String> onSearchChanged;
+  // v0.9.4（用户需求）：默认只加载活跃会话；true 表示已解除过滤显示全部。
+  final bool showAll;
+  final VoidCallback onToggleShowAll;
 
   @override
-  Widget build(BuildContext context) => TextField(
-    key: const Key('dsh-workspace-search-input'),
-    controller: searchController,
-    onChanged: onSearchChanged,
-    maxLines: 1,
-    decoration: const InputDecoration(
-      prefixIcon: Icon(Icons.search),
-      hintText: '搜索工作区或会话',
-      isDense: true,
-    ),
+  Widget build(BuildContext context) => Column(
+    children: [
+      TextField(
+        key: const Key('dsh-workspace-search-input'),
+        controller: searchController,
+        onChanged: onSearchChanged,
+        maxLines: 1,
+        decoration: const InputDecoration(
+          prefixIcon: Icon(Icons.search),
+          hintText: '搜索工作区或会话',
+          isDense: true,
+        ),
+      ),
+      const SizedBox(height: AppSpacing.xs),
+      // 活跃过滤开关：默认只看最近三天还在更新的会话，与 daemon 导入窗口一致。
+      Align(
+        alignment: Alignment.centerLeft,
+        child: FilterChip(
+          key: const Key('dsh-workspace-active-only-chip'),
+          selected: !showAll,
+          onSelected: (_) => onToggleShowAll(),
+          label: const Text('只看活跃（最近 3 天）'),
+        ),
+      ),
+    ],
   );
 }
 class _DSHWorkspaceGroup extends StatelessWidget {
@@ -1306,19 +1353,30 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
 }
 
 /// 窄屏工作区详情页；工作区 ID 只来自已同步的 DSH 投影，不能由输入框改写。
-class DSHWorkspaceDetailScreen extends ConsumerWidget {
+/// v0.9.4（用户需求）：默认只加载活跃会话（最近三天），appbar 可切换「显示全部」。
+class DSHWorkspaceDetailScreen extends ConsumerStatefulWidget {
   const DSHWorkspaceDetailScreen({required this.workspaceId, super.key});
 
   final String workspaceId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DSHWorkspaceDetailScreen> createState() =>
+      _DSHWorkspaceDetailScreenState();
+}
+
+class _DSHWorkspaceDetailScreenState
+    extends ConsumerState<DSHWorkspaceDetailScreen> {
+  // v0.9.4（用户需求）：默认只加载活跃会话；appbar 按钮切换「显示全部」。
+  bool _showAllDshSessions = false;
+
+  @override
+  Widget build(BuildContext context) {
     final app = ref.watch(appControllerProvider);
     final sessionsController = ref.watch(sessionControllerProvider);
     final terminals = ref.watch(terminalStatusControllerProvider);
     MobileWorkspace? workspace;
     for (final candidate in sessionsController.workspaces) {
-      if (candidate.id == workspaceId && candidate.isDsh) {
+      if (candidate.id == widget.workspaceId && candidate.isDsh) {
         workspace = candidate;
         break;
       }
@@ -1332,7 +1390,8 @@ class DSHWorkspaceDetailScreen extends ConsumerWidget {
     final selectedWorkspace = workspace;
     final workspaceSessions = _dshSessionsForWorkspace(
       sessionsController.sessions,
-      selectedWorkspace.id,
+      widget.workspaceId,
+      activeOnly: !_showAllDshSessions,
     );
     return Scaffold(
       key: const Key('dsh-workspace-detail-screen'),
@@ -1344,6 +1403,20 @@ class DSHWorkspaceDetailScreen extends ConsumerWidget {
           onPressed: () => context.pop(),
           icon: const Icon(Icons.arrow_back),
         ),
+        actions: [
+          IconButton(
+            key: const Key('dsh-workspace-detail-show-all'),
+            tooltip: _showAllDshSessions ? '只看活跃会话' : '显示全部会话',
+            onPressed: () => setState(
+              () => _showAllDshSessions = !_showAllDshSessions,
+            ),
+            icon: Icon(
+              _showAllDshSessions
+                  ? Icons.filter_alt_outlined
+                  : Icons.filter_alt,
+            ),
+          ),
+        ],
       ),
       body: _DSHWorkspaceDetailPane(
         workspace: selectedWorkspace,

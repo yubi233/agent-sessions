@@ -780,6 +780,9 @@ func dshSyncResultFromRow(ctx context.Context, repo store.Repository, row store.
 type DaemonDSHImportSessionContext struct {
 	SessionID string
 	Events    []DaemonEventInput
+	// LastActivityUnixMS 是 DSH artifact 的最后修改时间（会话真实活动时间）；
+	// 0 时回退导入时刻。
+	LastActivityUnixMS int64
 }
 
 func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceID, role, commandID string, deliverySeq int64, protocolVersion int, sessionIDs []string, sessionTitles []string, sessionContext []DaemonDSHImportSessionContext, status, errorCode string) (WorkspaceDSHImportResult, error) {
@@ -841,8 +844,16 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 						return err
 					}
 				}
-				// 导入成功是可审计的会话状态写入，记录其真实写入时间以便列表排序。
-				if err := tx.SetSessionStatusAt(ctx, sessionID, SessionIdle, s.now().UnixMilli()); err != nil {
+				// 导入成功是可审计的会话状态写入；last_activity 取 DSH 侧真实活动
+				// 时间（artifact ModTime），让「最近三天活跃」判定对用户是真实语义。
+				activity := s.now().UnixMilli()
+				for _, importCtx := range sessionContext {
+					if importCtx.SessionID == sessionID && importCtx.LastActivityUnixMS > 0 {
+						activity = importCtx.LastActivityUnixMS
+						break
+					}
+				}
+				if err := tx.SetSessionStatusAt(ctx, sessionID, SessionIdle, activity); err != nil {
 					return err
 				}
 				// v0.9.4（用户需求：标题+十几条上下文）：回执携带的最近上下文事件在
