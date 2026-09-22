@@ -822,3 +822,116 @@ func LegacyRootsFromEnv() []string {
 	}
 	return roots
 }
+
+// GlobalSessionsDir 返回 DSH 的全局会话存储目录（~/.dsh/sessions）。
+// DSH CLI/Web 在任意目录发起的会话都按「编码后的 cwd」集中存放于此——
+// 与「每个项目自己的 .dsh-sessions」的项目绑定布局并存，是真实使用中
+// 最常见的会话来源（v0.9.4 用户实测遗漏的主因）。
+func GlobalSessionsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(home, ".dsh", "sessions")
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		return "", os.ErrNotExist
+	}
+	return root, nil
+}
+
+// ScanGlobalSessionArtifacts 扫描 DSH 全局会话存储：
+//
+//	<root>/<encoded-cwd>/session-<uuid>/session.jsonl[.zstd]
+//
+// 与项目绑定布局不同：目录名是 DSH 侧的编码形式（中文等字符被转义），不能反解，
+// 因此工作目录一律以 artifact 首行 header 的 cwd 字段为准（明文、权威）。
+// 返回的 Path 指向具体会话文件，供后续读取标题/上下文（仅本机使用）。
+func ScanGlobalSessionArtifacts(root string) ([]SessionArtifact, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil, errors.New("DSH 全局会话存储根为空")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, errors.New("DSH 全局会话存储根不是目录")
+	}
+	var out []SessionArtifact
+	cwdDirs, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, cwdDir := range cwdDirs {
+		if !cwdDir.IsDir() || cwdDir.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		cwdPath := filepath.Join(root, cwdDir.Name())
+		sessionDirs, err := os.ReadDir(cwdPath)
+		if err != nil {
+			continue
+		}
+		for _, sessionDir := range sessionDirs {
+			if !sessionDir.IsDir() {
+				continue
+			}
+			for _, name := range []string{"session.jsonl", "session.jsonl.zstd"} {
+				path := filepath.Join(cwdPath, sessionDir.Name(), name)
+				info, err := os.Stat(path)
+				if err != nil || !info.Mode().IsRegular() {
+					continue
+				}
+				artifact, err := readGlobalArtifactHeader(path, info)
+				if err != nil {
+					continue // 坏文件容错跳过。
+				}
+				out = append(out, artifact)
+				break // 同一会话目录只取一个 artifact。
+			}
+		}
+	}
+	return out, nil
+}
+
+// readGlobalArtifactHeader 读取全局布局会话文件的首行 header 与文件元数据。
+func readGlobalArtifactHeader(path string, info os.FileInfo) (SessionArtifact, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return SessionArtifact{}, err
+	}
+	defer file.Close()
+	var input io.Reader = file
+	if strings.HasSuffix(path, ".zstd") {
+		decoder, decodeErr := zstd.NewReader(file)
+		if decodeErr != nil {
+			return SessionArtifact{}, fmt.Errorf("zstd artifact 无法解压: %w", decodeErr)
+		}
+		defer decoder.Close()
+		input = decoder
+	}
+	scanner := bufio.NewScanner(io.LimitReader(input, maxSessionHeaderBytes))
+	scanner.Buffer(make([]byte, 4096), maxSessionHeaderBytes)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return SessionArtifact{}, err
+		}
+		return SessionArtifact{}, errors.New("artifact 缺少 header")
+	}
+	var header sessionHeader
+	if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+		return SessionArtifact{}, fmt.Errorf("header JSON 无效: %w", err)
+	}
+	if header.Type != "session" || strings.TrimSpace(header.ID) == "" || strings.TrimSpace(header.CWD) == "" {
+		return SessionArtifact{}, errors.New("header 缺少有效 id/cwd")
+	}
+	return SessionArtifact{
+		ID:          header.ID,
+		CWD:         filepath.Clean(header.CWD),
+		Path:        path,
+		Compression: map[bool]string{true: "zstd", false: "none"}[strings.HasSuffix(path, ".zstd")],
+		Size:        info.Size(),
+		ModTime:     info.ModTime(),
+	}, nil
+}

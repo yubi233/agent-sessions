@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
+	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
 	"github.com/yubi233/agent-sessions/internal/authz"
 	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/packages/protocol"
@@ -1691,6 +1693,33 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 					status, errorCode = "failed", protocol.ErrWorkspacePathDenied
 				} else {
 					candidates = scannedCandidates
+				}
+			}
+			// v0.9.4 遗漏修齐（用户实测：ai_novel 等项目只在 DSH 全局存储
+			// ~/.dsh/sessions 有会话、项目目录无 .dsh-sessions 证据）：从全局存储
+			// 反推候选工作区（cwd→root，display_name=目录名），活跃窗口内才上报，
+			// 与导入侧 72h 口径一致。临时目录（/var/folders 等）跳过。
+			if globalRoot, globalErr := dsh.GlobalSessionsDir(); globalErr == nil {
+				if globalArtifacts, scanErr := dsh.ScanGlobalSessionArtifacts(globalRoot); scanErr == nil {
+					seenRoot := map[string]bool{}
+					for _, candidate := range candidates {
+						seenRoot[candidate.Root] = true
+					}
+					cutoff := importActiveCutoff()
+					for _, artifact := range globalArtifacts {
+						root := artifact.CWD
+						if seenRoot[root] || strings.HasPrefix(root, "/var/folders/") || strings.HasPrefix(root, "/private/var/") {
+							continue
+						}
+						if artifact.ModTime.Before(cutoff) {
+							continue
+						}
+						seenRoot[root] = true
+						candidates = append(candidates, DSHWorkspaceCandidate{
+							Root:        root,
+							DisplayName: filepath.Base(root),
+						})
+					}
 				}
 			}
 		}

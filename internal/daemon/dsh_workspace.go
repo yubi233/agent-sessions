@@ -262,6 +262,37 @@ func (m *WorkspaceManager) ConfirmExistingDSHWorkspace(ctx context.Context, work
 	return m.store.ConfirmDSHWorkspace(workspaceID, resolved)
 }
 
+// ConfirmGlobalDSHWorkspace 以 DSH 全局会话存储（~/.dsh/sessions）中的会话为证据
+// 登记工作区——全局布局下项目目录没有自己的 .dsh-sessions，证据就是全局存储中
+// 该 cwd 的会话文件。授权边界照验（root 必须仍在授权根内），登记走非 Git DSH 语义。
+func (m *WorkspaceManager) ConfirmGlobalDSHWorkspace(ctx context.Context, workspaceID, root string) (ConfirmedWorkspace, error) {
+	if m == nil || m.store == nil || strings.TrimSpace(m.root) == "" {
+		return ConfirmedWorkspace{}, ErrWorkspaceRootInvalid
+	}
+	resolved, err := workspacesafe.ResolveAbsolute(m.root, root)
+	if err != nil {
+		return ConfirmedWorkspace{}, err
+	}
+	if !pathWithin(m.root, resolved) {
+		return ConfirmedWorkspace{}, workspacesafe.ErrEscapeRoot
+	}
+	globalRoot, globalErr := dsh.GlobalSessionsDir()
+	if globalErr != nil {
+		return ConfirmedWorkspace{}, globalErr
+	}
+	artifacts, scanErr := dsh.ScanGlobalSessionArtifacts(globalRoot)
+	if scanErr != nil {
+		return ConfirmedWorkspace{}, scanErr
+	}
+	target := comparableWorkspacePath(resolved)
+	for _, artifact := range artifacts {
+		if sameCanonicalPath(artifact.CWD, target) {
+			return m.store.ConfirmDSHWorkspace(workspaceID, resolved)
+		}
+	}
+	return ConfirmedWorkspace{}, errors.New("DSH 全局存储中没有该工作区的会话证据")
+}
+
 // DSHImportedSession 是一次按需导入的本机映射结果。Relay 只接收 opaque relay session id。
 // Title/Messages 来自本机 JSONL 提取（v0.9.4 用户需求：每个历史会话保留十几条上下文与
 // 真实标题），仅经用户自己的 Relay 事件流回流，不进入任何第三方或日志。
@@ -304,15 +335,22 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 	if err != nil {
 		return nil, err
 	}
-	// 只扫描该 Workspace 自己的 .dsh-sessions，不递归到其他项目。
+	// 来源合并（v0.9.4 遗漏修齐）：① 项目绑定布局 <root>/.dsh-sessions；
+	// ② DSH 全局存储 ~/.dsh/sessions（CLI/Web 在任意 cwd 发起的会话都集中存放在
+	// 这里，ai_novel 等项目只出现在全局布局）。两个来源都按 cwd==工作区 root 过滤。
 	persistenceRoot := filepath.Join(confirmed.Root, ".dsh-sessions")
 	artifacts, err := dsh.ScanSessionArtifacts(persistenceRoot)
 	if err != nil {
 		// 没有持久化根时视为空导入，而不是让整个同步失败。
-		if os.IsNotExist(err) {
-			return nil, nil
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
-		return nil, err
+		artifacts = nil
+	}
+	if globalRoot, globalErr := dsh.GlobalSessionsDir(); globalErr == nil {
+		if globalArtifacts, scanErr := dsh.ScanGlobalSessionArtifacts(globalRoot); scanErr == nil {
+			artifacts = append(artifacts, globalArtifacts...)
+		}
 	}
 	seen := map[string]bool{}
 	var out []DSHImportedSession
@@ -328,6 +366,18 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 			continue
 		}
 		seen[artifact.ID] = true
+		// 跨轮幂等（v0.9.4）：同一 DSH 会话只对应一个 Relay 会话——复用已有映射，
+		// 且上下文只回填一次（contextImported 标记），避免重复导入在事件流里翻倍。
+		threadKey := "dshthread:" + confirmed.Root + ":" + artifact.ID
+		if existingRelayID, getErr := store.Get(threadKey); getErr == nil && existingRelayID != "" {
+			out = append(out, DSHImportedSession{
+				RelaySessionID:     existingRelayID,
+				DSHSessionID:       artifact.ID,
+				WorkspaceRoot:      confirmed.Root,
+				LastActivityUnixMS: artifact.ModTime.UnixMilli(),
+			})
+			continue
+		}
 		// 活跃过滤：只导入最近三天还在更新的会话（ModTime 即会话最后活动时间）。
 		// 老会话跳过；一旦 DSH 侧再次更新它，下一次导入会自动带回来。
 		if artifact.ModTime.Before(importActiveCutoff()) {
@@ -353,6 +403,9 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 		}
 		// 新导入的 DSH 会话应走 session.load 回放，因此 replay state 置 pending。
 		if err := store.Set(replayStateKey(relaySessionID), replayPending); err != nil {
+			return nil, err
+		}
+		if err := store.Set(threadKey, relaySessionID); err != nil {
 			return nil, err
 		}
 		out = append(out, DSHImportedSession{
@@ -401,8 +454,13 @@ func (l *RelayLoop) confirmDSHWorkspaceCandidates(ctx context.Context, commandID
 	}
 	for i, workspaceID := range receipt.WorkspaceIDs {
 		if _, err := l.WorkspaceManager.ConfirmExistingDSHWorkspace(ctx, workspaceID, orderedRoots[i]); err != nil {
-			l.Logger.Warn("daemon dsh workspace confirm failed",
-				"command", commandID, "workspace", workspaceID, "error", err)
+			// v0.9.4 遗漏修齐：全局布局（DSH CLI/Web 在任意 cwd 发起的会话集中在
+			// ~/.dsh/sessions）下，项目目录没有 .dsh-sessions 证据——回退用「全局
+			// 存储中存在该 cwd 的会话」作为 DSH 证据登记工作区。
+			if _, globalErr := l.WorkspaceManager.ConfirmGlobalDSHWorkspace(ctx, workspaceID, orderedRoots[i]); globalErr != nil {
+				l.Logger.Warn("daemon dsh workspace confirm failed",
+					"command", commandID, "workspace", workspaceID, "error", globalErr)
+			}
 		}
 	}
 }
