@@ -10,6 +10,8 @@
 *.exe
 *.test
 *.out
+# Go 构建产物（go build -o ./daemon）
+/daemon
 
 # 本地数据与密钥，禁止入库
 .env
@@ -58,6 +60,7 @@ packages/protocol/generated/.cache/
 **/node_modules/.tmp/
 
 # tool-internal scratch (not project artifacts)
+.zcode/
 .dsh-fix-*/
 .dsh-media/
 .dsh-sessions/
