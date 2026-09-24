@@ -38,7 +38,11 @@ type Adapter struct {
 	// workspaceFactory 将生产 Start/Resume 的工作区根与无工作区 Detect 探测隔离；
 	// fixture 适配器仍可沿用旧的无参数工厂形状。
 	workspaceFactory func(string) (BridgeTransport, error)
-	production       bool
+	// sourceFactory 绑定「既有 DSH 存储根」（v0.9.5 P0）：导入映射携带 artifact
+	// 实际所在根与物理编码时，resume 用它把桥精确绑定到该存储，而不是回落
+	// <workspace>/.dsh-sessions 缺省根（全局存储来源的会话在缺省根上不可续）。
+	sourceFactory func(persistenceRoot, workspaceRoot, compression string) (BridgeTransport, error)
+	production    bool
 
 	// 握手结果缓存：首次 Detect 后确定能力口径；成功快照永久命中，
 	// 失败结果受控重探（v0.9.2 P1 / C2，见 reprobe.go）。
@@ -64,8 +68,11 @@ func New() *Adapter {
 	return &Adapter{
 		factory:          func() (BridgeTransport, error) { return newBinTransport() },
 		workspaceFactory: func(root string) (BridgeTransport, error) { return newBinTransportForWorkspace(root) },
-		production:       true,
-		reprobeCooldown:  reprobeCooldownFromEnv(),
+		sourceFactory: func(persistenceRoot, workspaceRoot, compression string) (BridgeTransport, error) {
+			return newBinTransportForSource(persistenceRoot, workspaceRoot, compression)
+		},
+		production:      true,
+		reprobeCooldown: reprobeCooldownFromEnv(),
 	}
 }
 
@@ -79,7 +86,10 @@ func NewWithTransport(factory func() (BridgeTransport, error)) *Adapter {
 	return &Adapter{
 		factory:          factory,
 		workspaceFactory: func(string) (BridgeTransport, error) { return factory() },
-		reprobeCooldown:  reprobeCooldownFromEnv(),
+		// 显式存储根在注入工厂下按同一工厂处理（契约测试不感知根差异）；
+		// 需要断言路由时测试可直接覆写该字段。
+		sourceFactory:   func(string, string, string) (BridgeTransport, error) { return factory() },
+		reprobeCooldown: reprobeCooldownFromEnv(),
 	}
 }
 
@@ -99,6 +109,18 @@ func (a *Adapter) transportForWorkspace(workspaceRoot string) (BridgeTransport, 
 		return nil, errors.New("DSH bridge factory 未配置")
 	}
 	return a.factory()
+}
+
+// transportForResume 按 resume 来源选择桥工厂（v0.9.5 P0）：显式持久化根
+// （来自导入映射）把桥绑定到 artifact 实际存储位置与编码；否则沿用工作区缺省根。
+func (a *Adapter) transportForResume(persistenceRoot, workspaceRoot, compression string) (BridgeTransport, error) {
+	if strings.TrimSpace(persistenceRoot) != "" {
+		if a.sourceFactory == nil {
+			return nil, errors.New("DSH 桥工厂未配置显式持久化根支持")
+		}
+		return a.sourceFactory(persistenceRoot, workspaceRoot, compression)
+	}
+	return a.transportForWorkspace(workspaceRoot)
 }
 
 // prepareWorkspacePersistence 在 DSH 打开新根前迁移匹配的旧 artifact。
@@ -361,10 +383,17 @@ func (a *Adapter) resumeStreaming(ctx context.Context, req adapter.ResumeRequest
 			return adapter.ResumeResult{}, fmt.Errorf("规约 workspace root: %w", err)
 		}
 	}
-	if err := a.prepareWorkspacePersistence(workspaceRoot); err != nil {
-		return adapter.ResumeResult{}, fmt.Errorf("准备 DSH workspace 持久化: %w", err)
+	// 显式持久化根（v0.9.5 导入映射）= artifact 实际所在存储，可能是用户的全局
+	// 存储 ~/.dsh/sessions：跳过 prepareWorkspacePersistence——它面向工作区缺省根
+	// 的旧 artifact 迁移，对显式根既无意义，也可能因无关冲突阻断恢复，更不能
+	// 碰用户的全局存储。无显式根时保持既有迁移行为不变。
+	persistenceRoot := strings.TrimSpace(req.PersistenceRoot)
+	if persistenceRoot == "" {
+		if err := a.prepareWorkspacePersistence(workspaceRoot); err != nil {
+			return adapter.ResumeResult{}, fmt.Errorf("准备 DSH workspace 持久化: %w", err)
+		}
 	}
-	tr, err := a.transportForWorkspace(workspaceRoot)
+	tr, err := a.transportForResume(persistenceRoot, workspaceRoot, req.Compression)
 	if err != nil {
 		return adapter.ResumeResult{}, err
 	}

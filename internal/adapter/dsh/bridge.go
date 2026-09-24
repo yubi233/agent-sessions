@@ -90,11 +90,55 @@ func newBinTransport() (*dshBinTransport, error) {
 // workspaceRoot 非空时，持久化根固定为 <workspaceRoot>/.dsh-sessions，且不拥有/不清理该目录。
 // workspaceRoot 为空时才允许使用临时根或 EnvPersistRoot 隔离根。
 func newBinTransportForWorkspace(workspaceRoot string) (*dshBinTransport, error) {
-	bin, config, err := binConfig()
+	compression, err := configuredPersistenceCompression()
 	if err != nil {
 		return nil, err
 	}
-	if _, err := configuredPersistenceCompression(); err != nil {
+	persistRoot, retainPersistRoot, ownsPersistRoot, canonicalWorkspace, err := persistRootForWorkspace(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return spawnBridgeTransport(persistRoot, canonicalWorkspace, compression, retainPersistRoot, ownsPersistRoot)
+}
+
+// newBinTransportForSource 启动一个绑定「既有 DSH 存储根」的桥子进程（v0.9.5 P0）。
+// persistenceRoot 是会话 artifact 实际所在的存储根（工作区 .dsh-sessions 或全局
+// ~/.dsh/sessions），compression 是该 artifact 的物理编码——两者都必须与存储现状
+// 一致，否则上游按「根编码归属」拒绝加载。该根由用户/DSH 所有：不创建、不迁移、
+// 不清理，只校验可读后原样绑定。
+func newBinTransportForSource(persistenceRoot, workspaceRoot, compression string) (*dshBinTransport, error) {
+	persistenceRoot = strings.TrimSpace(persistenceRoot)
+	if persistenceRoot == "" {
+		return nil, errors.New("DSH 持久化根为空")
+	}
+	if !filepath.IsAbs(persistenceRoot) {
+		return nil, errors.New("DSH 持久化根必须是绝对路径")
+	}
+	if compression != PersistenceCompressionNone && compression != PersistenceCompressionZstd {
+		return nil, fmt.Errorf("DSH artifact 物理编码 %q 非法（仅支持 none|zstd）", compression)
+	}
+	// 在 spawn 之前校验根与工作区：fail-closed 且错误信息指向根问题，
+	// 绝不留下半开进程或误创建用户存储目录。
+	info, err := os.Stat(persistenceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("DSH 持久化根不可用: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("DSH 持久化根不是目录")
+	}
+	canonicalWorkspace, err := canonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return spawnBridgeTransport(filepath.Clean(persistenceRoot), canonicalWorkspace, compression, true, false)
+}
+
+// spawnBridgeTransport 是工作区根与显式存储根两条路径共用的桥 spawn：
+// 持久化根、工作区、编码与目录所有权由调用方决定，其余口径（进程组、最小环境、
+// 诊断环形缓冲、scanner 缓冲）完全一致。
+func spawnBridgeTransport(persistRoot, canonicalWorkspace, compression string, retainPersistRoot, ownsPersistRoot bool) (*dshBinTransport, error) {
+	bin, config, err := binConfig()
+	if err != nil {
 		return nil, err
 	}
 	node, err := exec.LookPath("node")
@@ -104,18 +148,12 @@ func newBinTransportForWorkspace(workspaceRoot string) (*dshBinTransport, error)
 	// 桥启动目录固定为 DSH 检出根（bin 上溯 5 级），与 P0 冒烟 cwd=--dsh-root 一致：
 	// 组合内插件按 DSH 树解析，loadEnv 读取 DSH 根 .env（LLM key 由 DSH 侧承载）。
 	runRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(bin)))))
-	// 每次会话独立持久化目录：默认放入系统临时目录并在关闭后删除；验证时可通过
-	// AGENT_SESSIONS_DSH_PERSIST_ROOT 保留 cache，以把 DSH 原始会话日志与 Relay/Flutter 证据绑定。
-	persistRoot, retainPersistRoot, ownsPersistRoot, canonicalWorkspace, err := persistRootForWorkspace(workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
 	ring := &diagRing{}
 	cmd := exec.Command(node, bin, "-c", config)
 	cmd.Dir = runRoot
 	// 最小环境注入（ADR-013 §5）：只透传进程生存必需项并显式重定向持久化，
 	// scrub 掉其他 Provider 凭据变量；桥自身按设计加载 DSH 根 .env，本仓库不读取不转储。
-	cmd.Env = minimalEnv(persistRoot, canonicalWorkspace)
+	cmd.Env = minimalEnvWithCompression(persistRoot, compression, canonicalWorkspace)
 	// 独立进程组：Close/ForceKill 可对整个进程树（含子进程）发信号。
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = ring
@@ -149,24 +187,38 @@ func newBinTransportForWorkspace(workspaceRoot string) (*dshBinTransport, error)
 	return t, nil
 }
 
+// canonicalWorkspaceRoot 校验并规约工作区根：绝对路径、存在且是目录，
+// 返回 EvalSymlinks 后的 canonical 路径（桥 cwd 与 DSH_SESSION_CWD 都用它）。
+func canonicalWorkspaceRoot(workspaceRoot string) (string, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(workspaceRoot) {
+		return "", errors.New("workspace root 必须是绝对路径")
+	}
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("解析 workspace root: %w", err)
+	}
+	canonicalWorkspace, err = filepath.Abs(canonicalWorkspace)
+	if err != nil {
+		return "", fmt.Errorf("规约 workspace root: %w", err)
+	}
+	info, statErr := os.Stat(canonicalWorkspace)
+	if statErr != nil || !info.IsDir() {
+		return "", errors.New("workspace root 不是目录")
+	}
+	return canonicalWorkspace, nil
+}
+
 // persistRootForWorkspace 解析生产与探测两种持久化策略。
 func persistRootForWorkspace(workspaceRoot string) (path string, retain bool, owns bool, canonicalWorkspace string, err error) {
 	workspaceRoot = strings.TrimSpace(workspaceRoot)
 	if workspaceRoot != "" {
-		if !filepath.IsAbs(workspaceRoot) {
-			return "", false, false, "", errors.New("workspace root 必须是绝对路径")
-		}
-		canonicalWorkspace, err = filepath.EvalSymlinks(workspaceRoot)
+		canonicalWorkspace, err = canonicalWorkspaceRoot(workspaceRoot)
 		if err != nil {
-			return "", false, false, "", fmt.Errorf("解析 workspace root: %w", err)
-		}
-		canonicalWorkspace, err = filepath.Abs(canonicalWorkspace)
-		if err != nil {
-			return "", false, false, "", fmt.Errorf("规约 workspace root: %w", err)
-		}
-		info, statErr := os.Stat(canonicalWorkspace)
-		if statErr != nil || !info.IsDir() {
-			return "", false, false, "", errors.New("workspace root 不是目录")
+			return "", false, false, "", err
 		}
 		path = filepath.Join(canonicalWorkspace, ".dsh-sessions")
 		if err := os.MkdirAll(path, 0o700); err != nil {
@@ -208,8 +260,19 @@ func newPersistRoot() (path string, retain bool, err error) {
 }
 
 // minimalEnv 构造子进程最小环境：PATH/HOME/TMPDIR、持久化根和会话工作区。
-// workspaceRoots 保留可选参数形状，兼容旧的探测 fixture 调用。
+// 编码取环境变量缺省；workspaceRoots 保留可选参数形状，兼容旧的探测 fixture 调用。
 func minimalEnv(persistRoot string, workspaceRoots ...string) []string {
+	compression, err := configuredPersistenceCompression()
+	if err != nil {
+		compression = ""
+	}
+	return minimalEnvWithCompression(persistRoot, compression, workspaceRoots...)
+}
+
+// minimalEnvWithCompression 在 minimalEnv 基础上允许显式指定 artifact 物理编码
+// （v0.9.5：恢复既有会话时按 artifact 实际编码启动桥，上游按「根编码归属」校验，
+// 编码错会被整根拒绝）。压缩编码为空时回落环境变量缺省。
+func minimalEnvWithCompression(persistRoot, compression string, workspaceRoots ...string) []string {
 	workspaceRoot := ""
 	if len(workspaceRoots) > 0 {
 		workspaceRoot = workspaceRoots[0]
@@ -227,8 +290,12 @@ func minimalEnv(persistRoot string, workspaceRoots ...string) []string {
 		// workspace/.dsh-sessions 错位到 workspace/.dsh-sessions/sessions。
 		env = append(env, "DSH_SNAPSHOT_SESSIONS_ROOT="+filepath.Clean(persistRoot))
 	}
-	compression, err := configuredPersistenceCompression()
-	if err == nil {
+	if compression == "" {
+		if resolved, err := configuredPersistenceCompression(); err == nil {
+			compression = resolved
+		}
+	}
+	if compression != "" {
 		// 通过独立变量显式锁定桥配置，避免 DSH_SNAPSHOT/运行模式变化时
 		// cordis.yml 与迁移目标采用不同后缀。
 		env = append(env, "DSH_SNAPSHOT_COMPRESSION="+compression)

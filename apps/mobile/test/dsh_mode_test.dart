@@ -348,7 +348,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('dsh-workspace-import-button')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('仅导入会话元数据'), findsOneWidget);
+    // v0.9.5：导入如实说明（真实标题+最近上下文，替代 v0.9.4 前的「仅元数据」口径）。
+    expect(find.textContaining('最近十几条对话上下文'), findsOneWidget);
     await tester.tap(find.byKey(const Key('dsh-workspace-import-confirm')));
     await tester.pumpAndSettle();
     expect(find.text('未发现可导入会话。'), findsOneWidget);

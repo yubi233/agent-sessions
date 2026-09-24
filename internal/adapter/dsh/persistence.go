@@ -37,11 +37,15 @@ const (
 	PersistenceCompressionZstd = "zstd"
 )
 
-// SessionArtifact 是 DSH artifact 的脱敏投影。Path 仅供本机迁移使用，不能进入 Relay 或报告。
+// SessionArtifact 是 DSH artifact 的脱敏投影。Path/SourceRoot 仅供本机迁移、
+// 导入映射与恢复定位使用，不能进入 Relay 或报告。
 type SessionArtifact struct {
-	ID          string
-	CWD         string
-	Path        string
+	ID   string
+	CWD  string
+	Path string
+	// SourceRoot 是 artifact 所在的存储根（项目绑定布局为 <root>/.dsh-sessions，
+	// 全局存储为 ~/.dsh/sessions）。v0.9.5 导入用它把恢复绑定到真实存储位置。
+	SourceRoot  string
 	Compression string // none | zstd
 	Size        int64
 	ModTime     time.Time
@@ -123,6 +127,7 @@ func scanSessionArtifacts(root string) ([]SessionArtifact, int, error) {
 			invalid++
 			return nil
 		}
+		artifact.SourceRoot = root
 		out = append(out, artifact)
 		return nil
 	})
@@ -887,6 +892,7 @@ func ScanGlobalSessionArtifacts(root string) ([]SessionArtifact, error) {
 				if err != nil {
 					continue // 坏文件容错跳过。
 				}
+				artifact.SourceRoot = root
 				out = append(out, artifact)
 				break // 同一会话目录只取一个 artifact。
 			}

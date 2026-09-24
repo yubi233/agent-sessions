@@ -165,6 +165,12 @@ type StartRequest struct {
 type ResumeRequest struct {
 	InstanceID    string
 	WorkspaceRoot string
+	// PersistenceRoot/Compression 是 v0.9.5 的内部提示（同 ReplayHistory，故意不进
+	// 命令 JSON 载荷）：DSH artifact 实际所在的存储根（工作区 .dsh-sessions 或全局
+	// ~/.dsh/sessions）与其物理编码（none|zstd）。桥必须按这两个值启动，否则上游
+	// 按「根编码归属」拒绝加载既有会话；两者为空 = 未提供，适配器沿用工作区缺省根。
+	PersistenceRoot string `json:"-"`
+	Compression     string `json:"-"`
 	// ReplayHistory 请求 ACP 使用 session/load 而不是 session/resume；这是 Daemon 内部提示，
 	// 故意不进入命令 JSON 载荷。
 	ReplayHistory bool `json:"-"`

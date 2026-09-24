@@ -539,7 +539,10 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('导入历史 DSH 会话？'),
-        content: const Text('仅导入会话元数据，不读取或上传消息正文。导入结果会按当前工作区显示。'),
+        // v0.9.5：文案与实际行为对齐——导入携带真实标题与最近上下文（v0.9.4 起生效），
+        // 不再宣称「仅导入元数据」；正文只经用户自己的 Relay，不出本机信任边界。
+        content: const Text(
+            '将导入会话的真实标题与最近十几条对话上下文，便于在应用内继续原会话。内容只经过你自己的 Relay，不会上传到任何第三方。导入结果会按当前工作区显示。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -1503,7 +1506,9 @@ class _DSHWorkspaceDetailScreenState
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('导入历史 DSH 会话？'),
-        content: const Text('仅导入会话元数据，不读取或上传消息正文。'),
+        // v0.9.5：与工作区列表入口同一口径，如实描述标题+上下文导入。
+        content: const Text(
+            '将导入会话的真实标题与最近十几条对话上下文，便于在应用内继续原会话。内容只经过你自己的 Relay，不会上传到任何第三方。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),

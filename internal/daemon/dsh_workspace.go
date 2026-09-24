@@ -306,6 +306,11 @@ type DSHImportedSession struct {
 	// Relay 以它作为导入会话的 last_activity 而不是导入时刻——「最近三天还在
 	// 更新」的判定对用户是真实语义。
 	LastActivityUnixMS int64
+	// PersistenceRoot/Compression 是 artifact 实际所在的存储根与物理编码
+	// （v0.9.5：写入 instance 映射，resume 把桥绑定到真实存储位置——全局存储
+	// （zstd）来源的会话在工作区缺省根上不可续）。只存本机，不上传 Relay。
+	PersistenceRoot string
+	Compression     string
 }
 
 const (
@@ -389,11 +394,15 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 		if ctxErr != nil {
 			artifactContext = dsh.SessionContext{}
 		}
-		// 写本机 instance 映射：Relay session -> DSH session + workspace root。
+		// 写本机 instance 映射：Relay session -> DSH session + workspace root，
+		// 并记录 artifact 来源存储根与物理编码（v0.9.5）：resume 据此把桥绑定到
+		// 真实存储位置，全局存储（zstd）来源的会话才能在原会话上继续。
 		mapping, err := json.Marshal(providerThread{
-			Provider:      "dsh",
-			InstanceID:    artifact.ID,
-			WorkspaceRoot: confirmed.Root,
+			Provider:        "dsh",
+			InstanceID:      artifact.ID,
+			WorkspaceRoot:   confirmed.Root,
+			PersistenceRoot: artifact.SourceRoot,
+			Compression:     artifact.Compression,
 		})
 		if err != nil {
 			return nil, err
@@ -415,6 +424,8 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 			Title:              artifactContext.Title,
 			Messages:           artifactContext.Messages,
 			LastActivityUnixMS: artifact.ModTime.UnixMilli(),
+			PersistenceRoot:    artifact.SourceRoot,
+			Compression:        artifact.Compression,
 		})
 	}
 	return out, nil
@@ -425,6 +436,38 @@ func sameCanonicalPath(left, right string) bool {
 	left = comparableWorkspacePath(left)
 	right = comparableWorkspacePath(right)
 	return left != "" && right != "" && left == right
+}
+
+// locateDSHArtifactSource 按 DSH 会话 id 在两源存储中定位 artifact（v0.9.5 P0）：
+// 工作区绑定布局优先，其次全局存储（~/.dsh/sessions）。返回来源存储根与物理编码，
+// 供 resume 把桥绑定到 artifact 实际位置——旧映射（无 persistence_root）首次恢复时
+// 由它完成一次性自升级。找不到时 ok=false，调用方保持缺省行为（不阻断恢复）。
+func locateDSHArtifactSource(instanceID, workspaceRoot string) (root, compression string, ok bool) {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return "", "", false
+	}
+	// ① 工作区绑定布局：与生产 Start/Resume 的缺省根一致，优先命中。
+	if strings.TrimSpace(workspaceRoot) != "" {
+		if artifacts, err := dsh.ScanSessionArtifacts(filepath.Join(workspaceRoot, ".dsh-sessions")); err == nil {
+			for _, artifact := range artifacts {
+				if artifact.ID == instanceID {
+					return artifact.SourceRoot, artifact.Compression, true
+				}
+			}
+		}
+	}
+	// ② 全局存储：DSH CLI/Web 在任意 cwd 发起的会话集中存放（zstd）。
+	if globalRoot, err := dsh.GlobalSessionsDir(); err == nil {
+		if artifacts, scanErr := dsh.ScanGlobalSessionArtifacts(globalRoot); scanErr == nil {
+			for _, artifact := range artifacts {
+				if artifact.ID == instanceID {
+					return artifact.SourceRoot, artifact.Compression, true
+				}
+			}
+		}
+	}
+	return "", "", false
 }
 
 // confirmDSHWorkspaceCandidates 把本次 sync_dsh 上报成功的候选在本机 confirmed_workspace

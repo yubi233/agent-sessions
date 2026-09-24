@@ -58,11 +58,16 @@ const (
 )
 
 // providerThread 是本地持久化的会话实例映射。
-// 只存 provider 与 OpenCode session id（及 workspace root），不存正文/密文。
+// 只存 provider 与 OpenCode session id（及 workspace root、DSH 存储定位），不存正文/密文。
 type providerThread struct {
 	Provider      string `json:"provider"`
 	InstanceID    string `json:"instance_id"`
 	WorkspaceRoot string `json:"workspace_root,omitempty"`
+	// PersistenceRoot/Compression 是 DSH artifact 实际所在的存储根与物理编码
+	// （v0.9.5：导入时写入）。空 = 旧映射：首次 resume 时按会话 id 在两源定位并
+	// 回写（一次性自升级），让存量导入会话同样可续。两者只存本机，不上传 Relay。
+	PersistenceRoot string `json:"persistence_root,omitempty"`
+	Compression     string `json:"compression,omitempty"`
 }
 
 // lastEvent 是事件转发 goroutine 写入的最新 canonical 事件摘要。这里只保留类型、序号与累计
@@ -824,13 +829,28 @@ func (r *SessionRunner) resumeSession(ctx context.Context, cmd Command) error {
 	if state, stateErr := r.store.Get(replayStateKey(sessionID)); stateErr == nil && strings.TrimSpace(state) == replayComplete {
 		replay = false
 	}
+	// v0.9.5 P0（全局会话可续聊）：旧映射没有 persistence_root 时，按会话 id 在
+	// 两源存储（工作区 .dsh-sessions 优先、其次全局 ~/.dsh/sessions）定位 artifact，
+	// 把来源根/编码传给适配器并回写映射（一次性自升级）。定位失败保持缺省行为，
+	// 不阻断恢复——会话若确实存在，session/load 会在适配器层给出真实错误。
+	req := adapter.ResumeRequest{
+		InstanceID:      th.InstanceID,
+		WorkspaceRoot:   root,
+		ReplayHistory:   replay,
+		PersistenceRoot: th.PersistenceRoot,
+		Compression:     th.Compression,
+	}
+	if th.Provider == "dsh" && strings.TrimSpace(th.PersistenceRoot) == "" {
+		if srcRoot, srcComp, ok := locateDSHArtifactSource(th.InstanceID, root); ok {
+			req.PersistenceRoot, req.Compression = srcRoot, srcComp
+			th.PersistenceRoot, th.Compression = srcRoot, srcComp
+			if upgraded, mErr := json.Marshal(th); mErr == nil {
+				_ = r.store.Set(instanceKey(sessionID), string(upgraded))
+			}
+		}
+	}
 	// 每次恢复都分配新的代数；旧句柄即使在取消后晚到完成信号，也不能改写本轮状态。
 	resumeGeneration := r.beginResumeGeneration(sessionID)
-	req := adapter.ResumeRequest{
-		InstanceID:    th.InstanceID,
-		WorkspaceRoot: root,
-		ReplayHistory: replay,
-	}
 	var registered *runningSession
 	var replayDone <-chan struct{}
 	ready := func(handle adapter.Handle) error {
