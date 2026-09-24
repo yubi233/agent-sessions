@@ -1372,6 +1372,27 @@ class _DSHWorkspaceDetailScreenState
   // v0.9.4（用户需求）：默认只加载活跃会话；appbar 按钮切换「显示全部」。
   bool _showAllDshSessions = false;
 
+  // v0.9.5 P1（持续同步）：进入工作区即静默节流刷新一次（增量导入：只拉取
+  // watermark 之后的新正文）。控制器侧 60s 节流兜底；失败静默不打扰用户；
+  // 只读设备不触发（与手动导入同一 canWrite 口径）。
+  bool _autoRefreshScheduled = false;
+
+  void _scheduleAutoRefresh(
+    AppController app,
+    SessionController sessions,
+    MobileWorkspace workspace,
+  ) {
+    if (_autoRefreshScheduled || !app.canManageDevices) return;
+    _autoRefreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      sessions.refreshDSHSessionsSilently(
+        workspaceId: workspace.id,
+        terminalId: workspace.terminalId,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = ref.watch(appControllerProvider);
@@ -1391,6 +1412,7 @@ class _DSHWorkspaceDetailScreenState
       );
     }
     final selectedWorkspace = workspace;
+    _scheduleAutoRefresh(app, sessionsController, selectedWorkspace);
     final workspaceSessions = _dshSessionsForWorkspace(
       sessionsController.sessions,
       widget.workspaceId,

@@ -930,7 +930,8 @@ class SessionController extends ChangeNotifier {
     _notifyListeners();
   }
 
-  /// 在工作区详情中按需导入历史会话；只轮询元数据命令，不读取消息正文。
+  /// 在工作区详情中按需导入历史会话（v0.9.5 起 daemon 侧为增量补齐：已导入
+  /// 线程只回传水位之后的新正文，无新行零事件）。
   Future<WorkspaceImportState?> importDSHSessions({
     required String workspaceId,
     required String? deviceId,
@@ -940,14 +941,53 @@ class SessionController extends ChangeNotifier {
     if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
       return null;
     }
+    return _runDSHImport(workspaceId: workspaceId, terminalId: terminalId);
+  }
+
+  /// v0.9.5 P1（持续同步）：进入 DSH 工作区时的静默节流刷新。与手动导入共用
+  /// 同一命令通道（daemon 增量补齐），差异仅两点——① 节流：同工作区距上次
+  /// 自动刷新尝试不足 60s、或已有导入在途时直接跳过；② 失败静默：不写
+  /// workspaceErrorMessage、不发失败状态，用户无感知（手动入口保留完整报错）。
+  Future<void> refreshDSHSessionsSilently({
+    required String workspaceId,
+    String terminalId = '',
+  }) async {
+    final last = _dshAutoRefreshAt[workspaceId];
+    if (last != null &&
+        DateTime.now().difference(last) < dshAutoRefreshThrottle) {
+      return;
+    }
+    if (_workspaceImportWaiting) return;
+    _dshAutoRefreshAt[workspaceId] = DateTime.now();
+    try {
+      await _runDSHImport(
+        workspaceId: workspaceId,
+        terminalId: terminalId,
+        silent: true,
+      );
+    } catch (_) {
+      // 静默刷新失败不打扰用户；下一次进入工作区（≥60s）会再试。
+    }
+  }
+
+  static const dshAutoRefreshThrottle = Duration(seconds: 60);
+  final Map<String, DateTime> _dshAutoRefreshAt = <String, DateTime>{};
+
+  Future<WorkspaceImportState?> _runDSHImport({
+    required String workspaceId,
+    String terminalId = '',
+    bool silent = false,
+  }) async {
     if (_workspaceImportWaiting) return _workspaceImportState;
     final normalized = workspaceId.trim();
     final workspace = _workspaces
         .where((item) => item.id == normalized)
         .firstOrNull;
     if (workspace == null || !workspace.isDsh) {
-      _workspaceErrorMessage = '只能从已同步的 DSH 工作区导入历史会话。';
-      _notifyListeners();
+      if (!silent) {
+        _workspaceErrorMessage = '只能从已同步的 DSH 工作区导入历史会话。';
+        _notifyListeners();
+      }
       return null;
     }
     _workspaceImportWaiting = true;
@@ -982,12 +1022,17 @@ class SessionController extends ChangeNotifier {
       }
       return state;
     } on RelayFailure catch (failure) {
-      _workspaceErrorMessage = failure.message;
-      _workspaceImportState = const WorkspaceImportState(status: 'failed');
+      // 静默刷新不发布失败状态/错误文案（手动入口保留完整报错）。
+      if (!silent) {
+        _workspaceErrorMessage = failure.message;
+        _workspaceImportState = const WorkspaceImportState(status: 'failed');
+      }
       return _workspaceImportState;
     } catch (_) {
-      _workspaceErrorMessage = '历史 DSH 会话导入暂时不可用，请稍后重试。';
-      _workspaceImportState = const WorkspaceImportState(status: 'failed');
+      if (!silent) {
+        _workspaceErrorMessage = '历史 DSH 会话导入暂时不可用，请稍后重试。';
+        _workspaceImportState = const WorkspaceImportState(status: 'failed');
+      }
       return _workspaceImportState;
     } finally {
       _workspaceImportWaiting = false;

@@ -822,6 +822,13 @@ func (r *sqliteRepo) SetSessionStatusAt(ctx context.Context, id, status string, 
 	return err
 }
 
+// SetSessionDisplayName 只更新展示标题，不触碰状态与活跃时间（v0.9.5 P1：
+// 导入增量同步把 DSH 侧的新标题带给已存在会话）。
+func (r *sqliteRepo) SetSessionDisplayName(ctx context.Context, id, displayName string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET display_name=? WHERE id=?`, displayName, id)
+	return err
+}
+
 // SetSessionStatusKeepActivity 只翻转状态，保留 last_activity_at_unix_ms。
 // 确定性对账/启动清扫用：历史收口不制造虚假的“刚刚活跃”，最后消息时间
 // 继续反映真实的最后一次事件/命令写入。

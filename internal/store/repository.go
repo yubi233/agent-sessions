@@ -109,6 +109,9 @@ type Repository interface {
 	UnarchiveSession(ctx context.Context, id string) error
 	SetSessionStatus(ctx context.Context, id, status string) error
 	SetSessionStatusAt(ctx context.Context, id, status string, activityAtUnixMS int64) error
+	// SetSessionDisplayName 更新会话展示标题（v0.9.5 P1 导入增量同步：DSH 侧
+	// 重写标题后随导入回执更新 display_name）。仅在调用方确认值变化时调用。
+	SetSessionDisplayName(ctx context.Context, id, displayName string) error
 	// SetSessionStatusKeepActivity 只翻转状态不改活动时间；历史收口/清扫专用。
 	SetSessionStatusKeepActivity(ctx context.Context, id, status string) error
 	SetSessionLastSeq(ctx context.Context, id string, lastSeq int64) error

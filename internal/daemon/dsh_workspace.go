@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -311,11 +312,20 @@ type DSHImportedSession struct {
 	// （zstd）来源的会话在工作区缺省根上不可续）。只存本机，不上传 Relay。
 	PersistenceRoot string
 	Compression     string
+	// ImportedSeq/WatermarkValid 是本次导入的增量水位（v0.9.5 P1）：WatermarkValid
+	// 为 true 时 ImportedSeq 是「已完整导入到哪一行」的 JSONL seq。回执成功收口后
+	// 由 CommitDSHImportWatermarks 落账——回执失败不推进，下次导入重发同一批
+	// 增量，不丢消息；空标题+零消息的导入不携带水位（无事可推进）。
+	ImportedSeq    int64
+	WatermarkValid bool
 }
 
 const (
 	// importContextLimit 是每个导入会话保留的最近上下文条数（用户口径「十几条」取 14）。
 	importContextLimit = 14
+	// importIncrementalLimit 是单次导入为已导入线程补齐的增量消息上限（v0.9.5 P1）：
+	// 超出部分留在下一次导入，水位停在最后一条已导入消息上，不产生空洞。
+	importIncrementalLimit = 200
 	// dshImportActiveWindow 是「活跃会话」的判定窗口（用户口径：最近三天还在更新
 	// 的会话）。只有 DSH artifact 的最后修改时间落在窗口内的会话才会被导入——
 	// 老会话不产生投影，客户端列表因此只加载活跃工作集；会话重新活跃（DSH 更新
@@ -371,16 +381,32 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 			continue
 		}
 		seen[artifact.ID] = true
-		// 跨轮幂等（v0.9.4）：同一 DSH 会话只对应一个 Relay 会话——复用已有映射，
-		// 且上下文只回填一次（contextImported 标记），避免重复导入在事件流里翻倍。
+		// 跨轮幂等（v0.9.4）：同一 DSH 会话只对应一个 Relay 会话——复用已有映射。
+		// v0.9.5 P1（持续同步）：复用时不再只回活动时间，而是按水位做增量补齐——
+		// 只携带上次导入之后的新正文（上限 importIncrementalLimit，超出留到下一
+		// 次导入）与 watermark 之后的新标题；无新行时零消息零标题，绝不重发预览。
 		threadKey := "dshthread:" + confirmed.Root + ":" + artifact.ID
 		if existingRelayID, getErr := store.Get(threadKey); getErr == nil && existingRelayID != "" {
-			out = append(out, DSHImportedSession{
+			item := DSHImportedSession{
 				RelaySessionID:     existingRelayID,
 				DSHSessionID:       artifact.ID,
 				WorkspaceRoot:      confirmed.Root,
 				LastActivityUnixMS: artifact.ModTime.UnixMilli(),
-			})
+			}
+			watermark := int64(-1)
+			if raw, seqErr := store.Get(threadSeqKey(confirmed.Root, artifact.ID)); seqErr == nil {
+				if parsed, parseErr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); parseErr == nil {
+					watermark = parsed
+				}
+			}
+			if incrementalCtx, incrErr := dsh.ReadSessionEventsAfter(artifact.Path, watermark, importIncrementalLimit); incrErr == nil &&
+				(len(incrementalCtx.Messages) > 0 || incrementalCtx.Title != "") {
+				item.Messages = incrementalCtx.Messages
+				item.Title = incrementalCtx.Title
+				item.ImportedSeq = incrementalCtx.LastSeq
+				item.WatermarkValid = true
+			}
+			out = append(out, item)
 			continue
 		}
 		// 活跃过滤：只导入最近三天还在更新的会话（ModTime 即会话最后活动时间）。
@@ -426,9 +452,36 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 			LastActivityUnixMS: artifact.ModTime.UnixMilli(),
 			PersistenceRoot:    artifact.SourceRoot,
 			Compression:        artifact.Compression,
+			// 首次导入的水位 = 预览读取的行尾；同样等回执成功后由
+			// CommitDSHImportWatermarks 落账（与映射写入的失败窗口解耦）。
+			ImportedSeq:    artifactContext.LastSeq,
+			WatermarkValid: true,
 		})
 	}
 	return out, nil
+}
+
+// threadSeqKey 是 <root>:<dshID> -> 已导入最大 JSONL seq 的 local_state 键
+// （v0.9.5 P1 增量同步水位）。只存本机。
+func threadSeqKey(root, dshID string) string {
+	return "dshthreadseq:" + root + ":" + dshID
+}
+
+// CommitDSHImportWatermarks 在导入回执成功收口后推进各线程水位（v0.9.5 P1）。
+// 由 daemon RelayLoop 在 receipt succeeded 之后调用：回执失败/未收口不推进，
+// 下次导入会重发同一批增量，保证不丢消息（可能重复的窗口仅限「回执成功但
+// 本机落账前崩溃」，与既有命令收口语义一致）。落账失败静默忽略——重复导入
+// 只会由客户端投影层折叠，不会丢数据。
+func (m *WorkspaceManager) CommitDSHImportWatermarks(store *Store, imported []DSHImportedSession) {
+	if m == nil || store == nil {
+		return
+	}
+	for _, item := range imported {
+		if !item.WatermarkValid {
+			continue
+		}
+		_ = store.Set(threadSeqKey(item.WorkspaceRoot, item.DSHSessionID), strconv.FormatInt(item.ImportedSeq, 10))
+	}
 }
 
 // sameCanonicalPath 比较两个路径是否指向同一 canonical 目录。

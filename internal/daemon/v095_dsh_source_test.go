@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -217,4 +218,101 @@ func mustMarshalV095(value any) []byte {
 		panic(err)
 	}
 	return raw
+}
+
+// v0.9.5 P1（持续同步）先红回归：已导入线程的再次导入必须做增量补齐——
+// 只携带 watermark 之后的正文（不是重新回填 14 条预览），水位随导入推进，
+// 无新行时零事件（去重，不翻倍）。
+func TestV095ImportIncrementalSyncsNewMessagesOnly(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	project := filepath.Join(root, "p")
+	wsRoot := filepath.Join(project, ".dsh-sessions")
+	mustMkdirAll(t, wsRoot)
+	mustGitInit(t, project)
+	canonicalProject := canonicalTestPath(t, project)
+
+	// 初始 artifact：标题 + 两条消息（行 seq 0..2）。
+	writeDSHSessionArtifactForTest(t, wsRoot, canonicalProject, "dsh-incr-1", strings.Join([]string{
+		`{"type":"session/title","seq":0,"time":1,"data":{"title":"旧标题"}}`,
+		`{"type":"user/message","seq":1,"time":2,"data":{"content":[{"type":"text","text":"旧问题"}]}}`,
+		`{"type":"assistant/message","seq":2,"time":3,"data":{"message":{"content":[{"type":"text","text":"旧回答"}]}}}`,
+	}, "\n")+"\n")
+
+	state, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer state.Close()
+	manager, err := NewWorkspaceManager(state, root)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	if _, err := manager.ConfirmExistingDSHWorkspace(ctx, "ws-v095-incr", canonicalProject); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	first, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state)
+	if err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	if len(first) != 1 || len(first[0].Messages) != 2 {
+		t.Fatalf("首次导入应携带 2 条预览: %+v", first)
+	}
+	// 回执成功收口后水位才落账（seq=2）；收口前不得提前推进。
+	if got, err := state.Get(threadSeqKey(canonicalProject, "dsh-incr-1")); err == nil && got != "" {
+		t.Fatalf("回执收口前水位不应落账，实际 %q", got)
+	}
+	manager.CommitDSHImportWatermarks(state, first)
+	if got, err := state.Get(threadSeqKey(canonicalProject, "dsh-incr-1")); err != nil || got != "2" {
+		t.Fatalf("首次导入水位 = %q, %v, want \"2\"", got, err)
+	}
+
+	// DSH 侧追加：助手回答 + 重写标题 + 新用户消息（seq 3..5）。
+	appendLines := strings.Join([]string{
+		`{"type":"assistant/message","seq":3,"time":4,"data":{"message":{"content":[{"type":"text","text":"补充回答"}]}}}`,
+		`{"type":"session/title","seq":4,"time":5,"data":{"title":"新标题"}}`,
+		`{"type":"user/message","seq":5,"time":6,"data":{"content":[{"type":"text","text":"新问题"}]}}`,
+	}, "\n") + "\n"
+	f, err := os.OpenFile(filepath.Join(wsRoot, dshProjectKeyForTest(canonicalProject), dshEncodeSegmentForTest("dsh-incr-1"), "session.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(appendLines); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	second, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state)
+	if err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("第二次导入应复用同一线程: %+v", second)
+	}
+	if second[0].RelaySessionID != first[0].RelaySessionID {
+		t.Fatalf("增量导入必须复用 Relay 会话 id: %s vs %s", second[0].RelaySessionID, first[0].RelaySessionID)
+	}
+	if len(second[0].Messages) != 2 {
+		t.Fatalf("增量应只携带 watermark 之后的 2 条消息: %+v", second[0].Messages)
+	}
+	if second[0].Messages[0].Text != "补充回答" || second[0].Messages[1].Text != "新问题" {
+		t.Fatalf("增量消息内容不符: %+v", second[0].Messages)
+	}
+	if second[0].Title != "新标题" {
+		t.Fatalf("增量标题 = %q, want 新标题", second[0].Title)
+	}
+	manager.CommitDSHImportWatermarks(state, second)
+	if got, err := state.Get(threadSeqKey(canonicalProject, "dsh-incr-1")); err != nil || got != "5" {
+		t.Fatalf("增量导入后水位 = %q, %v, want \"5\"", got, err)
+	}
+
+	// 第三次：无新行 → 零消息、零标题（不重复回填）。
+	third, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state)
+	if err != nil {
+		t.Fatalf("third import: %v", err)
+	}
+	if len(third) != 1 || len(third[0].Messages) != 0 || third[0].Title != "" {
+		t.Fatalf("无新行时应为零增量: %+v", third)
+	}
 }

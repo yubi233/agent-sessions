@@ -1,6 +1,7 @@
 package dsh
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -137,4 +138,80 @@ func TestReadSessionContextEmptySessionIsEmpty(t *testing.T) {
 	if ctx.Title != "" || len(ctx.Messages) != 0 {
 		t.Fatalf("空会话应返回空上下文: %+v", ctx)
 	}
+}
+
+// v0.9.5 P1（持续同步）：增量读取只返回 watermark 之后的 user/assistant 正文；
+// limit 截断时保留最早的新消息、水位停在最后一条已导入消息上（不产生空洞）；
+// 标题仅在 watermark 之后出现新 title 行时返回最新值。
+func TestV095ReadSessionEventsAfterReturnsOnlyNewMessages(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	rows := []map[string]any{
+		{"type": "session/title", "seq": 0, "time": 1, "data": map[string]any{"title": "旧标题"}},
+		{"type": "user/message", "seq": 1, "time": 2, "data": map[string]any{"content": []map[string]any{{"type": "text", "text": "旧问题"}}}},
+		{"type": "assistant/message", "seq": 2, "time": 3, "data": map[string]any{"message": map[string]any{"content": []map[string]any{{"type": "text", "text": "旧回答"}}}}},
+		{"type": "tool/call", "seq": 3, "time": 4, "data": map[string]any{}},
+		{"type": "user/message", "seq": 4, "time": 5, "data": map[string]any{"content": []map[string]any{{"type": "text", "text": "新问题"}}}},
+		{"type": "session/title", "seq": 5, "time": 6, "data": map[string]any{"title": "新标题"}},
+		{"type": "assistant/message", "seq": 6, "time": 7, "data": map[string]any{"message": map[string]any{"content": []map[string]any{{"type": "text", "text": "新回答"}}}}},
+	}
+	if err := os.WriteFile(path, encodeJSONLRows(rows), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := ReadSessionEventsAfter(path, 3, 0)
+	if err != nil {
+		t.Fatalf("ReadSessionEventsAfter: %v", err)
+	}
+	if len(ctx.Messages) != 2 {
+		t.Fatalf("增量消息数 = %d, want 2（只含 seq>3 的 user/assistant）: %+v", len(ctx.Messages), ctx.Messages)
+	}
+	if ctx.Messages[0].Text != "新问题" || ctx.Messages[1].Text != "新回答" {
+		t.Fatalf("增量消息内容不符: %+v", ctx.Messages)
+	}
+	if ctx.Title != "新标题" {
+		t.Fatalf("增量标题 = %q, want 新标题（watermark 之后的最新 title 行）", ctx.Title)
+	}
+	if ctx.LastSeq != 6 {
+		t.Fatalf("水位 = %d, want 6", ctx.LastSeq)
+	}
+
+	// 标题未变（无新 title 行）时返回空，调用方保持原值。
+	ctx, err = ReadSessionEventsAfter(path, 6, 0)
+	if err != nil {
+		t.Fatalf("ReadSessionEventsAfter #2: %v", err)
+	}
+	if len(ctx.Messages) != 0 || ctx.Title != "" {
+		t.Fatalf("无新行时应返回空增量: %+v", ctx)
+	}
+}
+
+func TestV095ReadSessionEventsAfterLimitTruncationKeepsEarliestAndStopsWatermark(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	rows := []map[string]any{
+		{"type": "user/message", "seq": 1, "time": 1, "data": map[string]any{"content": []map[string]any{{"type": "text", "text": "a"}}}},
+		{"type": "assistant/message", "seq": 2, "time": 2, "data": map[string]any{"message": map[string]any{"content": []map[string]any{{"type": "text", "text": "b"}}}}},
+		{"type": "user/message", "seq": 3, "time": 3, "data": map[string]any{"content": []map[string]any{{"type": "text", "text": "c"}}}},
+	}
+	if err := os.WriteFile(path, encodeJSONLRows(rows), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := ReadSessionEventsAfter(path, 0, 2)
+	if err != nil {
+		t.Fatalf("ReadSessionEventsAfter: %v", err)
+	}
+	if len(ctx.Messages) != 2 || ctx.Messages[0].Text != "a" || ctx.Messages[1].Text != "b" {
+		t.Fatalf("截断应保留最早 2 条: %+v", ctx.Messages)
+	}
+	if ctx.LastSeq != 2 {
+		t.Fatalf("截断后水位应停在最后一条已导入消息 = %d, want 2", ctx.LastSeq)
+	}
+}
+
+// encodeJSONLRows 把测试行序列化为 JSONL（生产解析器逐行 json.Unmarshal）。
+func encodeJSONLRows(rows []map[string]any) []byte {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	for _, row := range rows {
+		_ = enc.Encode(row)
+	}
+	return b.Bytes()
 }

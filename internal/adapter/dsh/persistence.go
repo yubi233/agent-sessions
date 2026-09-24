@@ -153,10 +153,16 @@ type SessionContextMessage struct {
 // SessionContext 是 DSH 会话的本地上下文投影：标题 + 最近对话消息。
 type SessionContext struct {
 	// Title 是 DSH 侧会话标题（session/title 行）；缺失时由调用方回退首条用户消息。
+	// 增量读取（ReadSessionEventsAfter）语义不同：仅当 watermark 之后出现新 title
+	// 行时才返回最新值，否则为空（调用方保持既有标题不覆盖）。
 	Title string
 	// Messages 按时间升序（seq 升序），至多 limit 条——即「每个历史会话保留十几条
 	// 上下文」的载体；导入后随 canonical 事件流入用户自己的 Relay。
 	Messages []SessionContextMessage
+	// LastSeq 是本次读取的导入水位（v0.9.5 增量同步）：全量读取=扫描到的最大行
+	// seq；增量读取=实际导入的最后一条消息 seq（被 limit 截断时不跳过未读行）。
+	// 空 artifact 为 -1。
+	LastSeq int64
 }
 
 // ReadSessionContext 读取 session.jsonl 的标题与最近 limit 条 user/assistant 正文：
@@ -167,10 +173,33 @@ type SessionContext struct {
 // 容错：坏行/超长行跳过不致命，尽力返回已解析部分；文件无法打开才返回错误。
 // 读取只发生在导入命令的本机执行内（用户数据不出用户机器）。
 func ReadSessionContext(path string, limit int) (SessionContext, error) {
-	ctx := SessionContext{}
-	if limit <= 0 {
-		limit = 1
+	ctx, err := scanSessionContext(path, -1, int64(limit))
+	if err != nil {
+		return SessionContext{}, err
 	}
+	if ctx.Title == "" && len(ctx.Messages) > 0 {
+		ctx.Title = truncateRunes(strings.TrimSpace(ctx.Messages[0].Text), 40)
+	}
+	return ctx, nil
+}
+
+// ReadSessionEventsAfter 读取 artifact 中 seq 大于 afterSeq 的对话正文（v0.9.5
+// 增量同步）：解析口径与 ReadSessionContext 一致（zstd/坏行容错/只取
+// user+assistant 文本）。Title 仅在 watermark 之后出现新 title 行时返回最新值。
+// limit 截断时 Messages 保留最早的新消息，LastSeq 停在最后一条已导入消息上，
+// 保证剩余新消息留给下一次导入，不产生空洞。
+func ReadSessionEventsAfter(path string, afterSeq, limit int64) (SessionContext, error) {
+	return scanSessionContext(path, afterSeq, limit)
+}
+
+// scanSessionContext 是两条读取路径的共享扫描核心：afterSeq<0 为全量（标题取
+// 首个 title 行），>=0 为增量（标题取 watermark 之后的最新 title 行）。
+// limit<=0 表示不限制消息条数（全量路径由调用方传入 14）。
+func scanSessionContext(path string, afterSeq, limit int64) (SessionContext, error) {
+	full := afterSeq < 0
+	ctx := SessionContext{LastSeq: -1}
+	var all []SessionContextMessage
+	var firstUserText string
 	file, err := os.Open(path)
 	if err != nil {
 		return ctx, err
@@ -187,8 +216,6 @@ func ReadSessionContext(path string, limit int) (SessionContext, error) {
 	}
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	var messages []SessionContextMessage
-	var firstUserText string
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -215,36 +242,62 @@ func ReadSessionContext(path string, limit int) (SessionContext, error) {
 		if err := json.Unmarshal(line, &row); err != nil {
 			continue // 坏行容错：跳过，不影响其余上下文。
 		}
+		// 水位推进：任何已解析行（含 title/tool 等非对话行）都计入，因为后续
+		// 新消息的 seq 必然大于此前任意行。
+		if row.Seq > ctx.LastSeq {
+			ctx.LastSeq = row.Seq
+		}
 		switch row.Type {
 		case "session/title":
-			if ctx.Title == "" {
-				ctx.Title = strings.TrimSpace(row.Data.Title)
+			trimmed := strings.TrimSpace(row.Data.Title)
+			if full {
+				if ctx.Title == "" {
+					ctx.Title = trimmed
+				}
+			} else if row.Seq > afterSeq {
+				// 增量：标题可能被 DSH 侧重写（追加新 title 行），后写覆盖。
+				ctx.Title = trimmed
 			}
 		case "user/message":
+			if !full && row.Seq <= afterSeq {
+				continue
+			}
 			text := concatTextParts(row.Data.Content)
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
-			messages = append(messages, SessionContextMessage{Role: "user", Text: text, TimeMS: row.Time, Seq: row.Seq})
+			all = append(all, SessionContextMessage{Role: "user", Text: text, TimeMS: row.Time, Seq: row.Seq})
 			if firstUserText == "" {
 				firstUserText = text
 			}
 		case "assistant/message":
+			if !full && row.Seq <= afterSeq {
+				continue
+			}
 			text := concatTextParts(row.Data.Message.Content)
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
-			messages = append(messages, SessionContextMessage{Role: "assistant", Text: text, TimeMS: row.Time, Seq: row.Seq})
+			all = append(all, SessionContextMessage{Role: "assistant", Text: text, TimeMS: row.Time, Seq: row.Seq})
 		}
 	}
 	// 尽力而为：超长坏行导致的 scanner 错误不覆盖已解析内容。
 	_ = scanner.Err()
-	// 只保留最近 limit 条（保持时间升序，客户端按 seq/时间渲染）。
-	if len(messages) > limit {
-		messages = messages[len(messages)-limit:]
+	messages := all
+	if full {
+		// 只保留最近 limit 条（保持时间升序，客户端按 seq/时间渲染）；limit<=0
+		// 视为不限制（增量路径）。
+		if limit > 0 && len(messages) > int(limit) {
+			messages = messages[len(messages)-int(limit):]
+		}
+	} else if limit > 0 && len(messages) > int(limit) {
+		// 增量截断保留最早的新消息，水位停在最后一条已导入消息上，
+		// 剩余部分留给下一次导入（不产生空洞）。
+		messages = messages[:limit]
+		ctx.LastSeq = messages[len(messages)-1].Seq
 	}
 	ctx.Messages = messages
-	if ctx.Title == "" && firstUserText != "" {
+	if full && ctx.Title == "" && firstUserText != "" {
 		ctx.Title = truncateRunes(strings.TrimSpace(firstUserText), 40)
 	}
 	return ctx, nil

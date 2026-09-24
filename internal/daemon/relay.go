@@ -1600,6 +1600,9 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 		status, errorCode := "succeeded", ""
 		var sessionIDs []string
 		var sessions []DSHImportSessionResult
+		// imported 提升到回执收口层：水位落账（CommitDSHImportWatermarks）需要
+		// 在 ResolveDSHImport 成功之后访问它（v0.9.5 P1）。
+		var imported []DSHImportedSession
 		if l.WorkspaceManager == nil {
 			status, errorCode = "failed", protocol.ErrCapabilityUnsupported
 		} else {
@@ -1609,7 +1612,8 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 			if err := json.Unmarshal([]byte(command.PayloadJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
 				status, errorCode = "failed", protocol.ErrWorkspacePathDenied
 			} else {
-				imported, importErr := l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store)
+				var importErr error
+				imported, importErr = l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store)
 				if importErr != nil {
 					status, errorCode = "failed", CommandErrorCode(importErr)
 					l.Logger.Warn("daemon dsh session import failed", "command", command.CommandID, "error_code", errorCode)
@@ -1628,6 +1632,10 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 							case "user":
 								eventType = adapter.EventUserMessage
 								payload["text"] = message.Text
+								// v0.9.5 P1（预览/回放合一）：user 预览事件补 imported
+								// 稳定 id，客户端投影据此在回放 canonical 节点到达时
+								// 折叠同文预览（assistant 既有 imported-<seq> 口径）。
+								payload["message_id"] = fmt.Sprintf("imported-u-%d", message.Seq)
 							case "assistant":
 								eventType = adapter.EventMessageCompleted
 								payload["text"] = message.Text
@@ -1669,6 +1677,11 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 				return nil
 			}
 			return resolveErr
+		}
+		// v0.9.5 P1（持续同步）：只有回执真正 succeeded 才推进增量水位——
+		// 失败/未收口不推进，下次导入重发同一批增量，不丢消息。
+		if receipt.Status == "succeeded" && l.WorkspaceManager != nil {
+			l.WorkspaceManager.CommitDSHImportWatermarks(l.Store, imported)
 		}
 		if err := l.Store.MarkRelayCommandResult(command.CommandID, receipt.Status, receipt.ErrorCode); err != nil {
 			return err

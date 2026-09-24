@@ -843,6 +843,16 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 					if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "constraint") {
 						return err
 					}
+					// v0.9.5 P1（持续同步）：已存在会话的标题按 DSH 侧最新值更新——
+					// 增量导入携带新标题（非空且与现值不同才写，避免回执写放大）。
+					// 无本地重命名入口，display_name 的权威来源始终是导入侧。
+					if title != "" {
+						if existing, lookupErr := tx.SessionByID(ctx, sessionID); lookupErr == nil && existing.DisplayName != title {
+							if err := tx.SetSessionDisplayName(ctx, sessionID, title); err != nil {
+								return err
+							}
+						}
+					}
 				}
 				// 导入成功是可审计的会话状态写入；last_activity 取 DSH 侧真实活动
 				// 时间（artifact ModTime），让「最近三天活跃」判定对用户是真实语义。

@@ -99,6 +99,15 @@ class SessionProjectionController {
           !event.isStreaming) {
         continue;
       }
+      // v0.9.5 P1（预览/回放合一）：导入预览（messageId 带 `imported` 前缀）与
+      // resume 回放的 canonical 事件描述同一段 DSH 历史；canonical 节点到达时
+      // 折叠更早的同文 imported 预览节点，避免回放后出现双气泡。只作用于本次
+      // 投影的 chatNodes（原始事件不删除）；仅精确匹配 imported 前缀，绝不折叠
+      // 无前缀的真实历史（两次同文发送是合法历史）。
+      if (nodeKind == ConversationNodeKind.user ||
+          nodeKind == ConversationNodeKind.assistant) {
+        _collapseImportedPreview(nodes, nodeKind, event.text);
+      }
       nodes.add(
         ConversationNode(
           // v0.8.7（V087-06）：assistant/reasoning 节点优先用上游 messageId 作
@@ -153,6 +162,29 @@ class SessionProjectionController {
       context: SessionContextMeterProjection.fromUsage(controls.usage),
       turnPhase: turnPhase,
     );
+  }
+
+  /// v0.9.5 P1（预览/回放合一）：移除与 incoming 同 kind、同文本的 imported
+  /// 预览节点。折叠的唯一依据是被移除节点自身的 `imported` messageId 前缀——
+  /// 导入侧（daemon relay.go）为预览 assistant 写 `imported-<seq>`、为预览
+  /// user 写 `imported-u-<seq>`；无前缀的真实历史永不参与折叠。
+  void _collapseImportedPreview(
+    List<ConversationNode> nodes,
+    ConversationNodeKind kind,
+    String? incomingText,
+  ) {
+    final text = incomingText?.trim();
+    if (text == null || text.isEmpty) return;
+    for (var i = nodes.length - 1; i >= 0; i--) {
+      final node = nodes[i];
+      final id = node.messageId;
+      if (node.kind != kind || id == null || !id.startsWith('imported')) {
+        continue;
+      }
+      if (node.text?.trim() == text) {
+        nodes.removeAt(i);
+      }
+    }
   }
 
   /// R17：把 turn.completed 终态标记并入最后一条 assistant 气泡
