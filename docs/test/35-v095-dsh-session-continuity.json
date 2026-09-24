@@ -1,0 +1,321 @@
+{
+  "suite": "V095",
+  "plan_id": "V095",
+  "status": "in_progress",
+  "description": "v0.9.5 DSH 会话接续完整化：P0 全局会话可续聊（导入映射携带来源根/编码、resume 按真实存储绑定桥、旧映射自升级、导入文案对齐）；P1 持续同步（水位增量导入回执成功才落账、标题更新、预览/回放合一去重、进入工作区静默节流刷新）；P2 历史完整可见（快照首屏窗口+before_seq 翻页、include_all 按需导入全部、客户端加载更早）。来源 docs/zh/迭代计划/迭代计划v0.9.5.md。P0..P2 已实施并分别提交；真实模型旅程因部署路由缺 DEEPSEEK_API_KEY 如实 blocked（credential_or_quota_blocker，授权额度未消耗，凭据就绪后经 AGENT_SESSIONS_DSH_REAL=1 复跑）；可见 GUI 旅程与实机旅程待用户侧条件。详见实施记录 35。",
+  "environment": {
+    "local": "隔离 fixture 与本地 Relay/Daemon；live 门控（AGENT_SESSIONS_DSH_LIVE=1）使用真实 dsh-acp-demo 桥子进程与临时存储；真实数据仅以副本进入临时目录，绝不写用户 ~/.dsh/sessions",
+    "flutter": "apps/mobile 单元/widget；投影折叠与分页流程以控制器级回归覆盖",
+    "device": "物理 Android（未连接，保持 planned）",
+    "real_model": "AGENT_SESSIONS_DSH_REAL=1 门控；免费池档（value 含 free/flash）；no-key 失败如实 SKIP（credential_or_quota_blocker）"
+  },
+  "verification": {
+    "execution_status": "partial_run",
+    "allow_real_upstream": false,
+    "allow_real_model": false,
+    "required_gates": [
+      "go_unit_contract",
+      "live_bridge_gated",
+      "real_model_gated",
+      "flutter_full",
+      "historical_regression",
+      "visible_gui_journey"
+    ],
+    "note": "以上为执行要求。已运行事实：Go 全量 internal/... 绿、Flutter 全量 620 项绿、task check 绿、live 门控真桥 4 项绿（含真实 artifact 副本 session/load）；真实模型旅程在 API 调用前被凭据缺位拦截（blocked，0 次消耗）。visible_gui_journey 待 localdev 可见窗口人工走查。"
+  },
+  "cases": [
+    {
+      "id": "V095-01",
+      "title": "导入映射记录 artifact 来源存储根与物理编码",
+      "status": "passed",
+      "phase": "P0",
+      "category": "import_mapping",
+      "priority": "P0",
+      "test_layer": "unit/contract",
+      "precondition": "项目绑定布局与全局布局（HOME 注入）两种 artifact；活跃窗口内",
+      "steps": [
+        "项目布局导入 → 断言映射 persistence_root=<project>/.dsh-sessions、compression=none",
+        "全局布局 zstd 导入 → 断言 persistence_root=~/.dsh/sessions、compression=zstd"
+      ],
+      "expected": "映射与 artifact 实际存储位置/编码一致；只存本机不上传",
+      "cleanup": ["临时目录随测试回收"],
+      "evidence": [
+        "internal/daemon/v095_dsh_source_test.go TestV095ImportRecordsSourceRootAndCompression / TestV095ImportGlobalLayoutRecordsGlobalSourceRootAndZstd"
+      ]
+    },
+    {
+      "id": "V095-02",
+      "title": "resume 按显式来源根/编码绑定桥，旧映射两源定位自升级",
+      "status": "passed",
+      "phase": "P0",
+      "category": "resume_binding",
+      "priority": "P0",
+      "test_layer": "unit/contract",
+      "precondition": "假桥记录 ResumeRequest；真实桥 live 门控另测",
+      "steps": [
+        "显式根 resume → 断言 sourceFactory 收到（根, 工作区, 编码）且不走工作区工厂；session/load cwd=工作区",
+        "旧映射（无 persistence_root）resume → 两源定位并回写映射；适配器收到来源根/编码",
+        "全局存储来源定位 → 落在全局根与 zstd"
+      ],
+      "expected": "桥绑定 artifact 实际存储；旧映射一次性自升级；定位失败保持缺省 fail-closed",
+      "cleanup": ["无"],
+      "evidence": [
+        "internal/adapter/dsh/v095_resume_source_test.go TestV095ResumeWithExplicitSourceRootRoutesToSourceFactory",
+        "internal/daemon/v095_dsh_source_test.go TestV095ResumeUpgradesLegacyMappingFromWorkspaceStore / FromGlobalStore"
+      ]
+    },
+    {
+      "id": "V095-03",
+      "title": "显式存储根环境注入与 fail-closed 校验",
+      "status": "passed",
+      "phase": "P0",
+      "category": "transport_env",
+      "priority": "P0",
+      "test_layer": "unit/contract",
+      "precondition": "无",
+      "steps": [
+        "minimalEnvWithCompression 显式编码覆盖环境变量缺省；持久化根精确注入",
+        "根不存在/非目录/相对路径/编码非法/为空 → spawn 前 fail-closed，错误指向根问题"
+      ],
+      "expected": "编码错误会被上游整根拒绝，必须精确注入；非法输入不留半开进程",
+      "cleanup": ["无"],
+      "evidence": [
+        "internal/adapter/dsh/v095_resume_source_test.go TestV095MinimalEnvWithCompressionOverridesEncoding / TestV095SourceTransportRejectsInvalidRootOrCompression"
+      ]
+    },
+    {
+      "id": "V095-04",
+      "title": "真桥全局布局与真实 artifact 副本 session/load（live 门控）",
+      "status": "passed",
+      "phase": "P0",
+      "category": "live_bridge",
+      "priority": "P0",
+      "test_layer": "live_gated",
+      "precondition": "AGENT_SESSIONS_DSH_LIVE=1；真桥组合含 persistenceCompression 覆盖与 agent-presets 服务",
+      "steps": [
+        "hermetic：全局布局 zstd artifact（帧容器格式）→ 源绑定桥 → initialize → session/load",
+        "真实副本：~/.dsh/sessions 无 preset 事件 artifact 复制到临时根 → 源绑定桥 → session/load",
+        "既有 TestLiveBridgeLifecycle 不回退"
+      ],
+      "expected": "三条全部通过；真实数据仅副本进入临时目录",
+      "cleanup": ["临时目录随测试回收；不触碰用户存储"],
+      "evidence": [
+        "internal/adapter/dsh/v095_live_source_test.go TestLiveBridgeSourceBoundGlobalLayoutResume / TestLiveBridgeRealGlobalArtifactResume（LIVE_SUMMARY source_bound=…,zstd load=ok）"
+      ]
+    },
+    {
+      "id": "V095-05",
+      "title": "导入确认文案与实际行为对齐",
+      "status": "passed",
+      "phase": "P0",
+      "category": "ux_copy",
+      "priority": "P2",
+      "test_layer": "widget",
+      "precondition": "无",
+      "steps": [
+        "先红：oracle 改为「最近十几条对话上下文」→ 旧文案失败",
+        "两处弹窗改为如实描述（标题+上下文；正文只经用户自己的 Relay）→ 绿"
+      ],
+      "expected": "不再宣称「仅导入元数据」；信任边界表述准确",
+      "cleanup": ["无"],
+      "evidence": [
+        "apps/mobile/test/dsh_mode_test.dart V081-P2 导入确认（10/10 绿）"
+      ]
+    },
+    {
+      "id": "V095-06",
+      "title": "增量读取只返回 watermark 之后的新消息",
+      "status": "passed",
+      "phase": "P1",
+      "category": "incremental_read",
+      "priority": "P0",
+      "test_layer": "unit/contract",
+      "precondition": "无",
+      "steps": [
+        "afterSeq 之后仅 user/assistant 正文返回；工具/标题行不计消息但推进水位",
+        "limit 截断保留最早新消息、水位停在最后一条已导入消息",
+        "watermark 之后有新 title 行才返回新标题，否则为空"
+      ],
+      "expected": "增量无重复、无空洞；DSH 重写标题可感知",
+      "cleanup": ["无"],
+      "evidence": [
+        "internal/adapter/dsh/persistence_context_test.go TestV095ReadSessionEventsAfterReturnsOnlyNewMessages / TestV095ReadSessionEventsAfterLimitTruncationKeepsEarliestAndStopsWatermark"
+      ]
+    },
+    {
+      "id": "V095-07",
+      "title": "导入命令对已导入线程做增量补齐，水位回执成功才落账",
+      "status": "passed",
+      "phase": "P1",
+      "category": "incremental_import",
+      "priority": "P0",
+      "test_layer": "unit/contract",
+      "precondition": "无",
+      "steps": [
+        "首次导入携带预览；收口前水位不落账，CommitDSHImportWatermarks 后 =2",
+        "DSH 侧追加（回答+重写标题+新消息）→ 二次导入仅 2 条新消息+新标题，复用同一 Relay 会话 id；收口后水位=5",
+        "第三次导入零消息零标题（不重发预览）"
+      ],
+      "expected": "回执失败不推进水位（下次重发同批增量，不丢消息）；无新行零事件",
+      "cleanup": ["无"],
+      "evidence": [
+        "internal/daemon/v095_dsh_source_test.go TestV095ImportIncrementalSyncsNewMessagesOnly"
+      ]
+    },
+    {
+      "id": "V095-08",
+      "title": "标题变化更新已存在会话 display_name",
+      "status": "passed",
+      "phase": "P1",
+      "category": "title_sync",
+      "priority": "P1",
+      "test_layer": "unit/contract",
+      "precondition": "store 新增 SetSessionDisplayName",
+      "steps": [
+        "ResolveDSHImport 对 UNIQUE 冲突（已存在会话）在标题非空且变化时更新 display_name"
+      ],
+      "expected": "只写标题不动状态/活跃时间；无变化不写（避免写放大）",
+      "cleanup": ["无"],
+      "evidence": [
+        "internal/domain/daemon.go ResolveDSHImport；internal/store 契约（domain/store/daemon 包全绿）"
+      ]
+    },
+    {
+      "id": "V095-09",
+      "title": "预览/回放合一：canonical 节点折叠同文 imported 预览",
+      "status": "passed",
+      "phase": "P1",
+      "category": "projection_dedup",
+      "priority": "P0",
+      "test_layer": "unit/widget",
+      "precondition": "先红复现：imported-<seq>/imported-u-<seq> 与回放 canonical id 不同 → 双气泡",
+      "steps": [
+        "预览块 + 回放块 → 仅 2 节点（保留 canonical）",
+        "仅预览未回放 → 原样保留",
+        "两条无前缀同文真实历史 → 不折叠"
+      ],
+      "expected": "回放后无双气泡；原始事件不删除；折叠仅按 imported 前缀精确匹配",
+      "cleanup": ["无"],
+      "evidence": [
+        "apps/mobile/test/v095_import_replay_dedup_test.dart（3 项）"
+      ]
+    },
+    {
+      "id": "V095-10",
+      "title": "进入 DSH 工作区静默节流刷新（60s）+ 手动入口保留",
+      "status": "passed",
+      "phase": "P1",
+      "category": "auto_refresh",
+      "priority": "P1",
+      "test_layer": "widget/controller",
+      "precondition": "无",
+      "steps": [
+        "详情页挂载即调度一次静默刷新（只写设备）；控制器 60s 节流+在途跳过",
+        "静默失败不写 workspaceErrorMessage/不发失败状态；手动导入完整报错保留"
+      ],
+      "expected": "自动刷新用户无感；手动入口行为不变（dsh_mode_test 10/10）",
+      "cleanup": ["无"],
+      "evidence": [
+        "apps/mobile/lib/state/session_controller.dart refreshDSHSessionsSilently；session_screens.dart 详情页挂载调度"
+      ]
+    },
+    {
+      "id": "V095-11",
+      "title": "快照首屏窗口 + before_seq 向前翻页（解大会话首屏 500）",
+      "status": "passed",
+      "phase": "P2",
+      "category": "snapshot_paging",
+      "priority": "P0",
+      "test_layer": "integration/e2e",
+      "precondition": "OpenAPI has_more/oldest_event_seq/before_seq/limit 已冻结并再生生成物",
+      "steps": [
+        "320 事件会话：首屏（after_seq=0）返回最新 200 + has_more",
+        "客户端本地展开（50/步）耗尽后以 before_seq=最旧序号续拉（25/页）×5 到头部",
+        "到头部后 canLoadOlder=false、hasMore 标记清除；翻页事件经 fromRelayEvent 转换"
+      ],
+      "expected": "大会话首屏不再全量拉取；全历史可经翻页完整到达",
+      "cleanup": ["无"],
+      "evidence": [
+        "apps/mobile/test/v095_history_paging_test.dart",
+        "internal/httpapi handleSessionSnapshot（Go 全量绿）；packages/protocol 生成物（task check 绿）"
+      ]
+    },
+    {
+      "id": "V095-12",
+      "title": "include_all 绕过 72h 活跃窗口按需导入全部",
+      "status": "passed",
+      "phase": "P2",
+      "category": "import_all",
+      "priority": "P1",
+      "test_layer": "unit/contract",
+      "precondition": "窗口外 artifact（os.Chtimes 置老）",
+      "steps": [
+        "默认导入跳过窗口外会话",
+        "includeAll=true 导入带入窗口外会话（预览+水位增量照常）",
+        "详情页「显示全部」切换时静默触发（60s 节流、失败无感）"
+      ],
+      "expected": "按需全量导入可达；默认活跃过滤不变",
+      "cleanup": ["无"],
+      "evidence": [
+        "internal/daemon/v095_dsh_source_test.go TestV095ImportIncludeAllBypassesActiveWindow"
+      ]
+    },
+    {
+      "id": "V095-13",
+      "title": "真实模型续聊旅程（授权 1–2 次调用）",
+      "status": "blocked",
+      "phase": "P3",
+      "category": "real_model",
+      "priority": "P1",
+      "test_layer": "real_gated",
+      "precondition": "AGENT_SESSIONS_DSH_REAL=1；部署路由可解析 API key（env 或 credentials）",
+      "steps": [
+        "桥① 临时全局根新建会话（免费池档）发送暗号",
+        "桥② 按导入映射路径回放同一 artifact，续问暗号",
+        "断言回复含暗号（原上下文继承）"
+      ],
+      "expected": "两段真实调用证明「导入的全局会话可在原上下文继续」；no-key 失败如实 SKIP（credential_or_quota_blocker），其余失败 FAIL",
+      "cleanup": ["临时目录回收；不触碰用户真实会话"],
+      "evidence": [
+        "internal/adapter/dsh/v095_live_source_test.go TestV095LiveGlobalResumeRealPrompt",
+        "2026-09-25 实测：session/new、免费档目录解析、artifact 物化、源绑定回放路径全部就绪；prompt 在 API 调用前被拦（deepseek-official 路由缺 DEEPSEEK_API_KEY，env 与 credentials 均未配置）→ blocked；授权额度未消耗"
+      ]
+    },
+    {
+      "id": "V095-14",
+      "title": "可见 GUI 旅程：导入→预览→续聊→增量刷新→加载更早（localdev 可见窗口）",
+      "status": "planned",
+      "phase": "P3",
+      "category": "visible_journey",
+      "priority": "P1",
+      "test_layer": "visible_flutter",
+      "precondition": "./restart.sh start 本地调试壳 + 可见窗口；DSH 桥侧组合修齐在位",
+      "steps": [
+        "进入 DSH 工作区 → 观察静默自动刷新（列表标题/新会话出现）",
+        "打开导入会话 → 预览可见；发送消息续聊 → 回放+回复同上下文",
+        "DSH 终端侧继续对话 → 返回应用再次进入工作区 → 新内容出现",
+        "320+ 事件大会话：加载更早逐页到头部"
+      ],
+      "expected": "全程无手工导入/刷新补发；文案与状态真实",
+      "cleanup": ["按 restart.sh 既有清理"],
+      "evidence": ["待执行（自动化覆盖已到 daemon/桥层）"]
+    },
+    {
+      "id": "V095-15",
+      "title": "实机定向旅程与 V094-21/22",
+      "status": "planned",
+      "phase": "P3",
+      "category": "device",
+      "priority": "P2",
+      "test_layer": "physical_android",
+      "precondition": "物理 Android 连接并安装本版构建",
+      "steps": [
+        "导入→续聊→增量刷新定向旅程",
+        "顺带补跑 V094-21 完整旅程后翻转 V094-21/22"
+      ],
+      "expected": "设备连接后按 steps 执行；未连接如实保持 planned",
+      "cleanup": ["不重置用户数据"],
+      "evidence": ["待设备连接（2026-09-25 adb devices 为空）"]
+    }
+  ]
+}

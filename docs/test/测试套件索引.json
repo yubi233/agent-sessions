@@ -1,5 +1,5 @@
 {
-  "registry_version": 17,
+  "registry_version": 18,
   "status": "in_progress",
   "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
   "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
@@ -1391,6 +1391,36 @@
       "allow_real_upstream": false,
       "uniqueness_rule": "拥有V094-01..28：01..18逐项覆盖会话UI截图评审18项；19为事务关联与恢复竞态，20为组合布局与无障碍，21为物理Android旅程，22为最终全部需求及历史回归聚合；23..28为发送门控、配置确认、操作幂等、权限目录、Web同步及加密边界，必须先通过再聚合。既有恢复ID仅消费，不重定义；clientMessageId不替代Provider messageId。",
       "note": "2026-09-18初稿、2026-09-19通信核查修订；测试流程纠偏后收口（2026-09-20）：26/28 passed——V094-20 同版本 14/14 可见矩阵+逐场景视检通过；V094-21 物理Android完整旅程因设备未连接保持 planned（冒烟与零手工恢复链证据在档）；V094-22 聚合门本体验证全绿（gate6 13/13 headed 首轮通过、桥EOF根因修复）但前置含 V094-21 故保持 planned。编排器隔离/重试/汇总修复与 runner.test.mjs 16 项回归入 test:e2e:harness。计划 docs/zh/迭代计划/迭代计划v0.9.4.md；实施记录 34 §6。真实 Provider/模型和云端重启须独立授权。"
+    },
+    {
+      "plan_id": "V095",
+      "suite_path": "docs/test/35-v095-dsh-session-continuity.json",
+      "owner": "DSH/Session",
+      "id_prefix": [
+        "V095-"
+      ],
+      "owned_ids": [
+        "V095-01",
+        "V095-02",
+        "V095-03",
+        "V095-04",
+        "V095-05",
+        "V095-06",
+        "V095-07",
+        "V095-08",
+        "V095-09",
+        "V095-10",
+        "V095-11",
+        "V095-12",
+        "V095-13",
+        "V095-14",
+        "V095-15"
+      ],
+      "consumed_ids": [],
+      "dependencies": [
+        "V094",
+        "V081"
+      ]
     }
   ]
 }

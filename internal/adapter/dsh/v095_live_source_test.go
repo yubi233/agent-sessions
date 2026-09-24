@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
 // v0.9.5 P0 真实桥链路验证（无模型）：全局存储布局（~/.dsh/sessions，zstd）的
@@ -202,4 +203,144 @@ func TestLiveBridgeRealGlobalArtifactResume(t *testing.T) {
 		t.Fatalf("session/load（真实全局 artifact 副本）: %v\n桥 stderr:\n%s", err, tr.stderr.digest())
 	}
 	t.Logf("LIVE_SUMMARY provider=dsh protocol=1 source_bound=real_global,zstd load=ok")
+}
+
+// v0.9.5 P3 真实模型续聊旅程（用户已授权 1–2 次调用；门控
+// AGENT_SESSIONS_DSH_REAL=1）：两段式验证「导入的全局会话可在原上下文继续」——
+// 桥①在临时全局根新建会话（新会话可切免费池模型）发送暗号；桥②按导入映射
+// 路径（来源根+编码）回放同一 artifact 并续问暗号。共 2 次真实调用，与授权
+// 上限一致；全程在临时目录，绝不触碰用户真实会话。
+func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
+	if os.Getenv("AGENT_SESSIONS_DSH_REAL") != "1" {
+		t.Skip("AGENT_SESSIONS_DSH_REAL != 1：跳过真实模型旅程（需用户授权）")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+
+	// 模拟 DSH 全局存储：<home>/.dsh/sessions；工作区独立目录。
+	home := t.TempDir()
+	globalRoot := filepath.Join(home, ".dsh", "sessions")
+	if err := os.MkdirAll(globalRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+
+	freeModel := func(info initializeResult) string {
+		for _, group := range info.ModelCatalog.Groups {
+			for _, model := range group.Models {
+				lower := strings.ToLower(model.Value + " " + model.ID)
+				if strings.Contains(lower, "free") || strings.Contains(lower, "flash") {
+					return model.Value
+				}
+			}
+		}
+		return ""
+	}
+	startBridge := func() (*dshBinTransport, *handle, initializeResult, error) {
+		tr, err := newBinTransportForSource(globalRoot, workspace, PersistenceCompressionZstd)
+		if err != nil {
+			return nil, nil, initializeResult{}, err
+		}
+		h := newHandle(tr)
+		go h.readLoop()
+		initCtx, cancelInit := withTimeout(ctx, handshakeTimeoutFor())
+		info, err := h.initialize(initCtx)
+		cancelInit()
+		if err != nil {
+			_ = h.Dispose(context.Background())
+			return nil, nil, initializeResult{}, err
+		}
+		if err := bridgeHandshakeAllowed(info); err != nil {
+			_ = h.Dispose(context.Background())
+			return nil, nil, initializeResult{}, err
+		}
+		return tr, h, info, nil
+	}
+	runTurn := func(h *handle, prompt string) (string, error) {
+		events := make(chan adapter.Event, 256)
+		go func() {
+			for event := range h.Events() {
+				select {
+				case events <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+			close(events)
+		}()
+		sendErr := h.Send(ctx, prompt)
+		reply := ""
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case event, ok := <-events:
+				if !ok {
+					return reply, sendErr
+				}
+				if event.Type == adapter.EventMessageCompleted {
+					if text, _ := event.Payload["text"].(string); strings.TrimSpace(text) != "" {
+						reply = text
+					}
+				}
+			case <-deadline:
+				return reply, sendErr
+			}
+		}
+	}
+
+	// 桥①：新建会话 + 免费池模型 + 暗号。
+	tr1, h1, info1, err := startBridge()
+	if err != nil {
+		t.Fatalf("桥①启动: %v", err)
+	}
+	newCtx, cancelNew := withTimeout(ctx, handshakeTimeoutFor())
+	sessionID, err := h1.newSession(newCtx, workspace)
+	cancelNew()
+	if err != nil {
+		_ = h1.Dispose(context.Background())
+		t.Fatalf("session/new: %v", err)
+	}
+	h1.setSessionID(sessionID)
+	picked := freeModel(info1)
+	if picked == "" {
+		_ = h1.Dispose(context.Background())
+		t.Skip("目录中没有免费池档模型，未经授权不消耗付费调用")
+	}
+	h1.SetModel(picked)
+	reply1, err := runTurn(h1, "请记住暗号：芝麻开门。现在只回复两个字：好的")
+	_ = h1.Dispose(context.Background())
+	if err != nil {
+		// 凭据不可达是环境条件而非产品缺陷：按 V083-26 惯例如实 skip
+		// （credential_or_quota_blocker），授权额度不消耗、不伪造证据。
+		if strings.Contains(err.Error(), "no API key") {
+			t.Skipf("credential_or_quota_blocker：部署路由缺 DEEPSEEK_API_KEY（env 与 credentials 均未配置）：%v", err)
+		}
+		t.Fatalf("桥①首轮（真实调用）: %v\n桥 stderr:\n%s", err, tr1.stderr.digest())
+	}
+	t.Logf("bridge1 reply=%q", reply1)
+
+	// artifact 必须已落在全局布局（zstd）。
+	artifacts, err := ScanGlobalSessionArtifacts(globalRoot)
+	if err != nil || len(artifacts) != 1 {
+		t.Fatalf("全局布局 artifact 未生成: n=%d err=%v", len(artifacts), err)
+	}
+
+	// 桥②：按导入映射路径（来源根+编码）回放并续问暗号。
+	tr2, h2, _, err := startBridge()
+	if err != nil {
+		t.Fatalf("桥②启动: %v", err)
+	}
+	defer func() { _ = h2.Dispose(context.Background()) }()
+	h2.setSessionID(sessionID)
+	loadCtx, cancelLoad := withTimeout(ctx, handshakeTimeoutFor())
+	loadErr := h2.loadSession(loadCtx, workspace)
+	cancelLoad()
+	if loadErr != nil {
+		t.Fatalf("session/load（续聊路径）: %v\n桥 stderr:\n%s", loadErr, tr2.stderr.digest())
+	}
+	reply2, err := runTurn(h2, "暗号是什么？只回复暗号两个字面内容。")
+	if err != nil || !strings.Contains(reply2, "芝麻开门") {
+		t.Fatalf("续聊未继承原上下文: err=%v reply=%q\n桥 stderr:\n%s", err, reply2, tr2.stderr.digest())
+	}
+	t.Logf("LIVE_SUMMARY provider=dsh protocol=1 source_bound=global,zstd real_model=2 model=%s context_inherited=1", picked)
 }
