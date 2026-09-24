@@ -912,6 +912,17 @@ func (s *SessionService) ListEventsAfter(ctx context.Context, sessionID string, 
 	return s.repo.ListEventsAfter(ctx, sessionID, afterSeq)
 }
 
+// ListEventsBefore 返回 event_seq < beforeSeq 的最近 limit 条事件（v0.9.5 P2
+// 历史向前翻页，升序返回）。
+func (s *SessionService) ListEventsBefore(ctx context.Context, sessionID string, beforeSeq int64, limit int) ([]store.SessionEventRow, error) {
+	return s.repo.ListEventsBefore(ctx, sessionID, beforeSeq, limit)
+}
+
+// CountSessionEvents 返回会话事件总数（v0.9.5 P2 分页 has_more 判定）。
+func (s *SessionService) CountSessionEvents(ctx context.Context, sessionID string) (int64, error) {
+	return s.repo.CountSessionEvents(ctx, sessionID)
+}
+
 // NewWakeResult 生成唤醒结果事件（SESS-04）。
 func (s *SessionService) NewWakeResult(ctx context.Context, sessionID, result string) error {
 	if !validWake(result) {

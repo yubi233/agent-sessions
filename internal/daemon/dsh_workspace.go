@@ -342,7 +342,7 @@ var importActiveCutoff = func() time.Time { return time.Now().Add(-dshImportActi
 // 消息（v0.9.4：客户端打开导入会话即可见最近十几条正文）。窗口外的历史会话不导入、
 // 不产生投影，客户端列表因此只加载活跃工作集。DSH session id、cwd 或路径仍不上传
 // 到 Relay；正文只进入用户自己的事件流。
-func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID string, store *Store) ([]DSHImportedSession, error) {
+func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID string, store *Store, includeAll bool) ([]DSHImportedSession, error) {
 	if m == nil || store == nil {
 		return nil, ErrWorkspaceRootInvalid
 	}
@@ -411,7 +411,9 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 		}
 		// 活跃过滤：只导入最近三天还在更新的会话（ModTime 即会话最后活动时间）。
 		// 老会话跳过；一旦 DSH 侧再次更新它，下一次导入会自动带回来。
-		if artifact.ModTime.Before(importActiveCutoff()) {
+		// includeAll（v0.9.5 P2 按需导入全部）：显式请求时绕过窗口，把窗口外的
+		// 历史会话也按需带入（每个会话仍是标题+最近十几条预览，水位增量照常）。
+		if !includeAll && artifact.ModTime.Before(importActiveCutoff()) {
 			continue
 		}
 		relaySessionID := id.New("sess")

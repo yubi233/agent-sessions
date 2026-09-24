@@ -1798,8 +1798,14 @@ type SessionOwnerKey struct {
 
 // SessionSnapshot defines model for SessionSnapshot.
 type SessionSnapshot struct {
-	Events  []CipherEvent `json:"events"`
-	Session Session       `json:"session"`
+	Events []CipherEvent `json:"events"`
+
+	// HasMore v0.9.5 首屏窗口截断或 before_seq 翻页仍有更早历史时为 true；增量（after_seq>0）响应恒缺省。
+	HasMore *bool `json:"has_more,omitempty"`
+
+	// OldestEventSeq 本页最旧事件的 session-local event_seq；作为下一次 before_seq 续拉游标。空页缺省。
+	OldestEventSeq *int64  `json:"oldest_event_seq,omitempty"`
+	Session        Session `json:"session"`
 }
 
 // SubmitCommandRequest defines model for SubmitCommandRequest.
@@ -2128,6 +2134,12 @@ type StreamSessionEventsParams struct {
 // GetSessionSnapshotParams defines parameters for GetSessionSnapshot.
 type GetSessionSnapshotParams struct {
 	AfterSeq *int64 `form:"after_seq,omitempty" json:"after_seq,omitempty"`
+
+	// BeforeSeq v0.9.5 历史向前翻页游标：返回 event_seq < before_seq 的最新一页（升序）。与 after_seq>0 互斥，提供时忽略 after_seq。
+	BeforeSeq *int64 `form:"before_seq,omitempty" json:"before_seq,omitempty"`
+
+	// Limit v0.9.5 首屏窗口大小（默认 200，上限 500）。仅约束首屏/向前翻页，不约束 after_seq>0 的增量。
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // UsageSummaryParams defines parameters for UsageSummary.
@@ -3799,6 +3811,22 @@ func (siw *ServerInterfaceWrapper) GetSessionSnapshot(c *gin.Context) {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "after_seq", c.Request.URL.Query(), &params.AfterSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
 	if err != nil {
 		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter after_seq: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "before_seq" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "before_seq", c.Request.URL.Query(), &params.BeforeSeq, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter before_seq: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", c.Request.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
 		return
 	}
 

@@ -1216,6 +1216,13 @@ export interface components {
         SessionSnapshot: {
             session: components["schemas"]["Session"];
             events: components["schemas"]["CipherEvent"][];
+            /** @description v0.9.5 首屏窗口截断或 before_seq 翻页仍有更早历史时为 true；增量（after_seq>0）响应恒缺省。 */
+            has_more?: boolean;
+            /**
+             * Format: int64
+             * @description 本页最旧事件的 session-local event_seq；作为下一次 before_seq 续拉游标。空页缺省。
+             */
+            oldest_event_seq?: number;
         };
         /** @description Flutter P2-F 只读观察投影。该资源不返回会话/命令/Terminal 的 opaque 标识，也不返回原始密文 envelope。 */
         DaemonSessionObservation: {
@@ -2637,6 +2644,10 @@ export interface operations {
         parameters: {
             query?: {
                 after_seq?: number;
+                /** @description v0.9.5 历史向前翻页游标：返回 event_seq < before_seq 的最新一页（升序）。与 after_seq>0 互斥，提供时忽略 after_seq。 */
+                before_seq?: number;
+                /** @description v0.9.5 首屏窗口大小（默认 200，上限 500）。仅约束首屏/向前翻页，不约束 after_seq>0 的增量。 */
+                limit?: number;
             };
             header?: never;
             path: {

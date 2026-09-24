@@ -1114,6 +1114,9 @@ class _DelayedEchoRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) async {
     snapshotCalls += 1;
     final snapshot = await super.getSessionSnapshot(
@@ -1187,6 +1190,9 @@ class _StreamingTurnRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) async {
     final snapshot = await super.getSessionSnapshot(
       sessionId,
@@ -1258,6 +1264,9 @@ class _LateStreamingAfterCompletedRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) async {
     final snapshot = await super.getSessionSnapshot(
       sessionId,
@@ -1339,6 +1348,9 @@ class _OutOfOrderSnapshotRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) async {
     final snapshot = await super.getSessionSnapshot(
       sessionId,
@@ -1379,6 +1391,9 @@ class _FailingCommandRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) async {
     final snapshot = await super.getSessionSnapshot(
       sessionId,
@@ -1498,6 +1513,9 @@ class _TurnCompletedRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) async {
     final snapshot = await super.getSessionSnapshot(
       sessionId,
@@ -1538,6 +1556,9 @@ class _EmptyDeltaIdleRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) async {
     final snapshot = await super.getSessionSnapshot(
       sessionId,
@@ -1577,6 +1598,7 @@ class _PendingDSHImportRelay extends FixtureRelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    bool includeAll = false,
   }) async => const WorkspaceImportState(
     status: 'pending',
     commandId: 'cmd-import-pending',

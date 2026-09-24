@@ -326,6 +326,8 @@ class HttpRelayRepository implements RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    // v0.9.5 P2：绕过 72h 活跃窗口按需导入全部历史会话。
+    bool includeAll = false,
   }) async {
     final normalized = workspaceId.trim();
     if (normalized.isEmpty) {
@@ -337,6 +339,7 @@ class HttpRelayRepository implements RelayRepository {
       data: {
         'workspace_id': normalized,
         if (terminalId.trim().isNotEmpty) 'terminal_id': terminalId.trim(),
+        if (includeAll) 'include_all': true,
       },
     );
     return WorkspaceImportState.fromRelayJson(_asMap(response.data));
@@ -472,6 +475,8 @@ class HttpRelayRepository implements RelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     if (afterSequence < 0) {
       throw const RelayFailure(RelayFailureKind.validation, '事件游标不能为负数。');
@@ -479,7 +484,13 @@ class HttpRelayRepository implements RelayRepository {
     final response = await _authenticatedSend(
       'GET',
       '/v1/sessions/$sessionId/snapshot',
-      queryParameters: {'after_seq': afterSequence},
+      queryParameters: {
+        'after_seq': afterSequence,
+        // v0.9.5 P2：before_seq 翻页（服务端忽略 after_seq）；limit 约束窗口大小。
+        if (beforeSequence != null && beforeSequence >= 0)
+          'before_seq': beforeSequence,
+        'limit': ?limit,
+      },
     );
     return SessionSnapshot.fromRelayJson(_asMap(response.data));
   }

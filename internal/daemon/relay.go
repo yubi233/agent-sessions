@@ -1608,12 +1608,13 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 		} else {
 			var payload struct {
 				WorkspaceID string `json:"workspace_id"`
+				IncludeAll  bool   `json:"include_all"`
 			}
 			if err := json.Unmarshal([]byte(command.PayloadJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
 				status, errorCode = "failed", protocol.ErrWorkspacePathDenied
 			} else {
 				var importErr error
-				imported, importErr = l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store)
+				imported, importErr = l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store, payload.IncludeAll)
 				if importErr != nil {
 					status, errorCode = "failed", CommandErrorCode(importErr)
 					l.Logger.Warn("daemon dsh session import failed", "command", command.CommandID, "error_code", errorCode)

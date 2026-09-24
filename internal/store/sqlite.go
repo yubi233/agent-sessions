@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -957,6 +958,51 @@ func (r *sqliteRepo) ListEventsAfter(ctx context.Context, sessionID string, afte
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ListEventsBefore 返回 event_seq < beforeSeq 的最近 limit 条事件（v0.9.5 P2
+// 历史向前翻页）：SQL 侧 DESC LIMIT 取最新一页，再反转为升序交付，调用方按
+// 既有升序 timeline 合并。投影口径与 ListEventsAfter 相同（receipt 关联回投）。
+func (r *sqliteRepo) ListEventsBefore(ctx context.Context, sessionID string, beforeSeq int64, limit int) ([]SessionEventRow, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit 必须为正整数")
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT events.session_id,events.event_seq,event_log.cursor,events.event_type,events.terminal_status,events.envelope_json,events.created_at_unix_ms,COALESCE(receipt.command_id,'')
+		 FROM session_events AS events
+		 JOIN account_event_log AS event_log
+		   ON event_log.session_id=events.session_id AND event_log.event_seq=events.event_seq
+		 LEFT JOIN daemon_event_receipts AS receipt
+		   ON receipt.session_id=events.session_id AND receipt.event_seq=events.event_seq
+		 WHERE events.session_id=? AND events.event_seq<? ORDER BY events.event_seq DESC LIMIT ?`, sessionID, beforeSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionEventRow
+	for rows.Next() {
+		var e SessionEventRow
+		if err := rows.Scan(&e.SessionID, &e.EventSeq, &e.AccountEventCursor, &e.EventType, &e.TerminalStatus, &e.EnvelopeJSON, &e.CreatedAtUnixMS, &e.CommandID); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// DESC 取页后反转为升序，调用方按时间正序合并。
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+	return out, nil
+}
+
+// CountSessionEvents 返回会话事件总数（v0.9.5 P2：快照分页 has_more 判定）。
+func (r *sqliteRepo) CountSessionEvents(ctx context.Context, sessionID string) (int64, error) {
+	var total int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM session_events WHERE session_id=?`, sessionID).Scan(&total)
+	return total, err
 }
 
 // ListAccountEventsAfter 以账号 SSE cursor 的严格总序回放事件。查询从 sessions 推导账号范围，

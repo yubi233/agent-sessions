@@ -541,6 +541,8 @@ class _V090ScriptedRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     snapshotRequests += 1;
     final gate = nextSnapshotGate;
@@ -580,6 +582,8 @@ class _V090StreamingRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     snapshotRequests += 1;
     final snapshot = await super.getSessionSnapshot(
@@ -615,6 +619,8 @@ class _V090IncidentRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     if (sessionId == managedSessionId) {
       // 快照内 session row 必须携带请求的会话 id（合并按它落键）。

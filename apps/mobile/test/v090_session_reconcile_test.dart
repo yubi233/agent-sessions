@@ -411,6 +411,8 @@ class _V090ReconcileRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     snapshotCalls += 1;
     if (snapshotOverrides.containsKey(sessionId) || failSnapshots) {

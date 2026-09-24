@@ -508,7 +508,12 @@ class RelaySessionEvent {
 }
 
 class SessionSnapshot {
-  const SessionSnapshot({required this.session, required this.events});
+  const SessionSnapshot({
+    required this.session,
+    required this.events,
+    this.hasMore = false,
+    this.oldestEventSeq = 0,
+  });
 
   factory SessionSnapshot.fromRelayJson(Map<String, dynamic> json) {
     final session = json['session'];
@@ -525,11 +530,22 @@ class SessionSnapshot {
             ),
           )
           .toList(growable: false),
+      // v0.9.5 P2 历史向前翻页（additive 可选）：首屏窗口截断/仍有更早历史时
+      // has_more=true 且 oldest_event_seq 是本页最旧序号（下一次 before_seq 游标）。
+      hasMore: json['has_more'] == true,
+      oldestEventSeq:
+          (json['oldest_event_seq'] as num?)?.toInt() ?? 0,
     );
   }
 
   final MobileSession session;
   final List<RelaySessionEvent> events;
+
+  /// v0.9.5 P2：是否还有更早历史未加载（首屏窗口截断或翻页未到头部）。
+  final bool hasMore;
+
+  /// 本页最旧事件的 event_seq；作为下一次 before_seq 续拉游标（空页为 0）。
+  final int oldestEventSeq;
 }
 
 /// 一次只读 cursor 恢复的脱敏结果。

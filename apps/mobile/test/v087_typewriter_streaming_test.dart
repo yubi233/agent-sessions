@@ -31,6 +31,8 @@ class _SteppingTimedRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     _now = _now.add(step);
     return super.getSessionSnapshot(sessionId, afterSequence: afterSequence);

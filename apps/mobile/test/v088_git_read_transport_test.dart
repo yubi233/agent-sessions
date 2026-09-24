@@ -69,6 +69,8 @@ class _ReadonlyLoopRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     // 本测试只关注 tool_result 注入；fixture 会话不存在时回退空事件快照。
     SessionSnapshot snapshot;

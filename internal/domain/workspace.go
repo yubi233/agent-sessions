@@ -63,6 +63,8 @@ type WorkspaceImportDSHInput struct {
 	Role        string
 	WorkspaceID string
 	TerminalID  string
+	// IncludeAll 绕过 72h 活跃窗口导入全部历史会话（v0.9.5 P2 按需入口）。
+	IncludeAll bool
 }
 
 // WorkspaceImportDSHState 是客户端轮询 session.import_dsh 的脱敏状态。
@@ -333,7 +335,8 @@ func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceIm
 		}
 		payload, err := json.Marshal(struct {
 			WorkspaceID string `json:"workspace_id"`
-		}{WorkspaceID: in.WorkspaceID})
+			IncludeAll  bool   `json:"include_all,omitempty"`
+		}{WorkspaceID: in.WorkspaceID, IncludeAll: in.IncludeAll})
 		if err != nil {
 			return err
 		}

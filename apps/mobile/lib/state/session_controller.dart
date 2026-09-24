@@ -687,10 +687,18 @@ class SessionController extends ChangeNotifier {
       );
   bool get historyLoading => _historyLoading;
   String? get historyErrorMessage => _historyErrorMessage;
+
+  // v0.9.5 P2（历史向前翻页）：服务端首屏窗口截断标记。仅由「首屏/翻页」路径
+  // 置位（快照 hasMore=true）与「翻页未满一页」（权威到头）清除；增量快照的
+  // has_more=false 不清除，避免把还有更早历史的会话误判为已到底。
+  final Set<String> _sessionsWithMoreHistory = <String>{};
+  bool hasMoreServerHistory(String sessionId) =>
+      _sessionsWithMoreHistory.contains(sessionId);
   bool get canLoadOlder {
     final sessionId = _selectedSessionId;
     if (sessionId == null) return false;
-    return (_timelineWindows[sessionId]?.length ?? 0) > _timeline.length;
+    return (_timelineWindows[sessionId]?.length ?? 0) > _timeline.length ||
+        _sessionsWithMoreHistory.contains(sessionId);
   }
 
   String? get selectedSessionId => _selectedSessionId;
@@ -951,19 +959,23 @@ class SessionController extends ChangeNotifier {
   Future<void> refreshDSHSessionsSilently({
     required String workspaceId,
     String terminalId = '',
+    // v0.9.5 P2：绕过 72h 活跃窗口按需导入全部历史（「显示全部」入口触发）。
+    bool includeAll = false,
   }) async {
-    final last = _dshAutoRefreshAt[workspaceId];
+    final throttleKey = includeAll ? '$workspaceId#all' : workspaceId;
+    final last = _dshAutoRefreshAt[throttleKey];
     if (last != null &&
         DateTime.now().difference(last) < dshAutoRefreshThrottle) {
       return;
     }
     if (_workspaceImportWaiting) return;
-    _dshAutoRefreshAt[workspaceId] = DateTime.now();
+    _dshAutoRefreshAt[throttleKey] = DateTime.now();
     try {
       await _runDSHImport(
         workspaceId: workspaceId,
         terminalId: terminalId,
         silent: true,
+        includeAll: includeAll,
       );
     } catch (_) {
       // 静默刷新失败不打扰用户；下一次进入工作区（≥60s）会再试。
@@ -977,6 +989,7 @@ class SessionController extends ChangeNotifier {
     required String workspaceId,
     String terminalId = '',
     bool silent = false,
+    bool includeAll = false,
   }) async {
     if (_workspaceImportWaiting) return _workspaceImportState;
     final normalized = workspaceId.trim();
@@ -999,6 +1012,7 @@ class SessionController extends ChangeNotifier {
       var state = await _relay.importDSHSessions(
         workspaceId: normalized,
         terminalId: terminalId,
+        includeAll: includeAll,
       );
       _workspaceImportState = state;
       _notifyListeners();
@@ -1391,7 +1405,55 @@ class SessionController extends ChangeNotifier {
     if (sessionId == null || _historyLoading) return;
     final window = _timelineWindows[sessionId] ?? const [];
     final hidden = window.length - _timeline.length;
-    if (hidden <= 0) return;
+    // 优先展开本地窗口（零网络）；本地已全部展示且服务端仍有更早历史时，
+    // 以窗口最旧序号为 before_seq 向 Relay 续拉一页（v0.9.5 P2）。
+    if (hidden <= 0) {
+      if (!_sessionsWithMoreHistory.contains(sessionId)) return;
+      _historyLoading = true;
+      _historyErrorMessage = null;
+      _notifyListeners();
+      try {
+        final oldest = window.isEmpty ? 0 : window.first.sequence;
+        const pageSize = 25;
+        final page = await _relay.getSessionSnapshot(
+          sessionId,
+          afterSequence: 0,
+          beforeSequence: oldest,
+          limit: pageSize,
+        );
+        if (_disposed) return;
+        // 快照事件必须经 fromRelayEvent 转换为时间线事件（与 _mergeSnapshot 同规）。
+        final older = page.events
+            .map(SessionTimelineEvent.fromRelayEvent)
+            .where(
+              (event) => !window.any(
+                (existing) => existing.sequence == event.sequence,
+              ),
+            )
+            .toList(growable: false);
+        if (older.isNotEmpty) {
+          _timelineWindows[sessionId] = List.unmodifiable([
+            ...older,
+            ...window,
+          ]..sort((left, right) => left.sequence.compareTo(right.sequence)));
+          if (_selectedSessionId == sessionId) {
+            _timeline = List.unmodifiable([...older, ..._timeline]);
+          }
+        }
+        // 服务端权威：本页不足一页（或明确 has_more=false）即到头部。
+        if (older.length < pageSize && !page.hasMore) {
+          _sessionsWithMoreHistory.remove(sessionId);
+        }
+      } on RelayFailure {
+        _historyErrorMessage = '更早的会话记录暂时不可用，请重试。';
+      } catch (_) {
+        _historyErrorMessage = '更早的会话记录暂时不可用，请重试。';
+      } finally {
+        _historyLoading = false;
+        _notifyListeners();
+      }
+      return;
+    }
     _historyLoading = true;
     _historyErrorMessage = null;
     _notifyListeners();
@@ -4336,6 +4398,10 @@ class SessionController extends ChangeNotifier {
     } else if (snapshot.session.status == MobileSessionStatus.streaming) {
       // 本机观察为活动：角标置位的资格条件。
       _observedActiveSessionIds.add(snapshot.session.id);
+    }
+    // v0.9.5 P2：首屏窗口截断标记（增量响应的 has_more 恒为 false，不会误置位）。
+    if (snapshot.hasMore) {
+      _sessionsWithMoreHistory.add(snapshot.session.id);
     }
     final priorCursor = _cursorFor(snapshot.session.id);
     final highestIncoming = incoming.fold<int>(

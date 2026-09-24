@@ -132,6 +132,11 @@ type Repository interface {
 	// 跨会话全局顺序。两者不能相互替代。
 	AppendEvent(ctx context.Context, e SessionEventRow) (int64, error)
 	ListEventsAfter(ctx context.Context, sessionID string, afterSeq int64) ([]SessionEventRow, error)
+	// ListEventsBefore 返回 event_seq < beforeSeq 的最近 limit 条事件（升序返回，
+	// v0.9.5 P2 历史向前翻页）；limit<=0 视为非法，返回错误由调用方约束。
+	ListEventsBefore(ctx context.Context, sessionID string, beforeSeq int64, limit int) ([]SessionEventRow, error)
+	// CountSessionEvents 返回会话事件总数（v0.9.5 P2 分页 has_more 判定）。
+	CountSessionEvents(ctx context.Context, sessionID string) (int64, error)
 	ListAccountEventsAfter(ctx context.Context, accountID string, afterCursor int64) ([]SessionEventRow, error)
 
 	// 命令（idempotency 在应用层用 (scope_hash,idempotency_key) 校验）

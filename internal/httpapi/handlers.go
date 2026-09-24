@@ -790,6 +790,10 @@ func (a *API) handleDeleteMessageFeedback(c *gin.Context) {
 }
 
 // handleSessionSnapshot 读取当前账号指定会话的增量密文事件，after_seq 不允许为负数。
+// v0.9.5 P2 历史向前翻页：增量语义（after_seq>0）保持不变；首屏（after_seq=0）
+// 默认只回最新 sessionSnapshotWindowLimit 条并带 has_more/oldest_event_seq，
+// 客户端以 before_seq=<oldest_event_seq> 续拉更早历史——超大会话首屏不再全量
+// 拉取（修齐 32k 事件快照 500 的规模缺陷）。
 func (a *API) handleSessionSnapshot(c *gin.Context) {
 	afterSeq := int64(0)
 	if raw := c.Query("after_seq"); raw != "" {
@@ -800,6 +804,25 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 		}
 		afterSeq = parsed
 	}
+	// before_seq：向前翻页游标（返回 event_seq < before_seq 的一页，升序）。
+	beforeSeq := int64(-1)
+	if raw := c.Query("before_seq"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "before_seq must be a non-negative integer"))
+			return
+		}
+		beforeSeq = parsed
+	}
+	limit := sessionSnapshotWindowLimit
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > sessionSnapshotWindowLimitMax {
+			writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "limit must be within (0, 500]"))
+			return
+		}
+		limit = parsed
+	}
 	session, err := a.Sessions.GetSession(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		writeError(c, err)
@@ -809,10 +832,33 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 		writeError(c, domain.ErrScopeDenied)
 		return
 	}
-	events, err := a.Sessions.ListEventsAfter(c.Request.Context(), session.ID, afterSeq)
-	if err != nil {
-		writeError(c, err)
-		return
+	hasMore := false
+	oldestSeq := int64(0)
+	var events []store.SessionEventRow
+	switch {
+	case beforeSeq >= 0:
+		// 向前翻页：固定窗口，事件数不足一页即到头部。
+		events, err = a.Sessions.ListEventsBefore(c.Request.Context(), session.ID, beforeSeq, limit)
+		if err != nil {
+			writeError(c, err)
+			return
+		}
+		hasMore = len(events) == limit
+	}
+	if beforeSeq < 0 {
+		events, err = a.Sessions.ListEventsAfter(c.Request.Context(), session.ID, afterSeq)
+		if err != nil {
+			writeError(c, err)
+			return
+		}
+		if afterSeq == 0 && len(events) > limit {
+			// 首屏窗口：保留最新 limit 条（事件升序，截掉头部）。
+			events = events[len(events)-limit:]
+			hasMore = true
+		}
+	}
+	if len(events) > 0 {
+		oldestSeq = events[0].EventSeq
 	}
 	views := make([]cipherEventView, 0, len(events))
 	for _, event := range events {
@@ -829,7 +875,10 @@ func (a *API) handleSessionSnapshot(c *gin.Context) {
 			CommandID: event.CommandID,
 		})
 	}
-	writeOK(c, sessionSnapshotView{Session: a.sessionViewFor(c.Request.Context(), session), Events: views})
+	writeOK(c, sessionSnapshotView{
+		Session: a.sessionViewFor(c.Request.Context(), session), Events: views,
+		HasMore: hasMore, OldestEventSeq: oldestSeq,
+	})
 }
 
 // handleSessionDaemonObservation 返回 Android 可消费的 Daemon 安全投影。
@@ -1604,6 +1653,8 @@ func (a *API) handleGetSyncDSHWorkspaces(c *gin.Context) {
 type importDSHSessionsRequest struct {
 	WorkspaceID string `json:"workspace_id"`
 	TerminalID  string `json:"terminal_id,omitempty"`
+	// IncludeAll 绕过 72h 活跃窗口一次性导入全部历史会话（v0.9.5 P2 按需）。
+	IncludeAll bool `json:"include_all,omitempty"`
 }
 
 type workspaceImportDSHView struct {
@@ -1629,6 +1680,7 @@ func (a *API) handleImportDSHSessions(c *gin.Context) {
 	subj := subject(c)
 	state, err := a.Workspaces.ImportDSHSessions(c.Request.Context(), domain.WorkspaceImportDSHInput{
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role, WorkspaceID: req.WorkspaceID, TerminalID: req.TerminalID,
+		IncludeAll: req.IncludeAll,
 	})
 	if err != nil {
 		writeError(c, err)
@@ -1969,9 +2021,20 @@ type cipherEventView struct {
 	CommandID string `json:"command_id,omitempty"`
 }
 
+// v0.9.5 P2 快照首屏窗口：默认最新 200 条，最大 500（before_seq/limit 可调）。
+const (
+	sessionSnapshotWindowLimit    = 200
+	sessionSnapshotWindowLimitMax = 500
+)
+
 type sessionSnapshotView struct {
 	Session sessionView       `json:"session"`
 	Events  []cipherEventView `json:"events"`
+	// v0.9.5 P2 历史向前翻页（additive 可选）：首屏窗口只回最新 limit 条时
+	// has_more=true 且 oldest_event_seq 是本页最旧事件序号（客户端以其为
+	// before_seq 续拉）；增量（after_seq>0）或已到头部时 has_more=false。
+	HasMore        bool  `json:"has_more,omitempty"`
+	OldestEventSeq int64 `json:"oldest_event_seq,omitempty"`
 }
 
 // daemonSessionObservationView 只保留 Flutter 观察页显示状态所需的字段。

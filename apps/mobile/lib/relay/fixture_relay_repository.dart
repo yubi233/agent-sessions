@@ -431,6 +431,7 @@ class FixtureRelayRepository implements RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    bool includeAll = false,
   }) async {
     _requireFixtureNetwork();
     _requireFixtureOwner();
@@ -676,6 +677,8 @@ class FixtureRelayRepository implements RelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     if (afterSequence < 0) {
       throw const RelayFailure(RelayFailureKind.validation, '事件游标不能为负数。');
@@ -690,6 +693,22 @@ class FixtureRelayRepository implements RelayRepository {
     // after_seq，若包含未来帧序号，未到期 delta 将永远不可见。
     final timedRelease = _timedReleaseSessions.contains(sessionId);
     final visibleBefore = _clock();
+    // v0.9.5 P2：before_seq 翻页返回游标之前的最多 limit 条（升序）；fixture
+    // 历史较小，全量满足窗口语义，不模拟截断。
+    if (beforeSequence != null && beforeSequence >= 0) {
+      final page = state.events
+          .where((event) => event.sequence < beforeSequence)
+          .where(
+            (event) =>
+                !timedRelease ||
+                !(event.createdAt?.isAfter(_clock()) ?? false),
+          )
+          .toList(growable: false);
+      return SessionSnapshot(
+        session: state.session,
+        events: List<RelaySessionEvent>.unmodifiable(page),
+      );
+    }
     final events = state.events
         .where((event) => event.sequence > afterSequence)
         .where(

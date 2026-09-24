@@ -74,6 +74,8 @@ class _BatchedStreamRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     final snapshot = await super.getSessionSnapshot(
       sessionId,

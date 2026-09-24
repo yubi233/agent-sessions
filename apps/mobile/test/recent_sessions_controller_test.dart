@@ -355,6 +355,7 @@ class _ListOverridingRelay implements RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    bool includeAll = false,
   }) => _delegate.importDSHSessions(
     workspaceId: workspaceId,
     terminalId: terminalId,
@@ -453,6 +454,9 @@ class _ListOverridingRelay implements RelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页（fixture/测试桩不模拟截断，仅保持签名兼容）。
+    int? beforeSequence,
+    int? limit,
   }) => _delegate.getSessionSnapshot(sessionId, afterSequence: afterSequence);
 
   @override

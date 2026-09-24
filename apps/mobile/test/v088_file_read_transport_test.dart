@@ -52,6 +52,8 @@ class _ReadonlyFilesRelay extends FixtureRelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    int? beforeSequence,
+    int? limit,
   }) async {
     final events = <RelaySessionEvent>[];
     if (armedKind != null) {

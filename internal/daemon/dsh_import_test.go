@@ -112,7 +112,7 @@ func TestImportDSHSessionsGeneratesMappingAndPendingReplay(t *testing.T) {
 	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-dsh", project); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	imported, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state)
+	imported, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state, false)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestImportDSHSessionsMissingPersistenceRootIsEmpty(t *testing.T) {
 	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-dsh", project); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	imported, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state)
+	imported, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state, false)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -192,11 +192,11 @@ func TestImportDSHSessionsIdempotentEmpty(t *testing.T) {
 	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-dsh", project); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	first, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state)
+	first, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state, false)
 	if err != nil {
 		t.Fatalf("first import: %v", err)
 	}
-	second, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state)
+	second, err := manager.ImportDSHSessions(context.Background(), "ws-dsh", state, false)
 	if err != nil {
 		t.Fatalf("second import: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestImportDSHSessionsFiltersStaleSessionsByActiveWindow(t *testing.T) {
 		t.Fatalf("confirm stale: %v", err)
 	}
 
-	freshImported, err := manager.ImportDSHSessions(ctx, "ws-dsh-fresh", state)
+	freshImported, err := manager.ImportDSHSessions(ctx, "ws-dsh-fresh", state, false)
 	if err != nil {
 		t.Fatalf("import fresh: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestImportDSHSessionsFiltersStaleSessionsByActiveWindow(t *testing.T) {
 		t.Fatalf("LastActivity 应取 DSH artifact 修改时间: %d", freshImported[0].LastActivityUnixMS)
 	}
 
-	staleImported, err := manager.ImportDSHSessions(ctx, "ws-dsh-stale", state)
+	staleImported, err := manager.ImportDSHSessions(ctx, "ws-dsh-stale", state, false)
 	if err != nil {
 		t.Fatalf("import stale: %v", err)
 	}

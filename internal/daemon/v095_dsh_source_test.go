@@ -156,7 +156,7 @@ func importSingleForV095Test(t *testing.T, root, project, dshID string) DSHImpor
 	if _, err := manager.ConfirmExistingDSHWorkspace(context.Background(), "ws-v095", canonicalTestPath(t, project)); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
-	imported, err := manager.ImportDSHSessions(context.Background(), "ws-v095", state)
+	imported, err := manager.ImportDSHSessions(context.Background(), "ws-v095", state, false)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestV095ImportIncrementalSyncsNewMessagesOnly(t *testing.T) {
 		t.Fatalf("confirm: %v", err)
 	}
 
-	first, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state)
+	first, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state, false)
 	if err != nil {
 		t.Fatalf("first import: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestV095ImportIncrementalSyncsNewMessagesOnly(t *testing.T) {
 	}
 	f.Close()
 
-	second, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state)
+	second, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state, false)
 	if err != nil {
 		t.Fatalf("second import: %v", err)
 	}
@@ -308,11 +308,57 @@ func TestV095ImportIncrementalSyncsNewMessagesOnly(t *testing.T) {
 	}
 
 	// 第三次：无新行 → 零消息、零标题（不重复回填）。
-	third, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state)
+	third, err := manager.ImportDSHSessions(ctx, "ws-v095-incr", state, false)
 	if err != nil {
 		t.Fatalf("third import: %v", err)
 	}
 	if len(third) != 1 || len(third[0].Messages) != 0 || third[0].Title != "" {
 		t.Fatalf("无新行时应为零增量: %+v", third)
+	}
+}
+
+// v0.9.5 P2（按需导入全部）：includeAll=true 时绕过 72h 活跃窗口，把窗口外的
+// 历史会话也按需带入；默认（false）维持活跃过滤。
+func TestV095ImportIncludeAllBypassesActiveWindow(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	state, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer state.Close()
+	manager, err := NewWorkspaceManager(state, root)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	staleProject := dshImportFixtureProject(t, filepath.Join(root, "stale"))
+	staleCanonical := canonicalTestPath(t, staleProject)
+	stalePath := writeDSHSessionArtifactForTest(t,
+		filepath.Join(staleProject, ".dsh-sessions"), staleCanonical, "stale-include-1",
+		`{"type":"user/message"}`)
+	staleTime := time.Now().Add(-10 * 24 * time.Hour)
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if _, err := manager.ConfirmExistingDSHWorkspace(ctx, "ws-v095-all", staleCanonical); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	// 默认：窗口外跳过。
+	plain, err := manager.ImportDSHSessions(ctx, "ws-v095-all", state, false)
+	if err != nil {
+		t.Fatalf("plain import: %v", err)
+	}
+	if len(plain) != 0 {
+		t.Fatalf("窗口外会话默认不得导入: %+v", plain)
+	}
+	// includeAll：按需带入。
+	all, err := manager.ImportDSHSessions(ctx, "ws-v095-all", state, true)
+	if err != nil {
+		t.Fatalf("include-all import: %v", err)
+	}
+	if len(all) != 1 || all[0].DSHSessionID != "stale-include-1" {
+		t.Fatalf("includeAll 应导入窗口外会话: %+v", all)
 	}
 }

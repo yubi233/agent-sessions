@@ -67,6 +67,8 @@ abstract interface class RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    // v0.9.5 P2：绕过 72h 活跃窗口按需导入全部历史会话。
+    bool includeAll = false,
   });
 
   /// 轮询 session.import_dsh 的脱敏状态。
@@ -100,6 +102,9 @@ abstract interface class RelayRepository {
   Future<SessionSnapshot> getSessionSnapshot(
     String sessionId, {
     int afterSequence = 0,
+    // v0.9.5 P2 历史向前翻页：beforeSequence>=0 时返回其之前的一页（升序）。
+    int? beforeSequence,
+    int? limit,
   });
 
   /// 获取当前会话的 fencing epoch；后续每条控制命令必须带这个正数值。

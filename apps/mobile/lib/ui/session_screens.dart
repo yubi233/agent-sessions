@@ -1432,9 +1432,19 @@ class _DSHWorkspaceDetailScreenState
           IconButton(
             key: const Key('dsh-workspace-detail-show-all'),
             tooltip: _showAllDshSessions ? '只看活跃会话' : '显示全部会话',
-            onPressed: () => setState(
-              () => _showAllDshSessions = !_showAllDshSessions,
-            ),
+            onPressed: () {
+              setState(() => _showAllDshSessions = !_showAllDshSessions);
+              // v0.9.5 P2（按需导入全部）：切换到「显示全部」时静默发起
+              // include_all 导入——窗口外的老会话标题+预览随之进入列表
+              // （60s 节流；失败无感，手动导入入口不受影响）。
+              if (_showAllDshSessions && app.canManageDevices) {
+                sessionsController.refreshDSHSessionsSilently(
+                  workspaceId: selectedWorkspace.id,
+                  terminalId: selectedWorkspace.terminalId,
+                  includeAll: true,
+                );
+              }
+            },
             icon: Icon(
               _showAllDshSessions
                   ? Icons.filter_alt_outlined
