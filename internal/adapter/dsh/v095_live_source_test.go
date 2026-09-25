@@ -230,27 +230,30 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 		// 无密钥；free 档来自用户 settings.yaml 的 opencode-zen 等真实路由）。
 		// 免费池模型的可用性由上游决定（个别可能 400 unavailable），调用方按序
 		// 重试；400 不可用不产生 token 消耗。
-		var free, fallback []string
+		// 授权口径（2026-09-25 用户确认）：仅 deepseek 模型——① 免费池（settings
+		// 中带 free 的 deepseek 路由）；② 免费池不可用时回退到凭据文档有密钥的
+		// goat deepseek-v4.1-flash（模型名与 v0.9.4 真机一致）。任何非 deepseek
+		// 渠道（xiaomi/openai/sub2api 等）不在授权内，不进入候选——首版曾因
+		// 按 catalog 组序构建回退列表让 xiaomi 插队接活，属越权，已修正。
+		var picked []string
 		for _, group := range info.ModelCatalog.Groups {
 			for _, model := range group.Models {
 				t.Logf("catalog model: provider=%s value=%s id=%s", group.ID, model.Value, model.ID)
-				if strings.Contains(strings.ToLower(model.Value), "free") {
-					free = append(free, model.Value)
+				id := strings.ToLower(model.Value + " " + model.ID)
+				isDeepseek := strings.Contains(id, "deepseek")
+				if !isDeepseek {
 					continue
 				}
-				// 二级回退：凭据文档里有密钥的 deepseek/闪档路由（goat 的
-				// deepseek-v4.1-flash 是 v0.9.4 真机同款模型；xiaomi 为套餐计费），
-				// 仅在免费档全部不可用时兜底，仍然在授权口径内。
-				id := strings.ToLower(model.ID)
-				if strings.Contains(group.ID, "goat") && strings.Contains(id, "deepseek") {
-					fallback = append(fallback, model.Value)
+				if strings.Contains(id, "free") {
+					picked = append(picked, model.Value)
+					continue
 				}
-				if strings.Contains(group.ID, "xiaomi") && strings.Contains(id, "flash") {
-					fallback = append(fallback, model.Value)
+				if strings.Contains(group.ID, "goat") {
+					picked = append(picked, model.Value)
 				}
 			}
 		}
-		return append(free, fallback...)
+		return picked
 	}
 	startBridge := func() (*dshBinTransport, *handle, initializeResult, error) {
 		tr, err := newBinTransportForSource(globalRoot, workspace, PersistenceCompressionZstd)
