@@ -307,7 +307,7 @@
         "LIVE_SUMMARY provider=dsh protocol=1 source_bound=global,zstd real_model=2 model=dsh:model:xiaomi-token-plan-cn:mimo-v2.6-flash context_inherited=1（2026-09-25）",
         "期间修齐：桥组合接入 settings-file+llm-pi-ai（用户真实路由注册）；上游 bin.ts stdin-EOF 竞态（监听在 boot 后挂载，已修并重建 lib）"
       ],
-      "note": "渠道偏差（2026-09-25 用户质询后如实登记）：通过运行实际走的是 xiaomi-token-plan-cn/mimo-v2.6-flash（2 次成功调用，非 deepseek 模型、为用户自有套餐渠道）——不在授权口径（授权=deepseek 免费池）。根因是候选回退按 catalog 组序构建让 xiaomi 插队；已修正为 deepseek-only 候选（opencode-zen deepseek 免费档 → goat deepseek-v4.1-flash），任何非 deepseek 渠道需用户单独授权。技术结论（上下文继承）与渠道无关，维持 passed。 用户随后逐渠道授权（仅测试环节）并固化白名单 v095AuthorizedModels：sub2api/gemini-3.8-flash、goat/deepseek-v4.1-flash、goat/xiaomi/mimo-v2.6-flash、opencode-zen 全部；xiaomi-token-plan-cn 等白名单外渠道不得进入候选。"
+      "note": "渠道偏差（2026-09-25 用户质询后如实登记）：通过运行实际走的是 xiaomi-token-plan-cn/mimo-v2.6-flash（2 次成功调用，非 deepseek 模型、为用户自有套餐渠道）——不在授权口径（授权=deepseek 免费池）。根因是候选回退按 catalog 组序构建让 xiaomi 插队；已修正为 deepseek-only 候选（opencode-zen deepseek 免费档 → goat deepseek-v4.1-flash），任何非 deepseek 渠道需用户单独授权。技术结论（上下文继承）与渠道无关，维持 passed。 用户随后逐渠道授权（仅测试环节）并固化白名单 v095AuthorizedModels：sub2api/gemini-3.8-flash、goat/deepseek-v4.1-flash、goat/xiaomi/mimo-v2.6-flash、opencode-zen 全部；xiaomi-token-plan-cn 等白名单外渠道不得进入候选。 尝试顺序（用户指定）：goat xiaomi/mimo-v2.6-flash → sub2api gemini-3.8-flash → goat deepseek-v4.1-flash → opencode-zen 各档。"
     },
     {
       "id": "V095-14",

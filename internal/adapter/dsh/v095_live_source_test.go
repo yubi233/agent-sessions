@@ -235,14 +235,15 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 		"goat":         {"deepseek/deepseek-v4.1-flash": true, "xiaomi/mimo-v2.6-flash": true},
 		"opencode-zen": {"deepseek-v4-flash-free": true, "mimo-v2.5-free": true, "big-pickle": true, "ling-3.0-flash-fin-free": true, "nemotron-3-ultra-free": true, "nemotron-3.5-lightning-free": true},
 	}
-	// 尝试顺序：优先套餐密钥路由（goat deepseek → goat xiaomi → sub2api），
-	// opencode-zen 免费档殿后（当前对非 OpenCode 客户端 403/400，失败不计额度）。
+	// 尝试顺序（2026-09-25 用户指定）：goat xiaomi → sub2api gemini →
+	// goat deepseek，opencode-zen 免费档殿后（当前对非 OpenCode 客户端
+	// 403/400，失败不计额度）。
 	authorizedModels := func(info initializeResult) []string {
 		type route struct{ provider, id string }
 		order := []route{
-			{"goat", "deepseek/deepseek-v4.1-flash"},
 			{"goat", "xiaomi/mimo-v2.6-flash"},
 			{"sub2api", "gemini-3.8-flash"},
+			{"goat", "deepseek/deepseek-v4.1-flash"},
 			{"opencode-zen", "deepseek-v4-flash-free"},
 			{"opencode-zen", "mimo-v2.5-free"},
 			{"opencode-zen", "big-pickle"},
