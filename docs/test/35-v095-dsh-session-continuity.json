@@ -2,7 +2,7 @@
   "suite": "V095",
   "plan_id": "V095",
   "status": "in_progress",
-  "description": "v0.9.5 DSH 会话接续完整化：P0 全局会话可续聊（导入映射携带来源根/编码、resume 按真实存储绑定桥、旧映射自升级、导入文案对齐）；P1 持续同步（水位增量导入回执成功才落账、标题更新、预览/回放合一去重、进入工作区静默节流刷新）；P2 历史完整可见（快照首屏窗口+before_seq 翻页、include_all 按需导入全部、客户端加载更早）。来源 docs/zh/迭代计划/迭代计划v0.9.5.md。P0..P2 已实施并分别提交；真实模型旅程因部署路由缺 DEEPSEEK_API_KEY 如实 blocked（credential_or_quota_blocker，授权额度未消耗，凭据就绪后经 AGENT_SESSIONS_DSH_REAL=1 复跑）；可见 GUI 旅程与实机旅程待用户侧条件。详见实施记录 35。",
+  "description": "v0.9.5 DSH 会话接续完整化：P0 全局会话可续聊（导入映射携带来源根/编码、resume 按真实存储绑定桥、旧映射自升级、导入文案对齐）；P1 持续同步（水位增量导入回执成功才落账、标题更新、预览/回放合一去重、进入工作区静默节流刷新）；P2 历史完整可见（快照首屏窗口+before_seq 翻页、include_all 按需导入全部、客户端加载更早）。来源 docs/zh/迭代计划/迭代计划v0.9.5.md。P0..P2 已实施并分别提交；真实模型旅程已通过（2026-09-25，桥组合接入 settings-file+llm-pi-ai 后经用户真实路由 xiaomi mimo-v2.6-flash 两段式验证上下文继承，恰耗授权 2 次调用）；可见 GUI 旅程与实机旅程待用户侧条件。详见实施记录 35。",
   "environment": {
     "local": "隔离 fixture 与本地 Relay/Daemon；live 门控（AGENT_SESSIONS_DSH_LIVE=1）使用真实 dsh-acp-demo 桥子进程与临时存储；真实数据仅以副本进入临时目录，绝不写用户 ~/.dsh/sessions",
     "flutter": "apps/mobile 单元/widget；投影折叠与分页流程以控制器级回归覆盖",
@@ -38,7 +38,9 @@
         "全局布局 zstd 导入 → 断言 persistence_root=~/.dsh/sessions、compression=zstd"
       ],
       "expected": "映射与 artifact 实际存储位置/编码一致；只存本机不上传",
-      "cleanup": ["临时目录随测试回收"],
+      "cleanup": [
+        "临时目录随测试回收"
+      ],
       "evidence": [
         "internal/daemon/v095_dsh_source_test.go TestV095ImportRecordsSourceRootAndCompression / TestV095ImportGlobalLayoutRecordsGlobalSourceRootAndZstd"
       ]
@@ -58,7 +60,9 @@
         "全局存储来源定位 → 落在全局根与 zstd"
       ],
       "expected": "桥绑定 artifact 实际存储；旧映射一次性自升级；定位失败保持缺省 fail-closed",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "internal/adapter/dsh/v095_resume_source_test.go TestV095ResumeWithExplicitSourceRootRoutesToSourceFactory",
         "internal/daemon/v095_dsh_source_test.go TestV095ResumeUpgradesLegacyMappingFromWorkspaceStore / FromGlobalStore"
@@ -78,7 +82,9 @@
         "根不存在/非目录/相对路径/编码非法/为空 → spawn 前 fail-closed，错误指向根问题"
       ],
       "expected": "编码错误会被上游整根拒绝，必须精确注入；非法输入不留半开进程",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "internal/adapter/dsh/v095_resume_source_test.go TestV095MinimalEnvWithCompressionOverridesEncoding / TestV095SourceTransportRejectsInvalidRootOrCompression"
       ]
@@ -98,7 +104,9 @@
         "既有 TestLiveBridgeLifecycle 不回退"
       ],
       "expected": "三条全部通过；真实数据仅副本进入临时目录",
-      "cleanup": ["临时目录随测试回收；不触碰用户存储"],
+      "cleanup": [
+        "临时目录随测试回收；不触碰用户存储"
+      ],
       "evidence": [
         "internal/adapter/dsh/v095_live_source_test.go TestLiveBridgeSourceBoundGlobalLayoutResume / TestLiveBridgeRealGlobalArtifactResume（LIVE_SUMMARY source_bound=…,zstd load=ok）"
       ]
@@ -117,7 +125,9 @@
         "两处弹窗改为如实描述（标题+上下文；正文只经用户自己的 Relay）→ 绿"
       ],
       "expected": "不再宣称「仅导入元数据」；信任边界表述准确",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "apps/mobile/test/dsh_mode_test.dart V081-P2 导入确认（10/10 绿）"
       ]
@@ -137,7 +147,9 @@
         "watermark 之后有新 title 行才返回新标题，否则为空"
       ],
       "expected": "增量无重复、无空洞；DSH 重写标题可感知",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "internal/adapter/dsh/persistence_context_test.go TestV095ReadSessionEventsAfterReturnsOnlyNewMessages / TestV095ReadSessionEventsAfterLimitTruncationKeepsEarliestAndStopsWatermark"
       ]
@@ -157,7 +169,9 @@
         "第三次导入零消息零标题（不重发预览）"
       ],
       "expected": "回执失败不推进水位（下次重发同批增量，不丢消息）；无新行零事件",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "internal/daemon/v095_dsh_source_test.go TestV095ImportIncrementalSyncsNewMessagesOnly"
       ]
@@ -175,7 +189,9 @@
         "ResolveDSHImport 对 UNIQUE 冲突（已存在会话）在标题非空且变化时更新 display_name"
       ],
       "expected": "只写标题不动状态/活跃时间；无变化不写（避免写放大）",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "internal/domain/daemon.go ResolveDSHImport；internal/store 契约（domain/store/daemon 包全绿）"
       ]
@@ -195,7 +211,9 @@
         "两条无前缀同文真实历史 → 不折叠"
       ],
       "expected": "回放后无双气泡；原始事件不删除；折叠仅按 imported 前缀精确匹配",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "apps/mobile/test/v095_import_replay_dedup_test.dart（3 项）"
       ]
@@ -214,7 +232,9 @@
         "静默失败不写 workspaceErrorMessage/不发失败状态；手动导入完整报错保留"
       ],
       "expected": "自动刷新用户无感；手动入口行为不变（dsh_mode_test 10/10）",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "apps/mobile/lib/state/session_controller.dart refreshDSHSessionsSilently；session_screens.dart 详情页挂载调度"
       ]
@@ -234,7 +254,9 @@
         "到头部后 canLoadOlder=false、hasMore 标记清除；翻页事件经 fromRelayEvent 转换"
       ],
       "expected": "大会话首屏不再全量拉取；全历史可经翻页完整到达",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "apps/mobile/test/v095_history_paging_test.dart",
         "internal/httpapi handleSessionSnapshot（Go 全量绿）；packages/protocol 生成物（task check 绿）"
@@ -255,7 +277,9 @@
         "详情页「显示全部」切换时静默触发（60s 节流、失败无感）"
       ],
       "expected": "按需全量导入可达；默认活跃过滤不变",
-      "cleanup": ["无"],
+      "cleanup": [
+        "无"
+      ],
       "evidence": [
         "internal/daemon/v095_dsh_source_test.go TestV095ImportIncludeAllBypassesActiveWindow"
       ]
@@ -263,23 +287,27 @@
     {
       "id": "V095-13",
       "title": "真实模型续聊旅程（授权 1–2 次调用）",
-      "status": "blocked",
+      "status": "passed",
       "phase": "P3",
       "category": "real_model",
       "priority": "P1",
       "test_layer": "real_gated",
       "precondition": "AGENT_SESSIONS_DSH_REAL=1；部署路由可解析 API key（env 或 credentials）",
       "steps": [
-        "桥① 临时全局根新建会话（免费池档）发送暗号",
-        "桥② 按导入映射路径回放同一 artifact，续问暗号",
-        "断言回复含暗号（原上下文继承）"
+        "桥① 临时全局根新建会话（目录含用户 settings.yaml 全部路由；免费档逐个重试，400/403 不计额度）→ xiaomi mimo-v2.6-flash 接活，发送暗号「芝麻开门」→ 回复「好的」（真实调用 1）",
+        "桥② 按导入映射路径（来源根+编码）回放同一 artifact，沿用冻结路由，续问暗号",
+        "断言回复含暗号（原上下文继承）→ 通过（真实调用 2，授权 ≤2 次恰好用满）"
       ],
       "expected": "两段真实调用证明「导入的全局会话可在原上下文继续」；no-key 失败如实 SKIP（credential_or_quota_blocker），其余失败 FAIL",
-      "cleanup": ["临时目录回收；不触碰用户真实会话"],
+      "cleanup": [
+        "临时目录回收；不触碰用户真实会话"
+      ],
       "evidence": [
         "internal/adapter/dsh/v095_live_source_test.go TestV095LiveGlobalResumeRealPrompt",
-        "2026-09-25 实测：session/new、免费档目录解析、artifact 物化、源绑定回放路径全部就绪；prompt 在 API 调用前被拦（deepseek-official 路由缺 DEEPSEEK_API_KEY，env 与 credentials 均未配置）→ blocked；授权额度未消耗"
-      ]
+        "LIVE_SUMMARY provider=dsh protocol=1 source_bound=global,zstd real_model=2 model=dsh:model:xiaomi-token-plan-cn:mimo-v2.6-flash context_inherited=1（2026-09-25）",
+        "期间修齐：桥组合接入 settings-file+llm-pi-ai（用户真实路由注册）；上游 bin.ts stdin-EOF 竞态（监听在 boot 后挂载，已修并重建 lib）"
+      ],
+      "note": "新登记上游边界：opencode-zen 免费档 403 仅限 OpenCode 客户端；deepseek-v4-flash-free 400 不可用；可用路由为用户 settings.yaml 中的 xiaomi/goat/openai/sub2api/axis-grok"
     },
     {
       "id": "V095-14",
@@ -297,8 +325,12 @@
         "320+ 事件大会话：加载更早逐页到头部"
       ],
       "expected": "全程无手工导入/刷新补发；文案与状态真实",
-      "cleanup": ["按 restart.sh 既有清理"],
-      "evidence": ["待执行（自动化覆盖已到 daemon/桥层）"]
+      "cleanup": [
+        "按 restart.sh 既有清理"
+      ],
+      "evidence": [
+        "待执行（自动化覆盖已到 daemon/桥层）"
+      ]
     },
     {
       "id": "V095-15",
@@ -314,8 +346,12 @@
         "顺带补跑 V094-21 完整旅程后翻转 V094-21/22"
       ],
       "expected": "设备连接后按 steps 执行；未连接如实保持 planned",
-      "cleanup": ["不重置用户数据"],
-      "evidence": ["待设备连接（2026-09-25 adb devices 为空）"]
+      "cleanup": [
+        "不重置用户数据"
+      ],
+      "evidence": [
+        "待设备连接（2026-09-25 adb devices 为空）"
+      ]
     }
   ]
 }

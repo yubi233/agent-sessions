@@ -225,16 +225,32 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 	}
 	workspace := t.TempDir()
 
-	freeModel := func(info initializeResult) string {
+	freeModels := func(info initializeResult) []string {
+		// 只选显式 free 路由（flash 在 deepseek-official 下也存在，且该 provider
+		// 无密钥；free 档来自用户 settings.yaml 的 opencode-zen 等真实路由）。
+		// 免费池模型的可用性由上游决定（个别可能 400 unavailable），调用方按序
+		// 重试；400 不可用不产生 token 消耗。
+		var free, fallback []string
 		for _, group := range info.ModelCatalog.Groups {
 			for _, model := range group.Models {
-				lower := strings.ToLower(model.Value + " " + model.ID)
-				if strings.Contains(lower, "free") || strings.Contains(lower, "flash") {
-					return model.Value
+				t.Logf("catalog model: provider=%s value=%s id=%s", group.ID, model.Value, model.ID)
+				if strings.Contains(strings.ToLower(model.Value), "free") {
+					free = append(free, model.Value)
+					continue
+				}
+				// 二级回退：凭据文档里有密钥的 deepseek/闪档路由（goat 的
+				// deepseek-v4.1-flash 是 v0.9.4 真机同款模型；xiaomi 为套餐计费），
+				// 仅在免费档全部不可用时兜底，仍然在授权口径内。
+				id := strings.ToLower(model.ID)
+				if strings.Contains(group.ID, "goat") && strings.Contains(id, "deepseek") {
+					fallback = append(fallback, model.Value)
+				}
+				if strings.Contains(group.ID, "xiaomi") && strings.Contains(id, "flash") {
+					fallback = append(fallback, model.Value)
 				}
 			}
 		}
-		return ""
+		return append(free, fallback...)
 	}
 	startBridge := func() (*dshBinTransport, *handle, initializeResult, error) {
 		tr, err := newBinTransportForSource(globalRoot, workspace, PersistenceCompressionZstd)
@@ -243,6 +259,9 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 		}
 		h := newHandle(tr)
 		go h.readLoop()
+		// settings 热发布有 debounce（~100ms）+ 文档读取：立即握手会抢在
+		// llm-pi-ai 路由注册之前，目录退化为合成默认路由。等一拍再握手。
+		time.Sleep(1500 * time.Millisecond)
 		initCtx, cancelInit := withTimeout(ctx, handshakeTimeoutFor())
 		info, err := h.initialize(initCtx)
 		cancelInit()
@@ -301,23 +320,34 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 		t.Fatalf("session/new: %v", err)
 	}
 	h1.setSessionID(sessionID)
-	picked := freeModel(info1)
-	if picked == "" {
+	candidates := freeModels(info1)
+	if len(candidates) == 0 {
 		_ = h1.Dispose(context.Background())
 		t.Skip("目录中没有免费池档模型，未经授权不消耗付费调用")
 	}
-	h1.SetModel(picked)
-	reply1, err := runTurn(h1, "请记住暗号：芝麻开门。现在只回复两个字：好的")
-	_ = h1.Dispose(context.Background())
-	if err != nil {
-		// 凭据不可达是环境条件而非产品缺陷：按 V083-26 惯例如实 skip
-		// （credential_or_quota_blocker），授权额度不消耗、不伪造证据。
-		if strings.Contains(err.Error(), "no API key") {
-			t.Skipf("credential_or_quota_blocker：部署路由缺 DEEPSEEK_API_KEY（env 与 credentials 均未配置）：%v", err)
+	// 逐个免费档重试：上游对个别免费模型返回 400 unavailable（不消耗额度），
+	// 取第一个接活的模型建立会话；成功即真实消耗 1 次调用（授权 ≤2 次）。
+	var reply1 string
+	var lastErr error
+	picked := ""
+	for _, candidate := range candidates {
+		h1.SetModel(candidate)
+		reply, err := runTurn(h1, "请记住暗号：芝麻开门。现在只回复两个字：好的")
+		if err == nil && strings.TrimSpace(reply) != "" {
+			reply1, picked = reply, candidate
+			break
 		}
-		t.Fatalf("桥①首轮（真实调用）: %v\n桥 stderr:\n%s", err, tr1.stderr.digest())
+		lastErr = err
+		t.Logf("candidate unavailable: %s err=%v", candidate, err)
 	}
-	t.Logf("bridge1 reply=%q", reply1)
+	_ = h1.Dispose(context.Background())
+	if picked == "" {
+		if lastErr != nil && strings.Contains(lastErr.Error(), "no API key") {
+			t.Skipf("credential_or_quota_blocker：部署路由缺 API key（env 与 credentials 均未配置）：%v", lastErr)
+		}
+		t.Fatalf("桥①首轮（真实调用）全部免费档不可用: lastErr=%v\n桥 stderr:\n%s", lastErr, tr1.stderr.digest())
+	}
+	t.Logf("bridge1 model=%s reply=%q", picked, reply1)
 
 	// artifact 必须已落在全局布局（zstd）。
 	artifacts, err := ScanGlobalSessionArtifacts(globalRoot)
@@ -343,4 +373,5 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 		t.Fatalf("续聊未继承原上下文: err=%v reply=%q\n桥 stderr:\n%s", err, reply2, tr2.stderr.digest())
 	}
 	t.Logf("LIVE_SUMMARY provider=dsh protocol=1 source_bound=global,zstd real_model=2 model=%s context_inherited=1", picked)
+	_ = tr1
 }
