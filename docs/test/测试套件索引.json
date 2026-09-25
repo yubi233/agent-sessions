@@ -1,5 +1,5 @@
 {
-  "registry_version": 19,
+  "registry_version": 20,
   "status": "in_progress",
   "description": "Agent Sessions 稳定测试 ID 的唯一注册表。每个具体 ID 只由一个领域 suite 拥有；跨项目基础验收只消费已有 ID，不重复定义。",
   "uniqueness_rule": "每个具体测试 ID 必须且只能出现在一个 suite 的 owned_ids 或 id_prefix 范围中。consumed_ids 只允许引用其他 suite 已拥有的 ID。新增 ID 只能追加，不能复用或重编号；跨层验证应新增独立 ID，不能把同一 ID 交给多个 suite 定义。",
@@ -1414,7 +1414,8 @@
         "V095-12",
         "V095-13",
         "V095-14",
-        "V095-15"
+        "V095-15",
+        "V095-16"
       ],
       "consumed_ids": [],
       "dependencies": [

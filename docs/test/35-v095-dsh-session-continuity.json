@@ -307,7 +307,7 @@
         "LIVE_SUMMARY provider=dsh protocol=1 source_bound=global,zstd real_model=2 model=dsh:model:xiaomi-token-plan-cn:mimo-v2.6-flash context_inherited=1（2026-09-25）",
         "期间修齐：桥组合接入 settings-file+llm-pi-ai（用户真实路由注册）；上游 bin.ts stdin-EOF 竞态（监听在 boot 后挂载，已修并重建 lib）"
       ],
-      "note": "渠道偏差（2026-09-25 用户质询后如实登记）：通过运行实际走的是 xiaomi-token-plan-cn/mimo-v2.6-flash（2 次成功调用，非 deepseek 模型、为用户自有套餐渠道）——不在授权口径（授权=deepseek 免费池）。根因是候选回退按 catalog 组序构建让 xiaomi 插队；已修正为 deepseek-only 候选（opencode-zen deepseek 免费档 → goat deepseek-v4.1-flash），任何非 deepseek 渠道需用户单独授权。技术结论（上下文继承）与渠道无关，维持 passed。 用户随后逐渠道授权（仅测试环节）并固化白名单 v095AuthorizedModels：sub2api/gemini-3.8-flash、goat/deepseek-v4.1-flash、goat/xiaomi/mimo-v2.6-flash、opencode-zen 全部；xiaomi-token-plan-cn 等白名单外渠道不得进入候选。 尝试顺序（用户指定）：goat xiaomi/mimo-v2.6-flash → sub2api gemini-3.8-flash → goat deepseek-v4.1-flash → opencode-zen 各档。"
+      "note": "渠道偏差（2026-09-25 用户质询后如实登记）：通过运行实际走的是 xiaomi-token-plan-cn/mimo-v2.6-flash（2 次成功调用，非 deepseek 模型、为用户自有套餐渠道）——不在授权口径（授权=deepseek 免费池）。根因是候选回退按 catalog 组序构建让 xiaomi 插队；已修正为 deepseek-only 候选（opencode-zen deepseek 免费档 → goat deepseek-v4.1-flash），任何非 deepseek 渠道需用户单独授权。技术结论（上下文继承）与渠道无关，维持 passed。 用户随后逐渠道授权（仅测试环节）并固化白名单 v095AuthorizedModels：sub2api/gemini-3.8-flash、goat/deepseek-v4.1-flash、goat/xiaomi/mimo-v2.6-flash、opencode-zen 全部；xiaomi-token-plan-cn 等白名单外渠道不得进入候选。 尝试顺序（用户指定）：goat xiaomi/mimo-v2.6-flash → sub2api gemini-3.8-flash → goat deepseek-v4.1-flash → opencode-zen 各档。 尝试顺序（用户指定）：goat xiaomi/mimo-v2.6-flash → sub2api gemini-3.8-flash → goat deepseek-v4.1-flash → opencode-zen 各档。"
     },
     {
       "id": "V095-14",
@@ -335,7 +335,7 @@
     {
       "id": "V095-15",
       "title": "实机定向旅程与 V094-21/22",
-      "status": "planned",
+      "status": "passed",
       "phase": "P3",
       "category": "device",
       "priority": "P2",
@@ -350,7 +350,33 @@
         "不重置用户数据"
       ],
       "evidence": [
-        "待设备连接（2026-09-25 adb devices 为空）"
+        "2026-09-25 实机（d723617 vermeer）：恢复码接管 → v0.9.5 release APK 覆盖安装 → adb reverse → DSH 工作区 3d_survivors_like_0922 自动发现并确认 → 新建 DSH 会话（自动 start，会话可控制）",
+        "多轮会话自手机发起：T1 审读（5031 事件，模型带工具读码）→ T2 修复+自检（6661 事件）→ 会话收敛 idle；截图 .task/phone-*.png"
+      ]
+    },
+    {
+      "id": "V095-16",
+      "title": "真实项目多轮旅程：手机发起任务，模型审读→修复→自检（3d_survivors_like_0922 交互缺陷）",
+      "status": "passed",
+      "phase": "P3",
+      "category": "real_project_multiturn",
+      "priority": "P1",
+      "test_layer": "real_gated",
+      "precondition": "AGENT_SESSIONS_DSH_REAL=1 + AGENT_SESSIONS_DSH_PROJECT=<项目>；实机路径经手机 App 下发任务；调用方先对项目做快照备份",
+      "steps": [
+        "T1（手机发送）：模型审读玩家交互代码，只报告一个真实交互缺陷（文件/复现/根因/影响）",
+        "T2（手机发送）：按报告实施最小修复并运行 npm run typecheck + selftest + sim 自检",
+        "独立核验：diff 对比备份 + 本机复跑 typecheck/selftest"
+      ],
+      "expected": "缺陷真实且有证据；修复最小且验证通过；会话经手机→Relay→daemon→桥全链执行",
+      "cleanup": [
+        "模型自清理探针；项目改动留存待用户确认（备份 /tmp/3dsl-backup-20260925.tgz）"
+      ],
+      "evidence": [
+        "缺陷：地面移动时角色朝向冻结（p.yaw 仅空中分支赋值，world.ts:298；heroSync 忠实渲染陈旧朝向，违反 README:17 自动转身契约）",
+        "修复：src/core/world.ts +2 行（滑铲分支与地面分支各同步 p.yaw=atan2(vx,vz)）；typecheck exit 0；movement/combat/progression 自测全过；sim 9 分钟局通关断言通过",
+        "模型白盒探针实测：地面八向 yaw 与期望一致、静止保持、滑铲朝向=起铲方向；独立 diff 核验仅 1 文件 2 行",
+        "internal/adapter/dsh/v095_live_project_journey_test.go（门控复跑入口）"
       ]
     }
   ]
