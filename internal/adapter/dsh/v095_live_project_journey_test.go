@@ -45,8 +45,8 @@ func TestV095LiveProjectInteractionDefectJourney(t *testing.T) {
 	go h.readLoop()
 	defer func() { _ = h.Dispose(context.Background()) }()
 
-	// settings 热发布有 debounce：立即握手目录会退化为合成默认路由
-	//（记录 35 §4.2），等一拍再握手。
+	// 桥组合加载需要时间（settings/多 Provider 注册）：立即握手可能拿到
+	// 退化目录，等一拍再握手。
 	time.Sleep(1500 * time.Millisecond)
 	initCtx, cancelInit := withTimeout(ctx, handshakeTimeoutFor())
 	info, err := h.initialize(initCtx)
