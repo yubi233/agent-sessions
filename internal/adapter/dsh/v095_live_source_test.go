@@ -225,32 +225,45 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 	}
 	workspace := t.TempDir()
 
-	freeModels := func(info initializeResult) []string {
-		// 只选显式 free 路由（flash 在 deepseek-official 下也存在，且该 provider
-		// 无密钥；free 档来自用户 settings.yaml 的 opencode-zen 等真实路由）。
-		// 免费池模型的可用性由上游决定（个别可能 400 unavailable），调用方按序
-		// 重试；400 不可用不产生 token 消耗。
-		// 授权口径（2026-09-25 用户确认）：仅 deepseek 模型——① 免费池（settings
-		// 中带 free 的 deepseek 路由）；② 免费池不可用时回退到凭据文档有密钥的
-		// goat deepseek-v4.1-flash（模型名与 v0.9.4 真机一致）。任何非 deepseek
-		// 渠道（xiaomi/openai/sub2api 等）不在授权内，不进入候选——首版曾因
-		// 按 catalog 组序构建回退列表让 xiaomi 插队接活，属越权，已修正。
-		var picked []string
+	// v095AuthorizedModels 是用户逐渠道授权的真实模型白名单（2026-09-25，
+	// 仅测试环节，固化于此）：sub2api/gemini-3.8-flash、goat/deepseek-v4.1-flash、
+	// goat/xiaomi/mimo-v2.6-flash、opencode-zen 全部模型。白名单之外的渠道
+	// 不得进入候选——首版回退曾让 xiaomi-token-plan-cn 插队接活，属越权
+	// （记录 35 §4.3），该渠道现明确不在白名单。
+	v095AuthorizedModels := map[string]map[string]bool{
+		"sub2api":      {"gemini-3.8-flash": true},
+		"goat":         {"deepseek/deepseek-v4.1-flash": true, "xiaomi/mimo-v2.6-flash": true},
+		"opencode-zen": {"deepseek-v4-flash-free": true, "mimo-v2.5-free": true, "big-pickle": true, "ling-3.0-flash-fin-free": true, "nemotron-3-ultra-free": true, "nemotron-3.5-lightning-free": true},
+	}
+	// 尝试顺序：优先套餐密钥路由（goat deepseek → goat xiaomi → sub2api），
+	// opencode-zen 免费档殿后（当前对非 OpenCode 客户端 403/400，失败不计额度）。
+	authorizedModels := func(info initializeResult) []string {
+		type route struct{ provider, id string }
+		order := []route{
+			{"goat", "deepseek/deepseek-v4.1-flash"},
+			{"goat", "xiaomi/mimo-v2.6-flash"},
+			{"sub2api", "gemini-3.8-flash"},
+			{"opencode-zen", "deepseek-v4-flash-free"},
+			{"opencode-zen", "mimo-v2.5-free"},
+			{"opencode-zen", "big-pickle"},
+			{"opencode-zen", "ling-3.0-flash-fin-free"},
+			{"opencode-zen", "nemotron-3-ultra-free"},
+			{"opencode-zen", "nemotron-3.5-lightning-free"},
+		}
+		byRoute := map[string]string{}
 		for _, group := range info.ModelCatalog.Groups {
 			for _, model := range group.Models {
 				t.Logf("catalog model: provider=%s value=%s id=%s", group.ID, model.Value, model.ID)
-				id := strings.ToLower(model.Value + " " + model.ID)
-				isDeepseek := strings.Contains(id, "deepseek")
-				if !isDeepseek {
-					continue
-				}
-				if strings.Contains(id, "free") {
-					picked = append(picked, model.Value)
-					continue
-				}
-				if strings.Contains(group.ID, "goat") {
-					picked = append(picked, model.Value)
-				}
+				byRoute[group.ID+"/"+model.ID] = model.Value
+			}
+		}
+		var picked []string
+		for _, r := range order {
+			if !v095AuthorizedModels[r.provider][r.id] {
+				continue // 双保险：顺序表本身也只含白名单路由。
+			}
+			if value, ok := byRoute[r.provider+"/"+r.id]; ok {
+				picked = append(picked, value)
 			}
 		}
 		return picked
@@ -323,7 +336,7 @@ func TestV095LiveGlobalResumeRealPrompt(t *testing.T) {
 		t.Fatalf("session/new: %v", err)
 	}
 	h1.setSessionID(sessionID)
-	candidates := freeModels(info1)
+	candidates := authorizedModels(info1)
 	if len(candidates) == 0 {
 		_ = h1.Dispose(context.Background())
 		t.Skip("目录中没有免费池档模型，未经授权不消耗付费调用")
