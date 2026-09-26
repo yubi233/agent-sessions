@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- v0.9.7 阶段 2.1：本地栈监督代理。安装：
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agentsessions.localstack.plist
+     停止：launchctl bootout gui/$(id -u)/com.agentsessions.localstack（并按 README 加 pause 标志） -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentsessions.localstack</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yubi/code/agentProject/agent-sessions/tools/local_stack_supervisor.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/yubi/Library/Android/sdk/platform-tools</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/yubi/code/agentProject/agent-sessions/.task/supervisor.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yubi/code/agentProject/agent-sessions/.task/supervisor.log</string>
+</dict>
+</plist>

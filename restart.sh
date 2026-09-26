@@ -1549,6 +1549,13 @@ start_action() {
   if [[ "$WITH_FLUTTER" == true ]] && ! start_flutter; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_WEB" == true ]] && ! start_web; then cleanup_start_failure; return 1; fi
   if [[ "$WITH_ADMIN" == true ]] && ! start_admin; then cleanup_start_failure; return 1; fi
+  # v0.9.7 阶段 2.3：历史日志目录只保留最近 10 个（当前活跃目录必然最新）。
+  local -a old_logs=()
+  while IFS= read -r d; do old_logs+=("$d"); done < <(ls -1dt "$LOG_ROOT"/20* 2>/dev/null | tail -n +11)
+  local old_dir
+  for old_dir in "${old_logs[@]:-}"; do
+    [[ -n "$old_dir" && "$old_dir" != "$LOG_DIR" ]] && rm -rf "$old_dir"
+  done
   echo "restart.sh: selected services are running"
 }
 

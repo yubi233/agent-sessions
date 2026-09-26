@@ -57,25 +57,28 @@ func Integrity(path string, validateEvents bool) error {
 	if !validateEvents {
 		return nil
 	}
-	// 事件序号单调且无重复（恢复后仍可重放）。
-	rows, err := db.Query(`SELECT event_seq FROM session_events ORDER BY session_id, event_seq`)
+	// 事件序号单调且无重复（恢复后仍可重放）。event_seq 是会话内局部序号，
+	// 跨会话不可比（v0.9.6 修复：旧实现跨会话比较，上一会话 116 之后下一
+	// 会话从 1 开始即误报 not monotonic）；这里按会话分组各自校验单调。
+	rows, err := db.Query(`SELECT session_id, event_seq FROM session_events ORDER BY session_id, event_seq`)
 	if err != nil {
 		// 空库可能无事件表行，视为合法。
 		return nil
 	}
 	defer rows.Close()
+	prevSession := ""
 	prev := int64(0)
 	hasRow := false
 	for rows.Next() {
+		var session string
 		var seq int64
-		if err := rows.Scan(&seq); err != nil {
+		if err := rows.Scan(&session, &seq); err != nil {
 			return err
 		}
-		if hasRow && seq <= prev {
-			return fmt.Errorf("event seq not monotonic: %d then %d", prev, seq)
+		if hasRow && session == prevSession && seq <= prev {
+			return fmt.Errorf("event seq not monotonic in session %s: %d then %d", session, prev, seq)
 		}
-		prev = seq
-		hasRow = true
+		prevSession, prev, hasRow = session, seq, true
 	}
 	return rows.Err()
 }

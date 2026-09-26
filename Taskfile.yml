@@ -881,6 +881,13 @@ tasks:
       NOW:
         sh: date +%Y%m%dT%H%M%S
 
+  # v0.9.7 阶段 2.2：本地栈（Relay+Daemon）备份，滚动保留 14 份；
+  # 定时执行由 launchd com.agentsessions.localbackup 承载。
+  local:backup:
+    desc: 本地栈备份（relay.db+daemon.db，VACUUM INTO 在线备份+完整性校验）
+    cmds:
+      - ./tools/backup_local_stack.sh
+
   deploy:restore:
     desc: 从备份恢复并校验完整性
     cmds:

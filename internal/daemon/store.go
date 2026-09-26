@@ -1421,3 +1421,82 @@ func (s *Store) RelayOutboxGenerationProjection() ([]RelayOutboxGenerationRow, e
 func DefaultStatePath(root string) string {
 	return filepath.Join(root, "daemon.db")
 }
+
+// CompactRelayOutboxSummary 记录一次 outbox 清理的删除量，供日志与诊断投影。
+type CompactRelayOutboxSummary struct {
+	DeliveredEvents     int64
+	QuarantinedEvents   int64
+	DeliveredUsages     int64
+	StaleGenerationCmds int64
+}
+
+// CompactRelayOutbox 清理 outbox 终态行与旧世代命令行（v0.9.7 阶段 3.1）。
+// 历史原因：delivered/quarantined 行自 v0.9.3 起只标记不删除，长期运行下
+// daemon.db 无界增长（2026-09-27 实测 12 万行 ≈ 649MB）。策略：
+//   - delivered 事件/用量：全部删除——已确认送达，Relay 侧是权威账本；
+//   - quarantined 事件：保留当前世代的全部（活跃审计）与全局最近
+//     quarantineKeep 条（跨世代审计样本），其余旧世代死信删除；
+//   - relay_commands：仅删除非当前世代且已终态（result_status 非空）的行，
+//     当前世代与未收口命令一律保留。
+//
+// pending/failed 永不触碰；单事务执行保证不留半清理状态；VACUUM 由调用方
+// 在事务提交后的空闲期执行（SQLite 不允许事务内 VACUUM）。
+func (s *Store) CompactRelayOutbox(quarantineKeep int) (CompactRelayOutboxSummary, error) {
+	if quarantineKeep < 0 {
+		quarantineKeep = 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var summary CompactRelayOutboxSummary
+	tx, err := s.db.Begin()
+	if err != nil {
+		return summary, err
+	}
+	defer tx.Rollback()
+	var current string
+	if err := tx.QueryRow(`SELECT COALESCE(value,'') FROM local_state WHERE key='relay_generation'`).Scan(&current); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return summary, err
+	}
+	// delivered 事件与用量：终态即垃圾。
+	if result, err := tx.Exec(`DELETE FROM relay_event_outbox WHERE status='delivered'`); err != nil {
+		return summary, err
+	} else if summary.DeliveredEvents, err = result.RowsAffected(); err != nil {
+		return summary, err
+	}
+	if result, err := tx.Exec(`DELETE FROM relay_usage_outbox WHERE status='delivered'`); err != nil {
+		return summary, err
+	} else if summary.DeliveredUsages, err = result.RowsAffected(); err != nil {
+		return summary, err
+	}
+	// quarantined 死信：当前世代全保留（活跃审计），旧世代只留最近 N 条样本。
+	result, err := tx.Exec(
+		`DELETE FROM relay_event_outbox WHERE status='quarantined' AND relay_generation <> ?
+		 AND event_id NOT IN (
+		   SELECT event_id FROM relay_event_outbox
+		   WHERE status='quarantined' ORDER BY created_at DESC LIMIT ?)`,
+		current, quarantineKeep)
+	if err != nil {
+		return summary, err
+	}
+	if summary.QuarantinedEvents, err = result.RowsAffected(); err != nil {
+		return summary, err
+	}
+	// 旧世代且已收口的命令行：活动命令（received/started 等）与当前世代不动。
+	if result, err := tx.Exec(
+		`DELETE FROM relay_commands WHERE result_status<>'' AND relay_generation <> ?`,
+		current); err != nil {
+		return summary, err
+	} else if summary.StaleGenerationCmds, err = result.RowsAffected(); err != nil {
+		return summary, err
+	}
+	return summary, tx.Commit()
+}
+
+// Vacuum 压缩主库文件（VACUUM 不允许在事务内执行，独立于 Compact 调用）。
+// 长期运行下 outbox 清理后会遗留大量空闲页，VACUUM 把文件归还操作系统。
+func (s *Store) Vacuum() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`VACUUM`)
+	return err
+}

@@ -124,8 +124,48 @@ func (l *RelayLoop) startSchedulers(ctx context.Context) {
 	l.schedMu.Unlock()
 	go l.workerLoop(ctx, false)
 	go l.workerLoop(ctx, true)
+	// v0.9.7 阶段 3.1：outbox 终态行清理（启动即清一次 + 每 24h 周期）。
+	// delivered 只增不删曾让 daemon.db 累积到 649MB（实施记录 37 §核查）。
+	go l.compactionLoop(ctx)
 	if l.Logger != nil {
 		l.Logger.Info("relay command scheduler started", "normal_workers", 1, "control_workers", 1)
+	}
+}
+
+// relayOutboxCompactInterval 是 outbox 清理的运行周期；首次在 daemon 启动后
+// 延迟 5 分钟执行，避开与 hello/SSE 建连争抢写锁。
+const relayOutboxCompactInterval = 24 * time.Hour
+
+// compactionLoop 周期性清理 outbox 终态行并压缩库文件。失败只告警不退出——
+// 清理是运维优化而非正确性前提，下一周期会重试。
+func (l *RelayLoop) compactionLoop(ctx context.Context) {
+	timer := time.NewTimer(5 * time.Minute)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		summary, err := l.Store.CompactRelayOutbox(100)
+		if err == nil {
+			// 只在确实清出空间时才付出 VACUUM 的成本。
+			if summary.DeliveredEvents+summary.QuarantinedEvents+summary.StaleGenerationCmds > 0 {
+				err = l.Store.Vacuum()
+			}
+		}
+		if err != nil {
+			if l.Logger != nil {
+				l.Logger.Warn("relay outbox compaction failed", "error", err)
+			}
+		} else if l.Logger != nil {
+			l.Logger.Info("relay outbox compacted",
+				"delivered_events", summary.DeliveredEvents,
+				"quarantined_events", summary.QuarantinedEvents,
+				"delivered_usages", summary.DeliveredUsages,
+				"stale_generation_commands", summary.StaleGenerationCmds)
+		}
+		timer.Reset(relayOutboxCompactInterval)
 	}
 }
 

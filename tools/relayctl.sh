@@ -20,6 +20,13 @@ start() {
     return 0
   fi
   mkdir -p "$state_dir" "$(dirname "$database_path")"
+  # v0.9.7 阶段 2.3：启动前归档上一次的 relay.log（保留最近 14 份），
+  # 防止单文件无界增长（2026-09-27 实测曾达 23MB）。
+  if [[ -s "$log_file" ]]; then
+    archive="$log_file.$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$log_file" "$archive"
+    ls -1t "$log_file".* 2>/dev/null | tail -n +15 | while IFS= read -r old; do rm -f "$old"; done
+  fi
   go build -o "$bin" ./apps/relay
   python3 - "$root" "$log_file" "$bin" --addr "$address" --db "$database_path" >"$pid_file" <<'PY'
 import subprocess

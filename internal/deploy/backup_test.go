@@ -70,3 +70,38 @@ func TestBackupDetectsCorruption(t *testing.T) {
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
+
+// v0.9.7 阶段 2.2 回归：event_seq 是会话内局部序号，跨会话必须各自单调。
+// 旧校验器跨会话比较（上一会话 116 → 下一会话 1 即误报），本地库含导入回填
+// 事件后该误报阻断每日备份。
+func TestIntegrityPerSessionSeqMonotonic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "relay.db")
+	db, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	for _, tc := range []struct {
+		session string
+		events  int
+	}{
+		{"sess_a", 116},
+		{"sess_b", 1},
+		{"sess_c", 40},
+	} {
+		for seq := 1; seq <= tc.events; seq++ {
+			if _, err := db.Exec(
+				`INSERT INTO session_events(session_id,event_type,envelope_json,event_seq) VALUES(?,?,?,?)`,
+				tc.session, "user.message", "{}", seq,
+			); err != nil {
+				t.Fatalf("insert %s#%d: %v", tc.session, seq, err)
+			}
+		}
+	}
+	if err := Integrity(path, true); err != nil {
+		t.Fatalf("多会话各自单调应通过（旧实现跨会话比较在此误报）: %v", err)
+	}
+	// 说明：UNIQUE(session_id,event_seq) 已在库层保证会话内无重复；校验器的
+	// 会话内单调检查是纵深防御，正常库不可能构造出触发它的行。
+}
