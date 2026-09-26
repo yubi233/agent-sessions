@@ -1,0 +1,16 @@
+diff --git a/examples/acp-agent/cordis.yml b/examples/acp-agent/cordis.yml
+index d37e09f2b8..797cc54a16 100644
+--- a/examples/acp-agent/cordis.yml
++++ b/examples/acp-agent/cordis.yml
+@@ -54,7 +54,10 @@
+     provider: deepseek-official
+     model: deepseek-v4-pro
+     persistenceRoot: !!js process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? './.sessions'
+-    persistenceCompression: !!js "process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none'"
++    # v0.9.7（Agent Sessions）：显式 DSH_SNAPSHOT_COMPRESSION 优先——record 模式
++    # 固化 none 会让 zstd 全局会话整根拒载（实施记录 35 §1.1/§5）；未显式时维持
++    # demo 原语义（快照模式 none，普通运行 zstd）。
++    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? (process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none')"
+     workspaceContext:
+       maxBytes: 65536
+     # Keep the persona to identity and behavior; tool plugins own tool guidance.

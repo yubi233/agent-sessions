@@ -1259,7 +1259,41 @@ start_admin() {
   wait_for_http admin "http://127.0.0.1:$ADMIN_PORT" "$pid"
 }
 
+# v0.9.7 阶段 0.3：DSH 桥预检（fail-fast）。桥以路径钉扎消费外部检出
+# （internal/adapter/dsh/bridge.go 的 defaultBin/defaultConfig + 产品 cordis.yml
+# 里的插件绝对路径）；检出被还原或 lib 构建产物被清理时，daemon 仍能启动但
+# 新建 DSH 会话必败。这里在 daemon 启动前把两类路径校验掉，缺失即报修复指引。
+check_dsh_bridge_preflight() {
+  if [[ "$WITH_DAEMON" != true ]]; then return 0; fi
+  local -a missing=() candidates=()
+  # 桥入口：env 优先；未设时与 bridge.go 的 defaultBin 保持一致（改动需同步）。
+  candidates+=("${AGENT_SESSIONS_DSH_BIN:-/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/bin.js}")
+  # 组合文件：restart.sh 注入产品根 cordis.yml（1275-1277 行同一优先级）。
+  candidates+=("${AGENT_SESSIONS_DSH_CONFIG:-$ROOT_DIR/cordis.yml}")
+  # 产品组合引用的全部插件绝对路径（name: '/…/lib/index.js'）。
+  local config="${AGENT_SESSIONS_DSH_CONFIG:-$ROOT_DIR/cordis.yml}"
+  if [[ -f "$config" ]]; then
+    while IFS= read -r plugin; do
+      [[ -n "$plugin" ]] && candidates+=("$plugin")
+    done < <(sed -n "s/^.*name: '\(\/[^']*\)'.*$/\1/p" "$config")
+  fi
+  local path
+  for path in "${candidates[@]}"; do
+    [[ -f "$path" ]] || missing+=("$path")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    echo "dsh bridge preflight: 桥钉扎路径缺失，新建 DSH 会话将失败：" >&2
+    local item
+    for item in "${missing[@]}"; do echo "  缺失: $item" >&2; done
+    echo "  修复指引: tools/dsh-bridge-patches/README.md（重建链 + 冒烟验收）" >&2
+    return 1
+  fi
+}
+
 start_daemon() {
+  if ! check_dsh_bridge_preflight; then
+    return 1
+  fi
   if [[ -z "$DAEMON_ACCESS_TOKEN" ]]; then
     echo "daemon: missing access token after pairing" >&2
     return 1
