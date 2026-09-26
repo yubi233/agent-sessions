@@ -350,7 +350,8 @@ component_matches() {
       [[ "$command" == *vite* && "$command" == *"--port $ADMIN_PORT"* ]]
       ;;
     daemon)
-      [[ "$command" == *"apps/daemon"* || "$command" == *"daemon run"* ]]
+      # v0.9.7 阶段 1.3：固定产物 daemon.bin 与旧 go run 形态都承认。
+      [[ "$command" == *"apps/daemon"* || "$command" == *"daemon run"* || "$command" == *"daemon.bin"* ]]
       ;;
     opencode)
       [[ "$command" == *"opencode"* && "$command" == *"serve"* ]]
@@ -1319,7 +1320,14 @@ start_daemon() {
   if truthy "$TERMINAL_SIGNING" && [[ -n "$DAEMON_SIGNING_KEY_FILE" && -s "$DAEMON_SIGNING_KEY_FILE" ]]; then
     args+=(AGENT_SESSIONS_DAEMON_SIGNING_KEY_FILE="$DAEMON_SIGNING_KEY_FILE")
   fi
-  args+=(go run ./apps/daemon run --relay-base "http://$RELAY_ADDR" --state-dir "$DAEMON_STATE_DIR")
+  # v0.9.7 阶段 1.3：daemon 以固定产物执行，不再依赖 `go run` 的 go-build 缓存
+  # （缓存被清理或路径含哈希漂移时旧形态无法启动）。构建失败视为启动失败。
+  local daemon_bin="$DAEMON_STATE_DIR/daemon.bin"
+  if ! (cd "$ROOT_DIR" && go build -o "$daemon_bin" ./apps/daemon); then
+    echo "daemon: go build ./apps/daemon 失败，无法启动" >&2
+    return 1
+  fi
+  args+=("$daemon_bin" run --relay-base "http://$RELAY_ADDR" --state-dir "$DAEMON_STATE_DIR")
   if [[ "$FIXTURE_DAEMON" == true ]]; then
     args+=(--fixture-adapter)
   fi
@@ -1602,7 +1610,7 @@ stop_orphan_daemons() {
   while read -r p; do
     [[ -n "$p" ]] || continue
     [[ "$p" != "$known_pid" ]] || continue
-    if [[ "$(process_command "$p")" == *"daemon run"*"--state-dir $state_abs"* ]]; then
+    if [[ "$(process_command "$p")" == *"daemon run"*"--state-dir $state_abs"* || "$(process_command "$p")" == *"daemon.bin"*"--state-dir $state_abs"* ]]; then
       echo "daemon: stopping orphan daemon pid $p (state dir $state_abs)"
       kill_tree "$p"
       if ! wait_dead "$p"; then
@@ -1615,7 +1623,7 @@ stop_orphan_daemons() {
       fi
       orphans=1
     fi
-  done < <(pgrep -f "daemon run .*state-dir" 2>/dev/null || true)
+  done < <(pgrep -f "daemon(\.bin)? run .*state-dir" 2>/dev/null || true)
   if [[ "$orphans" == 1 ]]; then
     echo "daemon: orphan cleanup complete"
   fi

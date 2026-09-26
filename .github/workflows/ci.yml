@@ -14,7 +14,34 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.3'
+      # v0.9.7 阶段 1.2：把本地 task check 的三个纯静态门补进 CI——格式、
+      # 文档注册表校验、协议生成物漂移（重新生成后 git diff 必须为空）。
+      - name: gofmt（禁止未格式化代码）
+        run: test -z "$(gofmt -l apps internal packages)"
+      - name: docs_verify（测试 ID 注册表与文档回填）
+        run: python3 tools/docs_verify.py
       - run: go test ./packages/... ./internal/... ./apps/relay/... -count=1
+
+  protocol-drift:
+    name: Protocol generation drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.15.0
+          cache: pnpm
+      # v0.9.7 阶段 1.2：与本地 task generate 同口径——重新生成 Go/TS/Dart 三份
+      # 边界后必须与提交内容零差异，防止 schema 与生成物漂移（历史事故防线）。
+      - run: pnpm install --frozen-lockfile
+      - run: ./tools/generate_protocol.sh
+      - run: git diff --exit-code -- packages/protocol/generated packages/protocol-ts apps/mobile/lib/protocol
 
   node:
     name: TypeScript protocol and web
