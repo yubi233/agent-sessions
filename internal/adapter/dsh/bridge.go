@@ -62,6 +62,16 @@ type BridgeTransport interface {
 
 // binConfig 解析桥路径配置：环境变量优先，未设置时缺省 P0 冒烟核实的路径；
 // 显式设置为空视为"未配置"（fail-closed），与既有 Provider 的空值口径一致。
+// BridgeBinPath 返回当前生效的桥 bin 路径（env 覆盖后）。供测试判断本机是否
+// 具备真实桥检出（CI 上不存在时，依赖桥的环境型测试应 Skip 而非误报）。
+func BridgeBinPath() string {
+	bin, _, err := binConfig()
+	if err != nil {
+		return ""
+	}
+	return bin
+}
+
 func binConfig() (bin string, config string, err error) {
 	bin = defaultBin
 	if v, ok := os.LookupEnv(EnvBin); ok {

@@ -477,9 +477,11 @@ func newRunnerFixture(t *testing.T, provider string) (*Store, *SessionRunner, *f
 }
 
 // waitEvent 轮询 local_state，直到事件转发 goroutine 写入 last_event。
+// v0.9.7：窗口从 3s 放宽到 15s——CI 的 2 核 runner 高负载下事件回写可超 3s
+// （曾致 ubuntu CI 误报，本地 darwin 无法复现）。
 func waitEvent(t *testing.T, s *Store, sessionID, want string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		v, err := s.Get(eventKey(sessionID))
 		if err == nil && strings.Contains(v, want) {

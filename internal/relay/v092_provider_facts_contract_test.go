@@ -13,6 +13,7 @@ package relay
 
 import (
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
@@ -264,6 +265,12 @@ func v092TerminalID(t *testing.T, env *testEnv, accountID string) string {
 // V092-03 对照：Relay 自己能真实执行该 Provider 时以本进程事实为准
 // （localdev 同机形态），不因为执行侧上报了别的版本而改变结论。
 func TestV092CapabilitiesPreferRelayWhenRelayCanExecute(t *testing.T) {
+	// v0.9.7：本用例前提是 Relay 本机存在可执行桥（localdev 同机形态）。
+	// CI/云端检出上桥必然不存在，facts 回退 terminal 属预期行为，
+	// 该场景由上一个用例以"云端形态等价复现"覆盖——这里 Skip 而非误报。
+	if _, err := os.Stat(dsh.BridgeBinPath()); err != nil {
+		t.Skip("本机无 DSH 桥构建产物，无法构造 relay-owns-facts 场景")
+	}
 	env := newTestEnv(t)
 	owner := env.registerAs(t, "v092-relay-owns@test.dev")
 	terminal := env.pairTerminal(t, owner, "v092-relay-owns-terminal")
