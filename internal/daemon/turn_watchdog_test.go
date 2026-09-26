@@ -69,6 +69,26 @@ func (s *v086WatchdogSink) waitFor(t *testing.T, timeout time.Duration, predicat
 	}
 }
 
+// waitDisarmed 轮询等待指定会话从看门狗表中移除（撤防事件已被事件泵消费）。
+// v0.9.7：CI 2 核 runner 下固定 sleep 200ms 存在"撤防事件排队未消费、看门狗
+// tick 先行"的竞态窗口；改为同步确认撤防完成后再断言，语义不放宽。
+func waitDisarmed(t *testing.T, r *SessionRunner, sessionID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r.watchdogMu.Lock()
+		_, stillArmed := r.watchdogs[sessionID]
+		r.watchdogMu.Unlock()
+		if !stillArmed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("撤防未在窗口内完成: %s", sessionID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // hasWatchdogTerminalFunc 是 waitFor 用的函数式断言（判断是否已出现看门狗终态）。
 func hasWatchdogTerminalFunc(events []adapter.Event) bool {
 	for _, event := range events {
@@ -190,7 +210,7 @@ func TestV086TurnWatchdogResetByStreamingEvents(t *testing.T) {
 	handle.emit(adapter.Event{Type: adapter.EventTurnCompleted, Seq: 500,
 		Payload: map[string]any{"instance_id": "s1", "stop_reason": "end_turn"}})
 	handle.mu.Unlock()
-	time.Sleep(200 * time.Millisecond)
+	waitDisarmed(t, runner, "s1")
 	if sink.hasWatchdogTerminal() {
 		t.Fatal("终态撤防后看门狗不得再触发")
 	}
