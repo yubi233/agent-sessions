@@ -11,7 +11,7 @@ import '../domain/usage_models.dart';
 import 'relay_repository.dart';
 
 /// 可重复的本地 Relay fixture。它只模拟白名单元数据，绝不生成会话正文。
-class FixtureRelayRepository implements RelayRepository {
+class FixtureRelayRepository implements RelayRepository, SessionHistoryRepository {
   FixtureRelayRepository({DateTime Function()? clock})
     : _clock = clock ?? DateTime.now;
 
@@ -20,6 +20,28 @@ class FixtureRelayRepository implements RelayRepository {
   final List<TerminalSummary> _terminals = [];
   final Map<String, PairingRequest> _pairings = {};
   final Map<String, _FixtureSessionState> _sessions = {};
+  final Map<String, MobileSession> _undiscoveredDSHHistory = {};
+
+  /// 仅供测试显式注入元数据；fixture 不代表真实历史扫描结果。
+  void seedSession(MobileSession session) {
+    final existing = _sessions[session.id];
+    if (existing != null) {
+      existing.session = session;
+      return;
+    }
+    _sessions[session.id] = _FixtureSessionState(
+      session: session,
+      controls: _fixtureControlsForProvider(session.provider),
+    );
+  }
+
+  /// 历史种子只有 discover:true 后才成为隐藏候选，绝不自动加入日常列表。
+  void seedDSHHistoryCandidate(MobileSession session) {
+    _undiscoveredDSHHistory[session.id] = session.copyWith(
+      origin: MobileSessionOrigin.dshImport,
+      visibility: MobileSessionVisibility.history,
+    );
+  }
   final Map<String, MobileWorkspace> _workspaces = {};
   final Map<String, WorkspaceCreateState> _workspaceCreateStates = {};
   final Map<String, WorkspaceSyncState> _workspaceSyncStates = {};
@@ -367,10 +389,35 @@ class FixtureRelayRepository implements RelayRepository {
     _requireFixtureNetwork();
     final sessions = _sessions.values
         .map((state) => state.session)
-        .where((session) => session.archivedAt == null)
+        .where((session) => session.isVisible)
         .toList();
     sessions.sort(MobileSession.compareByLastActivity);
     return List<MobileSession>.unmodifiable(sessions);
+  }
+
+  @override
+  Future<List<MobileSession>> listHistorySessions() async {
+    _requireFixtureNetwork();
+    return _sessions.values
+        .map((state) => state.session)
+        .where((session) => session.isHistoryCandidate)
+        .toList(growable: false)
+      ..sort(MobileSession.compareByLastActivity);
+  }
+
+  @override
+  Future<MobileSession> manageSession(String sessionId) async {
+    _requireFixtureNetwork();
+    _requireFixtureOwner();
+    final state = _sessionState(sessionId);
+    if (state.session.isVisible) return state.session;
+    if (!state.session.isHistoryCandidate) {
+      throw const RelayFailure.validation('该会话不是可接续的历史候选。');
+    }
+    state.session = state.session.copyWith(
+      visibility: MobileSessionVisibility.defaultList,
+    );
+    return state.session;
   }
 
   @override
@@ -431,6 +478,7 @@ class FixtureRelayRepository implements RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    bool discover = false,
     bool includeAll = false,
   }) async {
     _requireFixtureNetwork();
@@ -444,8 +492,16 @@ class FixtureRelayRepository implements RelayRepository {
       throw const RelayFailure(RelayFailureKind.forbidden, '导入必须使用工作区归属终端。');
     }
     final commandId = 'fixture-dsh-import-${workspace.id}';
-    final existing = _workspaceImportStates[commandId];
-    if (existing != null) return existing;
+    if (discover) {
+      final candidates = _undiscoveredDSHHistory.values
+          .where((session) => session.workspaceId == workspace.id)
+          .toList(growable: false);
+      for (final candidate in candidates) {
+        // 已接续过的线程不会因再次发现而退回历史候选。
+        if (!_sessions.containsKey(candidate.id)) seedSession(candidate);
+        _undiscoveredDSHHistory.remove(candidate.id);
+      }
+    }
     final state = WorkspaceImportState(
       status: 'succeeded',
       commandId: commandId,
@@ -454,7 +510,8 @@ class FixtureRelayRepository implements RelayRepository {
           .where(
             (session) =>
                 session.workspaceId == workspace.id &&
-                session.provider == 'dsh',
+                session.provider == 'dsh' &&
+                (session.isVisible || (discover && session.isHistoryCandidate)),
           )
           .map((session) => session.id)
           .toList(growable: false),

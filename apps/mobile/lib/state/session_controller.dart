@@ -664,7 +664,7 @@ class SessionController extends ChangeNotifier {
 
   SessionListPhase get phase => _phase;
   List<MobileSession> get sessions =>
-      List<MobileSession>.unmodifiable(_sessions);
+      List<MobileSession>.unmodifiable(_sessions.where((session) => session.isVisible));
   WorkspaceListPhase get workspacePhase => _workspacePhase;
   List<MobileWorkspace> get workspaces =>
       List<MobileWorkspace>.unmodifiable(_workspaces);
@@ -852,6 +852,7 @@ class SessionController extends ChangeNotifier {
     if (existing != null) return existing;
     final task = _relay
         .listSessions()
+        .then((items) => items.where((session) => session.isVisible).toList(growable: false))
         .whenComplete(() => _listSessionsInFlight = null);
     _listSessionsInFlight = task;
     return task;
@@ -938,8 +939,7 @@ class SessionController extends ChangeNotifier {
     _notifyListeners();
   }
 
-  /// 在工作区详情中按需导入历史会话（v0.9.5 起 daemon 侧为增量补齐：已导入
-  /// 线程只回传水位之后的新正文，无新行零事件）。
+  /// 显式发现历史候选；只读候选列表与日常列表分开，只有选择后才调用 manage。
   Future<WorkspaceImportState?> importDSHSessions({
     required String workspaceId,
     required String? deviceId,
@@ -949,37 +949,80 @@ class SessionController extends ChangeNotifier {
     if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) {
       return null;
     }
-    return _runDSHImport(workspaceId: workspaceId, terminalId: terminalId);
+    return _runDSHImport(
+      workspaceId: workspaceId,
+      terminalId: terminalId,
+      discover: true,
+    );
   }
 
-  /// v0.9.5 P1（持续同步）：进入 DSH 工作区时的静默节流刷新。与手动导入共用
-  /// 同一命令通道（daemon 增量补齐），差异仅两点——① 节流：同工作区距上次
-  /// 自动刷新尝试不足 60s、或已有导入在途时直接跳过；② 失败静默：不写
-  /// workspaceErrorMessage、不发失败状态，用户无感知（手动入口保留完整报错）。
+  Future<List<MobileSession>?> historyCandidatesForWorkspace(String workspaceId) async {
+    try {
+      final candidates = await _relay.listHistorySessions();
+      return candidates.where((session) =>
+        session.isHistoryCandidate &&
+        session.workspaceId == workspaceId &&
+        session.provider == 'dsh',
+      ).toList(growable: false)..sort(MobileSession.compareByLastActivity);
+    } on RelayFailure catch (failure) {
+      _workspaceErrorMessage = failure.message;
+    } catch (_) {
+      _workspaceErrorMessage = '历史会话候选暂时不可用，请稍后重试。';
+    }
+    _notifyListeners();
+    return null;
+  }
+
+  /// 仅显式选择的一条候选进入日常列表；不创建会话、不启动 Provider、不发 prompt。
+  Future<MobileSession?> manageHistorySession({
+    required MobileSession candidate,
+    required String? deviceId,
+    required bool canWrite,
+  }) async {
+    if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) return null;
+    if (!candidate.isHistoryCandidate || candidate.provider != 'dsh' ||
+        !_workspaces.any((workspace) => workspace.id == candidate.workspaceId && workspace.isDsh)) {
+      _workspaceErrorMessage = '请选择当前 DSH 工作区的历史候选。';
+      _notifyListeners();
+      return null;
+    }
+    final managed = await _runAction<MobileSession?>(
+      'manage-session:${candidate.id}',
+      () async {
+        final session = await _relay.manageSession(candidate.id);
+        if (session.id != candidate.id || session.workspaceId != candidate.workspaceId ||
+            session.provider != 'dsh' || !session.isVisible) {
+          throw const RelayFailure(RelayFailureKind.protocol, '历史会话接续响应无效。');
+        }
+        _sessions = [session, ..._sessions.where((item) => item.id != session.id)]
+          ..sort(MobileSession.compareByLastActivity);
+        _phase = SessionListPhase.ready;
+        return session;
+      },
+    );
+    if (managed == null) {
+      _workspaceErrorMessage = _errorMessage ?? '历史会话接续失败，请重试。';
+      _notifyListeners();
+    }
+    return managed;
+  }
+
+  /// 进入详情只刷新已管理会话；空工作区不扫描，时间开关不影响此边界。
   Future<void> refreshDSHSessionsSilently({
     required String workspaceId,
     String terminalId = '',
-    // v0.9.5 P2：绕过 72h 活跃窗口按需导入全部历史（「显示全部」入口触发）。
-    bool includeAll = false,
   }) async {
-    final throttleKey = includeAll ? '$workspaceId#all' : workspaceId;
-    final last = _dshAutoRefreshAt[throttleKey];
-    if (last != null &&
-        DateTime.now().difference(last) < dshAutoRefreshThrottle) {
-      return;
-    }
+    if (!sessions.any((session) => session.workspaceId == workspaceId && session.provider == 'dsh')) return;
+    final last = _dshAutoRefreshAt[workspaceId];
+    if (last != null && _clock().difference(last) < dshAutoRefreshThrottle) return;
     if (_workspaceImportWaiting) return;
-    _dshAutoRefreshAt[throttleKey] = DateTime.now();
-    try {
-      await _runDSHImport(
-        workspaceId: workspaceId,
-        terminalId: terminalId,
-        silent: true,
-        includeAll: includeAll,
-      );
-    } catch (_) {
-      // 静默刷新失败不打扰用户；下一次进入工作区（≥60s）会再试。
-    }
+    _dshAutoRefreshAt[workspaceId] = _clock();
+    await _runDSHImport(
+      workspaceId: workspaceId,
+      terminalId: terminalId,
+      silent: true,
+      discover: false,
+    );
   }
 
   static const dshAutoRefreshThrottle = Duration(seconds: 60);
@@ -989,7 +1032,8 @@ class SessionController extends ChangeNotifier {
     required String workspaceId,
     String terminalId = '',
     bool silent = false,
-    bool includeAll = false,
+    // 只有用户显式浏览历史才 discover:true；自动刷新固定 false，不发现新历史。
+    bool discover = false,
   }) async {
     if (_workspaceImportWaiting) return _workspaceImportState;
     final normalized = workspaceId.trim();
@@ -1012,7 +1056,7 @@ class SessionController extends ChangeNotifier {
       var state = await _relay.importDSHSessions(
         workspaceId: normalized,
         terminalId: terminalId,
-        includeAll: includeAll,
+        discover: discover,
       );
       _workspaceImportState = state;
       _notifyListeners();

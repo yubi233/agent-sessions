@@ -188,7 +188,7 @@ describe("P4 会话列表页", () => {
     expect(wrapper.text()).not.toContain("private-root");
     await wrapper.get('[data-testid="dsh-workspace-select-w-unsafe"]').trigger("click");
     expect(wrapper.get('[data-testid="dsh-workspace-expand-w-unsafe"]').attributes("aria-expanded")).toBe("true");
-    expect(wrapper.get('[data-testid="session-link-opaque-dsh-session-id"]').text()).toContain("DSH 历史会话");
+    expect(wrapper.get('[data-testid="session-link-opaque-dsh-session-id"]').text()).toContain("未命名 DSH 会话");
     expect(wrapper.text()).not.toContain("opaque-dsh-session-id");
   });
 

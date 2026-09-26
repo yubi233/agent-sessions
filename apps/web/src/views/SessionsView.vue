@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // DSH 工作区优先的只读视图：只消费 Relay 安全投影，不提供或调用同步、导入、建会话、恢复、发送 API。
 import { computed, onMounted, ref } from "vue";
-import { readOnlyGet, sessionState, type SessionMeta } from "../session";
+import { readOnlyGet, sessionState, sessionVisible, type SessionMeta } from "../session";
 
 type ListState = "loading" | "ready" | "error";
 type WorkspaceMeta = {
@@ -29,7 +29,7 @@ async function load(): Promise<void> {
       readOnlyGet<{ sessions?: SessionMeta[] }>("/v1/sessions"),
       readOnlyGet<{ workspaces?: WorkspaceMeta[] }>("/v1/workspaces"),
     ]);
-    sessions.value = sessionData.sessions ?? [];
+    sessions.value = (sessionData.sessions ?? []).filter(sessionVisible);
     workspaces.value = workspaceData.workspaces ?? [];
     state.value = "ready";
     message.value = "";
@@ -71,8 +71,9 @@ const secondarySessions = computed(() =>
 
 function dshSessionLabel(session: SessionMeta): string {
   const candidate = session.display_name?.trim() ?? "";
+  // 无标题不等于历史来源；可见性由服务端 visibility 决定，这里只负责命名。
   if (candidate.length === 0 || /[\\/]/u.test(candidate) || /[\u0000-\u001f\u007f]/u.test(candidate)) {
-    return "DSH 历史会话";
+    return "未命名 DSH 会话";
   }
   return candidate;
 }

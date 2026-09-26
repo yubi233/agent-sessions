@@ -348,11 +348,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('dsh-workspace-import-button')));
     await tester.pumpAndSettle();
-    // v0.9.5：导入如实说明（真实标题+最近上下文，替代 v0.9.4 前的「仅元数据」口径）。
-    expect(find.textContaining('最近十几条对话上下文'), findsOneWidget);
+    // v0.9.6：入口改为「选择历史会话接续」，如实说明逐条选择、未选中不进日常列表。
+    expect(find.text('选择历史会话接续？'), findsOneWidget);
     await tester.tap(find.byKey(const Key('dsh-workspace-import-confirm')));
     await tester.pumpAndSettle();
-    expect(find.text('未发现可导入会话。'), findsOneWidget);
+    // fixture 无候选：如实显示空态，不批量导入。
+    expect(find.text('暂无历史候选'), findsOneWidget);
 
     relay.replaceTerminals([
       TerminalSummary(

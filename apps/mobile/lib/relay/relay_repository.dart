@@ -7,6 +7,30 @@ import '../domain/session_projection_models.dart';
 import '../domain/terminal_models.dart';
 import '../domain/usage_models.dart';
 
+/// 可选历史能力单独扩展，既有只读 repository/test double 无需补写空实现。
+abstract interface class SessionHistoryRepository {
+  Future<List<MobileSession>> listHistorySessions();
+  Future<MobileSession> manageSession(String sessionId);
+}
+
+extension RelaySessionHistory on RelayRepository {
+  Future<List<MobileSession>> listHistorySessions() {
+    final repository = this;
+    if (repository is SessionHistoryRepository) {
+      return (repository as SessionHistoryRepository).listHistorySessions();
+    }
+    throw const RelayFailure.validation('当前连接不支持历史会话候选。');
+  }
+
+  Future<MobileSession> manageSession(String sessionId) {
+    final repository = this;
+    if (repository is SessionHistoryRepository) {
+      return (repository as SessionHistoryRepository).manageSession(sessionId);
+    }
+    throw const RelayFailure.validation('当前连接不支持历史会话接续。');
+  }
+}
+
 /// Flutter 只依赖此业务契约；真实 HTTP、fixture 或未来 Daemon 命令流实现都可替换。
 abstract interface class RelayRepository {
   /// Happy-style Android 首次启动：由本机设备密钥直接初始化首个 owner，不要求账号登录。
@@ -67,7 +91,8 @@ abstract interface class RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
-    // v0.9.5 P2：绕过 72h 活跃窗口按需导入全部历史会话。
+    // 只有用户明确浏览历史时才发现新候选；自动刷新只同步已管理会话。
+    bool discover = false,
     bool includeAll = false,
   });
 

@@ -355,10 +355,12 @@ class _ListOverridingRelay implements RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    bool discover = false,
     bool includeAll = false,
   }) => _delegate.importDSHSessions(
     workspaceId: workspaceId,
     terminalId: terminalId,
+    discover: discover,
   );
 
   @override

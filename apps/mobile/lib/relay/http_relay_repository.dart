@@ -16,7 +16,7 @@ import 'relay_repository.dart';
 import 'session_sse.dart';
 
 /// 真实 Relay REST 适配器。密码登录不提交角色或设备 id，只能获得 Relay 默认的只读 token。
-class HttpRelayRepository implements RelayRepository {
+class HttpRelayRepository implements RelayRepository, SessionHistoryRepository {
   HttpRelayRepository({
     required Dio dio,
     required Future<AuthTokens?> Function() readTokens,
@@ -278,6 +278,34 @@ class HttpRelayRepository implements RelayRepository {
   }
 
   @override
+  Future<List<MobileSession>> listHistorySessions() async {
+    final response = await _authenticatedSend('GET', '/v1/sessions?history=true');
+    return _asList(response.data, wrappedKey: 'sessions')
+        .map(MobileSession.fromRelayJson)
+        .where((session) => session.isHistoryCandidate)
+        .toList(growable: false);
+  }
+
+  @override
+  Future<MobileSession> manageSession(String sessionId) async {
+    final normalized = sessionId.trim();
+    if (normalized.isEmpty) {
+      throw const RelayFailure.validation('会话标识无效。');
+    }
+    final response = await _authenticatedSend(
+      'POST',
+      '/v1/sessions/${Uri.encodeComponent(normalized)}/manage',
+    );
+    final session = MobileSession.fromRelayJson(
+      _asMap(_asMap(response.data)['session']),
+    );
+    if (session.id != normalized || !session.isVisible) {
+      throw const RelayFailure(RelayFailureKind.protocol, '历史会话接续响应无效。');
+    }
+    return session;
+  }
+
+  @override
   Future<List<MobileSession>> listArchivedSessions() async {
     final response = await _authenticatedSend(
       'GET',
@@ -326,7 +354,7 @@ class HttpRelayRepository implements RelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
-    // v0.9.5 P2：绕过 72h 活跃窗口按需导入全部历史会话。
+    bool discover = false,
     bool includeAll = false,
   }) async {
     final normalized = workspaceId.trim();
@@ -338,6 +366,7 @@ class HttpRelayRepository implements RelayRepository {
       '/v1/workspaces/import-dsh',
       data: {
         'workspace_id': normalized,
+        'discover': discover,
         if (terminalId.trim().isNotEmpty) 'terminal_id': terminalId.trim(),
         if (includeAll) 'include_all': true,
       },

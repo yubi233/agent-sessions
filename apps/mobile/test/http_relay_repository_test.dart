@@ -367,8 +367,10 @@ void main() {
           case 3:
             expect(options.method, 'POST');
             expect(options.path, '/v1/workspaces/import-dsh');
+            // v0.9.6：discover 显式下发；缺省 false 只同步已管理会话。
             expect(options.data, {
               'workspace_id': 'ws_dsh',
+              'discover': false,
               'terminal_id': 'term_dsh',
             });
             return _jsonResponse({

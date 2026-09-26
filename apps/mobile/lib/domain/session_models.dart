@@ -83,8 +83,41 @@ enum MobileSessionStatus {
   };
 }
 
+/// 会话来源与是否进入日常列表正交；显式接续不会改写来源。
+enum MobileSessionOrigin {
+  managed('managed'),
+  dshImport('dsh_import'),
+  unknown('unknown');
+
+  const MobileSessionOrigin(this.wireValue);
+  final String wireValue;
+
+  static MobileSessionOrigin fromRelayJson(Object? value) => switch (value) {
+    null || 'managed' => MobileSessionOrigin.managed,
+    'dsh_import' => MobileSessionOrigin.dshImport,
+    _ => MobileSessionOrigin.unknown,
+  };
+}
+
+enum MobileSessionVisibility {
+  defaultList('default'),
+  history('history'),
+  duplicate('duplicate'),
+  unknown('unknown');
+
+  const MobileSessionVisibility(this.wireValue);
+  final String wireValue;
+
+  static MobileSessionVisibility fromRelayJson(Object? value) => switch (value) {
+    null || 'default' => MobileSessionVisibility.defaultList,
+    'history' => MobileSessionVisibility.history,
+    'duplicate' => MobileSessionVisibility.duplicate,
+    _ => MobileSessionVisibility.unknown,
+  };
+}
+
 /// Relay Session 的白名单元数据加上本地可选展示字段。
-/// 真实 Relay 只要求 id/workspace/status/provider/last_seq；展示名来自已解密缓存或 fixture。
+/// 旧 Relay 缺省来源与可见性按 managed/default 兼容，未知可见性不进入日常列表。
 class MobileSession {
   const MobileSession({
     required this.id,
@@ -103,6 +136,8 @@ class MobileSession {
     this.agentPresetId,
     this.subagentReadOnlyReason,
     this.archivedAt,
+    this.origin = MobileSessionOrigin.managed,
+    this.visibility = MobileSessionVisibility.defaultList,
   });
 
   factory MobileSession.fromRelayJson(Map<String, dynamic> json) =>
@@ -129,6 +164,8 @@ class MobileSession {
           json['subagent_read_only_reason'],
         ),
         archivedAt: _nullableDateTimeFromMillis(json['archived_at_unix_ms']),
+        origin: MobileSessionOrigin.fromRelayJson(json['origin']),
+        visibility: MobileSessionVisibility.fromRelayJson(json['visibility']),
       );
 
   final String id;
@@ -156,11 +193,32 @@ class MobileSession {
   /// 归档时间；非 null 表示该会话已从默认列表隐藏，但数据和事件仍保留。
   final DateTime? archivedAt;
 
+  final MobileSessionOrigin origin;
+  final MobileSessionVisibility visibility;
+
   bool get isArchived => archivedAt != null;
 
-  String get title => displayName?.trim().isNotEmpty == true
-      ? displayName!.trim()
-      : '会话 ${id.length > 8 ? id.substring(0, 8) : id}';
+  /// 所有日常入口共用此边界，时间筛选、搜索、来源都不能解除隐藏。
+  bool get isVisible =>
+      visibility == MobileSessionVisibility.defaultList && !isArchived;
+  bool get isHistoryCandidate =>
+      visibility == MobileSessionVisibility.history && !isArchived;
+
+  String get title {
+    final candidate = displayName?.trim() ?? '';
+    if (provider == 'dsh') {
+      if (candidate.isEmpty ||
+          candidate.contains('/') ||
+          candidate.contains('\\') ||
+          candidate.runes.any((rune) => rune < 0x20 || rune == 0x7f)) {
+        return '未命名 DSH 会话';
+      }
+      return candidate;
+    }
+    return candidate.isNotEmpty
+        ? candidate
+        : '会话 ${id.length > 8 ? id.substring(0, 8) : id}';
+  }
 
   String get workspaceLabel => workspaceName?.trim().isNotEmpty == true
       ? workspaceName!.trim()
@@ -197,6 +255,8 @@ class MobileSession {
     String? subagentReadOnlyReason,
     DateTime? archivedAt,
     bool clearArchivedAt = false,
+    MobileSessionOrigin? origin,
+    MobileSessionVisibility? visibility,
   }) => MobileSession(
     id: id,
     workspaceId: workspaceId,
@@ -215,6 +275,8 @@ class MobileSession {
     subagentReadOnlyReason:
         subagentReadOnlyReason ?? this.subagentReadOnlyReason,
     archivedAt: clearArchivedAt ? null : (archivedAt ?? this.archivedAt),
+    origin: origin ?? this.origin,
+    visibility: visibility ?? this.visibility,
   );
 }
 

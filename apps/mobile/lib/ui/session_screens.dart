@@ -534,35 +534,8 @@ class _DSHWorkspaceHomeState extends State<_DSHWorkspaceHome> {
     AppController app,
     SessionController sessions,
     MobileWorkspace workspace,
-  ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('导入历史 DSH 会话？'),
-        // v0.9.5：文案与实际行为对齐——导入携带真实标题与最近上下文（v0.9.4 起生效），
-        // 不再宣称「仅导入元数据」；正文只经用户自己的 Relay，不出本机信任边界。
-        content: const Text(
-            '将导入会话的真实标题与最近十几条对话上下文，便于在应用内继续原会话。内容只经过你自己的 Relay，不会上传到任何第三方。导入结果会按当前工作区显示。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            key: const Key('dsh-workspace-import-confirm'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('确认导入'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    await sessions.importDSHSessions(
-      workspaceId: workspace.id,
-      deviceId: app.currentDevice?.id,
-      canWrite: app.canManageDevices,
-      terminalId: workspace.terminalId,
-    );
+  ) {
+    return confirmDSHHistoryContinuation(context, app, sessions, workspace);
   }
 
   // ---- v0.8.6 C（G9）：主页终端卡片化 ----
@@ -653,7 +626,11 @@ List<MobileSession> _dshSessionsForWorkspace(
 }) {
   final cutoff = (now ?? DateTime.now()).subtract(dshActiveSessionWindow);
   return sessions.where((session) {
-    if (session.workspaceId != workspaceId || session.provider != 'dsh') {
+    // 72h 只是时间筛选；历史来源与重复副本由服务端 visibility 决定，
+    // 时间筛选、搜索或「显示全部」都不能解除隐藏。
+    if (!session.isVisible ||
+        session.workspaceId != workspaceId ||
+        session.provider != 'dsh') {
       return false;
     }
     if (activeOnly) {
@@ -686,12 +663,103 @@ String _dshSessionLabel(MobileSession session) {
   if (candidate.isEmpty ||
       candidate.contains('/') ||
       candidate.contains('\\')) {
-    return 'DSH 历史会话';
+    return '未命名 DSH 会话';
   }
   if (candidate.runes.any((rune) => rune < 0x20 || rune == 0x7f)) {
-    return 'DSH 历史会话';
+    return '未命名 DSH 会话';
   }
   return candidate;
+}
+
+/// 显式历史接续：确认 → 发现候选 → 用户单选 → 纳入日常列表。
+/// 不做批量接续；取消或未选择都不会改变日常列表。
+Future<void> confirmDSHHistoryContinuation(
+  BuildContext context,
+  AppController app,
+  SessionController sessions,
+  MobileWorkspace workspace,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('选择历史会话接续？'),
+      content: const Text(
+          '将按当前工作区列出历史候选，由你逐条选择接续；未选中的历史不会进入日常列表。接续会读取该会话的真实标题与最近上下文，内容只经过你自己的 Relay。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const Key('dsh-workspace-import-confirm'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('查看历史候选'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return;
+  final state = await sessions.importDSHSessions(
+    workspaceId: workspace.id,
+    deviceId: app.currentDevice?.id,
+    canWrite: app.canManageDevices,
+    terminalId: workspace.terminalId,
+  );
+  if (state != null && !state.isSucceeded) return;
+  if (!context.mounted) return;
+  final candidates = await sessions.historyCandidatesForWorkspace(workspace.id);
+  if (candidates == null || !context.mounted) return;
+  if (candidates.isEmpty) {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('暂无历史候选'),
+        content: const Text('当前工作区没有可接续的历史会话。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('好的'),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
+  final selected = await showDialog<MobileSession>(
+    context: context,
+    builder: (context) => SimpleDialog(
+      key: const Key('dsh-history-picker'),
+      title: const Text('选择要接续的历史会话'),
+      children: [
+        for (final candidate in candidates)
+          ListTile(
+            key: Key('dsh-history-option-${candidate.id}'),
+            title: Text(_dshSessionLabel(candidate)),
+            subtitle: candidate.lastActivityAt == null
+                ? null
+                : Text(_sessionTimestamp(candidate.lastActivityAt!)),
+            onTap: () => Navigator.of(context).pop(candidate),
+          ),
+      ],
+    ),
+  );
+  if (selected == null || !context.mounted) return;
+  final managed = await sessions.manageHistorySession(
+    candidate: selected,
+    deviceId: app.currentDevice?.id,
+    canWrite: app.canManageDevices,
+  );
+  if (managed == null || !context.mounted) return;
+  if (GoRouter.maybeOf(context) != null) {
+    context.push('/sessions/${managed.id}');
+  }
+}
+
+String _sessionTimestamp(DateTime time) {
+  final local = time.toLocal();
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${local.year}-${two(local.month)}-${two(local.day)} '
+      '${two(local.hour)}:${two(local.minute)}';
 }
 
 /// v0.8.6 C（G9）：主页工具栏只保留搜索。原全局"同步本机 DSH 项目"按钮已被
@@ -725,7 +793,8 @@ class _DSHWorkspaceToolbar extends StatelessWidget {
         ),
       ),
       const SizedBox(height: AppSpacing.xs),
-      // 活跃过滤开关：默认只看最近三天还在更新的会话，与 daemon 导入窗口一致。
+      // 时间筛选开关：默认只看最近三天还在更新的已管理会话；
+      // 解除筛选只扩大时间范围，历史候选/重复副本的隐藏边界不变。
       Align(
         alignment: Alignment.centerLeft,
         child: FilterChip(
@@ -1175,7 +1244,7 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                     enabled: canImport && !importWaiting,
                     child: ListTile(
                       leading: const Icon(Icons.history),
-                      title: const Text('导入历史会话'),
+                      title: const Text('选择历史会话接续'),
                       subtitle: importReason == null
                           ? null
                           : Text(importReason),
@@ -1431,19 +1500,11 @@ class _DSHWorkspaceDetailScreenState
         actions: [
           IconButton(
             key: const Key('dsh-workspace-detail-show-all'),
-            tooltip: _showAllDshSessions ? '只看活跃会话' : '显示全部会话',
+            tooltip: _showAllDshSessions ? '只看活跃会话' : '显示全部已管理会话',
             onPressed: () {
+              // 只解除 72h 时间筛选；历史候选与重复副本的可见性边界不变，
+              // 这里绝不触发历史发现（接续只经「选择历史会话接续」逐条完成）。
               setState(() => _showAllDshSessions = !_showAllDshSessions);
-              // v0.9.5 P2（按需导入全部）：切换到「显示全部」时静默发起
-              // include_all 导入——窗口外的老会话标题+预览随之进入列表
-              // （60s 节流；失败无感，手动导入入口不受影响）。
-              if (_showAllDshSessions && app.canManageDevices) {
-                sessionsController.refreshDSHSessionsSilently(
-                  workspaceId: selectedWorkspace.id,
-                  terminalId: selectedWorkspace.terminalId,
-                  includeAll: true,
-                );
-              }
             },
             icon: Icon(
               _showAllDshSessions
@@ -1533,34 +1594,8 @@ class _DSHWorkspaceDetailScreenState
     AppController app,
     SessionController sessions,
     MobileWorkspace workspace,
-  ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('导入历史 DSH 会话？'),
-        // v0.9.5：与工作区列表入口同一口径，如实描述标题+上下文导入。
-        content: const Text(
-            '将导入会话的真实标题与最近十几条对话上下文，便于在应用内继续原会话。内容只经过你自己的 Relay，不会上传到任何第三方。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            key: const Key('dsh-workspace-import-confirm'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('确认导入'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) return;
-    await sessions.importDSHSessions(
-      workspaceId: workspace.id,
-      deviceId: app.currentDevice?.id,
-      canWrite: app.canManageDevices,
-      terminalId: workspace.terminalId,
-    );
+  ) {
+    return confirmDSHHistoryContinuation(context, app, sessions, workspace);
   }
 }
 
@@ -1759,11 +1794,17 @@ class _TerminalWorkspaceCard extends StatelessWidget {
             ),
           const Divider(height: 1),
           // 卡内工作区沿用既有分组语义（展开/会话数/进入详情）。
+          // 计数与子项与详情页同一可见边界：默认受管 DSH 会话，非 DSH 不混入。
           for (final workspace in group.workspaces) ...[
             _DSHWorkspaceGroup(
               workspace: workspace,
               sessions: sessions.sessions
-                  .where((item) => item.workspaceId == workspace.id)
+                  .where(
+                    (item) =>
+                        item.isVisible &&
+                        item.workspaceId == workspace.id &&
+                        item.provider == 'dsh',
+                  )
                   .toList(growable: false),
               expanded: expandedWorkspaceIds.contains(workspace.id),
               selected: selectedWorkspaceId == workspace.id,

@@ -19,6 +19,15 @@ export interface SessionMeta {
   // an Agent Sessions-owned label must never fall back to their opaque ID.
   display_name?: string;
   last_activity_at_unix_ms?: number;
+  // 来源与可见性（v0.9.6）：缺省按 managed/default 兼容；非 default 的会话
+  // 只属于显式历史入口，Web 只读视图一律兜底过滤。
+  origin?: "managed" | "dsh_import";
+  visibility?: "default" | "history" | "duplicate";
+}
+
+export function sessionVisible(session: SessionMeta): boolean {
+  const visibility = session.visibility ?? "default";
+  return visibility === "default";
 }
 
 // 会话事件只读投影只保留时间线元数据。snapshot 响应中的 envelope 会在映射时丢弃，

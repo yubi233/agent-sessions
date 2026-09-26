@@ -1598,6 +1598,7 @@ class _PendingDSHImportRelay extends FixtureRelayRepository {
   Future<WorkspaceImportState> importDSHSessions({
     required String workspaceId,
     String terminalId = '',
+    bool discover = false,
     bool includeAll = false,
   }) async => const WorkspaceImportState(
     status: 'pending',
