@@ -46,3 +46,18 @@ pnpm run build:lib:client   # client 面（bridge spawn 不依赖，保持仓库
 
 2026-09-27 实测：initialize 2 秒响应，模型目录 current=goat/deepseek-v4.1-flash，
 stderr 干净（证据：实施记录 37）。
+
+## 换机路径映射
+
+检出根变化时（例如 `/Users/旧用户名/code/deepseek-harness` → 新根），除更新
+产品 `cordis.yml` 内的绝对路径与 `internal/adapter/dsh/bridge.go` 的
+`defaultBin/defaultConfig` 外，同步执行：
+
+```bash
+new_root=/Users/<新用户>/code/deepseek-harness
+sed -i '' "s|/Users/yubi/code/deepseek-harness|$new_root|g" \
+  /Users/yubi/code/agentProject/agent-sessions/cordis.yml \
+  /Users/yubi/code/agentProject/agent-sessions/internal/adapter/dsh/bridge.go
+```
+
+随后按上文「最小重建链」重建产物，并跑 `restart.sh restart` 验证桥预检通过。

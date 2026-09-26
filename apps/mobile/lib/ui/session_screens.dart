@@ -1357,13 +1357,15 @@ class _DSHWorkspaceDetailPane extends StatelessWidget {
                   const SizedBox(width: AppSpacing.sm),
                   Expanded(
                     child: Text(
+                      // v0.9.7：discover 语义收敛后这里描述的是受管同步结果，
+                      // 不再是「导入历史会话」——空增量是常态而非异常。
                       importWaiting
-                          ? '正在导入历史会话…'
+                          ? '正在同步已管理会话…'
                           : importState?.isSucceeded == true
                           ? importState!.sessionIds.isEmpty
-                                ? '未发现可导入会话。'
-                                : '已导入 ${importState!.sessionIds.length} 个会话。'
-                          : '历史会话导入未完成。',
+                                ? '已同步，无增量。'
+                                : '已同步 ${importState!.sessionIds.length} 个受管会话的增量。'
+                          : '受管会话同步未完成。',
                     ),
                   ),
                   if (importWaiting)
