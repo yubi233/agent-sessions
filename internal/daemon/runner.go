@@ -446,19 +446,19 @@ func (r *SessionRunner) startSession(ctx context.Context, cmd Command) error {
 		}
 	}
 
-	// 持久化 instance 映射：只存 provider 与 OpenCode session id，不存正文/密文。
-	mapping, err := json.Marshal(providerThread{
-		Provider:      provider,
-		InstanceID:    instanceID,
-		WorkspaceRoot: workspaceRoot,
-	})
-	if err != nil {
-		cancel()
-		_ = handle.Dispose(context.Background())
-		r.removeHandle(sessionID)
-		return err
+	// DSH writes its forward mapping and unique source binding in one transaction.
+	// Import must never allocate a second Relay session for this native source.
+	thread := providerThread{Provider: provider, InstanceID: instanceID, WorkspaceRoot: workspaceRoot}
+	if provider == "dsh" {
+		_, err = r.store.BindDSHThread(sessionID, thread, dshSourceNative)
+	} else {
+		var mapping []byte
+		mapping, err = json.Marshal(thread)
+		if err == nil {
+			err = r.store.Set(instanceKey(sessionID), string(mapping))
+		}
 	}
-	if err := r.store.Set(instanceKey(sessionID), string(mapping)); err != nil {
+	if err != nil {
 		cancel()
 		_ = handle.Dispose(context.Background())
 		r.removeHandle(sessionID)
@@ -824,6 +824,17 @@ func (r *SessionRunner) resumeSession(ctx context.Context, cmd Command) error {
 		resultJSON, _ := json.Marshal(res)
 		_ = r.store.Set(resumeResultKey(sessionID), string(resultJSON))
 		return nil
+	}
+	if th.Provider == "dsh" {
+		// Classify legacy origin before adding persistence_root. Otherwise a native
+		// resume could look like an old import on the next synchronization pass.
+		binding, err := r.store.BindDSHThread("", th, "")
+		if err != nil {
+			return err
+		}
+		if binding.RelaySessionID != sessionID {
+			return ErrDSHSourceConflict
+		}
 	}
 	replay := true
 	if state, stateErr := r.store.Get(replayStateKey(sessionID)); stateErr == nil && strings.TrimSpace(state) == replayComplete {

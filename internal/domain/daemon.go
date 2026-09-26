@@ -819,12 +819,20 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 			return ErrDaemonCommandState
 		}
 		var payload struct {
-			WorkspaceID string `json:"workspace_id"`
+			WorkspaceID string   `json:"workspace_id"`
+			Discover    bool     `json:"discover"`
+			SessionIDs  []string `json:"session_ids"`
 		}
 		if err := json.Unmarshal([]byte(cmd.CiphertextJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
 			return ErrScopeDenied
 		}
 		if status == CommandSucceeded {
+			// 同步（discover=false）只允许服务端允许列表内的会话；显式历史发现
+			// 允许登记新候选行。两种模式都不会重置会话状态或回退活动时间。
+			allowlist := map[string]bool{}
+			for _, allowed := range payload.SessionIDs {
+				allowlist[allowed] = true
+			}
 			for i, sessionID := range sessionIDs {
 				if strings.TrimSpace(sessionID) == "" {
 					return ErrScopeDenied
@@ -835,53 +843,64 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 				if i < len(sessionTitles) {
 					title = strings.TrimSpace(sessionTitles[i])
 				}
-				if err := tx.CreateSession(ctx, store.SessionRow{
-					ID: sessionID, WorkspaceID: payload.WorkspaceID, AccountID: accountID,
-					Status: SessionIdle, Provider: "dsh", DisplayName: title,
-				}); err != nil {
-					// 已存在的同 id 会话视为幂等确认，不覆盖归属。
-					if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "constraint") {
+				existing, lookupErr := tx.SessionByID(ctx, sessionID)
+				switch {
+				case errors.Is(lookupErr, sql.ErrNoRows):
+					// 新行只允许出现在显式历史发现；缺省同步绝不能凭空登记会话。
+					if !payload.Discover {
+						return ErrScopeDenied
+					}
+					if err := tx.CreateSession(ctx, store.SessionRow{
+						ID: sessionID, WorkspaceID: payload.WorkspaceID, AccountID: accountID,
+						Status: SessionIdle, Provider: "dsh", DisplayName: title,
+						Origin: store.SessionOriginDSHImport, Visibility: store.SessionVisibilityHistory,
+					}); err != nil {
 						return err
 					}
-					// v0.9.5 P1（持续同步）：已存在会话的标题按 DSH 侧最新值更新——
-					// 增量导入携带新标题（非空且与现值不同才写，避免回执写放大）。
-					// 无本地重命名入口，display_name 的权威来源始终是导入侧。
-					if title != "" {
-						if existing, lookupErr := tx.SessionByID(ctx, sessionID); lookupErr == nil && existing.DisplayName != title {
-							if err := tx.SetSessionDisplayName(ctx, sessionID, title); err != nil {
-								return err
-							}
+				case lookupErr != nil:
+					return lookupErr
+				default:
+					// 已存在会话必须同账号、同工作区、同 provider，防止跨工作区劫持。
+					if existing.AccountID != accountID || existing.WorkspaceID != payload.WorkspaceID || existing.Provider != "dsh" {
+						return ErrScopeDenied
+					}
+					// 同步回执的会话必须在允许列表内；显式发现允许重访已登记会话
+					//（发现命令不构造允许列表，作用域已由上方账号/工作区校验收口）。
+					if !payload.Discover && !allowlist[sessionID] {
+						return ErrScopeDenied
+					}
+					// 标题按 DSH 侧最新值更新（非空且变化才写）；来源/可见性/状态
+					// 均保持——重复同步不能把 history 提升为 default，更不能把
+					// running 会话重置为 idle。
+					if title != "" && existing.DisplayName != title {
+						if err := tx.SetSessionDisplayName(ctx, sessionID, title); err != nil {
+							return err
 						}
 					}
 				}
-				// 导入成功是可审计的会话状态写入；last_activity 取 DSH 侧真实活动
-				// 时间（artifact ModTime），让「最近三天活跃」判定对用户是真实语义。
-				activity := s.now().UnixMilli()
+				// 活动时间取 DSH artifact 真实修改时间；导入时刻不顶旧历史到列表最前。
+				activity := int64(0)
 				for _, importCtx := range sessionContext {
 					if importCtx.SessionID == sessionID && importCtx.LastActivityUnixMS > 0 {
 						activity = importCtx.LastActivityUnixMS
 						break
 					}
 				}
-				if err := tx.SetSessionStatusAt(ctx, sessionID, SessionIdle, activity); err != nil {
-					return err
-				}
 				// v0.9.4（用户需求：标题+十几条上下文）：回执携带的最近上下文事件在
-				// 登记会话的同一事务内落库——客户端打开导入会话即可见历史正文。
+				// 登记会话的同一事务内落库。稳定事件 ID + 回执表保证跨命令重试幂等。
 				for _, importCtx := range sessionContext {
 					if importCtx.SessionID != sessionID {
 						continue
 					}
 					for _, event := range importCtx.Events {
-						// AppendEvent 返回 (seq, error)：seq 与 normal 事件同源，无额外含义。
-						if _, appendErr := tx.AppendEvent(ctx, store.SessionEventRow{
-							SessionID: sessionID, EventType: event.EventType,
-							TerminalStatus: event.TerminalStatus, EnvelopeJSON: event.EnvelopeJSON,
-							CreatedAtUnixMS: event.CreatedAtUnixMS,
-						}); appendErr != nil {
-							return appendErr
+						if err := appendDSHImportEventInTx(ctx, tx, terminal, cmd, accountID, sessionID, event, s.now().UnixMilli()); err != nil {
+							return err
 						}
 					}
+				}
+				// 只修正事件游标并前推活动时间；状态保持原值（含 running）。
+				if err := tx.UpdateSessionImportProgress(ctx, sessionID, activity); err != nil {
+					return err
 				}
 			}
 		}
@@ -917,6 +936,38 @@ func (s *DaemonService) ResolveDSHImport(ctx context.Context, accountID, deviceI
 		return WorkspaceDSHImportResult{}, err
 	}
 	return result, nil
+}
+
+// appendDSHImportEventInTx 落库一条导入回执事件，并以稳定事件 ID 幂等：
+// 同一 event_id 允许跨不同 import 命令重试（不重复追加），但同一 event_id
+// 绑定其他会话/终端，或原命令不是导入回执（live/import 混用），一律拒绝。
+func appendDSHImportEventInTx(ctx context.Context, tx store.Repository, terminal store.TerminalRow, cmd store.CommandRow, accountID, sessionID string, event DaemonEventInput, nowUnixMS int64) error {
+	if strings.TrimSpace(event.EventID) == "" {
+		return ErrScopeDenied
+	}
+	if existing, lookupErr := tx.DaemonEventReceiptByID(ctx, event.EventID); lookupErr == nil {
+		if existing.TerminalID != terminal.ID || existing.SessionID != sessionID {
+			return ErrScopeDenied
+		}
+		if original, cmdErr := tx.CommandByID(ctx, existing.CommandID); cmdErr != nil || original.Kind != "session.import_dsh" || original.AccountID != accountID {
+			return ErrScopeDenied
+		}
+		return nil
+	} else if !errors.Is(lookupErr, sql.ErrNoRows) {
+		return lookupErr
+	}
+	seq, appendErr := tx.AppendEvent(ctx, store.SessionEventRow{
+		SessionID: sessionID, EventType: event.EventType,
+		TerminalStatus: event.TerminalStatus, EnvelopeJSON: event.EnvelopeJSON,
+		CreatedAtUnixMS: event.CreatedAtUnixMS,
+	})
+	if appendErr != nil {
+		return appendErr
+	}
+	return tx.CreateDaemonEventReceipt(ctx, store.DaemonEventReceiptRow{
+		EventID: event.EventID, TerminalID: terminal.ID, CommandID: cmd.ID,
+		SessionID: sessionID, EventSeq: seq, CreatedAtUnixMS: nowUnixMS,
+	})
 }
 
 func dshImportResultFromRow(ctx context.Context, repo store.Repository, row store.WorkspaceCommandResultRow) WorkspaceDSHImportResult {

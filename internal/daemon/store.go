@@ -302,6 +302,238 @@ func (s *Store) Set(key, value string) error {
 	return err
 }
 
+// ErrDSHSourceConflict means a local source already belongs to another session or
+// its durable forward/reverse mappings disagree. Never repair these by overwriting
+// a binding: historical conflicts require an explicit, reversible repair.
+var ErrDSHSourceConflict = errors.New("DSH source binding conflict")
+
+const (
+	dshSourceNative   = "native"
+	dshSourceImported = "imported"
+)
+
+func dshThreadKey(root, instanceID string) string {
+	return "dshthread:" + comparableWorkspacePath(root) + ":" + instanceID
+}
+
+// The source marker is local only. Keeping it separate lets legacy bindings be
+// classified without rewriting a live instance mapping or its replay state.
+func dshSourceKey(sessionID string) string { return "dshsource:" + sessionID }
+
+type dshThreadBinding struct {
+	RelaySessionID string
+	Thread         providerThread
+	Source         string
+	Created        bool
+}
+
+func validDSHRelayID(sessionID string) bool {
+	return sessionID != "" && len(sessionID) <= 128 && !strings.ContainsAny(sessionID, ":/\\\x00 \t\r\n")
+}
+
+type localStateQuerier interface {
+	Query(string, ...any) (*sql.Rows, error)
+	QueryRow(string, ...any) *sql.Row
+}
+
+// dshInstanceMappings reads only exact instance:<Relay ID> keys. Event summaries,
+// replay checkpoints and other instance:* auxiliary keys are never evidence of a
+// source binding. With discover=false it reads only the explicit allowlist.
+func dshInstanceMappings(q localStateQuerier, root string, sessionIDs []string, discover bool) ([]dshThreadBinding, error) {
+	var bindings []dshThreadBinding
+	appendMapping := func(sessionID, raw string) {
+		var thread providerThread
+		if validDSHRelayID(sessionID) && json.Unmarshal([]byte(raw), &thread) == nil &&
+			thread.Provider == "dsh" && thread.InstanceID != "" && sameCanonicalPath(thread.WorkspaceRoot, root) {
+			bindings = append(bindings, dshThreadBinding{RelaySessionID: sessionID, Thread: thread})
+		}
+	}
+	if !discover {
+		seen := map[string]bool{}
+		for _, sessionID := range sessionIDs {
+			if !validDSHRelayID(sessionID) || seen[sessionID] {
+				continue
+			}
+			seen[sessionID] = true
+			var raw string
+			err := q.QueryRow(`SELECT value FROM local_state WHERE key=?`, instanceKey(sessionID)).Scan(&raw)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			appendMapping(sessionID, raw)
+		}
+		return bindings, nil
+	}
+	rows, err := q.Query(`SELECT key, value FROM local_state WHERE key GLOB 'instance:*' ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, raw string
+		if err := rows.Scan(&key, &raw); err != nil {
+			return nil, err
+		}
+		appendMapping(strings.TrimPrefix(key, "instance:"), raw)
+	}
+	return bindings, rows.Err()
+}
+
+func (s *Store) dshInstanceMappings(root string, sessionIDs []string, discover bool) ([]dshThreadBinding, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return dshInstanceMappings(s.db, root, sessionIDs, discover)
+}
+
+func dshBindingSource(tx *sql.Tx, binding dshThreadBinding, reverseID string) (string, error) {
+	var source string
+	err := tx.QueryRow(`SELECT value FROM local_state WHERE key=?`, dshSourceKey(binding.RelaySessionID)).Scan(&source)
+	if err == nil {
+		if source != dshSourceNative && source != dshSourceImported {
+			return "", ErrDSHSourceConflict
+		}
+		return source, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	// Successful native start evidence takes precedence over an old import reverse
+	// mapping. Neither titles, event sequence numbers nor replay state identify origin.
+	var started bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM relay_commands
+		WHERE session_id=? AND kind='session.start' AND result_status='succeeded')`, binding.RelaySessionID).Scan(&started); err != nil {
+		return "", err
+	}
+	if started || binding.Thread.PersistenceRoot == "" || reverseID == "" {
+		// Native Start did not write persistence_root. This remains native even
+		// after an operator repairs its reverse index. Forward-only legacy rows
+		// are likewise conservative: missing import evidence never authorizes chat.
+		return dshSourceNative, nil
+	}
+	// Historical imports carry a persistence root and an old source index. A
+	// duplicate import remains imported after an operator rebinds that index to
+	// a native owner; this does not merge/delete either instance or its events.
+	return dshSourceImported, nil
+}
+
+// BindDSHThread atomically resolves/claims a source and persists its instance,
+// reverse index and local origin marker. An empty relaySessionID is lookup-only;
+// imported callers reuse an existing owner, native callers must own the exact ID.
+// Only a newly created import receives replay=pending. No migration merges rows.
+func (s *Store) BindDSHThread(relaySessionID string, thread providerThread, source string) (dshThreadBinding, error) {
+	if thread.Provider != "dsh" || strings.TrimSpace(thread.InstanceID) == "" ||
+		!filepath.IsAbs(thread.WorkspaceRoot) ||
+		(relaySessionID != "" && (!validDSHRelayID(relaySessionID) || (source != dshSourceNative && source != dshSourceImported))) {
+		return dshThreadBinding{}, ErrDSHSourceConflict
+	}
+	thread.WorkspaceRoot = comparableWorkspacePath(thread.WorkspaceRoot)
+	key := dshThreadKey(thread.WorkspaceRoot, thread.InstanceID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return dshThreadBinding{}, err
+	}
+	defer tx.Rollback()
+	// Acquire SQLite's writer lock BEFORE reading, including across Store handles.
+	// This avoids a check-then-write race and deferred-transaction snapshot upgrades.
+	if _, err := tx.Exec(`UPDATE local_state SET value=value WHERE key=?`, key); err != nil {
+		return dshThreadBinding{}, err
+	}
+	var reverseID string
+	if err := tx.QueryRow(`SELECT value FROM local_state WHERE key=?`, key).Scan(&reverseID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return dshThreadBinding{}, err
+	}
+	bindings, err := dshInstanceMappings(tx, thread.WorkspaceRoot, nil, true)
+	if err != nil {
+		return dshThreadBinding{}, err
+	}
+	var owner, native dshThreadBinding
+	matches := 0
+	for _, binding := range bindings {
+		if binding.Thread.InstanceID != thread.InstanceID {
+			continue
+		}
+		binding.Source, err = dshBindingSource(tx, binding, reverseID)
+		if err != nil {
+			return dshThreadBinding{}, err
+		}
+		matches++
+		if reverseID == "" || binding.RelaySessionID == reverseID {
+			owner = binding
+		}
+		if binding.Source == dshSourceNative {
+			if native.RelaySessionID != "" {
+				return dshThreadBinding{}, ErrDSHSourceConflict
+			}
+			native = binding
+		}
+	}
+	if reverseID != "" {
+		if owner.RelaySessionID != reverseID || (native.RelaySessionID != "" && native.RelaySessionID != reverseID) {
+			return dshThreadBinding{}, ErrDSHSourceConflict
+		}
+	} else if native.RelaySessionID != "" {
+		owner = native
+	} else if matches > 1 {
+		return dshThreadBinding{}, ErrDSHSourceConflict
+	}
+	if owner.RelaySessionID != "" {
+		if source == dshSourceNative && relaySessionID != "" && owner.RelaySessionID != relaySessionID {
+			return dshThreadBinding{}, ErrDSHSourceConflict
+		}
+	} else {
+		if relaySessionID == "" {
+			return dshThreadBinding{}, ErrSessionInstanceMissing
+		}
+		// A repeated native start may replace its own native instance (existing
+		// lifecycle contract), but cannot overwrite an imported/foreign mapping.
+		var old string
+		err := tx.QueryRow(`SELECT value FROM local_state WHERE key=?`, instanceKey(relaySessionID)).Scan(&old)
+		if err == nil {
+			var oldThread providerThread
+			if source != dshSourceNative || json.Unmarshal([]byte(old), &oldThread) != nil || oldThread.Provider != "dsh" {
+				return dshThreadBinding{}, ErrDSHSourceConflict
+			}
+			var oldReverse string
+			if err := tx.QueryRow(`SELECT value FROM local_state WHERE key=?`, dshThreadKey(oldThread.WorkspaceRoot, oldThread.InstanceID)).Scan(&oldReverse); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return dshThreadBinding{}, err
+			}
+			oldSource, err := dshBindingSource(tx, dshThreadBinding{RelaySessionID: relaySessionID, Thread: oldThread}, oldReverse)
+			if err != nil || oldSource != dshSourceNative || (oldReverse != "" && oldReverse != relaySessionID) {
+				return dshThreadBinding{}, ErrDSHSourceConflict
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return dshThreadBinding{}, err
+		}
+		owner = dshThreadBinding{RelaySessionID: relaySessionID, Thread: thread, Source: source, Created: true}
+		raw, err := json.Marshal(thread)
+		if err != nil {
+			return dshThreadBinding{}, err
+		}
+		if _, err := tx.Exec(`INSERT INTO local_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, instanceKey(relaySessionID), string(raw)); err != nil {
+			return dshThreadBinding{}, err
+		}
+		if source == dshSourceImported {
+			if _, err := tx.Exec(`INSERT INTO local_state(key,value) VALUES(?,?)`, replayStateKey(relaySessionID), replayPending); err != nil {
+				return dshThreadBinding{}, err
+			}
+		}
+	}
+	for key, value := range map[string]string{
+		dshThreadKey(thread.WorkspaceRoot, thread.InstanceID): owner.RelaySessionID,
+		dshSourceKey(owner.RelaySessionID):                    owner.Source,
+	} {
+		if _, err := tx.Exec(`INSERT INTO local_state(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, key, value); err != nil {
+			return dshThreadBinding{}, err
+		}
+	}
+	return owner, tx.Commit()
+}
+
 // Delete 删除已失效的本机状态。仅接受稳定内部键；不存在视为成功，确保 kill/关闭清理可重试。
 func (s *Store) Delete(key string) error {
 	s.mu.Lock()

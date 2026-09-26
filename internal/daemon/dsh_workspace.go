@@ -7,9 +7,11 @@ package daemon
 // canonical root 只进入本机确认表与 Relay 专用 result，不进入普通日志。
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
 	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/internal/workspacesafe"
@@ -336,12 +339,16 @@ const (
 // importActiveCutoff 返回活跃窗口的截止时间（now-72h），独立变量便于测试注入。
 var importActiveCutoff = func() time.Time { return time.Now().Add(-dshImportActiveWindow) }
 
-// ImportDSHSessions 扫描已确认 DSH 工作区下的 JSONL artifact，为每个**活跃**会话
-// （用户口径：最近三天还在更新，即 artifact ModTime 在 72h 窗口内）生成 opaque
-// Relay session id 并写入本机 instance/replay 映射；同时提取真实标题与最近上下文
-// 消息（v0.9.4：客户端打开导入会话即可见最近十几条正文）。窗口外的历史会话不导入、
-// 不产生投影，客户端列表因此只加载活跃工作集。DSH session id、cwd 或路径仍不上传
-// 到 Relay；正文只进入用户自己的事件流。
+// DSHImportOptions defaults to managed-only synchronization. Discovery is only
+// enabled by the explicit history-import action; IncludeAll never enables it.
+type DSHImportOptions struct {
+	Discover   bool
+	IncludeAll bool
+	SessionIDs []string
+}
+
+// ImportDSHSessions retains the explicit-import API for local callers. RelayLoop
+// must use ImportDSHSessionsWithOptions so missing command fields stay safe.
 func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID string, store *Store, includeAll bool) ([]DSHImportedSession, error) {
 	if m == nil || store == nil {
 		return nil, ErrWorkspaceRootInvalid
@@ -350,117 +357,183 @@ func (m *WorkspaceManager) ImportDSHSessions(ctx context.Context, workspaceID st
 	if err != nil {
 		return nil, err
 	}
-	// 来源合并（v0.9.4 遗漏修齐）：① 项目绑定布局 <root>/.dsh-sessions；
-	// ② DSH 全局存储 ~/.dsh/sessions（CLI/Web 在任意 cwd 发起的会话都集中存放在
-	// 这里，ai_novel 等项目只出现在全局布局）。两个来源都按 cwd==工作区 root 过滤。
-	persistenceRoot := filepath.Join(confirmed.Root, ".dsh-sessions")
-	artifacts, err := dsh.ScanSessionArtifacts(persistenceRoot)
+	bindings, err := store.dshInstanceMappings(confirmed.Root, nil, true)
 	if err != nil {
-		// 没有持久化根时视为空导入，而不是让整个同步失败。
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
-		artifacts = nil
+		return nil, err
 	}
-	if globalRoot, globalErr := dsh.GlobalSessionsDir(); globalErr == nil {
-		if globalArtifacts, scanErr := dsh.ScanGlobalSessionArtifacts(globalRoot); scanErr == nil {
-			artifacts = append(artifacts, globalArtifacts...)
-		}
+	opts := DSHImportOptions{Discover: true, IncludeAll: includeAll}
+	for _, binding := range bindings {
+		opts.SessionIDs = append(opts.SessionIDs, binding.RelaySessionID)
 	}
-	seen := map[string]bool{}
-	var out []DSHImportedSession
-	for _, artifact := range artifacts {
-		if artifact.ID == "" || artifact.CWD == "" {
-			continue
+	return m.ImportDSHSessionsWithOptions(ctx, workspaceID, store, opts)
+}
+
+func (m *WorkspaceManager) ImportDSHSessionsWithOptions(ctx context.Context, workspaceID string, store *Store, opts DSHImportOptions) ([]DSHImportedSession, error) {
+	if m == nil || store == nil {
+		return nil, ErrWorkspaceRootInvalid
+	}
+	confirmed, err := store.ConfirmedWorkspaceByID(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	bindings, err := store.dshInstanceMappings(confirmed.Root, opts.SessionIDs, opts.Discover)
+	if err != nil {
+		return nil, err
+	}
+	if !opts.Discover && len(bindings) == 0 {
+		return nil, nil // No scan, no new IDs, no imports without an existing allowlisted mapping.
+	}
+	allowed := map[string]bool{}
+	for _, sessionID := range opts.SessionIDs {
+		allowed[sessionID] = true
+	}
+	known := map[string]providerThread{}
+	for _, binding := range bindings {
+		known[binding.Thread.InstanceID] = binding.Thread
+	}
+	// Scan a mapped persistence root first. The scanner only locates artifacts;
+	// managed mode never reads/imports unknown sources encountered along the way.
+	scanned := map[string][]dsh.SessionArtifact{}
+	scan := func(root string) ([]dsh.SessionArtifact, error) {
+		if artifacts, ok := scanned[root]; ok {
+			return artifacts, nil
 		}
-		// 只导入 cwd 与当前 canonical workspace 一致的会话；不一致视为移动/越权，跳过。
-		if !sameCanonicalPath(artifact.CWD, confirmed.Root) {
-			continue
+		artifacts, err := dsh.ScanSessionArtifacts(root)
+		if globalRoot, globalErr := dsh.GlobalSessionsDir(); globalErr == nil && sameCanonicalPath(root, globalRoot) {
+			artifacts, err = dsh.ScanGlobalSessionArtifacts(root)
 		}
-		if seen[artifact.ID] {
-			continue
+		if os.IsNotExist(err) {
+			err = nil
 		}
-		seen[artifact.ID] = true
-		// 跨轮幂等（v0.9.4）：同一 DSH 会话只对应一个 Relay 会话——复用已有映射。
-		// v0.9.5 P1（持续同步）：复用时不再只回活动时间，而是按水位做增量补齐——
-		// 只携带上次导入之后的新正文（上限 importIncrementalLimit，超出留到下一
-		// 次导入）与 watermark 之后的新标题；无新行时零消息零标题，绝不重发预览。
-		threadKey := "dshthread:" + confirmed.Root + ":" + artifact.ID
-		if existingRelayID, getErr := store.Get(threadKey); getErr == nil && existingRelayID != "" {
-			item := DSHImportedSession{
-				RelaySessionID:     existingRelayID,
-				DSHSessionID:       artifact.ID,
-				WorkspaceRoot:      confirmed.Root,
-				LastActivityUnixMS: artifact.ModTime.UnixMilli(),
-			}
-			watermark := int64(-1)
-			if raw, seqErr := store.Get(threadSeqKey(confirmed.Root, artifact.ID)); seqErr == nil {
-				if parsed, parseErr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); parseErr == nil {
-					watermark = parsed
-				}
-			}
-			if incrementalCtx, incrErr := dsh.ReadSessionEventsAfter(artifact.Path, watermark, importIncrementalLimit); incrErr == nil &&
-				(len(incrementalCtx.Messages) > 0 || incrementalCtx.Title != "") {
-				item.Messages = incrementalCtx.Messages
-				item.Title = incrementalCtx.Title
-				item.ImportedSeq = incrementalCtx.LastSeq
-				item.WatermarkValid = true
-			}
-			out = append(out, item)
-			continue
+		if err == nil {
+			scanned[root] = artifacts
 		}
-		// 活跃过滤：只导入最近三天还在更新的会话（ModTime 即会话最后活动时间）。
-		// 老会话跳过；一旦 DSH 侧再次更新它，下一次导入会自动带回来。
-		// includeAll（v0.9.5 P2 按需导入全部）：显式请求时绕过窗口，把窗口外的
-		// 历史会话也按需带入（每个会话仍是标题+最近十几条预览，水位增量照常）。
-		if !includeAll && artifact.ModTime.Before(importActiveCutoff()) {
-			continue
+		return artifacts, err
+	}
+	var artifacts []dsh.SessionArtifact
+	located := map[string]bool{}
+	for _, binding := range bindings {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		relaySessionID := id.New("sess")
-		// v0.9.4：提取真实标题与最近上下文。读取失败不阻断导入（上下文尽力而为）。
-		artifactContext, ctxErr := dsh.ReadSessionContext(artifact.Path, importContextLimit)
-		if ctxErr != nil {
-			artifactContext = dsh.SessionContext{}
+		root := binding.Thread.PersistenceRoot
+		if root == "" {
+			root = filepath.Join(confirmed.Root, ".dsh-sessions")
 		}
-		// 写本机 instance 映射：Relay session -> DSH session + workspace root，
-		// 并记录 artifact 来源存储根与物理编码（v0.9.5）：resume 据此把桥绑定到
-		// 真实存储位置，全局存储（zstd）来源的会话才能在原会话上继续。
-		mapping, err := json.Marshal(providerThread{
-			Provider:        "dsh",
-			InstanceID:      artifact.ID,
-			WorkspaceRoot:   confirmed.Root,
-			PersistenceRoot: artifact.SourceRoot,
-			Compression:     artifact.Compression,
-		})
+		candidates, err := scan(root)
 		if err != nil {
 			return nil, err
 		}
-		if err := store.Set(instanceKey(relaySessionID), string(mapping)); err != nil {
-			return nil, err
+		for _, artifact := range candidates {
+			if artifact.ID == binding.Thread.InstanceID && sameCanonicalPath(artifact.CWD, confirmed.Root) && !located[artifact.ID] {
+				artifacts = append(artifacts, artifact)
+				located[artifact.ID] = true
+			}
 		}
-		// 新导入的 DSH 会话应走 session.load 回放，因此 replay state 置 pending。
-		if err := store.Set(replayStateKey(relaySessionID), replayPending); err != nil {
-			return nil, err
+	}
+	if opts.Discover || len(located) < len(known) {
+		roots := []string{filepath.Join(confirmed.Root, ".dsh-sessions")}
+		if globalRoot, globalErr := dsh.GlobalSessionsDir(); globalErr == nil {
+			roots = append(roots, globalRoot)
 		}
-		if err := store.Set(threadKey, relaySessionID); err != nil {
-			return nil, err
+		for _, root := range roots {
+			candidates, err := scan(root)
+			if err != nil {
+				return nil, err
+			}
+			for _, artifact := range candidates {
+				_, isKnown := known[artifact.ID]
+				if artifact.ID == "" || !sameCanonicalPath(artifact.CWD, confirmed.Root) || located[artifact.ID] || (!opts.Discover && !isKnown) {
+					continue
+				}
+				artifacts = append(artifacts, artifact)
+				located[artifact.ID] = true
+			}
 		}
-		out = append(out, DSHImportedSession{
-			RelaySessionID:     relaySessionID,
-			DSHSessionID:       artifact.ID,
-			WorkspaceRoot:      confirmed.Root,
-			Title:              artifactContext.Title,
-			Messages:           artifactContext.Messages,
-			LastActivityUnixMS: artifact.ModTime.UnixMilli(),
-			PersistenceRoot:    artifact.SourceRoot,
-			Compression:        artifact.Compression,
-			// 首次导入的水位 = 预览读取的行尾；同样等回执成功后由
-			// CommitDSHImportWatermarks 落账（与映射写入的失败窗口解耦）。
-			ImportedSeq:    artifactContext.LastSeq,
-			WatermarkValid: true,
-		})
+	}
+	var out []DSHImportedSession
+	for _, artifact := range artifacts {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		thread := providerThread{Provider: "dsh", InstanceID: artifact.ID, WorkspaceRoot: confirmed.Root,
+			PersistenceRoot: artifact.SourceRoot, Compression: artifact.Compression}
+		binding, err := store.BindDSHThread("", thread, "")
+		if errors.Is(err, ErrSessionInstanceMissing) {
+			if !opts.Discover || (!opts.IncludeAll && artifact.ModTime.Before(importActiveCutoff())) {
+				continue
+			}
+			binding, err = store.BindDSHThread(id.New("sess"), thread, dshSourceImported)
+		}
+		if err != nil {
+			return nil, err // A conflicting binding must not be silently overwritten or merged.
+		}
+		// Even explicit discovery must not resurrect a hidden native Relay session.
+		if (!opts.Discover || binding.Source == dshSourceNative) && !allowed[binding.RelaySessionID] {
+			continue
+		}
+		item := DSHImportedSession{
+			RelaySessionID: binding.RelaySessionID, DSHSessionID: artifact.ID, WorkspaceRoot: confirmed.Root,
+			LastActivityUnixMS: artifact.ModTime.UnixMilli(), PersistenceRoot: artifact.SourceRoot, Compression: artifact.Compression,
+		}
+		if binding.Source == dshSourceNative {
+			// Native text belongs exclusively to live events/resume. No chat body or
+			// message watermark may enter the artifact-import channel.
+			item.Title = readDSHNativeTitle(artifact.Path)
+		} else if binding.Created {
+			if preview, err := dsh.ReadSessionContext(artifact.Path, importContextLimit); err == nil {
+				item.Title, item.Messages, item.ImportedSeq = preview.Title, preview.Messages, preview.LastSeq
+				item.WatermarkValid = len(preview.Messages) > 0 || preview.Title != ""
+			}
+		} else {
+			watermark := int64(-1)
+			if raw, err := store.Get(threadSeqKey(confirmed.Root, artifact.ID)); err == nil {
+				if parsed, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil {
+					watermark = parsed
+				}
+			}
+			if incremental, err := dsh.ReadSessionEventsAfter(artifact.Path, watermark, importIncrementalLimit); err == nil {
+				item.Title, item.Messages, item.ImportedSeq = incremental.Title, incremental.Messages, incremental.LastSeq
+				item.WatermarkValid = len(incremental.Messages) > 0 || incremental.Title != ""
+			}
+		}
+		out = append(out, item)
 	}
 	return out, nil
+}
+
+// readDSHNativeTitle extracts only explicit title records, never user-message
+// previews or message watermarks. It supports both local JSONL and global zstd.
+func readDSHNativeTitle(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	var input io.Reader = file
+	if strings.HasSuffix(path, ".zstd") {
+		decoder, err := zstd.NewReader(file)
+		if err != nil {
+			return ""
+		}
+		defer decoder.Close()
+		input = decoder
+	}
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var title string
+	for scanner.Scan() {
+		var row struct {
+			Type string `json:"type"`
+			Data struct {
+				Title string `json:"title"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &row) == nil && row.Type == "session/title" && strings.TrimSpace(row.Data.Title) != "" {
+			title = strings.TrimSpace(row.Data.Title)
+		}
+	}
+	return title
 }
 
 // threadSeqKey 是 <root>:<dshID> -> 已导入最大 JSONL seq 的 local_state 键

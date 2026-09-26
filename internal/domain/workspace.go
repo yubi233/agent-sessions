@@ -63,7 +63,9 @@ type WorkspaceImportDSHInput struct {
 	Role        string
 	WorkspaceID string
 	TerminalID  string
-	// IncludeAll 绕过 72h 活跃窗口导入全部历史会话（v0.9.5 P2 按需入口）。
+	// Discover 必须由用户显式选择；缺省只同步当前受管会话，不发现外部历史。
+	Discover bool
+	// IncludeAll 仅在 Discover=true 时绕过活跃窗口。
 	IncludeAll bool
 }
 
@@ -279,8 +281,16 @@ func (s *WorkspaceService) GetSyncDSHWorkspaces(ctx context.Context, accountID, 
 	return dshSyncStateFromCommand(ctx, s.repo, command), nil
 }
 
-// ImportDSHSessions 创建 session.import_dsh 命令，或返回同账号已存在的导入命令。
-// 幂等键绑定 account + workspace；只允许 write 角色发起，且目标必须是 Workspace 的 home Terminal。
+// dshImportCommandPayload 的 discover 永远显式下发；缺省旧命令按空白名单同步处理。
+type dshImportCommandPayload struct {
+	WorkspaceID string   `json:"workspace_id"`
+	Discover    bool     `json:"discover"`
+	IncludeAll  bool     `json:"include_all,omitempty"`
+	SessionIDs  []string `json:"session_ids"`
+}
+
+// ImportDSHSessions 保留 session.import_dsh 动作名，但同步和显式发现使用独立幂等域。
+// 默认只同步本工作区未归档且默认可见的 DSH 会话；空集合不唤醒 Daemon。
 func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceImportDSHInput) (WorkspaceImportDSHState, error) {
 	if !protocol.DeviceRoleCanWrite(in.Role) {
 		return WorkspaceImportDSHState{}, ErrReadOnlyDevice
@@ -288,10 +298,50 @@ func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceIm
 	if strings.TrimSpace(in.AccountID) == "" || strings.TrimSpace(in.DeviceID) == "" || strings.TrimSpace(in.WorkspaceID) == "" {
 		return WorkspaceImportDSHState{}, ErrScopeDenied
 	}
-	scopeHash := hashScope(in.AccountID, in.WorkspaceID+"|dsh_import")
-	idempotencyKey := "session.import_dsh:" + in.AccountID + ":" + in.WorkspaceID
+	mode := "sync"
+	if in.Discover {
+		mode = "discover"
+		if in.IncludeAll {
+			mode = "discover_all"
+		}
+	}
+	scopeHash := hashScope(in.AccountID, in.WorkspaceID+"|dsh_import|"+mode)
+	idempotencyKey := "session.import_dsh:" + in.AccountID + ":" + in.WorkspaceID + ":" + mode
 	var state WorkspaceImportDSHState
 	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		workspace, err := tx.WorkspaceByID(ctx, in.WorkspaceID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrWorkspaceNotFound
+			}
+			return err
+		}
+		if !workspaceBelongsToAccount(ctx, tx, in.AccountID, in.WorkspaceID) {
+			return ErrScopeDenied
+		}
+		terminalID := workspace.TerminalID
+		if in.TerminalID != "" && in.TerminalID != terminalID {
+			return ErrScopeDenied
+		}
+		payload := dshImportCommandPayload{
+			WorkspaceID: in.WorkspaceID, Discover: in.Discover,
+			IncludeAll: in.Discover && in.IncludeAll, SessionIDs: []string{},
+		}
+		if !in.Discover {
+			sessions, err := tx.ListSessions(ctx, in.AccountID)
+			if err != nil {
+				return err
+			}
+			for _, session := range sessions {
+				if session.WorkspaceID == in.WorkspaceID && session.Provider == "dsh" {
+					payload.SessionIDs = append(payload.SessionIDs, session.ID)
+				}
+			}
+			if len(payload.SessionIDs) == 0 {
+				state = WorkspaceImportDSHState{Status: CommandSucceeded, SessionIDs: []string{}}
+				return nil
+			}
+		}
 		if existing, lookupErr := tx.CommandByScopeKey(ctx, scopeHash, idempotencyKey); lookupErr == nil {
 			if existing.AccountID != in.AccountID || existing.Kind != "session.import_dsh" {
 				return ErrScopeDenied
@@ -306,21 +356,6 @@ func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceIm
 		} else if !errors.Is(lookupErr, sql.ErrNoRows) {
 			return lookupErr
 		}
-		workspace, err := tx.WorkspaceByID(ctx, in.WorkspaceID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrWorkspaceNotFound
-			}
-			return err
-		}
-		if !workspaceBelongsToAccount(ctx, tx, in.AccountID, in.WorkspaceID) {
-			return ErrScopeDenied
-		}
-		// 导入只允许 home Terminal 自己发起；目标 Terminal 必须与 Workspace 归属一致。
-		terminalID := workspace.TerminalID
-		if in.TerminalID != "" && in.TerminalID != terminalID {
-			return ErrScopeDenied
-		}
 		terminal, err := tx.TerminalByID(ctx, terminalID)
 		if err != nil {
 			return ErrTerminalOffline
@@ -328,22 +363,17 @@ func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceIm
 		if terminal.AccountID != in.AccountID {
 			return ErrScopeDenied
 		}
-		// v0.9.1 C2：导入目标必须通过统一 freshness 门控；unknown 报 unreachable，
-		// offline/协议不安全报 offline，均不创建投递。
 		if err := s.Presence.RefreshGate(terminal, s.now().UnixMilli()); err != nil {
 			return err
 		}
-		payload, err := json.Marshal(struct {
-			WorkspaceID string `json:"workspace_id"`
-			IncludeAll  bool   `json:"include_all,omitempty"`
-		}{WorkspaceID: in.WorkspaceID, IncludeAll: in.IncludeAll})
+		encodedPayload, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
 		command := store.CommandRow{
 			ID: id.New("cmd"), AccountID: in.AccountID, SessionID: "", Kind: "session.import_dsh",
 			Status: CommandAccepted, ScopeHash: scopeHash, IdempotencyKey: idempotencyKey,
-			LeaseEpoch: 0, TargetTerminalID: terminal.ID, CiphertextJSON: string(payload),
+			LeaseEpoch: 0, TargetTerminalID: terminal.ID, CiphertextJSON: string(encodedPayload),
 		}
 		if err := tx.CreateCommand(ctx, command); err != nil {
 			return err
@@ -360,9 +390,6 @@ func (s *WorkspaceService) ImportDSHSessions(ctx context.Context, in WorkspaceIm
 		return nil
 	})
 	if err != nil {
-		if existing, lookupErr := s.repo.CommandByScopeKey(ctx, scopeHash, idempotencyKey); lookupErr == nil && existing.Kind == "session.import_dsh" {
-			return dshImportStateFromCommand(ctx, s.repo, existing), nil
-		}
 		return WorkspaceImportDSHState{}, err
 	}
 	return state, nil

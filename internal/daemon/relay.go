@@ -1597,6 +1597,7 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 	if command.Kind == "session.import_dsh" {
 		// 会话按需导入没有 Session lease；只允许 home Terminal 在本机已确认工作区下
 		// 扫描 JSONL 元数据并回传 opaque Relay session ids。
+		// discover=false（缺省）只同步服务端允许列表内的已管理会话，绝不发现新历史。
 		status, errorCode := "succeeded", ""
 		var sessionIDs []string
 		var sessions []DSHImportSessionResult
@@ -1607,14 +1608,21 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 			status, errorCode = "failed", protocol.ErrCapabilityUnsupported
 		} else {
 			var payload struct {
-				WorkspaceID string `json:"workspace_id"`
-				IncludeAll  bool   `json:"include_all"`
+				WorkspaceID string   `json:"workspace_id"`
+				Discover    bool     `json:"discover"`
+				IncludeAll  bool     `json:"include_all"`
+				SessionIDs  []string `json:"session_ids"`
 			}
 			if err := json.Unmarshal([]byte(command.PayloadJSON), &payload); err != nil || strings.TrimSpace(payload.WorkspaceID) == "" {
 				status, errorCode = "failed", protocol.ErrWorkspacePathDenied
 			} else {
+				// include_all 只有显式历史发现才有意义；缺省旧命令按空白名单安全收口。
 				var importErr error
-				imported, importErr = l.WorkspaceManager.ImportDSHSessions(ctx, payload.WorkspaceID, l.Store, payload.IncludeAll)
+				imported, importErr = l.WorkspaceManager.ImportDSHSessionsWithOptions(ctx, payload.WorkspaceID, l.Store, DSHImportOptions{
+					Discover:   payload.Discover,
+					IncludeAll: payload.Discover && payload.IncludeAll,
+					SessionIDs: payload.SessionIDs,
+				})
 				if importErr != nil {
 					status, errorCode = "failed", CommandErrorCode(importErr)
 					l.Logger.Warn("daemon dsh session import failed", "command", command.CommandID, "error_code", errorCode)
@@ -1656,7 +1664,11 @@ func (l *RelayLoop) processOneCommand(ctx context.Context, command RelayCommand)
 								continue
 							}
 							result.Events = append(result.Events, RelayEvent{
-								EventID: id.New("evt"), CommandID: command.CommandID,
+								// 跨命令重试必须幂等：Relay 以稳定事件 ID 去重回执。
+								// 散列只含 Relay 会话 id、源消息序号与事件类型，绝不携带
+								// 本机 DSH 源 id 或路径（协议边界不变）。
+								EventID:   dshImportEventID(item.RelaySessionID, message.Seq, relayEventType(eventType)),
+								CommandID: command.CommandID,
 								SessionID: item.RelaySessionID, EventType: relayEventType(eventType),
 								TerminalStatus: terminalStatusForEvent(event), EnvelopeJSON: envelope,
 								CreatedAtUnixMS: event.CreatedAtUnixMS,
@@ -2084,6 +2096,14 @@ func relayEventID(sessionID string, event adapter.Event) string {
 		return "evt-replay-" + replaySourceKey(sessionID, event.ReplayOrdinal)
 	}
 	return id.New("evt")
+}
+
+// dshImportEventID 是导入回执事件的跨命令稳定主键（Relay 据此对重试去重）。
+// 输入仅限 opaque Relay 会话 id、JSONL 消息序号与事件类型；本机 DSH 源 id、
+// cwd、artifact 路径与正文都不参与散列，协议不泄露本机存储信息。
+func dshImportEventID(sessionID string, messageSeq int64, eventType string) string {
+	digest := sha256.Sum256([]byte(sessionID + "\x00" + strconv.FormatInt(messageSeq, 10) + "\x00" + eventType))
+	return "evt_dsh_import_" + hex.EncodeToString(digest[:16])
 }
 
 // enqueueCanonicalEventResult 把事件写入本机 outbox，并向回放调用方返回提交结果。

@@ -790,6 +790,45 @@ func (e PairingRequestStatus) Valid() bool {
 	}
 }
 
+// Defines values for SessionOrigin.
+const (
+	SessionOriginDshImport SessionOrigin = "dsh_import"
+	SessionOriginManaged   SessionOrigin = "managed"
+)
+
+// Valid indicates whether the value is a known member of the SessionOrigin enum.
+func (e SessionOrigin) Valid() bool {
+	switch e {
+	case SessionOriginDshImport:
+		return true
+	case SessionOriginManaged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionVisibility.
+const (
+	Default   SessionVisibility = "default"
+	Duplicate SessionVisibility = "duplicate"
+	History   SessionVisibility = "history"
+)
+
+// Valid indicates whether the value is a known member of the SessionVisibility enum.
+func (e SessionVisibility) Valid() bool {
+	switch e {
+	case Default:
+		return true
+	case Duplicate:
+		return true
+	case History:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TerminalAvailability.
 const (
 	TerminalAvailabilityOffline     TerminalAvailability = "offline"
@@ -963,16 +1002,16 @@ func (e WebReadTransportAlgorithm) Valid() bool {
 
 // Defines values for WorkspaceOrigin.
 const (
-	Dsh     WorkspaceOrigin = "dsh"
-	Managed WorkspaceOrigin = "managed"
+	WorkspaceOriginDsh     WorkspaceOrigin = "dsh"
+	WorkspaceOriginManaged WorkspaceOrigin = "managed"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceOrigin enum.
 func (e WorkspaceOrigin) Valid() bool {
 	switch e {
-	case Dsh:
+	case WorkspaceOriginDsh:
 		return true
-	case Managed:
+	case WorkspaceOriginManaged:
 		return true
 	default:
 		return false
@@ -1011,13 +1050,28 @@ func (e WorkspaceCreateResponseStatus) Valid() bool {
 
 // Defines values for ListSessionsParamsArchived.
 const (
-	True ListSessionsParamsArchived = "true"
+	ListSessionsParamsArchivedTrue ListSessionsParamsArchived = "true"
 )
 
 // Valid indicates whether the value is a known member of the ListSessionsParamsArchived enum.
 func (e ListSessionsParamsArchived) Valid() bool {
 	switch e {
-	case True:
+	case ListSessionsParamsArchivedTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListSessionsParamsHistory.
+const (
+	ListSessionsParamsHistoryTrue ListSessionsParamsHistory = "true"
+)
+
+// Valid indicates whether the value is a known member of the ListSessionsParamsHistory enum.
+func (e ListSessionsParamsHistory) Valid() bool {
+	switch e {
+	case ListSessionsParamsHistoryTrue:
 		return true
 	default:
 		return false
@@ -1225,6 +1279,29 @@ type CreateWorkspaceWithFolderRequest struct {
 
 	// TerminalId 可选目标 Terminal；省略时由 Relay 选择账号下在线且声明 workspace_create 的 Terminal。
 	TerminalId *string `json:"terminal_id,omitempty"`
+}
+
+// DSHImportRequest defines model for DSHImportRequest.
+type DSHImportRequest struct {
+	// Discover 只有明确浏览历史候选才设 true；缺省不会发现或注册新历史会话。
+	Discover *bool `json:"discover,omitempty"`
+
+	// IncludeAll 仅在 discover=true 时允许历史发现绕过 72h 时间窗口。
+	IncludeAll *bool `json:"include_all,omitempty"`
+
+	// TerminalId 可省略；指定时必须是工作区归属的 home Terminal。
+	TerminalId  *string `json:"terminal_id,omitempty"`
+	WorkspaceId string  `json:"workspace_id"`
+}
+
+// DSHImportState defines model for DSHImportState.
+type DSHImportState struct {
+	CommandId *string `json:"command_id,omitempty"`
+	ErrorCode *string `json:"error_code,omitempty"`
+
+	// SessionIds 已同步或发现的 opaque Relay 会话标识；并不表示已纳入日常列表。
+	SessionIds *[]string `json:"session_ids,omitempty"`
+	Status     string    `json:"status"`
 }
 
 // DaemonAttachmentRead defines model for DaemonAttachmentRead.
@@ -1645,6 +1722,11 @@ type LoginRequest struct {
 // LoginRequestDeviceRole 仅允许 web 或 admin；省略时服务端按 web 只读 token 处理。
 type LoginRequestDeviceRole string
 
+// ManageSessionResponse defines model for ManageSessionResponse.
+type ManageSessionResponse struct {
+	Session Session `json:"session"`
+}
+
 // OpaqueCipherEnvelope Relay 不解密此对象；字段只证明其为版本化 ciphertext envelope，禁止携带明文正文、路径、prompt 或 Provider 原始响应。
 type OpaqueCipherEnvelope struct {
 	AadHash              string                 `json:"aad_hash"`
@@ -1763,20 +1845,32 @@ type Session struct {
 	// AgentPresetId 会话实际 joined 的 DSH agent preset（v0.8.5 §3.8 只读投影）；缺失表示未 joined，客户端如实降级。
 	AgentPresetId *string `json:"agent_preset_id,omitempty"`
 
-	// DisplayName 会话展示标题（v0.9.4：DSH 导入时从本地会话标题/首条用户消息提取的脱敏元数据）；缺省表示无标题，客户端按 id 短码回退，不编造正文摘要。
+	// DisplayName 会话展示标题；无标题的 DSH 会话显示“未命名 DSH 会话”，不能根据标题判断历史来源。
 	DisplayName *string `json:"display_name,omitempty"`
 	Id          string  `json:"id"`
 
 	// LastActivityAtUnixMs 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端仅用于最后消息时间展示与列表排序，不参与会话状态推断。
-	LastActivityAtUnixMs *int64  `json:"last_activity_at_unix_ms,omitempty"`
-	LastSeq              *int64  `json:"last_seq,omitempty"`
-	Provider             *string `json:"provider,omitempty"`
-	Status               string  `json:"status"`
-	WorkspaceId          string  `json:"workspace_id"`
+	LastActivityAtUnixMs *int64 `json:"last_activity_at_unix_ms,omitempty"`
+	LastSeq              *int64 `json:"last_seq,omitempty"`
+
+	// Origin 创建来源；dsh_import 表示外部 DSH 导入，即使明确接续也保留该来源。
+	Origin   *SessionOrigin `json:"origin,omitempty"`
+	Provider *string        `json:"provider,omitempty"`
+	Status   string         `json:"status"`
+
+	// Visibility default 进入日常列表，history 仅在显式历史候选入口展示，duplicate 为保留数据但隐藏的同源副本。
+	Visibility  *SessionVisibility `json:"visibility,omitempty"`
+	WorkspaceId string             `json:"workspace_id"`
 
 	// WorkspaceName 工作区安全显示名（v0.8.5 §3.4）：服务端由 workspace_id 解析为 display_name 后下发；缺失/解析失败时省略，客户端如实降级，不编造路径或写死项目名。
 	WorkspaceName *string `json:"workspace_name,omitempty"`
 }
+
+// SessionOrigin 创建来源；dsh_import 表示外部 DSH 导入，即使明确接续也保留该来源。
+type SessionOrigin string
+
+// SessionVisibility default 进入日常列表，history 仅在显式历史候选入口展示，duplicate 为保留数据但隐藏的同源副本。
+type SessionVisibility string
 
 // SessionContentDEK defines model for SessionContentDEK.
 type SessionContentDEK struct {
@@ -2111,10 +2205,16 @@ type StreamEventsParams struct {
 type ListSessionsParams struct {
 	// Archived 传 "true" 时读取已归档会话列表。
 	Archived *ListSessionsParamsArchived `form:"archived,omitempty" json:"archived,omitempty"`
+
+	// History 传 "true" 时只读取未归档的 DSH 历史候选，不自动纳入日常列表。
+	History *ListSessionsParamsHistory `form:"history,omitempty" json:"history,omitempty"`
 }
 
 // ListSessionsParamsArchived defines parameters for ListSessions.
 type ListSessionsParamsArchived string
+
+// ListSessionsParamsHistory defines parameters for ListSessions.
+type ListSessionsParamsHistory string
 
 // GetSessionDaemonObservationParams defines parameters for GetSessionDaemonObservation.
 type GetSessionDaemonObservationParams struct {
@@ -2239,6 +2339,9 @@ type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
 
 // CreateWorkspaceWithFolderJSONRequestBody defines body for CreateWorkspaceWithFolder for application/json ContentType.
 type CreateWorkspaceWithFolderJSONRequestBody = CreateWorkspaceWithFolderRequest
+
+// ImportDSHSessionsJSONRequestBody defines body for ImportDSHSessions for application/json ContentType.
+type ImportDSHSessionsJSONRequestBody = DSHImportRequest
 
 // Getter for additional properties for OpaqueCipherEnvelope. Returns the specified
 // element and whether it was found
@@ -2530,6 +2633,9 @@ type ServerInterface interface {
 	// (POST /v1/sessions/{id}/lease)
 	AcquireSessionLease(c *gin.Context, id string)
 
+	// (POST /v1/sessions/{id}/manage)
+	ManageSession(c *gin.Context, id string)
+
 	// (POST /v1/sessions/{id}/readonly-requests)
 	SubmitWebReadRequest(c *gin.Context, id string)
 
@@ -2559,6 +2665,12 @@ type ServerInterface interface {
 
 	// (GET /v1/workspaces/create-with-folder/{commandID})
 	GetWorkspaceCreateWithFolder(c *gin.Context, commandID string)
+
+	// (POST /v1/workspaces/import-dsh)
+	ImportDSHSessions(c *gin.Context)
+
+	// (GET /v1/workspaces/import-dsh/{commandID})
+	GetDSHImportState(c *gin.Context, commandID string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -3463,6 +3575,14 @@ func (siw *ServerInterfaceWrapper) ListSessions(c *gin.Context) {
 		return
 	}
 
+	// ------------- Optional query parameter "history" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "history", c.Request.URL.Query(), &params.History, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter history: %w", err), http.StatusBadRequest)
+		return
+	}
+
 	for _, middleware := range siw.HandlerMiddlewares {
 		middleware(c)
 		if c.IsAborted() {
@@ -3702,6 +3822,31 @@ func (siw *ServerInterfaceWrapper) AcquireSessionLease(c *gin.Context) {
 	}
 
 	siw.Handler.AcquireSessionLease(c, id)
+}
+
+// ManageSession operation middleware
+func (siw *ServerInterfaceWrapper) ManageSession(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", c.Param("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter id: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ManageSession(c, id)
 }
 
 // SubmitWebReadRequest operation middleware
@@ -3944,6 +4089,44 @@ func (siw *ServerInterfaceWrapper) GetWorkspaceCreateWithFolder(c *gin.Context) 
 	siw.Handler.GetWorkspaceCreateWithFolder(c, commandID)
 }
 
+// ImportDSHSessions operation middleware
+func (siw *ServerInterfaceWrapper) ImportDSHSessions(c *gin.Context) {
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.ImportDSHSessions(c)
+}
+
+// GetDSHImportState operation middleware
+func (siw *ServerInterfaceWrapper) GetDSHImportState(c *gin.Context) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "commandID" -------------
+	var commandID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "commandID", c.Param("commandID"), &commandID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter commandID: %w", err), http.StatusBadRequest)
+		return
+	}
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		middleware(c)
+		if c.IsAborted() {
+			return
+		}
+	}
+
+	siw.Handler.GetDSHImportState(c, commandID)
+}
+
 // GinServerOptions provides options for the Gin server.
 type GinServerOptions struct {
 	BaseURL      string
@@ -3999,8 +4182,11 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.POST(options.BaseURL+"/v1/workspaces", wrapper.CreateWorkspace)
 	router.POST(options.BaseURL+"/v1/workspaces/create-with-folder", wrapper.CreateWorkspaceWithFolder)
 	router.GET(options.BaseURL+"/v1/workspaces/create-with-folder/:commandID", wrapper.GetWorkspaceCreateWithFolder)
+	router.POST(options.BaseURL+"/v1/workspaces/import-dsh", wrapper.ImportDSHSessions)
+	router.GET(options.BaseURL+"/v1/workspaces/import-dsh/:commandID", wrapper.GetDSHImportState)
 	router.GET(options.BaseURL+"/v1/sessions", wrapper.ListSessions)
 	router.POST(options.BaseURL+"/v1/sessions", wrapper.CreateSession)
+	router.POST(options.BaseURL+"/v1/sessions/:id/manage", wrapper.ManageSession)
 	router.POST(options.BaseURL+"/v1/sessions/:id/lease", wrapper.AcquireSessionLease)
 	router.GET(options.BaseURL+"/v1/sessions/:id/content-dek", wrapper.GetSessionContentDEK)
 	router.GET(options.BaseURL+"/v1/sessions/:id/snapshot", wrapper.GetSessionSnapshot)

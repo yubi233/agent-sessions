@@ -686,7 +686,71 @@ var alterAddColumnRe = regexp.MustCompile(`(?i)^\s*ALTER\s+TABLE\s+["'` + "`" + 
 // Migrate 按编号执行尚未应用的 SQL。所有 pending migration 在同一 SQLite transaction 内提交：
 // 任意一条失败时 schema_migrations 和表结构一起回滚，进程重启可从完整旧状态重新演练。
 func Migrate(db *sql.DB) error {
-	return migrateWith(db, migrations)
+	if err := migrateWith(db, migrations); err != nil {
+		return err
+	}
+	return ensureSessionClassificationColumns(db)
+}
+
+// 分类与新增列在同一事务首次执行；重启不能把用户已接续的历史重新隐藏。
+// 仅成功导入回执能确证来源，last_seq 包含导入上下文，不能当作用户使用证据。
+// 漂移存量库可能尚无会话表（编号迁移未执行或缺列场景）；缺表时跳过，不阻塞迁移。
+func ensureSessionClassificationColumns(db *sql.DB) error {
+	var hasSessions int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name IN ('sessions','commands','workspace_command_results')`).Scan(&hasSessions); err != nil {
+		return err
+	}
+	if hasSessions < 3 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var hasOrigin, hasVisibility int
+	if err := tx.QueryRow(`SELECT
+		COUNT(CASE WHEN name='origin' THEN 1 END),
+		COUNT(CASE WHEN name='visibility' THEN 1 END)
+		FROM pragma_table_info('sessions')`).Scan(&hasOrigin, &hasVisibility); err != nil {
+		return err
+	}
+	if hasOrigin != 0 && hasVisibility != 0 {
+		return tx.Commit()
+	}
+	if hasOrigin == 0 {
+		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'managed'`); err != nil {
+			return err
+		}
+	}
+	if hasVisibility == 0 {
+		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'default'`); err != nil {
+			return err
+		}
+	}
+	// 账户和工作区都必须与回执相符；损坏/非导入 JSON 不能误分类其他会话。
+	const confirmedImport = `provider='dsh' AND EXISTS (
+		SELECT 1 FROM workspace_command_results AS result
+		JOIN commands AS command ON command.id=result.command_id
+		JOIN json_each(CASE WHEN json_valid(result.canonical_root) THEN result.canonical_root ELSE '{}' END, '$.session_ids') AS imported
+		WHERE result.status='succeeded' AND command.kind='session.import_dsh'
+		AND command.account_id=sessions.account_id AND result.account_id=sessions.account_id
+		AND result.workspace_id=sessions.workspace_id AND imported.type='text' AND imported.value=sessions.id
+	)`
+	if hasOrigin == 0 {
+		if _, err := tx.Exec(`UPDATE sessions SET origin='dsh_import' WHERE ` + confirmedImport); err != nil {
+			return err
+		}
+	}
+	if hasVisibility == 0 {
+		if _, err := tx.Exec(`UPDATE sessions SET visibility=CASE WHEN EXISTS (
+			SELECT 1 FROM commands AS used WHERE used.account_id=sessions.account_id
+			AND used.session_id=sessions.id AND used.kind IN ('session.start','session.resume','session.send')
+		) THEN 'default' ELSE 'history' END WHERE ` + confirmedImport); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // migrateWith 为 Migrate 的可注入实现。生产只传 migrations；迁移回归会传入带故障尾项的列表，

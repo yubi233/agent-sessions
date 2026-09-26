@@ -103,6 +103,11 @@ type Repository interface {
 	CreateSession(ctx context.Context, s SessionRow) error
 	SessionByID(ctx context.Context, id string) (SessionRow, error)
 	ListSessions(ctx context.Context, accountID string) ([]SessionRow, error)
+	ListHistorySessions(ctx context.Context, accountID string) ([]SessionRow, error)
+	// ManageSession 只把 history 提升为 default；不改变来源、归档、状态或活动时间。
+	ManageSession(ctx context.Context, id string) error
+	// UpdateSessionImportProgress 以真实事件最大序号更新游标，活动时间只推进到 artifact 时间。
+	UpdateSessionImportProgress(ctx context.Context, id string, activityAtUnixMS int64) error
 	ListArchivedSessions(ctx context.Context, accountID string) ([]SessionRow, error)
 	ListRunningSessions(ctx context.Context, accountID string) ([]SessionRow, error)
 	ArchiveSession(ctx context.Context, id string, archivedAtUnixMS int64) error
@@ -427,8 +432,20 @@ type WorkspaceRow struct {
 	DisplayName string
 }
 
+const (
+	SessionOriginManaged   = "managed"
+	SessionOriginDSHImport = "dsh_import"
+
+	SessionVisibilityDefault   = "default"
+	SessionVisibilityHistory   = "history"
+	SessionVisibilityDuplicate = "duplicate"
+)
+
 // SessionRow 是 sessions 表的行投影。
 type SessionRow struct {
+	// 来源与可见性独立：手动接续只改变可见性，不能把外部历史伪装成原生受管会话。
+	Origin              string
+	Visibility          string
 	ID                  string
 	WorkspaceID         string
 	AccountID           string

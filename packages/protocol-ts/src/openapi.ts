@@ -441,6 +441,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/import-dsh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 默认只同步该工作区已经纳入日常列表的 DSH 会话，服务器生成允许同步的 session_ids；仅 discover=true 时发现新的历史候选。候选不进入日常列表，需逐项明确接续。 */
+        post: operations["importDSHSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/import-dsh/{commandID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description 读取同账号 DSH 同步或显式历史发现命令的脱敏状态。 */
+        get: operations["getDSHImportState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/sessions": {
         parameters: {
             query?: never;
@@ -448,11 +482,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description 默认返回未归档会话（按 last_activity 倒序），读取前仅执行确定性历史状态对账；?archived=true 时返回归档列表。 */
+        /** @description 默认仅返回 visibility=default 的未归档受管会话（按 last_activity 倒序）；DSH 历史候选与重复副本不进入日常列表。?history=true 读取未归档历史候选，?archived=true 读取归档列表；读取不发现或导入新会话。 */
         get: operations["listSessions"];
         put?: never;
         /** @description 仅 android_owner/android 写控制端可创建逻辑会话。 */
         post: operations["createSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sessions/{id}/manage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description 仅写控制端可把同账号的未归档历史候选明确纳入日常列表。保留 origin，不创建会话、不启动模型；已纳入时幂等，重复副本不可纳入。 */
+        post: operations["manageSession"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1182,6 +1233,28 @@ export interface components {
             branch?: string;
             status?: string;
         };
+        DSHImportRequest: {
+            workspace_id: string;
+            /** @description 可省略；指定时必须是工作区归属的 home Terminal。 */
+            terminal_id?: string;
+            /**
+             * @description 只有明确浏览历史候选才设 true；缺省不会发现或注册新历史会话。
+             * @default false
+             */
+            discover: boolean;
+            /**
+             * @description 仅在 discover=true 时允许历史发现绕过 72h 时间窗口。
+             * @default false
+             */
+            include_all: boolean;
+        };
+        DSHImportState: {
+            status: string;
+            command_id?: string;
+            error_code?: string;
+            /** @description 已同步或发现的 opaque Relay 会话标识；并不表示已纳入日常列表。 */
+            session_ids?: string[];
+        };
         Session: {
             id: string;
             workspace_id: string;
@@ -1198,8 +1271,23 @@ export interface components {
              * @description 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端仅用于最后消息时间展示与列表排序，不参与会话状态推断。
              */
             last_activity_at_unix_ms?: number;
-            /** @description 会话展示标题（v0.9.4：DSH 导入时从本地会话标题/首条用户消息提取的脱敏元数据）；缺省表示无标题，客户端按 id 短码回退，不编造正文摘要。 */
+            /** @description 会话展示标题；无标题的 DSH 会话显示“未命名 DSH 会话”，不能根据标题判断历史来源。 */
             display_name?: string;
+            /**
+             * @description 创建来源；dsh_import 表示外部 DSH 导入，即使明确接续也保留该来源。
+             * @default managed
+             * @enum {string}
+             */
+            origin: "managed" | "dsh_import";
+            /**
+             * @description default 进入日常列表，history 仅在显式历史候选入口展示，duplicate 为保留数据但隐藏的同源副本。
+             * @default default
+             * @enum {string}
+             */
+            visibility: "default" | "history" | "duplicate";
+        };
+        ManageSessionResponse: {
+            session: components["schemas"]["Session"];
         };
         SessionList: {
             sessions: components["schemas"]["Session"][];
@@ -2533,11 +2621,75 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    importDSHSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DSHImportRequest"];
+            };
+        };
+        responses: {
+            /** @description completed or no managed sessions to synchronize */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DSHImportState"];
+                };
+            };
+            /** @description accepted and awaiting home Terminal */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DSHImportState"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getDSHImportState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commandID: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description import state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DSHImportState"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
                 /** @description 传 "true" 时读取已归档会话列表。 */
                 archived?: "true";
+                /** @description 传 "true" 时只读取未归档的 DSH 历史候选，不自动纳入日常列表。 */
+                history?: "true";
             };
             header?: never;
             path?: never;
@@ -2582,6 +2734,32 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    manageSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description managed session */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManageSessionResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     acquireSessionLease: {

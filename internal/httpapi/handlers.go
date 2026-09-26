@@ -77,6 +77,8 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		auth.POST("/delegations/:id/decision", a.RequireWrite(), a.handleDelegationDecision)
 		auth.GET("/commands/:id", a.handleGetCommand)
 		auth.POST("/sessions/:id/lease", a.RequireWrite(), a.handleAcquireLease)
+		// 历史候选的显式接续是本地元数据操作，但只允许写身份发起。
+		auth.POST("/sessions/:id/manage", a.RequireWrite(), a.handleManageSession)
 		// 附件写入和会话命令共用 Android 写身份与 fencing；Relay 只接收密文块。
 		auth.POST("/attachments/chunks", a.RequireWrite(), a.handleUploadAttachmentChunk)
 		auth.POST("/attachments/:id/complete", a.RequireWrite(), a.handleCompleteAttachment)
@@ -513,13 +515,22 @@ func newIdentityKeyView(row store.TerminalIdentityKeyRow) identityKeyView {
 
 func (a *API) handleListSessions(c *gin.Context) {
 	subj := subject(c)
-	// ?archived=true 读取显式归档列表；归档读取不触发状态对账。
+	// ?archived=true 读取显式归档列表；?history=true 只读取未归档的 DSH 历史候选。
+	// 三种读取都不扫描、不发现、不导入新会话；归档读取不触发状态对账。
 	var sessions []store.SessionRow
 	var err error
-	if c.Query("archived") == "true" {
+	switch c.Query("archived") {
+	case "true":
 		sessions, err = a.Sessions.ListArchivedSessions(c.Request.Context(), subj.AccountID)
-	} else {
-		sessions, err = a.Sessions.ListSessions(c.Request.Context(), subj.AccountID)
+	case "":
+		if c.Query("history") == "true" {
+			sessions, err = a.Sessions.ListHistorySessions(c.Request.Context(), subj.AccountID)
+		} else {
+			sessions, err = a.Sessions.ListSessions(c.Request.Context(), subj.AccountID)
+		}
+	default:
+		writeError(c, protocol.NewError(protocol.ErrInvalidRequest, "unsupported archived flag"))
+		return
 	}
 	if err != nil {
 		writeError(c, err)
@@ -1653,7 +1664,9 @@ func (a *API) handleGetSyncDSHWorkspaces(c *gin.Context) {
 type importDSHSessionsRequest struct {
 	WorkspaceID string `json:"workspace_id"`
 	TerminalID  string `json:"terminal_id,omitempty"`
-	// IncludeAll 绕过 72h 活跃窗口一次性导入全部历史会话（v0.9.5 P2 按需）。
+	// Discover 只有用户显式浏览历史候选才为 true；缺省只同步已管理会话。
+	Discover bool `json:"discover,omitempty"`
+	// IncludeAll 仅在 Discover=true 时绕过 72h 活跃窗口（v0.9.5 P2 语义收敛）。
 	IncludeAll bool `json:"include_all,omitempty"`
 }
 
@@ -1680,7 +1693,7 @@ func (a *API) handleImportDSHSessions(c *gin.Context) {
 	subj := subject(c)
 	state, err := a.Workspaces.ImportDSHSessions(c.Request.Context(), domain.WorkspaceImportDSHInput{
 		AccountID: subj.AccountID, DeviceID: subj.DeviceID, Role: subj.Role, WorkspaceID: req.WorkspaceID, TerminalID: req.TerminalID,
-		IncludeAll: req.IncludeAll,
+		Discover: req.Discover, IncludeAll: req.IncludeAll,
 	})
 	if err != nil {
 		writeError(c, err)
@@ -1697,6 +1710,18 @@ func (a *API) handleImportDSHSessions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, view)
+}
+
+// handleManageSession 把同账号的未归档历史候选明确纳入日常列表（用户逐条接续）。
+// 不投递命令、不唤醒模型、不取消归档、不修改来源；重复副本不可纳入。
+func (a *API) handleManageSession(c *gin.Context) {
+	subj := subject(c)
+	session, err := a.Sessions.ManageSession(c.Request.Context(), subj.AccountID, subj.Role, c.Param("id"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	writeOK(c, gin.H{"session": a.sessionViewFor(c.Request.Context(), session)})
 }
 
 // handleGetImportDSHSessions 返回同账号 session.import_dsh 的脱敏状态。
@@ -1869,6 +1894,11 @@ type sessionView struct {
 	// DisplayName 是会话展示标题（v0.9.4：DSH 导入时从本地会话标题/首条用户消息
 	// 提取的脱敏元数据）；空串表示无标题，客户端按 id 短码回退，不编造正文摘要。
 	DisplayName string `json:"display_name,omitempty"`
+	// Origin 记录创建来源（managed=应用内新建；dsh_import=外部 DSH 导入）；
+	// Visibility 记录列表归属（default/history/duplicate）。两者正交：
+	// 明确接续只改 visibility，不把外部历史伪装成原生受管会话。
+	Origin     string `json:"origin,omitempty"`
+	Visibility string `json:"visibility,omitempty"`
 }
 
 func newSessionView(session store.SessionRow) sessionView {
@@ -1878,6 +1908,7 @@ func newSessionView(session store.SessionRow) sessionView {
 		ParentSessionID: session.ParentSessionID, ForkedFromMessageID: session.ForkedFromMessageID,
 		ArchivedAtUnixMS: session.ArchivedAtUnixMS, LastActivityAtUnixMS: session.LastActivityAtUnixMS,
 		AgentPresetID: session.AgentPresetID, DisplayName: session.DisplayName,
+		Origin: session.Origin, Visibility: session.Visibility,
 	}
 }
 

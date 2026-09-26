@@ -463,6 +463,50 @@ func recoverStaleSessionsForTerminal(ctx context.Context, repo store.Repository,
 	return summary, nil
 }
 
+// ListHistorySessions 仅列出未归档的外部历史候选，不扫描、不对账、不自动接续。
+func (s *SessionService) ListHistorySessions(ctx context.Context, accountID string) ([]store.SessionRow, error) {
+	return s.repo.ListHistorySessions(ctx, accountID)
+}
+
+// ManageSession 是用户选中历史后的本地元数据操作，不投递命令、不唤醒模型、不取消归档。
+func (s *SessionService) ManageSession(ctx context.Context, accountID, role, sessionID string) (store.SessionRow, error) {
+	if !protocol.DeviceRoleCanWrite(role) {
+		return store.SessionRow{}, ErrReadOnlyDevice
+	}
+	var out store.SessionRow
+	err := s.repo.WithTx(ctx, func(ctx context.Context, tx store.Repository) error {
+		sess, err := tx.SessionByID(ctx, sessionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSessionNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if sess.AccountID != accountID {
+			return ErrScopeDenied
+		}
+		switch sess.Visibility {
+		case "", store.SessionVisibilityDefault:
+			// 兼容旧 fixture，重复接续不产生额外事件或审计。
+		case store.SessionVisibilityHistory:
+			if err := tx.ManageSession(ctx, sessionID); err != nil {
+				return err
+			}
+			metadata, _ := json.Marshal(map[string]string{"session_id": sessionID})
+			if err := tx.AppendAudit(ctx, accountID, "session.managed", string(metadata)); err != nil {
+				return err
+			}
+		default:
+			// 确证重复行不能由接续入口重新显示，必须另走安全修正工具。
+			return ErrScopeDenied
+		}
+		sess.Visibility = store.SessionVisibilityDefault
+		out = sess
+		return nil
+	})
+	return out, err
+}
+
 // ListArchivedSessions 列出账号下已归档会话。
 func (s *SessionService) ListArchivedSessions(ctx context.Context, accountID string) ([]store.SessionRow, error) {
 	return s.repo.ListArchivedSessions(ctx, accountID)

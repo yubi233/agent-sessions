@@ -728,13 +728,19 @@ func workspaceOriginOrManaged(origin string) string {
 }
 
 func (r *sqliteRepo) CreateSession(ctx context.Context, s SessionRow) error {
+	if s.Origin == "" {
+		s.Origin = SessionOriginManaged
+	}
+	if s.Visibility == "" {
+		s.Visibility = SessionVisibilityDefault
+	}
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO sessions(
 			id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
-			parent_session_id,forked_from_message_id,fork_idempotency_key,display_name
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			parent_session_id,forked_from_message_id,fork_idempotency_key,display_name,origin,visibility
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		s.ID, s.WorkspaceID, s.AccountID, s.Status, s.Provider, s.Model, s.LastSeq, s.CurrentInstanceID,
-		s.ParentSessionID, s.ForkedFromMessageID, s.ForkIdempotencyKey, s.DisplayName)
+		s.ParentSessionID, s.ForkedFromMessageID, s.ForkIdempotencyKey, s.DisplayName, s.Origin, s.Visibility)
 	return err
 }
 
@@ -743,36 +749,56 @@ func (r *sqliteRepo) SessionByID(ctx context.Context, id string) (SessionRow, er
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name,
+			COALESCE(NULLIF(origin,''),'managed'),COALESCE(NULLIF(visibility,''),'default')
 		   FROM sessions WHERE id=?`, id).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName, &s.Origin, &s.Visibility); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil
 }
 
 func (r *sqliteRepo) ListSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
-	return r.listSessions(ctx, accountID, false)
+	return r.listSessions(ctx, accountID, false, SessionVisibilityDefault)
+}
+
+func (r *sqliteRepo) ListHistorySessions(ctx context.Context, accountID string) ([]SessionRow, error) {
+	return r.listSessions(ctx, accountID, false, SessionVisibilityHistory)
 }
 
 func (r *sqliteRepo) ListArchivedSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
-	return r.listSessions(ctx, accountID, true)
+	return r.listSessions(ctx, accountID, true, "")
+}
+
+func (r *sqliteRepo) ManageSession(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET visibility='default' WHERE id=? AND visibility='history'`, id)
+	return err
+}
+
+func (r *sqliteRepo) UpdateSessionImportProgress(ctx context.Context, id string, activityAtUnixMS int64) error {
+	// 导入只修正事件游标并推进真实活动时间；不能用导入时刻把旧历史顶到列表最前。
+	_, err := r.db.ExecContext(ctx, `UPDATE sessions SET
+		last_seq=(SELECT COALESCE(MAX(event_seq),0) FROM session_events WHERE session_id=sessions.id),
+		last_activity_at_unix_ms=MAX(last_activity_at_unix_ms,?) WHERE id=?`, activityAtUnixMS, id)
+	return err
 }
 
 func (r *sqliteRepo) ListRunningSessions(ctx context.Context, accountID string) ([]SessionRow, error) {
 	const query = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,last_activity_at_unix_ms,
-		permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
+		permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name,
+			COALESCE(NULLIF(origin,''),'managed'),COALESCE(NULLIF(visibility,''),'default')
 		FROM sessions WHERE account_id=? AND status='running' ORDER BY last_activity_at_unix_ms ASC, id ASC`
 	return r.scanSessions(ctx, query, accountID)
 }
 
-func (r *sqliteRepo) listSessions(ctx context.Context, accountID string, archived bool) ([]SessionRow, error) {
+func (r *sqliteRepo) listSessions(ctx context.Context, accountID string, archived bool, visibility string) ([]SessionRow, error) {
 	const selectSessions = `SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name,
+			COALESCE(NULLIF(origin,''),'managed'),COALESCE(NULLIF(visibility,''),'default')
 		 FROM sessions`
 	var query string
 	if archived {
@@ -780,7 +806,9 @@ func (r *sqliteRepo) listSessions(ctx context.Context, accountID string, archive
 	} else {
 		// 默认列表按真实活动时间倒序：最后事件/状态写入最近者在前。last_seq 是
 		// 会话内局部序号，跨会话不可比；last_activity=0（旧数据未知）自然沉底。
-		query = selectSessions + ` WHERE account_id=? AND archived_at_unix_ms=0 ORDER BY last_activity_at_unix_ms DESC, last_seq DESC`
+		query = selectSessions + ` WHERE account_id=? AND archived_at_unix_ms=0
+			AND COALESCE(NULLIF(visibility,''),'default')=? ORDER BY last_activity_at_unix_ms DESC, last_seq DESC`
+		return r.scanSessions(ctx, query, accountID, visibility)
 	}
 	return r.scanSessions(ctx, query, accountID)
 }
@@ -796,7 +824,7 @@ func (r *sqliteRepo) scanSessions(ctx context.Context, query string, args ...any
 		var s SessionRow
 		if err := rows.Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName, &s.Origin, &s.Visibility); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -883,12 +911,13 @@ func (r *sqliteRepo) SessionByParentForkKey(ctx context.Context, parentSessionID
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,workspace_id,account_id,status,provider,model,last_seq,current_instance_id,
 		        parent_session_id,forked_from_message_id,fork_idempotency_key,archived_at_unix_ms,
-		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name
+		        last_activity_at_unix_ms,permission_mode,available_permission_modes,agent_preset_id,content_dek_id,display_name,
+			COALESCE(NULLIF(origin,''),'managed'),COALESCE(NULLIF(visibility,''),'default')
 		   FROM sessions WHERE parent_session_id=? AND fork_idempotency_key=?`,
 		parentSessionID, idempotencyKey).
 		Scan(&s.ID, &s.WorkspaceID, &s.AccountID, &s.Status, &s.Provider, &s.Model, &s.LastSeq, &s.CurrentInstanceID,
 			&s.ParentSessionID, &s.ForkedFromMessageID, &s.ForkIdempotencyKey, &s.ArchivedAtUnixMS,
-			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName); err != nil {
+			&s.LastActivityAtUnixMS, &s.PermissionMode, &s.AvailablePermissionModesJSON, &s.AgentPresetID, &s.ContentDEKID, &s.DisplayName, &s.Origin, &s.Visibility); err != nil {
 		return SessionRow{}, err
 	}
 	return s, nil

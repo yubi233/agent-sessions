@@ -398,7 +398,8 @@ func TestV08DSHImportAuthorizationAndResult(t *testing.T) {
 	}
 	wsID := list.Workspaces[0].ID
 
-	importReq := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID}, owner.AccessToken)
+	// 显式历史发现才创建导入命令；缺省同步在无受管会话时不唤醒 Daemon。
+	importReq := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID, "discover": true}, owner.AccessToken)
 	if importReq.Code != http.StatusAccepted && importReq.Code != http.StatusOK {
 		t.Fatalf("import status=%d body=%s", importReq.Code, importReq.Body.String())
 	}
@@ -432,7 +433,7 @@ func TestV08DSHImportAuthorizationAndResult(t *testing.T) {
 		t.Fatalf("expected 2 session ids, got %+v", importView.SessionIDs)
 	}
 
-	// 会话列表应出现两个 dsh 会话。
+	// 历史候选不得进入默认列表；只有显式历史入口能看到。
 	sessions := env.do(t, http.MethodGet, "/v1/sessions", nil, owner.AccessToken)
 	if sessions.Code != http.StatusOK {
 		t.Fatalf("list sessions status=%d body=%s", sessions.Code, sessions.Body.String())
@@ -445,12 +446,28 @@ func TestV08DSHImportAuthorizationAndResult(t *testing.T) {
 		} `json:"sessions"`
 	}
 	decodeW1(t, sessions.Body.Bytes(), &sessionList)
-	if len(sessionList.Sessions) != 2 {
-		t.Fatalf("expected 2 imported sessions, got %+v", sessionList.Sessions)
+	if len(sessionList.Sessions) != 0 {
+		t.Fatalf("历史候选不得进入默认列表: %+v", sessionList.Sessions)
 	}
-	for _, sess := range sessionList.Sessions {
+	var historyList struct {
+		Sessions []struct {
+			ID          string `json:"id"`
+			Provider    string `json:"provider"`
+			WorkspaceID string `json:"workspace_id"`
+			Origin      string `json:"origin"`
+			Visibility  string `json:"visibility"`
+		} `json:"sessions"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/sessions?history=true", nil, owner.AccessToken).Body.Bytes(), &historyList)
+	if len(historyList.Sessions) != 2 {
+		t.Fatalf("expected 2 history candidates, got %+v", historyList.Sessions)
+	}
+	for _, sess := range historyList.Sessions {
 		if sess.Provider != "dsh" || sess.WorkspaceID != wsID {
 			t.Fatalf("unexpected imported session: %+v", sess)
+		}
+		if sess.Origin != "dsh_import" || sess.Visibility != "history" {
+			t.Fatalf("历史候选来源/可见性不符: %+v", sess)
 		}
 	}
 }
@@ -545,7 +562,7 @@ func TestV094DSHImportCarriesTitleAndContextEvents(t *testing.T) {
 	decodeW1(t, env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken).Body.Bytes(), &list)
 	wsID := list.Workspaces[0].ID
 
-	importReq := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID}, owner.AccessToken)
+	importReq := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID, "discover": true}, owner.AccessToken)
 	var importState struct {
 		CommandID string `json:"command_id"`
 	}
@@ -585,8 +602,8 @@ func TestV094DSHImportCarriesTitleAndContextEvents(t *testing.T) {
 		t.Fatalf("import result status=%d body=%s", result.Code, result.Body.String())
 	}
 
-	// 会话列表：display_name 必须下发（标题回退链首选），无标题会话缺省。
-	sessions := env.do(t, http.MethodGet, "/v1/sessions", nil, owner.AccessToken)
+	// 标题断言走历史候选列表：新发现的历史不进默认列表（v0.9.6 展示边界）。
+	sessions := env.do(t, http.MethodGet, "/v1/sessions?history=true", nil, owner.AccessToken)
 	var sessionList struct {
 		Sessions []struct {
 			ID          string `json:"id"`
@@ -645,5 +662,234 @@ func TestV094DSHImportCarriesTitleAndContextEvents(t *testing.T) {
 	decodeW1(t, emptySnapshot.Body.Bytes(), &emptyView)
 	if len(emptyView.Events) != 0 {
 		t.Fatalf("无上下文会话不得串入事件: %+v", emptyView.Events)
+	}
+}
+
+// v0.9.6 展示边界端到端：历史候选显式接续（manage）后才进入默认列表；缺省
+// 同步受服务端允许列表约束，未接续的历史与陌生会话都不得借同步回执混入。
+func TestDSHHistoryManagePromotesAndSyncAllowlistDeniesUnknown(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v096-manage@test.dev")
+	terminal := env.pairTerminal(t, owner, "v096-manage-terminal")
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync", "dsh_session_import"})
+
+	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	var syncState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, sync.Body.Bytes(), &syncState)
+	_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncState.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 1,
+		"candidates": []map[string]string{{"canonical_root": "/Users/test/code/manage-proj", "display_name": "manage-proj"}},
+		"status":     "succeeded",
+	}, terminal.AccessToken)
+	var list struct {
+		Workspaces []struct {
+			ID string `json:"id"`
+		} `json:"workspaces"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken).Body.Bytes(), &list)
+	wsID := list.Workspaces[0].ID
+
+	// 显式发现一条历史候选。
+	importReq := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID, "discover": true}, owner.AccessToken)
+	var importState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, importReq.Body.Bytes(), &importState)
+	_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+importState.CommandID+"/ack", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2, "ack_kind": "started",
+	}, terminal.AccessToken)
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+importState.CommandID+"/dsh-import-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2,
+		"session_ids": []string{"sess_hist_manage"},
+		"status":      "succeeded",
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("discover result status=%d body=%s", result.Code, result.Body.String())
+	}
+
+	countSessions := func(path string) int {
+		t.Helper()
+		var view struct {
+			Sessions []struct {
+				ID         string `json:"id"`
+				Visibility string `json:"visibility"`
+				Origin     string `json:"origin"`
+			} `json:"sessions"`
+		}
+		decodeW1(t, env.do(t, http.MethodGet, path, nil, owner.AccessToken).Body.Bytes(), &view)
+		return len(view.Sessions)
+	}
+	if got := countSessions("/v1/sessions"); got != 0 {
+		t.Fatalf("接续前默认列表应为空: %d", got)
+	}
+	if got := countSessions("/v1/sessions?history=true"); got != 1 {
+		t.Fatalf("接续前历史候选应为 1: %d", got)
+	}
+
+	// 显式接续：history -> default，origin 保持 dsh_import；幂等可重复。
+	for i := 0; i < 2; i++ {
+		managed := env.do(t, http.MethodPost, "/v1/sessions/sess_hist_manage/manage", map[string]any{}, owner.AccessToken)
+		if managed.Code != http.StatusOK {
+			t.Fatalf("manage status=%d body=%s", managed.Code, managed.Body.String())
+		}
+		var manageView struct {
+			Session struct {
+				ID         string `json:"id"`
+				Origin     string `json:"origin"`
+				Visibility string `json:"visibility"`
+			} `json:"session"`
+		}
+		decodeW1(t, managed.Body.Bytes(), &manageView)
+		if manageView.Session.ID != "sess_hist_manage" || manageView.Session.Origin != "dsh_import" || manageView.Session.Visibility != "default" {
+			t.Fatalf("接续响应不符: %+v", manageView.Session)
+		}
+	}
+	if got := countSessions("/v1/sessions"); got != 1 {
+		t.Fatalf("接续后默认列表应为 1: %d", got)
+	}
+	if got := countSessions("/v1/sessions?history=true"); got != 0 {
+		t.Fatalf("接续后历史候选应为空: %d", got)
+	}
+
+	// 缺省同步只允许受管会话；混入陌生会话的回执整体拒绝，且不落库。
+	syncImport := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID}, owner.AccessToken)
+	var syncImportState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, syncImport.Body.Bytes(), &syncImportState)
+	if syncImportState.CommandID == "" {
+		t.Fatalf("存在受管会话时缺省同步应创建命令: %s", syncImport.Body.String())
+	}
+	_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncImportState.CommandID+"/ack", map[string]any{
+		"protocol_version": 1, "delivery_seq": 3, "ack_kind": "started",
+	}, terminal.AccessToken)
+	syncResult := env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncImportState.CommandID+"/dsh-import-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 3,
+		"session_ids": []string{"sess_hist_manage", "sess_intruder"},
+		"status":      "succeeded",
+	}, terminal.AccessToken)
+	if syncResult.Code != http.StatusForbidden {
+		t.Fatalf("同步回执混入陌生会话应 403: status=%d body=%s", syncResult.Code, syncResult.Body.String())
+	}
+	if got := countSessions("/v1/sessions"); got != 1 {
+		t.Fatalf("被拒回执不得改动默认列表: %d", got)
+	}
+	if got := countSessions("/v1/sessions?history=true"); got != 0 {
+		t.Fatalf("被拒回执不得登记新历史: %d", got)
+	}
+}
+
+// v0.9.6 回执幂等端到端：导入事件的稳定 event_id 允许跨命令重试去重；
+// 同一 event_id 绑定其他会话必须拒绝。
+func TestDSHImportEventReceiptsDedupAcrossCommands(t *testing.T) {
+	env := newTestEnv(t)
+	owner := env.registerAs(t, "v096-dedup@test.dev")
+	terminal := env.pairTerminal(t, owner, "v096-dedup-terminal")
+	_ = daemonHelloWithCapabilities(t, env, terminal.AccessToken, []string{"dsh_workspace_sync", "dsh_session_import"})
+
+	sync := env.do(t, http.MethodPost, "/v1/workspaces/sync-dsh", map[string]any{}, owner.AccessToken)
+	var syncState struct {
+		CommandID string `json:"command_id"`
+	}
+	decodeW1(t, sync.Body.Bytes(), &syncState)
+	_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+syncState.CommandID+"/dsh-workspace-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 1,
+		"candidates": []map[string]string{{"canonical_root": "/Users/test/code/dedup-proj", "display_name": "dedup-proj"}},
+		"status":     "succeeded",
+	}, terminal.AccessToken)
+	var list struct {
+		Workspaces []struct {
+			ID string `json:"id"`
+		} `json:"workspaces"`
+	}
+	decodeW1(t, env.do(t, http.MethodGet, "/v1/workspaces", nil, owner.AccessToken).Body.Bytes(), &list)
+	wsID := list.Workspaces[0].ID
+
+	envelope := func(text string) string {
+		payload := map[string]any{"kind": "user_message", "label": "你", "text": text, "copy_text": text}
+		inner, _ := json.Marshal(map[string]any{"fixture_payload": payload})
+		raw, _ := json.Marshal(map[string]any{
+			"alg": "local-dev-fixture", "key_id": "local-dev", "nonce": "local-dev",
+			"ciphertext": base64.StdEncoding.EncodeToString(inner), "aad_hash": "local-dev", "payload_version": 1,
+			"fixture_payload": payload,
+		})
+		return string(raw)
+	}
+	discoverImport := func(deliverySeq int64) string {
+		t.Helper()
+		importReq := env.do(t, http.MethodPost, "/v1/workspaces/import-dsh", map[string]any{"workspace_id": wsID, "discover": true}, owner.AccessToken)
+		var state struct {
+			CommandID string `json:"command_id"`
+		}
+		decodeW1(t, importReq.Body.Bytes(), &state)
+		if state.CommandID == "" {
+			t.Fatalf("discover import 应创建命令: %s", importReq.Body.String())
+		}
+		_ = env.do(t, http.MethodPost, "/v1/daemon/commands/"+state.CommandID+"/ack", map[string]any{
+			"protocol_version": 1, "delivery_seq": deliverySeq, "ack_kind": "started",
+		}, terminal.AccessToken)
+		return state.CommandID
+	}
+
+	first := discoverImport(2)
+	result := env.do(t, http.MethodPost, "/v1/daemon/commands/"+first+"/dsh-import-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 2,
+		"session_ids": []string{"sess_dedup"},
+		"session_context": []map[string]any{
+			{"session_id": "sess_dedup", "events": []map[string]any{
+				{"event_id": "evt-dup-1", "event_type": "user.message",
+					"envelope": envelope("去重验证消息"), "created_at_unix_ms": 1789965000000},
+			}},
+		},
+		"status": "succeeded",
+	}, terminal.AccessToken)
+	if result.Code != http.StatusOK {
+		t.Fatalf("first result status=%d body=%s", result.Code, result.Body.String())
+	}
+
+	// 第二条导入命令重放同一事件 ID：幂等收口，事件不重复。
+	second := discoverImport(3)
+	retry := env.do(t, http.MethodPost, "/v1/daemon/commands/"+second+"/dsh-import-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 3,
+		"session_ids": []string{"sess_dedup"},
+		"session_context": []map[string]any{
+			{"session_id": "sess_dedup", "events": []map[string]any{
+				{"event_id": "evt-dup-1", "event_type": "user.message",
+					"envelope": envelope("去重验证消息"), "created_at_unix_ms": 1789965000000},
+			}},
+		},
+		"status": "succeeded",
+	}, terminal.AccessToken)
+	if retry.Code != http.StatusOK {
+		t.Fatalf("跨命令重试应幂等: status=%d body=%s", retry.Code, retry.Body.String())
+	}
+	snapshot := env.do(t, http.MethodGet, "/v1/sessions/sess_dedup/snapshot?after_seq=0", nil, owner.AccessToken)
+	var snapView struct {
+		Events []struct {
+			EventType string `json:"event_type"`
+		} `json:"events"`
+	}
+	decodeW1(t, snapshot.Body.Bytes(), &snapView)
+	if len(snapView.Events) != 1 {
+		t.Fatalf("重试后事件不得重复: %+v", snapView.Events)
+	}
+
+	// 同一 event_id 绑定其他会话：整体拒绝。
+	third := discoverImport(4)
+	hijack := env.do(t, http.MethodPost, "/v1/daemon/commands/"+third+"/dsh-import-result", map[string]any{
+		"protocol_version": 1, "delivery_seq": 4,
+		"session_ids": []string{"sess_other"},
+		"session_context": []map[string]any{
+			{"session_id": "sess_other", "events": []map[string]any{
+				{"event_id": "evt-dup-1", "event_type": "user.message",
+					"envelope": envelope("越权消息"), "created_at_unix_ms": 1789965000000},
+			}},
+		},
+		"status": "succeeded",
+	}, terminal.AccessToken)
+	if hijack.Code != http.StatusForbidden {
+		t.Fatalf("事件 ID 跨会话复用应 403: status=%d body=%s", hijack.Code, hijack.Body.String())
 	}
 }

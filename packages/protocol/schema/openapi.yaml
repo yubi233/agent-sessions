@@ -612,10 +612,68 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+  /v1/workspaces/import-dsh:
+    post:
+      operationId: importDSHSessions
+      description: 默认只同步该工作区已经纳入日常列表的 DSH 会话，服务器生成允许同步的 session_ids；仅 discover=true 时发现新的历史候选。候选不进入日常列表，需逐项明确接续。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DSHImportRequest"
+      responses:
+        "200":
+          description: completed or no managed sessions to synchronize
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DSHImportState"
+        "202":
+          description: accepted and awaiting home Terminal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DSHImportState"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /v1/workspaces/import-dsh/{commandID}:
+    get:
+      operationId: getDSHImportState
+      description: 读取同账号 DSH 同步或显式历史发现命令的脱敏状态。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: commandID
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: import state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DSHImportState"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /v1/sessions:
     get:
       operationId: listSessions
-      description: 默认返回未归档会话（按 last_activity 倒序），读取前仅执行确定性历史状态对账；?archived=true 时返回归档列表。
+      description: 默认仅返回 visibility=default 的未归档受管会话（按 last_activity 倒序）；DSH 历史候选与重复副本不进入日常列表。?history=true 读取未归档历史候选，?archived=true 读取归档列表；读取不发现或导入新会话。
       security:
         - bearerAuth: []
       parameters:
@@ -625,6 +683,12 @@ paths:
             type: string
             enum: ["true"]
           description: 传 "true" 时读取已归档会话列表。
+        - in: query
+          name: history
+          schema:
+            type: string
+            enum: ["true"]
+          description: 传 "true" 时只读取未归档的 DSH 历史候选，不自动纳入日常列表。
       responses:
         "200":
           description: sessions
@@ -658,6 +722,33 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/sessions/{id}/manage:
+    post:
+      operationId: manageSession
+      description: 仅写控制端可把同账号的未归档历史候选明确纳入日常列表。保留 origin，不创建会话、不启动模型；已纳入时幂等，重复副本不可纳入。
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: managed session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManageSessionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /v1/sessions/{id}/lease:
     post:
       operationId: acquireSessionLease
@@ -2025,6 +2116,38 @@ components:
           type: string
         status:
           type: string
+    DSHImportRequest:
+      type: object
+      required: [workspace_id]
+      properties:
+        workspace_id:
+          type: string
+        terminal_id:
+          type: string
+          description: 可省略；指定时必须是工作区归属的 home Terminal。
+        discover:
+          type: boolean
+          default: false
+          description: 只有明确浏览历史候选才设 true；缺省不会发现或注册新历史会话。
+        include_all:
+          type: boolean
+          default: false
+          description: 仅在 discover=true 时允许历史发现绕过 72h 时间窗口。
+    DSHImportState:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+        command_id:
+          type: string
+        error_code:
+          type: string
+        session_ids:
+          type: array
+          items:
+            type: string
+          description: 已同步或发现的 opaque Relay 会话标识；并不表示已纳入日常列表。
     Session:
       type: object
       required: [id, workspace_id, status]
@@ -2052,7 +2175,23 @@ components:
           description: 最后一次状态/事件写入的活动时间；0 或缺省表示旧数据未知。客户端仅用于最后消息时间展示与列表排序，不参与会话状态推断。
         display_name:
           type: string
-          description: 会话展示标题（v0.9.4：DSH 导入时从本地会话标题/首条用户消息提取的脱敏元数据）；缺省表示无标题，客户端按 id 短码回退，不编造正文摘要。
+          description: 会话展示标题；无标题的 DSH 会话显示“未命名 DSH 会话”，不能根据标题判断历史来源。
+        origin:
+          type: string
+          enum: [managed, dsh_import]
+          default: managed
+          description: 创建来源；dsh_import 表示外部 DSH 导入，即使明确接续也保留该来源。
+        visibility:
+          type: string
+          enum: [default, history, duplicate]
+          default: default
+          description: default 进入日常列表，history 仅在显式历史候选入口展示，duplicate 为保留数据但隐藏的同源副本。
+    ManageSessionResponse:
+      type: object
+      required: [session]
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
     SessionList:
       type: object
       required: [sessions]
