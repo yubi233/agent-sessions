@@ -2280,6 +2280,14 @@ func (l *RelayLoop) flushEventsOneByOne(ctx context.Context, events []RelayEvent
 			if attemptErr := l.Store.MarkRelayEventAttempt(event.EventID, sanitizeRelayUploadError(err)); attemptErr != nil {
 				l.Logger.Warn("daemon event attempt accounting failed", "event_id", event.EventID, "error", attemptErr)
 			}
+			// 5xx 的 RelayHTTPError 带稳定错误码与脱敏原因：留一行归因证据
+			// （否则"响应丢失/服务端错误"在客户端日志里无差别，无法区分
+			// 网络抖动与 Relay 内部故障）。
+			if errors.As(err, &httpErr) {
+				l.Logger.Warn("daemon event upload rejected transiently",
+					"event_id", event.EventID, "status", httpErr.Status,
+					"code", httpErr.Code, "reason", httpErr.Message)
+			}
 			return uploaded, err
 		}
 		if err := l.Store.MarkRelayEventDelivered(event.EventID); err != nil {
@@ -2310,6 +2318,13 @@ func (l *RelayLoop) flushEventChunk(ctx context.Context, chunk []RelayEvent) (in
 			if attemptErr := l.Store.MarkRelayEventAttempt(event.EventID, sanitizeRelayUploadError(err)); attemptErr != nil {
 				l.Logger.Warn("daemon event attempt accounting failed", "event_id", event.EventID, "error", attemptErr)
 			}
+		}
+		// 与逐条路径同口径的归因证据：5xx 带状态码与脱敏原因，便于区分
+		// 网络抖动与 Relay 内部故障（v0.9.7 flaky 归因方法）。
+		if errors.As(err, &httpErr) {
+			l.Logger.Warn("daemon event batch upload rejected transiently",
+				"count", len(chunk), "status", httpErr.Status,
+				"code", httpErr.Code, "reason", httpErr.Message)
 		}
 		return 0, err
 	}

@@ -29,9 +29,12 @@ type testEnv struct {
 // newTestEnv 打开隔离库并装配完整路由。
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	// -race/慢 CI 下，daemon 事件 outbox 的一次瞬态 500（SQLite 写竞争）按缺省
-	// 30s 退避会把重放推出测试等待窗；收紧测试进程的退避起点，生产口径不变。
-	daemon.SetRelayEventRetryBaseMSForTest(250)
+	// -race/慢 CI 下，daemon 事件 outbox 的一次瞬态失败（drop 桩吞响应、
+	// cancelFirst 掐断在途重传）按缺省 30s 退避会把重放推出测试等待窗。收紧到
+	// 25ms：必须短于「恢复循环启动 flush」的时延（数百 ms），行到期后启动 flush
+	// 即可重放；首个循环的再投递仍由秒级心跳 tick 门控，drop 语义不受影响。
+	// 生产不调用该钩子，退避口径不变。
+	daemon.SetRelayEventRetryBaseMSForTest(25)
 	path := filepath.Join(t.TempDir(), "relay.db")
 	db, err := store.Open(path)
 	if err != nil {

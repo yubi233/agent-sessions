@@ -955,6 +955,12 @@ func TestP2RelayDaemonRestartReplaysCommittedEventOutbox(t *testing.T) {
 	if messageDeltas != 1 {
 		cancelRecovery()
 		<-recoveryDone
+		if rows, snapErr := reopened.RelayEventOutboxSnapshot(); snapErr == nil {
+			for _, row := range rows {
+				t.Logf("outbox row: event_id=%s status=%s attempts=%d last_error=%s",
+					row.EventID, row.Status, row.Attempts, row.LastError)
+			}
+		}
 		t.Fatalf("committed event was not idempotent: message.delta count=%d want 1", messageDeltas)
 	}
 	if starts, _, _, _, _ := recoveryAdapter.snapshot(); starts != 0 {

@@ -874,6 +874,9 @@ func (a *API) handleDaemonEventBatchUpload(c *gin.Context) {
 		ProtocolVersion: req.ProtocolVersion, Events: events,
 	})
 	if err != nil {
+		// gin Logger 会把 c.Errors 末项打进访问日志：500 归因（如并发重复上传的
+		// 约束冲突）不再只有状态码没有原因。
+		c.Error(err)
 		writeError(c, err)
 		return
 	}

@@ -34,10 +34,7 @@ jobs:
       # presence reaper、异步 send），常规 go job 不带 -race。首次本地接入即在
       # fakeHandle 桩抓到 close(events) 与异步 emit 的真实竞争，说明该门有效。
       # -race 有 2-20x 减速，超时放宽到 30m 吸收慢机抖动。
-      # TestP2RelayDaemonRestartReplaysCommittedEventOutbox 暂时跳过：既有
-      # race 时序 flake（非本次改动引入，非竞争报告，见遗留问题 2026-09-28 段），
-      # 常规 go job 仍全量覆盖该用例；根因修复后移除 -skip。
-      - run: go test -race ./internal/relay/... ./internal/daemon/... -count=1 -timeout 30m -skip 'TestP2RelayDaemonRestartReplaysCommittedEventOutbox$'
+      - run: go test -race ./internal/relay/... ./internal/daemon/... -count=1 -timeout 30m
 
   protocol-drift:
     name: Protocol generation drift
