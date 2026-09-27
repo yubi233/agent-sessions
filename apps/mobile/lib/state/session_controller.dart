@@ -13,6 +13,7 @@ import '../relay/relay_repository.dart';
 import '../relay/session_event_transport.dart';
 import '../relay/session_sse.dart';
 import 'session_config_confirmation_ledger.dart';
+import 'session_send_transaction_ledger.dart';
 import 'session_send_transaction.dart';
 import 'session_presentation_state.dart';
 import '../storage/model_effort_preference_store.dart';
@@ -135,20 +136,16 @@ class SessionController extends ChangeNotifier {
   final Map<String, String> _pendingOutgoingBySession = <String, String>{};
 
   // ── V094（计划 §2.2/§2.4）：消息发送事务账本 ────────────────────────────
-  /// 每会话最新发送事务（一次显式发送一个逻辑事务）。
-  /// 失败/待确认事务保留在槽内作为"消息待处理项"（失败内容不回填草稿、
-  /// 不删除记录），新一次显式发送或"编辑后重试"会将其取代。
-  final Map<String, SessionSendTransaction> _sendTxBySession =
-      <String, SessionSendTransaction>{};
-  int _sendTxCounter = 0;
-
-  /// 草稿 revision 计数：输入内容变化即推进（V094 §2.4 结算身份之一）。
-  final Map<String, int> _draftRevisionsBySession = <String, int>{};
+  /// 每会话最新发送事务、幂等序号与草稿版本快照收口在
+  /// [SessionSendTransactionLedger]（架构收口拆分）；选中会话的展示口径
+  /// （活动事务、可重试事务）仍由本控制器面向 UI 提供。
+  final SessionSendTransactionLedger _sendTxLedger =
+      SessionSendTransactionLedger();
 
   /// 当前会话的活动发送事务；无事务时为 null。
   SessionSendTransaction? get activeSendTransaction => _selectedSessionId == null
       ? null
-      : _sendTxBySession[_selectedSessionId!];
+      : _sendTxLedger.forSession(_selectedSessionId);
 
   /// 当前会话最近一个失败/待确认的事务（手动重试与"编辑后重试"入口的事实来源）。
   SessionSendTransaction? get lastInterruptedSendTransaction {
@@ -172,7 +169,7 @@ class SessionController extends ChangeNotifier {
     if (current != null && current.trim().isNotEmpty) {
       return null;
     }
-    _sendTxBySession.remove(sessionId);
+    _sendTxLedger.remove(sessionId);
     if (_pendingOutgoingBySession[sessionId] == tx.text) {
       _pendingOutgoingBySession.remove(sessionId);
     }
@@ -234,7 +231,7 @@ class SessionController extends ChangeNotifier {
   /// 当前会话的结构化恢复阶段；null 表示无恢复活动。
   SessionRecoveryStep? get recoveryStage => _selectedSessionId == null
       ? _recoveryStage
-      : (_sendTxBySession[_selectedSessionId!]?.recoveryStep ?? _recoveryStage);
+      : (_sendTxLedger.forSession(_selectedSessionId)?.recoveryStep ?? _recoveryStage);
 
   // ── V094-24/25：配置确认状态与操作幂等身份 ──────────────────────────
   /// 控制域确认账本（model/effort/permission 的确认状态、同域串行锁与幂等
@@ -298,7 +295,7 @@ class SessionController extends ChangeNotifier {
     required bool hasLease,
   }) {
     final sessionId = _selectedSessionId;
-    final tx = sessionId == null ? null : _sendTxBySession[sessionId];
+    final tx = _sendTxLedger.forSession(sessionId);
     return SessionPresentationState.fromFacts(
       SessionPresentationFacts(
         status: selectedSession?.status ?? MobileSessionStatus.unknown,
@@ -333,7 +330,7 @@ class SessionController extends ChangeNotifier {
   bool cancelAutoRecovery() {
     final sessionId = _selectedSessionId;
     if (sessionId == null) return false;
-    final tx = _sendTxBySession[sessionId];
+    final tx = _sendTxLedger.forSession(sessionId);
     if (tx == null || tx.isTerminal) return false;
     tx.cancelRequested = true;
     _notifyListeners();
@@ -1895,18 +1892,18 @@ class SessionController extends ChangeNotifier {
     // clientMessageId 稳定标识本次发送（自动重发复用；两次显式发送必不同）；
     // draftRevision 记录提交时刻的草稿版本（结算按身份，不按全文对账）。
     final tx = SessionSendTransaction(
-      submissionId: 'sendtx-$sessionId-${_sendTxCounter += 1}',
+      submissionId: 'sendtx-$sessionId-${_sendTxLedger.nextId()}',
       sessionId: sessionId,
       clientMessageId:
-          'cmsg-$sessionId-${_clock().microsecondsSinceEpoch}-${_sendTxCounter + 1}',
+          'cmsg-$sessionId-${_clock().microsecondsSinceEpoch}-${_sendTxLedger.peekNextId()}',
       text: trimmed,
-      draftRevision: _draftRevisionsBySession[sessionId] ?? 0,
+      draftRevision: _sendTxLedger.draftRevisionOf(sessionId),
       baseOperation: operation,
       createdAt: _clock(),
       deviceId: deviceId,
       canWrite: canWrite,
     );
-    _sendTxBySession[sessionId] = tx;
+    _sendTxLedger.put(sessionId, tx);
     // 乐观回显：不等 daemon 事件回传，先在本地挂出待确认的用户气泡。
     _pendingOutgoingBySession[sessionId] = trimmed;
     _notifyListeners();
@@ -1999,9 +1996,7 @@ class SessionController extends ChangeNotifier {
     } else {
       // 提交被拒（验证失败/受理失败）：尚未形成消息事务事实，正文留在
       // 输入框（既有错误面语义）；事务从账本移除，乐观回显清掉避免双气泡。
-      if (_sendTxBySession[sessionId] == tx) {
-        _sendTxBySession.remove(sessionId);
-      }
+      _sendTxLedger.removeIf(sessionId, tx);
       _notifyListeners();
     }
     if (!accepted && _pendingOutgoingBySession[sessionId] == trimmed) {
@@ -2296,22 +2291,22 @@ class SessionController extends ChangeNotifier {
       return false;
     }
     final retryOperation =
-        '${failed.baseOperation}:retry-${_sendTxCounter += 1}';
+        '${failed.baseOperation}:retry-${_sendTxLedger.nextId()}';
     final tx = SessionSendTransaction(
-      submissionId: 'sendtx-$sessionId-${_sendTxCounter += 1}',
+      submissionId: 'sendtx-$sessionId-${_sendTxLedger.nextId()}',
       sessionId: sessionId,
       // 新 attempt 的逻辑身份：重试关联旧事务（clientMessageId 带父标识），
       // 两次用户主动发送不共享身份。
-      clientMessageId: '${failed.clientMessageId}-r$_sendTxCounter',
+      clientMessageId: '${failed.clientMessageId}-r${_sendTxLedger.currentId()}',
       text: failed.text,
-      draftRevision: _draftRevisionsBySession[sessionId] ?? 0,
+      draftRevision: _sendTxLedger.draftRevisionOf(sessionId),
       baseOperation: retryOperation,
       createdAt: _clock(),
       // _ensureWriteAccess 已确保 deviceId 非空（与既有 send 契约一致）。
       deviceId: deviceId!,
       canWrite: canWrite,
     );
-    _sendTxBySession[sessionId] = tx;
+    _sendTxLedger.put(sessionId, tx);
     _pendingOutgoingBySession[sessionId] = tx.text;
     _notifyListeners();
     final accepted = await _submitCommand(
@@ -4453,7 +4448,7 @@ class SessionController extends ChangeNotifier {
     // 写出的 canonical user.message 而清账——失败记录必须留在气泡上直到
     // 用户重试/编辑或新一轮发送取代。
     final pending = _pendingOutgoingBySession[snapshot.session.id];
-    final activeTx = _sendTxBySession[snapshot.session.id];
+    final activeTx = _sendTxLedger.forSession(snapshot.session.id);
     final pendingIsFailureRecord =
         activeTx != null &&
         activeTx.text == pending &&
