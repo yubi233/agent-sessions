@@ -12,6 +12,7 @@ import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
 import '../relay/session_event_transport.dart';
 import '../relay/session_sse.dart';
+import 'session_config_confirmation_ledger.dart';
 import 'session_send_transaction.dart';
 import 'session_presentation_state.dart';
 import '../storage/model_effort_preference_store.dart';
@@ -236,49 +237,15 @@ class SessionController extends ChangeNotifier {
       : (_sendTxBySession[_selectedSessionId!]?.recoveryStep ?? _recoveryStage);
 
   // ── V094-24/25：配置确认状态与操作幂等身份 ──────────────────────────
-  /// 每控制域（model/effort/permission）当前确认记录。
-  final Map<String, ControlDomainConfirmation> _configConfirmations =
-      <String, ControlDomainConfirmation>{};
-
-  /// 每控制域的串行锁：确认期间后续显式选择排队串行（§2.5）。
-  final Map<String, Future<void>> _configDomainLocks =
-      <String, Future<void>>{};
-
-  int _configActionCounter = 0;
+  /// 控制域确认账本（model/effort/permission 的确认状态、同域串行锁与幂等
+  /// 序号）。状态与串行化收口在 [SessionConfigConfirmationLedger]（架构收口
+  /// 拆分）；投影核验需要 controls 权威读取，仍由本控制器完成。
+  late final SessionConfigConfirmationLedger _configLedger =
+      SessionConfigConfirmationLedger(onChanged: _notifyListeners);
 
   /// 读取控制域确认状态（UI 摘要行显示"切换中/待确认/失败"的事实来源）。
   ControlDomainConfirmation? configConfirmationFor(String domain) =>
-      _configConfirmations[domain];
-
-  /// 在指定控制域串行执行 [action]：前序确认未结束时等待其完成。
-  Future<T> _serializedConfigAction<T>(
-    String domain,
-    Future<T> Function() action,
-  ) {
-    final previous = _configDomainLocks[domain];
-    Future<T> run() async {
-      if (previous != null) {
-        try {
-          await previous;
-        } catch (_) {
-          // 前序失败不阻塞本次显式选择（失败已有独立错误面）。
-        }
-      }
-      return action();
-    }
-    final future = run();
-    _configDomainLocks[domain] = future.then(
-      (_) {},
-      onError: (_) {},
-    );
-    return future;
-  }
-
-  /// 记录确认状态并通知。
-  void _setConfigConfirmation(ControlDomainConfirmation confirmation) {
-    _configConfirmations[confirmation.domain] = confirmation;
-    _notifyListeners();
-  }
+      _configLedger.confirmationFor(domain);
 
   /// 命令成功后的权威投影核验：controls 值与请求值一致才标"已生效"；
   /// 投影滞后时有界重查（3 拍），仍不一致进入"结果待确认"。
@@ -295,7 +262,7 @@ class SessionController extends ChangeNotifier {
           if (_selectedSessionId != null) {
             _controls = controls;
           }
-          _setConfigConfirmation(
+          _configLedger.record(
             ControlDomainConfirmation(
               domain: domain,
               state: ControlConfirmState.applied,
@@ -309,7 +276,7 @@ class SessionController extends ChangeNotifier {
       }
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-    _setConfigConfirmation(
+    _configLedger.record(
       ControlDomainConfirmation(
         domain: domain,
         state: ControlConfirmState.unknown,
@@ -3112,9 +3079,9 @@ class SessionController extends ChangeNotifier {
     // V094-24/25：每次显式操作独立幂等身份（同次传输重试复用该 key），
     // A→B→A→B 每次真实变更都必须到执行端，不再命中第一次 B 的旧命令；
     // 202 只标"切换中"，成功且权威投影一致才标已生效，null 不假报成功。
-    final operation = 'model:$sessionId:$model:act-${_configActionCounter += 1}';
-    final accepted = await _serializedConfigAction('model', () async {
-      _setConfigConfirmation(
+    final operation = 'model:$sessionId:$model:act-${_configLedger.nextActionId()}';
+    final accepted = await _configLedger.serialized('model', () async {
+      _configLedger.record(
         ControlDomainConfirmation(
           domain: 'model',
           state: ControlConfirmState.confirming,
@@ -3131,7 +3098,7 @@ class SessionController extends ChangeNotifier {
         },
         onTerminal: (terminal) {
           if (terminal == null) {
-            _setConfigConfirmation(
+            _configLedger.record(
               ControlDomainConfirmation(
                 domain: 'model',
                 state: ControlConfirmState.unknown,
@@ -3190,8 +3157,8 @@ class SessionController extends ChangeNotifier {
       return;
     }
     // V094-24/25：独立幂等身份 + 确认状态机（与 selectModel 同构）。
-    final accepted = await _serializedConfigAction('effort', () async {
-      _setConfigConfirmation(
+    final accepted = await _configLedger.serialized('effort', () async {
+      _configLedger.record(
         ControlDomainConfirmation(
           domain: 'effort',
           state: ControlConfirmState.confirming,
@@ -3200,7 +3167,7 @@ class SessionController extends ChangeNotifier {
       );
       return _submitCommand(
         sessionId: sessionId,
-        operation: 'effort:$sessionId:$effort:act-${_configActionCounter += 1}',
+        operation: 'effort:$sessionId:$effort:act-${_configLedger.nextActionId()}',
         kind: SessionCommandKind.effortSelect,
         deviceId: deviceId!,
         ciphertext: {
@@ -3208,7 +3175,7 @@ class SessionController extends ChangeNotifier {
         },
         onTerminal: (terminal) {
           if (terminal == null) {
-            _setConfigConfirmation(
+            _configLedger.record(
               ControlDomainConfirmation(
                 domain: 'effort',
                 state: ControlConfirmState.unknown,
@@ -3260,8 +3227,8 @@ class SessionController extends ChangeNotifier {
     }
     // V094-24/25：独立幂等身份 + 确认状态机（风险确认门在上游，展示名
     // 不影响确认语义）。权限生效以 daemon 模式快照同步为准。
-    await _serializedConfigAction('permission', () async {
-      _setConfigConfirmation(
+    await _configLedger.serialized('permission', () async {
+      _configLedger.record(
         ControlDomainConfirmation(
           domain: 'permission',
           state: ControlConfirmState.confirming,
@@ -3271,7 +3238,7 @@ class SessionController extends ChangeNotifier {
       final accepted = await _submitCommand(
         sessionId: sessionId,
         operation:
-            'permission-mode:$sessionId:$mode:act-${_configActionCounter += 1}',
+            'permission-mode:$sessionId:$mode:act-${_configLedger.nextActionId()}',
         kind: SessionCommandKind.permissionModeSelect,
         deviceId: deviceId!,
         ciphertext: {
@@ -3279,7 +3246,7 @@ class SessionController extends ChangeNotifier {
         },
         onTerminal: (terminal) {
           if (terminal == null) {
-            _setConfigConfirmation(
+            _configLedger.record(
               ControlDomainConfirmation(
                 domain: 'permission',
                 state: ControlConfirmState.unknown,
@@ -3299,7 +3266,7 @@ class SessionController extends ChangeNotifier {
         },
       );
       if (!accepted) {
-        _setConfigConfirmation(
+        _configLedger.record(
           ControlDomainConfirmation(
             domain: 'permission',
             state: ControlConfirmState.failed,
