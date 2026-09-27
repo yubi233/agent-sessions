@@ -136,7 +136,9 @@ func (a *Adapter) prepareWorkspacePersistence(workspaceRoot string) error {
 	workspaceRoot = canonical
 	destination := filepath.Join(workspaceRoot, ".dsh-sessions")
 	roots := LegacyRootsFromEnv()
-	if bin, _, err := binConfig(); err == nil {
+	// BridgeBinPath 与 config 注入解耦：检出存在即可把检出根列入 legacy 迁移源，
+	// 即使组合尚未注入（此时 DSH 不可用，但工作区内迁移不依赖组合）。
+	if bin := BridgeBinPath(); bin != "" {
 		checkout := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(bin)))))
 		roots = append(roots, filepath.Join(checkout, ".dsh-sessions"))
 	}

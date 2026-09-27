@@ -14,6 +14,7 @@ package relay
 import (
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/yubi233/agent-sessions/internal/adapter/dsh"
@@ -266,11 +267,28 @@ func v092TerminalID(t *testing.T, env *testEnv, accountID string) string {
 // （localdev 同机形态），不因为执行侧上报了别的版本而改变结论。
 func TestV092CapabilitiesPreferRelayWhenRelayCanExecute(t *testing.T) {
 	// v0.9.7：本用例前提是 Relay 本机存在可执行桥（localdev 同机形态）。
-	// CI/云端检出上桥必然不存在，facts 回退 terminal 属预期行为，
-	// 该场景由上一个用例以"云端形态等价复现"覆盖——这里 Skip 而非误报。
-	if _, err := os.Stat(dsh.BridgeBinPath()); err != nil {
+	// "可执行" = bin 存在 + 组合可解析——组合无内置缺省（V092 R12 收口后必须
+	// 由入口注入：env 或产品根 cordis.yml）。CI/云端检出上桥必然不存在，
+	// facts 回退 terminal 属预期行为，该场景由上一个用例以"云端形态等价复现"
+	// 覆盖——这里 Skip 而非误报。
+	binPath := dsh.BridgeBinPath()
+	if _, err := os.Stat(binPath); err != nil {
 		t.Skip("本机无 DSH 桥构建产物，无法构造 relay-owns-facts 场景")
 	}
+	configPath := os.Getenv(dsh.EnvConfig)
+	if configPath == "" {
+		configPath = filepath.Join("..", "..", "cordis.yml")
+	}
+	if abs, err := filepath.Abs(configPath); err == nil {
+		configPath = abs
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Skip("本机未注入 DSH 组合（env 与产品根 cordis.yml 均缺）：组合缺失时 Relay 本就 fail-closed，回落 terminal 是正确行为")
+	}
+	// 适配器只从进程 env 解析桥路径；stat 通过后显式注入，复现 restart.sh 的
+	// localdev 注入形态，否则本进程 Detect 仍会因"组合未配置"fail-closed。
+	t.Setenv(dsh.EnvBin, binPath)
+	t.Setenv(dsh.EnvConfig, configPath)
 	env := newTestEnv(t)
 	owner := env.registerAs(t, "v092-relay-owns@test.dev")
 	terminal := env.pairTerminal(t, owner, "v092-relay-owns-terminal")

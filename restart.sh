@@ -1260,15 +1260,16 @@ start_admin() {
   wait_for_http admin "http://127.0.0.1:$ADMIN_PORT" "$pid"
 }
 
-# v0.9.7 阶段 0.3：DSH 桥预检（fail-fast）。桥以路径钉扎消费外部检出
-# （internal/adapter/dsh/bridge.go 的 defaultBin/defaultConfig + 产品 cordis.yml
-# 里的插件绝对路径）；检出被还原或 lib 构建产物被清理时，daemon 仍能启动但
+# DSH 桥预检（fail-fast）。桥以路径钉扎消费外部检出（bin 见
+# internal/adapter/dsh/bridge.go 的 $HOME 公式回退 + 产品根 cordis.yml 里的
+# 插件绝对路径）；检出被还原或 lib 构建产物被清理时，daemon 仍能启动但
 # 新建 DSH 会话必败。这里在 daemon 启动前把两类路径校验掉，缺失即报修复指引。
 check_dsh_bridge_preflight() {
   if [[ "$WITH_DAEMON" != true ]]; then return 0; fi
   local -a missing=() candidates=()
-  # 桥入口：env 优先；未设时与 bridge.go 的 defaultBin 保持一致（改动需同步）。
-  candidates+=("${AGENT_SESSIONS_DSH_BIN:-/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/bin.js}")
+  # 桥入口：env 优先；未设时按 $HOME 公式回退（与 bridge.go bridgeHomeFallbackBin
+  # 同一约定：检出位于 ~/code/deepseek-harness；产品代码不再内置用户名字面量）。
+  candidates+=("${AGENT_SESSIONS_DSH_BIN:-$HOME/code/deepseek-harness/packages/examples/acp-demo/lib/bin.js}")
   # 组合文件：restart.sh 注入产品根 cordis.yml（1275-1277 行同一优先级）。
   candidates+=("${AGENT_SESSIONS_DSH_CONFIG:-$ROOT_DIR/cordis.yml}")
   # 产品组合引用的全部插件绝对路径（name: '/…/lib/index.js'）。
@@ -1299,8 +1300,10 @@ start_daemon() {
     echo "daemon: missing access token after pairing" >&2
     return 1
   fi
-  # DSH_* 仅在非空时转发：空字符串会被 Daemon 判定为"显式置空"而 fail-closed，
-  # 未设置时 Daemon 才会回退到 internal/adapter/dsh/bridge.go 里的本机 checkout 默认路径。
+  # DSH_* 仅在非空时转发：空字符串会被 Daemon 判定为"显式置空"而 fail-closed。
+  # bin 未转发时由 Daemon 按 $HOME 公式回退（bridgeHomeFallbackBin）；config
+  # 在 Daemon 侧无任何回退（V092 R12：内置缺省组合曾造成模型目录漂移），
+  # 因此下方必须注入产品根 cordis.yml。
   local args=(env AGENT_SESSIONS_DAEMON_TOKEN="$DAEMON_ACCESS_TOKEN" AGENT_SESSIONS_OPENCODE_URL="$OPENCODE_URL" OPENCODE_SERVER_USERNAME="${OPENCODE_SERVER_USERNAME:-}" OPENCODE_SERVER_PASSWORD="${OPENCODE_SERVER_PASSWORD:-}" AGENT_SESSIONS_EVENT_LOCAL_DEV_PLAINTEXT=1 )
   if [[ -n "$OPENCODE_DEFAULT_MODEL" ]]; then args+=(AGENT_SESSIONS_OPENCODE_DEFAULT_MODEL="$OPENCODE_DEFAULT_MODEL"); fi
   if [[ -n "${AGENT_SESSIONS_DSH_BIN:-}" ]]; then args+=(AGENT_SESSIONS_DSH_BIN="$AGENT_SESSIONS_DSH_BIN"); fi

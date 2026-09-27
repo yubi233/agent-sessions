@@ -60,3 +60,5 @@ AGENT_SESSIONS_FLUTTER_RELAY_BASE=http://<本机局域网地址>:8787 \
 Relay 委托给 `tools/relayctl.sh`，Daemon 使用真实 `go run ./apps/daemon run`，Flutter 使用真实 `flutter run -d <target> --no-pub`；日志和 PID 状态写入 `.task/restart/`，不会写入 `testbox/`。Daemon 默认开启，必须存在已配对的 `AGENT_SESSIONS_DAEMON_TOKEN`，否则入口在启动任何组件前 fail-closed。Flutter 目标可通过 `--flutter-mode mac|device`、`--flutter-device <adb-serial>` 或 `AGENT_SESSIONS_FLUTTER_DEVICE` 覆盖；device 模式只接受脚本发现的 online 物理 Android，不启动 AVD。设备访问 Relay 时必须设置 host 可达的 `AGENT_SESSIONS_FLUTTER_RELAY_BASE`。
 
 `restart` 会清理所选 Relay/Web/Admin 端口上遗留的监听进程；`start` 默认不清理外部进程，可显式加 `--clean-ports`，也可用 `--no-clean-ports` 禁止清理。`--no-daemon`、`--no-flutter` 可用于分段调试，`--with-web`、`--with-admin` 开启可选调试面。`stop` 只停止本脚本记录且命令签名匹配的进程。清理范围只包含配置的服务端口，不会扫描其他端口。脚本回归使用 `task test:restart`。
+
+DSH 桥是可选 Provider：桥 bin 缺省按 `~/code/deepseek-harness` 检出回退（`AGENT_SESSIONS_DSH_BIN` 可覆盖）；组合文件没有内置缺省，`restart.sh` 默认注入仓库根 `cordis.yml`（个人端点与渠道配置，已 gitignore）。新机器从 `cordis.yml.example` 复制为 `cordis.yml`，按文件头注释补齐检出路径与渠道即可；检出缺失或产物被清理时的重建链见 `tools/dsh-bridge-patches/README.md`。

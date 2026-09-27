@@ -33,11 +33,45 @@ const (
 	EnvPersistCompression = "AGENT_SESSIONS_DSH_PERSIST_COMPRESSION"
 )
 
-// 缺省桥路径（spec 冻结，与 e2e-verify/real/dsh-acp-smoke.mjs --dsh-root 一致）。
-const (
-	defaultBin    = "/Users/yubi/code/deepseek-harness/packages/examples/acp-demo/lib/bin.js"
-	defaultConfig = "/Users/yubi/code/deepseek-harness/examples/acp-agent/cordis.yml"
-)
+// bridgeHomeFallbackBin 返回桥检出的家目录缺省位置（env 未设置时的 bin 回退）。
+// 产品代码不再内置 /Users/<user> 字面量：bin 按 $HOME 公式回退（约定检出位于
+// ~/code/deepseek-harness，与 e2e-verify/real/dsh-acp-smoke.mjs --dsh-root 一致），
+// 无家目录或解析失败时返回空。config 不做任何回退——组合是部署事实，必须由
+// 启动入口显式注入（restart.sh 默认注入产品根 cordis.yml）；给 config 设内置缺省
+// 曾让 Relay 与 Daemon 各自解析出不同模型目录（V092 R12 漂移根因），刻意 fail-closed。
+func bridgeHomeFallbackBin() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	home = strings.TrimSpace(home)
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, "code", "deepseek-harness", "packages", "examples", "acp-demo", "lib", "bin.js")
+}
+
+func binConfig() (bin string, config string, err error) {
+	bin = bridgeHomeFallbackBin()
+	if v, ok := os.LookupEnv(EnvBin); ok {
+		if strings.TrimSpace(v) == "" {
+			return "", "", fmt.Errorf("%s 显式置空，视为未配置", EnvBin)
+		}
+		bin = strings.TrimSpace(v)
+	}
+	if bin == "" {
+		return "", "", fmt.Errorf("%s 未设置，且 $HOME/code/deepseek-harness 无桥检出", EnvBin)
+	}
+	if v, ok := os.LookupEnv(EnvConfig); !ok {
+		// 组合无缺省：必须由启动入口注入（restart.sh 默认注入产品根 cordis.yml）。
+		return "", "", fmt.Errorf("%s 未设置：组合必须由启动入口注入（restart.sh 默认注入产品根 cordis.yml）", EnvConfig)
+	} else if strings.TrimSpace(v) == "" {
+		return "", "", fmt.Errorf("%s 显式置空，视为未配置", EnvConfig)
+	} else {
+		config = strings.TrimSpace(v)
+	}
+	return bin, config, nil
+}
 
 // closeGrace 是受控关闭时等待桥退出的缺省宽限期（spec §1：EOF 触发 dispose，exit 0）；
 // 超时后 SIGKILL 整个进程组。dshBinTransport.grace 可按实例覆盖（见该字段），
@@ -60,34 +94,20 @@ type BridgeTransport interface {
 	ForceKill() error
 }
 
-// binConfig 解析桥路径配置：环境变量优先，未设置时缺省 P0 冒烟核实的路径；
-// 显式设置为空视为"未配置"（fail-closed），与既有 Provider 的空值口径一致。
+// binConfig 解析桥路径配置：环境变量优先，bin 未设置时按 $HOME 公式回退、
+// config 必须显式注入（见 bridgeHomeFallbackBin 注释）；显式设置为空视为
+// "未配置"（fail-closed），与既有 Provider 的空值口径一致。
 // BridgeBinPath 返回当前生效的桥 bin 路径（env 覆盖后）。供测试判断本机是否
 // 具备真实桥检出（CI 上不存在时，依赖桥的环境型测试应 Skip 而非误报）。
+// bin 的存在性与 config 无关：config 缺失属于部署注入问题，不代表检出缺失。
 func BridgeBinPath() string {
-	bin, _, err := binConfig()
-	if err != nil {
-		return ""
-	}
-	return bin
-}
-
-func binConfig() (bin string, config string, err error) {
-	bin = defaultBin
 	if v, ok := os.LookupEnv(EnvBin); ok {
 		if strings.TrimSpace(v) == "" {
-			return "", "", fmt.Errorf("%s 显式置空，视为未配置", EnvBin)
+			return ""
 		}
-		bin = strings.TrimSpace(v)
+		return strings.TrimSpace(v)
 	}
-	config = defaultConfig
-	if v, ok := os.LookupEnv(EnvConfig); ok {
-		if strings.TrimSpace(v) == "" {
-			return "", "", fmt.Errorf("%s 显式置空，视为未配置", EnvConfig)
-		}
-		config = strings.TrimSpace(v)
-	}
-	return bin, config, nil
+	return bridgeHomeFallbackBin()
 }
 
 // newBinTransport 启动一个无工作区上下文的探测桥（每会话一个，Setpgid 独占进程组）。

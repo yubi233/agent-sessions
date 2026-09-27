@@ -1,11 +1,13 @@
 # DSH 桥（deepseek-harness 检出）补丁与重建指引
 
-产品以**路径钉扎**方式消费 `/Users/yubi/code/deepseek-harness` 检出
-（`internal/adapter/dsh/bridge.go` 的 `defaultBin`/`defaultConfig`，可用
-`AGENT_SESSIONS_DSH_BIN`/`AGENT_SESSIONS_DSH_CONFIG` 覆盖；本地栈由
-`restart.sh` 注入产品根 `cordis.yml`）。检出内容不在产品仓库依赖图内，
-历史上曾因"改动未提交 + 构建产物被清理"导致桥整体不可用（v0.9.7 阶段 0
-核查结论）。本目录把跨仓库差异固化为补丁，并记录最小重建链。
+产品以**路径钉扎**方式消费 `~/code/deepseek-harness` 检出。bin 缺省按
+`$HOME` 公式回退（`internal/adapter/dsh/bridge.go` 的
+`bridgeHomeFallbackBin`，可用 `AGENT_SESSIONS_DSH_BIN` 覆盖）；**组合文件没有
+任何内置缺省**，必须由启动入口注入（`restart.sh` 默认注入产品根 `cordis.yml`，
+可用 `AGENT_SESSIONS_DSH_CONFIG` 覆盖；新机器可从仓库根 `cordis.yml.example`
+复制生成）。检出内容不在产品仓库依赖图内，历史上曾因"改动未提交 + 构建产物
+被清理"导致桥整体不可用（v0.9.7 阶段 0 核查结论）。本目录把跨仓库差异固化为
+补丁，并记录最小重建链。
 
 ## 当前补丁
 
@@ -49,15 +51,14 @@ stderr 干净（证据：实施记录 37）。
 
 ## 换机路径映射
 
-检出根变化时（例如 `/Users/旧用户名/code/deepseek-harness` → 新根），除更新
-产品 `cordis.yml` 内的绝对路径与 `internal/adapter/dsh/bridge.go` 的
-`defaultBin/defaultConfig` 外，同步执行：
+检出根变化时（例如 `/Users/旧用户名/code/deepseek-harness` → 新根），bin 的
+`$HOME` 公式会自动跟随新家目录；如检出不在 `~/code/deepseek-harness`，用
+`AGENT_SESSIONS_DSH_BIN` 指向实际入口，并更新产品 `cordis.yml` 内的插件绝对路径：
 
 ```bash
 new_root=/Users/<新用户>/code/deepseek-harness
 sed -i '' "s|/Users/yubi/code/deepseek-harness|$new_root|g" \
-  /Users/yubi/code/agentProject/agent-sessions/cordis.yml \
-  /Users/yubi/code/agentProject/agent-sessions/internal/adapter/dsh/bridge.go
+  /Users/yubi/code/agentProject/agent-sessions/cordis.yml
 ```
 
 随后按上文「最小重建链」重建产物，并跑 `restart.sh restart` 验证桥预检通过。

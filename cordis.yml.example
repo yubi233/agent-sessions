@@ -1,0 +1,209 @@
+# DSH 桥产品组合模板（cordis.yml）
+#
+# 用法：`cp cordis.yml.example cordis.yml` 后按需修改。产品根 cordis.yml 含个人
+# 端点与渠道，属本地文件（.gitignore），不入库；本模板保持与生产组合相同的插件
+# 结构，新机器上补齐三件事即可运行：
+#   1. 把全部 `/absolute/path/to/deepseek-harness/...` 替换为本机检出绝对路径
+#      （检出要求见 tools/dsh-bridge-patches/README.md 的重建链）；
+#   2. llm.providers 中的渠道与模型目录按需增删（缺省仅 OpenCode Zen 免费池，
+#      公开端点，可直接使用）；
+#   3. 渠道 API key 写入 $DSH_HOME/.credentials.yaml（credentials-local 插件从
+#      该文件解析，桥进程环境里不出现 key）。
+# restart.sh 会自动把产品根 cordis.yml 注入为 AGENT_SESSIONS_DSH_CONFIG；
+# 桥 bin 路径见 internal/adapter/dsh/bridge.go 的 AGENT_SESSIONS_DSH_BIN 口径。
+#
+# 路径全部锚定启动 cwd 语义；所有 apiKeyEnv 引用统一经 credentials 服务从
+# $DSH_HOME/.credentials.yaml 解析，shell 导出的变量不会进入桥进程
+# （internal/adapter/dsh/bridge.go minimalEnv）。
+- id: credentials
+  # @deepseek-ai/dsh-credentials-local
+  name: '/absolute/path/to/deepseek-harness/packages/credentials/credentials-local/lib/index.js'
+- id: llm
+  # @deepseek-ai/dsh-llm-pi-ai
+  name: '/absolute/path/to/deepseek-harness/packages/llm/llm-pi-ai/lib/index.js'
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          - id: deepseek-v4-flash
+            input:
+              - text
+            reasoningEfforts:
+              max: max
+      opencode-zen:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/v1
+        retryPolicy:
+          mode: normal
+          maxRetries: 5
+        models:
+          # Zen 免费池当前可用模型（2026-09 口径）。注意：*-free 只允许 OpenCode
+          # 官方客户端调用，第三方调用方会拿到 403 FreeTierError——可用性以
+          # 桥握手返回的 ModelCatalog 为准，不要凭本表断言可用。
+          - id: mimo-v2.5-free
+            name: MiMo V2.5 Free (OpenCode Zen)
+            input:
+              - text
+          - id: big-pickle
+            name: Big Pickle (OpenCode Zen)
+            input:
+              - text
+          - id: ling-3.0-flash-fin-free
+            name: Ling 3.0 Flash Fin Free (OpenCode Zen)
+            input:
+              - text
+          - id: nemotron-3-ultra-free
+            input:
+              - text
+          - id: nemotron-3.5-lightning-free
+            input:
+              - text
+      # 自定义渠道示例（openai 兼容）：复制后替换 baseURL 与模型目录；
+      # API key 按 apiKeyEnv 名字写入 .credentials.yaml。
+      # custom-openai:
+      #   apiKeyEnv: CUSTOM_OPENAI_API_KEY
+      #   api: openai-completions
+      #   baseURL: https://<your-openai-compatible-endpoint>/v1
+      #   models:
+      #     - id: your-model
+      #       name: Your Model
+      #       contextWindow: 128000
+      #       maxTokens: 32768
+      #       input:
+      #         - text
+
+# bash 与文件工具限制在当前项目内；越界重试会先请求批准（手机推送）。
+- id: sandbox
+  # @deepseek-ai/dsh-sandbox-local
+  name: '/absolute/path/to/deepseek-harness/packages/sandbox/sandbox-local/lib/index.js'
+
+- id: sandbox-policy
+  # @deepseek-ai/dsh-sandbox-policy
+  name: '/absolute/path/to/deepseek-harness/packages/sandbox/sandbox-policy/lib/index.js'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js "process.env.DSH_SESSION_CWD ?? process.cwd()"
+
+- id: subprocess
+  # @deepseek-ai/dsh-subprocess-local
+  name: '/absolute/path/to/deepseek-harness/packages/subprocess/subprocess-local/lib/index.js'
+
+- id: bash
+  # @deepseek-ai/dsh-bash-sandbox
+  name: '/absolute/path/to/deepseek-harness/packages/shell/bash-sandbox/lib/index.js'
+  config:
+    timeoutMs: 60000
+
+- id: approval
+  # @deepseek-ai/dsh-user-approval
+  name: '/absolute/path/to/deepseek-harness/packages/interaction/user-approval/lib/index.js'
+  config:
+    policy: never
+
+# 权限模式三档预设：会话级 mode.set 原子捆绑（sandbox mode + approval policy）。
+# defaultPreset 与生产现状（danger-full-access + never）一致，启用即行为零变化；
+# read-only/workspace-write 档审批策略为 ask——写工具回合将经手机审批卡放行/拒绝。
+- id: permission
+  # @deepseek-ai/dsh-permission-presets
+  name: '/absolute/path/to/deepseek-harness/packages/interaction/permission-presets/lib/index.js'
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+        name: read-only
+        description: 只读沙箱：任何写入或执行都先经手机审批。
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+        name: workspace-write
+        description: 工作区内写入；越界或更宽的重试需手机审批。
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+        name: danger-full-access
+        description: 完整文件访问，无需审批确认。
+    defaultPreset: danger-full-access
+
+# ACP 自动化应用：agent spine + JSONL 持久化 + 协议桥。
+# stdout 只承载 JSON-RPC；toolUpdates 让手机端看到工具活动。
+- id: user-questions
+  name: '/absolute/path/to/deepseek-harness/packages/interaction/user-questions/lib/index.js'
+- id: fs-sandbox
+  name: '/absolute/path/to/deepseek-harness/packages/fs/fs-sandbox/lib/index.js'
+- id: token-meter
+  name: '/absolute/path/to/deepseek-harness/packages/llm/token-meter/lib/index.js'
+- id: commands
+  name: '/absolute/path/to/deepseek-harness/packages/interaction/commands/lib/index.js'
+- id: compaction
+  name: '/absolute/path/to/deepseek-harness/packages/compaction/compaction/lib/index.js'
+- id: subagent
+  name: '/absolute/path/to/deepseek-harness/packages/subagent/subagent/lib/index.js'
+- id: subagent-spawn-in-process
+  name: '/absolute/path/to/deepseek-harness/packages/subagent/subagent-spawn-in-process/lib/index.js'
+  config:
+    providerName: spawn
+- id: subagent-fork-in-process
+  name: '/absolute/path/to/deepseek-harness/packages/subagent/subagent-fork-in-process/lib/index.js'
+  config:
+    providerName: fork
+- id: workflow
+  name: '/absolute/path/to/deepseek-harness/packages/workflow/workflow/lib/index.js'
+- id: web
+  name: '/absolute/path/to/deepseek-harness/packages/web/web/lib/index.js'
+  config:
+    searchProvider: deepseek-official
+- id: web-search-deepseek
+  name: '/absolute/path/to/deepseek-harness/packages/web/web-search-deepseek/lib/index.js'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+
+# DSH 预设清单：Flash 使用 minimal，其余模型选择使用 standard。
+- id: agent-presets
+  name: '/absolute/path/to/deepseek-harness/packages/preset/agent-presets/lib/index.js'
+  config:
+    default: standard
+    includeUserRoot: false
+    roots:
+      - path: '/absolute/path/to/deepseek-harness/apps/cli/config/agent-presets'
+        trust: system
+
+- id: acp-agent
+  # @deepseek-ai/dsh-acp-demo
+  name: '/absolute/path/to/deepseek-harness/packages/examples/acp-demo/lib/index.js'
+  config:
+    provider: opencode-zen
+    # 默认模型：与 llm.providers 的模型目录保持一致。本地部署可用
+    # tools/sync_model_catalog.py 从 ~/.dsh/settings.yaml 同步多渠道目录。
+    model: nemotron-3-ultra-free
+    # 模型 → 路由映射：桥按此解析 set_config_option 并合并各 provider 目录。
+    # 模型集合本身以 llm-pi-ai.providers 为准；能力矩阵的唯一事实源是桥握手
+    # 返回的 ModelCatalog（internal/adapter/dsh/adapter.go）。
+    modelProviders:
+      mimo-v2.5-free: opencode-zen
+      big-pickle: opencode-zen
+      ling-3.0-flash-fin-free: opencode-zen
+      nemotron-3-ultra-free: opencode-zen
+      nemotron-3.5-lightning-free: opencode-zen
+    # 不设 minimalModel：所有模型归属同一（默认 standard）组合，避免
+    # "preset 在首个 turn 后固定"围栏拒绝会话中途的模型切换。
+    # 不设全局 reasoningEffort：每个模型使用自身目录中声明的档位和 provider 默认值。
+    toolUpdates: true
+    # 客户端声明它自己的 MCP 工具桥时放行并忽略（不挂载），否则 session/new 被拒。
+    ignoreMcpServers: true
+    # 会话界面只渲染模型选择器；把推理档位折成 model@effort 变体条目。
+    modelEffortVariants: true
+    # 生产会话使用客户端工作区。快照或 fixture 工具可以注入隔离根，
+    # 但不会改变工作区语义。
+    persistenceRoot: !!js "process.env.DSH_SNAPSHOT_SESSIONS_ROOT ?? (process.cwd() + '/.dsh-sessions')"
+    persistenceCompression: !!js "process.env.DSH_SNAPSHOT_COMPRESSION ?? 'none'"
+    workspaceContext:
+      maxBytes: 65536
+    persona: |
+      You are a coding assistant powered by the {{model}} model. Your working directory is {{cwd}}. Your bash tool runs under a file sandbox — a `[sandbox: file access denied …]` result is policy, not a command bug.
+
+      Verify your work by running the code or tests. Keep answers brief and factual.
