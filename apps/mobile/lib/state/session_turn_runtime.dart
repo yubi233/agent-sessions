@@ -72,3 +72,53 @@ final class SessionActiveTurn {
   Duration elapsed(int nowMonotonicMs) =>
       Duration(milliseconds: nowMonotonicMs - _anchorMs);
 }
+
+/// 回合注册表（架构收口拆自 SessionController）：每会话的活动回合槽与客户端侧
+/// "回合超时"标记。只负责登记、查询与撤防，不发起轮询、不发通知；轮询循环、
+/// 快照对账与静默对账仍由 SessionController 编排（绑定 disposed/通知/传输生命周期）。
+final class SessionTurnRegistry {
+  final Map<String, SessionActiveTurn> _turns = {};
+  final Set<String> _timedOut = {};
+
+  /// 该会话是否仍有活动回合（send 受理至终态收口之间）；null 会话按无回合。
+  bool contains(String? sessionId) =>
+      sessionId != null && _turns.containsKey(sessionId);
+
+  bool get isNotEmpty => _turns.isNotEmpty;
+  bool get isEmpty => _turns.isEmpty;
+
+  /// 选中会话的活动回合；null 表示无活动回合或未选中。
+  SessionActiveTurn? bySession(String? sessionId) =>
+      sessionId == null ? null : _turns[sessionId];
+
+  /// 读取指定会话的活动回合（调用方已保证 sessionId 非空）。
+  SessionActiveTurn? peek(String sessionId) => _turns[sessionId];
+
+  /// 登记/替换活动回合（同会话新回合以最新为准）。
+  void put(String sessionId, SessionActiveTurn turn) =>
+      _turns[sessionId] = turn;
+
+  /// 收口移除活动回合（终态/中止/看门狗/快照对账路径）。
+  void remove(String sessionId) => _turns.remove(sessionId);
+
+  /// 当前全部活动回合的会话 ID 快照（轮询遍历用，防御性拷贝）。
+  List<String> get ids => List<String>.of(_turns.keys);
+
+  /// 客户端侧回合超时标记（V086-11）：终态事实到达后按事件校正清除。
+  bool isTimedOut(String? sessionId) =>
+      sessionId != null && _timedOut.contains(sessionId);
+
+  void markTimedOut(String sessionId) => _timedOut.add(sessionId);
+
+  /// 撤防：终态/中止/新回合登记后清除超时标记。
+  void disarmTimeout(String sessionId) => _timedOut.remove(sessionId);
+
+  bool get anyTimedOut => _timedOut.isNotEmpty;
+
+  /// 全量清空（认证边界重置/dispose）。
+  void clear() {
+    _turns.clear();
+    _timedOut.clear();
+  }
+}
+

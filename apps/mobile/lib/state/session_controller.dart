@@ -168,7 +168,6 @@ class SessionController extends ChangeNotifier {
   // v0.8.6 A①：会话级"回合超时"标记。客户端轮询窗口（前台+后台约 2 分钟）
   // 耗尽仍无终态时置位，UI 据此把"处理中"收敛为显式超时文案；迟到的
   // daemon 看门狗 / Provider 终态事件到达后按事件校正清除。
-  final Set<String> _turnTimedOut = <String>{};
 
   /// 回合轮询窗口（v0.8.6 A① 参数化以便测试）：前台 120×500ms=60s，后台再
   /// 120×500ms=60s，总约 2 分钟后显式超时。生产保持既有口径不变。
@@ -330,7 +329,7 @@ class SessionController extends ChangeNotifier {
   /// 该会话的回合是否已被客户端判定超时（V086-11）：UI 据此把"处理中"
   /// 状态条替换为显式超时文案，并停止无限转圈。
   bool isTurnTimedOut(String? sessionId) =>
-      sessionId != null && _turnTimedOut.contains(sessionId);
+      sessionId != null && _turnRegistry.isTimedOut(sessionId);
 
   /// v0.8.6 B：权限目录为空时的禁用原因（capability 支持但目录未同步）。
   /// capability 不支持或只读等其它阻断由 controlBlockedReason 负责。
@@ -404,7 +403,8 @@ class SessionController extends ChangeNotifier {
   bool _disposed = false;
 
   /// v0.9.0 C1：会话级活动回合运行期状态（202 受理锚点 + 2/60 分钟预算）。
-  final Map<String, SessionActiveTurn> _activeTurns = {};
+  /// 活动回合槽与超时标记收口在 [SessionTurnRegistry]（架构收口拆分）。
+  final SessionTurnRegistry _turnRegistry = SessionTurnRegistry();
 
   /// v0.9.0 C2：每会话快照刷新单航班——同会话同时最多一个 fetch+merge 在途，
   /// 其余请求只置 pending；当前请求结束后从已合并 cursor 再拉一轮。
@@ -458,7 +458,7 @@ class SessionController extends ChangeNotifier {
 
   /// 当前会话的活动回合运行期状态（C1）；null 表示无已锚定的活动回合。
   SessionActiveTurn? activeTurnFor(String? sessionId) =>
-      sessionId == null ? null : _activeTurns[sessionId];
+      sessionId == null ? null : _turnRegistry.peek(sessionId);
 
   /// 该会话是否显示「有新完成结果」角标（C4：认证运行期内存集合）。
   bool hasUnseenCompletion(String? sessionId) =>
@@ -470,7 +470,7 @@ class SessionController extends ChangeNotifier {
 
   /// 本地是否存在已确认活动回合的会话（L3 运行前置条件之一）。
   bool get _hasObservableActiveTurns =>
-      _activeTurns.isNotEmpty ||
+      _turnRegistry.isNotEmpty ||
       _catalog.sessions.any(
         (session) =>
             session.status == MobileSessionStatus.streaming ||
@@ -683,7 +683,7 @@ class SessionController extends ChangeNotifier {
   /// UX 超时不清除它——超时后中断按钮仍可用（C1：空草稿仍允许用户中止），
   /// composer 的发送入口按既有 queue/steer 交互收敛。
   bool get isTurnInFlight =>
-      _selectedSessionId != null && _activeTurns.containsKey(_selectedSessionId);
+      _selectedSessionId != null && _turnRegistry.contains(_selectedSessionId);
   bool get isEmpty => _catalog.phase == SessionListPhase.ready && _catalog.sessions.isEmpty;
   int get selectedCursor => _cursorFor(_selectedSessionId);
 
@@ -1594,8 +1594,8 @@ class SessionController extends ChangeNotifier {
       return;
     }
     // kill 与 abort 同口径：用户发起的强制终止，本地活动回合事实随命令受理移除。
-    _activeTurns.remove(sessionId);
-    _turnTimedOut.remove(sessionId);
+    _turnRegistry.remove(sessionId);
+    _turnRegistry.disarmTimeout(sessionId);
     await _submitCommand(
       sessionId: sessionId,
       operation: 'kill:$sessionId:${selectedSession?.lastSequence ?? 0}',
@@ -2130,7 +2130,7 @@ class SessionController extends ChangeNotifier {
   }
 
   /// 事务观察器的回合终态接力：拍长 [activePollInterval]，直到 canonical
-  /// 收口（_activeTurns 移除）或上限（1200 拍）。合并走既有代际守卫；
+  /// 收口（_turnRegistry 移除）或上限（1200 拍）。合并走既有代际守卫；
   /// 传输 live（SSE wake 驱动）时跳过本拍拉取，避免双通道重复请求。
   ///
   /// 节拍等待是可取消的：页面/controller 销毁（dispose）时立即唤醒并退出，
@@ -2144,14 +2144,14 @@ class SessionController extends ChangeNotifier {
         (_syncGenerations[tx.sessionId] ?? 0) != syncGenerationAtStart;
     for (var i = 0; i < attempts; i++) {
       if (_disposed || generationsStale()) return;
-      if (!_activeTurns.containsKey(tx.sessionId)) {
+      if (!_turnRegistry.contains(tx.sessionId)) {
         // 回合已由 canonical 终态收口：刷新 controls 并结束。
         await _refreshControlsAfterTurn(tx.sessionId);
         return;
       }
       await _waitTurnObserverTick();
       if (_disposed || generationsStale()) return;
-      if (!_activeTurns.containsKey(tx.sessionId)) continue;
+      if (!_turnRegistry.contains(tx.sessionId)) continue;
       if (_transportSuppressesPolling(tx.sessionId)) continue;
       try {
         final latest = await _relay.getSessionSnapshot(
@@ -2200,8 +2200,8 @@ class SessionController extends ChangeNotifier {
   Future<void> _driveTurnPollingForTransaction(SessionSendTransaction tx) async {
     try {
       // 首批快照已在 defer 收敛分支合并：若 canonical 终态已收口活动回合
-      // （_activeTurns 移除），无需再轮询——避免空转的后台轮询悬挂计时器。
-      if (!_activeTurns.containsKey(tx.sessionId)) {
+      // （_turnRegistry 移除），无需再轮询——避免空转的后台轮询悬挂计时器。
+      if (!_turnRegistry.contains(tx.sessionId)) {
         return;
       }
       // 与内联路径同口径：全量回放（after_seq=0）+ replace 合并。
@@ -2215,7 +2215,7 @@ class SessionController extends ChangeNotifier {
       }
       if (_snapshotCompletesTurn(latest)) {
         await _refreshControlsAfterTurn(tx.sessionId);
-      } else if (_activeTurns.containsKey(tx.sessionId)) {
+      } else if (_turnRegistry.contains(tx.sessionId)) {
         // 回合仍在途：转既有后台轮询（自带代际守卫，有界窗口）。
         unawaited(_pollTurnCompletionInBackground(tx.sessionId, latest));
       }
@@ -2346,8 +2346,8 @@ class SessionController extends ChangeNotifier {
     if (accepted) {
       // 用户主动中止即清除本地超时标记（与 daemon 看门狗撤防同口径），
       // 并移除活动回合状态（用户发起的终止动作，不属于伪造服务端事实）。
-      _turnTimedOut.remove(sessionId);
-      _activeTurns.remove(sessionId);
+      _turnRegistry.disarmTimeout(sessionId);
+      _turnRegistry.remove(sessionId);
       // Abort 的命令回执和 canonical session.aborted/stopped 投影可能分开
       // 抵达。先确认命令成功，再用有界增量轮询等 Relay 投影完成，避免刷新过早
       // 错过可见的“已中止”轨迹。
@@ -3804,16 +3804,19 @@ class SessionController extends ChangeNotifier {
   /// 不等首批快照。
   void _noteSendAcceptedAt202(String sessionId, TurnSubmissionIntent intent) {
     final nowMs = monotonicElapsed().inMilliseconds;
-    final existing = _activeTurns[sessionId];
+    final existing = _turnRegistry.peek(sessionId);
     if (intent == TurnSubmissionIntent.steer) {
       if (existing != null) {
         // 继承原业务回合起点、超时标记与期限；不重置预算。
         return;
       }
-      _activeTurns[sessionId] = SessionActiveTurn(
-        sessionId: sessionId,
-        intent: intent,
-        monotonicAnchorMs: nowMs,
+      _turnRegistry.put(
+        sessionId,
+        SessionActiveTurn(
+          sessionId: sessionId,
+          intent: intent,
+          monotonicAnchorMs: nowMs,
+        ),
       );
     } else {
       if (existing != null) {
@@ -3821,13 +3824,16 @@ class SessionController extends ChangeNotifier {
         // 复用已有锚点，禁止重复续期。
         return;
       }
-      _activeTurns[sessionId] = SessionActiveTurn(
-        sessionId: sessionId,
-        intent: intent,
-        monotonicAnchorMs: nowMs,
+      _turnRegistry.put(
+        sessionId,
+        SessionActiveTurn(
+          sessionId: sessionId,
+          intent: intent,
+          monotonicAnchorMs: nowMs,
+        ),
       );
       // 新回合受理即清除上一轮的本地超时标记（重新计时）。
-      _turnTimedOut.remove(sessionId);
+      _turnRegistry.disarmTimeout(sessionId);
     }
     // v0.9.2 R17：deadline 节拍与传输解耦——SSE live 抑制轮询/L1 拉取后，
     // 超时评估必须有自己的节拍，否则悬挂回合永远收敛不了。
@@ -3892,7 +3898,7 @@ class SessionController extends ChangeNotifier {
     // 当前回合的任何状态（包括超时标记与在途标记）。
     if (generationsStale()) return;
     if (completed) {
-      _turnTimedOut.remove(sessionId);
+      _turnRegistry.disarmTimeout(sessionId);
       await _refreshControlsAfterTurn(sessionId);
     } else {
       // v0.9.0 C1（seq48 事故根因修复）：有界后台窗口耗尽仍无终态时，不再
@@ -3986,11 +3992,11 @@ class SessionController extends ChangeNotifier {
   /// UX 表达（超时标记 + 清账乐观回显 + 通知），活动回合事实与同步任务保持；
   /// 等待时长唯一来源是锚点，禁止 poll attempts×interval 或服务端时间推导。
   void _evaluateTurnDeadlines(String sessionId) {
-    final turn = _activeTurns[sessionId];
+    final turn = _turnRegistry.peek(sessionId);
     if (turn == null || turn.timedOut) return;
     if (monotonicElapsed().inMilliseconds < turn.uxDeadlineMs) return;
     turn.timedOut = true;
-    _turnTimedOut.add(sessionId);
+    _turnRegistry.markTimedOut(sessionId);
     // 超时清账乐观回显（canonical user_message 多半已入时间线；本次发送已失败
     // 时不留永久回显）。空草稿仍允许用户中止，有草稿走既有 queue/steer 交互。
     _pendingOutgoingBySession.remove(sessionId);
@@ -4015,7 +4021,7 @@ class SessionController extends ChangeNotifier {
   void _ensureTurnDeadlineTimer() {
     if (_disposed || _turnDeadlineTimer != null) return;
     _turnDeadlineTimer = Timer.periodic(turnDeadlineTickInterval, (_) {
-      if (_disposed || _activeTurns.isEmpty) {
+      if (_disposed || _turnRegistry.isEmpty) {
         _turnDeadlineTimer?.cancel();
         _turnDeadlineTimer = null;
         return;
@@ -4033,7 +4039,7 @@ class SessionController extends ChangeNotifier {
   /// 因此节拍本身不会产生通知风暴。
   @visibleForTesting
   void evaluateTurnDeadlineTick() {
-    for (final sessionId in List<String>.of(_activeTurns.keys)) {
+    for (final sessionId in _turnRegistry.ids) {
       _evaluateTurnDeadlines(sessionId);
     }
   }
@@ -4055,7 +4061,7 @@ class SessionController extends ChangeNotifier {
         _selectedSessionId != sessionId;
     while (true) {
       if (stale()) return;
-      final turn = _activeTurns[sessionId];
+      final turn = _turnRegistry.peek(sessionId);
       if (turn == null) return;
       // 到期只停止该任务并保留超时提示；不伪造终态、不清活动回合。
       if (monotonicElapsed().inMilliseconds >= turn.continuationDeadlineMs) {
@@ -4362,10 +4368,10 @@ class SessionController extends ChangeNotifier {
     ];
     // v0.8.6 A①：终态事实优先于本地超时提示——迟到的 daemon 看门狗事件或
     // Provider 终态到达时，按事件校正、清除本地"回合超时"标记。
-    if (_turnTimedOut.isNotEmpty &&
+    if (_turnRegistry.anyTimedOut &&
         (incoming.any((event) => event.completedTurn) ||
             snapshot.session.status != MobileSessionStatus.streaming)) {
-      _turnTimedOut.remove(snapshot.session.id);
+      _turnRegistry.disarmTimeout(snapshot.session.id);
     }
     // v0.9.0 C1：canonical 终态收口——活动回合事实只由服务端事实解除
     // （终态事件，或会话进入 idle/stopped/errored），本地 UX 超时永远不伪装
@@ -4377,7 +4383,7 @@ class SessionController extends ChangeNotifier {
     };
     if (incoming.any((event) => event.completedTurn) ||
         canonicalTerminalStatuses.contains(snapshot.session.status)) {
-      _activeTurns.remove(snapshot.session.id);
+      _turnRegistry.remove(snapshot.session.id);
       _bumpSyncGeneration(snapshot.session.id);
       // v0.9.0 C4：完成角标——只有该会话此前在本机被观察为活动、且本次快照
       // 确认真实 idle 投影、且它不是当前选中会话时才置位；stopped/errored
@@ -4652,8 +4658,7 @@ class SessionController extends ChangeNotifier {
   void resetForAuthBoundary() {
     if (_disposed) return;
     _authGeneration += 1;
-    _activeTurns.clear();
-    _turnTimedOut.clear();
+    _turnRegistry.clear();
     _pendingOutgoingBySession.clear();
     _sessionCursors.clear();
     _timelineWindows.clear();
@@ -4686,7 +4691,7 @@ class SessionController extends ChangeNotifier {
     // 丢弃通知，不再触碰已释放的 ChangeNotifier。
     _disposed = true;
     _authGeneration += 1;
-    _activeTurns.clear();
+    _turnRegistry.clear();
     _snapshotTurnsPending.clear();
     _snapshotTurnsInFlight.clear();
     _stopSessionEventTransport();
