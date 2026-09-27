@@ -12,6 +12,7 @@ import '../domain/session_models.dart';
 import '../relay/relay_repository.dart';
 import '../relay/session_event_transport.dart';
 import '../relay/session_sse.dart';
+import 'session_catalog.dart';
 import 'session_config_confirmation_ledger.dart';
 import 'session_send_transaction_ledger.dart';
 import 'session_send_transaction.dart';
@@ -20,6 +21,8 @@ import '../storage/model_effort_preference_store.dart';
 import 'session_composer_controller.dart';
 import 'session_turn_runtime.dart';
 
+export 'session_catalog.dart' show SessionListPhase, WorkspaceListPhase;
+
 /// v0.9.0 C7：App 传输构建开关（默认 auto）。
 /// `SESSION_EVENT_TRANSPORT=poll_only` 构建时永不建立 session SSE，
 /// L1/L3/手动刷新完整工作——回滚只切换传输，不回滚任何事件 schema。
@@ -27,10 +30,6 @@ const String kSessionEventTransportMode = String.fromEnvironment(
   'SESSION_EVENT_TRANSPORT',
   defaultValue: 'auto',
 );
-
-enum SessionListPhase { loading, ready, error }
-
-enum WorkspaceListPhase { loading, ready, error }
 
 /// 会话状态与认证状态分离：认证控制器只负责设备身份，本文控制器只负责用户可见的会话旅程。
 class SessionController extends ChangeNotifier {
@@ -104,19 +103,9 @@ class SessionController extends ChangeNotifier {
   final ModelEffortPreferenceStore? _modelEffortMemory;
   Map<String, String> _effortsByModel = {};
 
-  SessionListPhase _phase = SessionListPhase.loading;
-  List<MobileSession> _sessions = const [];
-  WorkspaceListPhase _workspacePhase = WorkspaceListPhase.loading;
-  List<MobileWorkspace> _workspaces = const [];
-  String? _workspaceErrorMessage;
-  String? _pendingWorkspaceId;
-  String? _pendingWorkspaceCommandId;
-  bool _workspaceSettling = false;
-  WorkspaceSyncState? _workspaceSyncState;
-  bool _workspaceSyncWaiting = false;
-  WorkspaceImportState? _workspaceImportState;
-  bool _workspaceImportWaiting = false;
-  String? _workspaceImportWorkspaceId;
+  /// 会话列表与工作区目录状态收口在 [SessionCatalog]（架构收口拆分）；
+  /// 刷新/同步/导入/创建等流程仍由本控制器编排。
+  final SessionCatalog _catalog = SessionCatalog();
   String? _selectedSessionId;
   List<SessionTimelineEvent> _timeline = const [];
   final Map<String, List<SessionTimelineEvent>> _timelineWindows = {};
@@ -482,7 +471,7 @@ class SessionController extends ChangeNotifier {
   /// 本地是否存在已确认活动回合的会话（L3 运行前置条件之一）。
   bool get _hasObservableActiveTurns =>
       _activeTurns.isNotEmpty ||
-      _sessions.any(
+      _catalog.sessions.any(
         (session) =>
             session.status == MobileSessionStatus.streaming ||
             session.status == MobileSessionStatus.waitingPermission ||
@@ -626,21 +615,21 @@ class SessionController extends ChangeNotifier {
     _notifyListeners();
   }
 
-  SessionListPhase get phase => _phase;
+  SessionListPhase get phase => _catalog.phase;
   List<MobileSession> get sessions =>
-      List<MobileSession>.unmodifiable(_sessions.where((session) => session.isVisible));
-  WorkspaceListPhase get workspacePhase => _workspacePhase;
+      List<MobileSession>.unmodifiable(_catalog.sessions.where((session) => session.isVisible));
+  WorkspaceListPhase get workspacePhase => _catalog.workspacePhase;
   List<MobileWorkspace> get workspaces =>
-      List<MobileWorkspace>.unmodifiable(_workspaces);
-  String? get workspaceErrorMessage => _workspaceErrorMessage;
-  String? get pendingWorkspaceId => _pendingWorkspaceId;
-  String? get pendingWorkspaceCommandId => _pendingWorkspaceCommandId;
-  bool get workspaceSettling => _workspaceSettling;
-  WorkspaceSyncState? get workspaceSyncState => _workspaceSyncState;
-  bool get workspaceSyncWaiting => _workspaceSyncWaiting;
-  WorkspaceImportState? get workspaceImportState => _workspaceImportState;
-  bool get workspaceImportWaiting => _workspaceImportWaiting;
-  String? get workspaceImportWorkspaceId => _workspaceImportWorkspaceId;
+      List<MobileWorkspace>.unmodifiable(_catalog.workspaces);
+  String? get workspaceErrorMessage => _catalog.workspaceErrorMessage;
+  String? get pendingWorkspaceId => _catalog.pendingWorkspaceId;
+  String? get pendingWorkspaceCommandId => _catalog.pendingWorkspaceCommandId;
+  bool get workspaceSettling => _catalog.workspaceSettling;
+  WorkspaceSyncState? get workspaceSyncState => _catalog.workspaceSyncState;
+  bool get workspaceSyncWaiting => _catalog.workspaceSyncWaiting;
+  WorkspaceImportState? get workspaceImportState => _catalog.workspaceImportState;
+  bool get workspaceImportWaiting => _catalog.workspaceImportWaiting;
+  String? get workspaceImportWorkspaceId => _catalog.workspaceImportWorkspaceId;
   List<SessionTimelineEvent> get timeline =>
       List<SessionTimelineEvent>.unmodifiable(_timeline);
 
@@ -695,12 +684,12 @@ class SessionController extends ChangeNotifier {
   /// composer 的发送入口按既有 queue/steer 交互收敛。
   bool get isTurnInFlight =>
       _selectedSessionId != null && _activeTurns.containsKey(_selectedSessionId);
-  bool get isEmpty => _phase == SessionListPhase.ready && _sessions.isEmpty;
+  bool get isEmpty => _catalog.phase == SessionListPhase.ready && _catalog.sessions.isEmpty;
   int get selectedCursor => _cursorFor(_selectedSessionId);
 
   /// 仅在首次消费 provider 时拉取列表，避免页面 rebuild 时重复请求 Relay。
   Future<void> initialize() async {
-    if (_initializing || _phase == SessionListPhase.ready) return;
+    if (_initializing || _catalog.phase == SessionListPhase.ready) return;
     _initializing = true;
     try {
       await Future.wait([
@@ -784,13 +773,13 @@ class SessionController extends ChangeNotifier {
 
   Future<void> refreshSessions() async {
     _errorMessage = null;
-    _phase = SessionListPhase.loading;
+    _catalog.phase = SessionListPhase.loading;
     _notifyListeners();
     try {
       final loaded = await _listSessionsShared();
       // 按最后活动时间稳定排序（服务端同样排序，这里兜底合并/刷新路径）。
-      _sessions = [...loaded]..sort(MobileSession.compareByLastActivity);
-      _phase = SessionListPhase.ready;
+      _catalog.sessions = [...loaded]..sort(MobileSession.compareByLastActivity);
+      _catalog.phase = SessionListPhase.ready;
       if (_selectedSessionId != null &&
           _sessionById(_selectedSessionId) == null) {
         _clearSelection();
@@ -800,10 +789,10 @@ class SessionController extends ChangeNotifier {
         (id) => _sessionById(id) == null,
       );
     } on RelayFailure catch (failure) {
-      _phase = SessionListPhase.error;
+      _catalog.phase = SessionListPhase.error;
       _errorMessage = failure.message;
     } catch (_) {
-      _phase = SessionListPhase.error;
+      _catalog.phase = SessionListPhase.error;
       _errorMessage = '会话列表暂时不可用，请稍后重试。';
     }
     _notifyListeners();
@@ -823,26 +812,26 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> refreshWorkspaces() async {
-    _workspaceErrorMessage = null;
-    _workspacePhase = WorkspaceListPhase.loading;
+    _catalog.workspaceErrorMessage = null;
+    _catalog.workspacePhase = WorkspaceListPhase.loading;
     _notifyListeners();
     try {
-      _workspaces = await _relay.listWorkspaces();
-      _workspacePhase = WorkspaceListPhase.ready;
+      _catalog.workspaces = await _relay.listWorkspaces();
+      _catalog.workspacePhase = WorkspaceListPhase.ready;
     } on RelayFailure catch (failure) {
-      _workspacePhase = WorkspaceListPhase.error;
-      _workspaceErrorMessage = failure.message;
+      _catalog.workspacePhase = WorkspaceListPhase.error;
+      _catalog.workspaceErrorMessage = failure.message;
     } catch (_) {
-      _workspacePhase = WorkspaceListPhase.error;
-      _workspaceErrorMessage = '工作区列表暂时不可用，请稍后重试。';
+      _catalog.workspacePhase = WorkspaceListPhase.error;
+      _catalog.workspaceErrorMessage = '工作区列表暂时不可用，请稍后重试。';
     }
     _notifyListeners();
   }
 
   /// 工作区操作错误只属于当前客户端提示，关闭后不影响已投递的 Daemon 命令。
   void clearWorkspaceError() {
-    if (_workspaceErrorMessage == null) return;
-    _workspaceErrorMessage = null;
+    if (_catalog.workspaceErrorMessage == null) return;
+    _catalog.workspaceErrorMessage = null;
     _notifyListeners();
   }
 
@@ -850,14 +839,14 @@ class SessionController extends ChangeNotifier {
   Future<WorkspaceSyncState?> syncDSHWorkspaces({
     String terminalId = '',
   }) async {
-    if (_workspaceSyncWaiting) return _workspaceSyncState;
-    _workspaceSyncWaiting = true;
-    _workspaceSyncState = null;
-    _workspaceErrorMessage = null;
+    if (_catalog.workspaceSyncWaiting) return _catalog.workspaceSyncState;
+    _catalog.workspaceSyncWaiting = true;
+    _catalog.workspaceSyncState = null;
+    _catalog.workspaceErrorMessage = null;
     _notifyListeners();
     try {
       var state = await _relay.syncDSHWorkspaces(terminalId: terminalId);
-      _workspaceSyncState = state;
+      _catalog.workspaceSyncState = state;
       _notifyListeners();
       final commandId = state.commandId;
       for (
@@ -865,41 +854,41 @@ class SessionController extends ChangeNotifier {
         state.isPending &&
             commandId != null &&
             attempt < 20 &&
-            _workspaceSyncWaiting;
+            _catalog.workspaceSyncWaiting;
         attempt += 1
       ) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
-        if (!_workspaceSyncWaiting) break;
+        if (!_catalog.workspaceSyncWaiting) break;
         state = await _relay.getDSHWorkspaceSyncState(commandId);
-        _workspaceSyncState = state;
+        _catalog.workspaceSyncState = state;
         _notifyListeners();
       }
-      if (state.isSucceeded && _workspaceSyncWaiting) {
+      if (state.isSucceeded && _catalog.workspaceSyncWaiting) {
         await refreshWorkspaces();
         await refreshSessions();
-      } else if (state.isPending && _workspaceSyncWaiting) {
-        _workspaceErrorMessage =
+      } else if (state.isPending && _catalog.workspaceSyncWaiting) {
+        _catalog.workspaceErrorMessage =
             '同步请求仍在等待终端响应。请确认本机 Daemon 在线且支持 DSH 工作区同步，再下拉刷新查看结果。';
       }
       return state;
     } on RelayFailure catch (failure) {
-      _workspaceErrorMessage = failure.message;
-      _workspaceSyncState = const WorkspaceSyncState(status: 'failed');
-      return _workspaceSyncState;
+      _catalog.workspaceErrorMessage = failure.message;
+      _catalog.workspaceSyncState = const WorkspaceSyncState(status: 'failed');
+      return _catalog.workspaceSyncState;
     } catch (_) {
-      _workspaceErrorMessage = 'DSH 工作区同步暂时不可用，请稍后重试。';
-      _workspaceSyncState = const WorkspaceSyncState(status: 'failed');
-      return _workspaceSyncState;
+      _catalog.workspaceErrorMessage = 'DSH 工作区同步暂时不可用，请稍后重试。';
+      _catalog.workspaceSyncState = const WorkspaceSyncState(status: 'failed');
+      return _catalog.workspaceSyncState;
     } finally {
-      _workspaceSyncWaiting = false;
+      _catalog.workspaceSyncWaiting = false;
       _notifyListeners();
     }
   }
 
   /// 停止本地状态等待；Relay/Daemon 命令继续按原幂等键收口。
   void stopWaitingForDSHWorkspaceSync() {
-    if (!_workspaceSyncWaiting) return;
-    _workspaceSyncWaiting = false;
+    if (!_catalog.workspaceSyncWaiting) return;
+    _catalog.workspaceSyncWaiting = false;
     _notifyListeners();
   }
 
@@ -929,9 +918,9 @@ class SessionController extends ChangeNotifier {
         session.provider == 'dsh',
       ).toList(growable: false)..sort(MobileSession.compareByLastActivity);
     } on RelayFailure catch (failure) {
-      _workspaceErrorMessage = failure.message;
+      _catalog.workspaceErrorMessage = failure.message;
     } catch (_) {
-      _workspaceErrorMessage = '历史会话候选暂时不可用，请稍后重试。';
+      _catalog.workspaceErrorMessage = '历史会话候选暂时不可用，请稍后重试。';
     }
     _notifyListeners();
     return null;
@@ -945,8 +934,8 @@ class SessionController extends ChangeNotifier {
   }) async {
     if (!_ensureWriteAccess(canWrite: canWrite, deviceId: deviceId)) return null;
     if (!candidate.isHistoryCandidate || candidate.provider != 'dsh' ||
-        !_workspaces.any((workspace) => workspace.id == candidate.workspaceId && workspace.isDsh)) {
-      _workspaceErrorMessage = '请选择当前 DSH 工作区的历史候选。';
+        !_catalog.workspaces.any((workspace) => workspace.id == candidate.workspaceId && workspace.isDsh)) {
+      _catalog.workspaceErrorMessage = '请选择当前 DSH 工作区的历史候选。';
       _notifyListeners();
       return null;
     }
@@ -958,14 +947,14 @@ class SessionController extends ChangeNotifier {
             session.provider != 'dsh' || !session.isVisible) {
           throw const RelayFailure(RelayFailureKind.protocol, '历史会话接续响应无效。');
         }
-        _sessions = [session, ..._sessions.where((item) => item.id != session.id)]
+        _catalog.sessions = [session, ..._catalog.sessions.where((item) => item.id != session.id)]
           ..sort(MobileSession.compareByLastActivity);
-        _phase = SessionListPhase.ready;
+        _catalog.phase = SessionListPhase.ready;
         return session;
       },
     );
     if (managed == null) {
-      _workspaceErrorMessage = _errorMessage ?? '历史会话接续失败，请重试。';
+      _catalog.workspaceErrorMessage = _errorMessage ?? '历史会话接续失败，请重试。';
       _notifyListeners();
     }
     return managed;
@@ -979,7 +968,7 @@ class SessionController extends ChangeNotifier {
     if (!sessions.any((session) => session.workspaceId == workspaceId && session.provider == 'dsh')) return;
     final last = _dshAutoRefreshAt[workspaceId];
     if (last != null && _clock().difference(last) < dshAutoRefreshThrottle) return;
-    if (_workspaceImportWaiting) return;
+    if (_catalog.workspaceImportWaiting) return;
     _dshAutoRefreshAt[workspaceId] = _clock();
     await _runDSHImport(
       workspaceId: workspaceId,
@@ -999,22 +988,22 @@ class SessionController extends ChangeNotifier {
     // 只有用户显式浏览历史才 discover:true；自动刷新固定 false，不发现新历史。
     bool discover = false,
   }) async {
-    if (_workspaceImportWaiting) return _workspaceImportState;
+    if (_catalog.workspaceImportWaiting) return _catalog.workspaceImportState;
     final normalized = workspaceId.trim();
-    final workspace = _workspaces
+    final workspace = _catalog.workspaces
         .where((item) => item.id == normalized)
         .firstOrNull;
     if (workspace == null || !workspace.isDsh) {
       if (!silent) {
-        _workspaceErrorMessage = '只能从已同步的 DSH 工作区导入历史会话。';
+        _catalog.workspaceErrorMessage = '只能从已同步的 DSH 工作区导入历史会话。';
         _notifyListeners();
       }
       return null;
     }
-    _workspaceImportWaiting = true;
-    _workspaceImportWorkspaceId = normalized;
-    _workspaceImportState = null;
-    _workspaceErrorMessage = null;
+    _catalog.workspaceImportWaiting = true;
+    _catalog.workspaceImportWorkspaceId = normalized;
+    _catalog.workspaceImportState = null;
+    _catalog.workspaceErrorMessage = null;
     _notifyListeners();
     try {
       var state = await _relay.importDSHSessions(
@@ -1022,7 +1011,7 @@ class SessionController extends ChangeNotifier {
         terminalId: terminalId,
         discover: discover,
       );
-      _workspaceImportState = state;
+      _catalog.workspaceImportState = state;
       _notifyListeners();
       final commandId = state.commandId;
       for (
@@ -1030,51 +1019,51 @@ class SessionController extends ChangeNotifier {
         state.isPending &&
             commandId != null &&
             attempt < 20 &&
-            _workspaceImportWaiting;
+            _catalog.workspaceImportWaiting;
         attempt += 1
       ) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
-        if (!_workspaceImportWaiting) break;
+        if (!_catalog.workspaceImportWaiting) break;
         state = await _relay.getDSHImportState(commandId);
-        _workspaceImportState = state;
+        _catalog.workspaceImportState = state;
         _notifyListeners();
       }
-      if (state.isSucceeded && _workspaceImportWaiting) {
+      if (state.isSucceeded && _catalog.workspaceImportWaiting) {
         await refreshSessions();
       }
       return state;
     } on RelayFailure catch (failure) {
       // 静默刷新不发布失败状态/错误文案（手动入口保留完整报错）。
       if (!silent) {
-        _workspaceErrorMessage = failure.message;
-        _workspaceImportState = const WorkspaceImportState(status: 'failed');
+        _catalog.workspaceErrorMessage = failure.message;
+        _catalog.workspaceImportState = const WorkspaceImportState(status: 'failed');
       }
-      return _workspaceImportState;
+      return _catalog.workspaceImportState;
     } catch (_) {
       if (!silent) {
-        _workspaceErrorMessage = '历史 DSH 会话导入暂时不可用，请稍后重试。';
-        _workspaceImportState = const WorkspaceImportState(status: 'failed');
+        _catalog.workspaceErrorMessage = '历史 DSH 会话导入暂时不可用，请稍后重试。';
+        _catalog.workspaceImportState = const WorkspaceImportState(status: 'failed');
       }
-      return _workspaceImportState;
+      return _catalog.workspaceImportState;
     } finally {
-      _workspaceImportWaiting = false;
+      _catalog.workspaceImportWaiting = false;
       _notifyListeners();
     }
   }
 
   /// 停止客户端等待而不取消已投递的 import 命令。
   void stopWaitingForDSHImport() {
-    if (!_workspaceImportWaiting) return;
-    _workspaceImportWaiting = false;
+    if (!_catalog.workspaceImportWaiting) return;
+    _catalog.workspaceImportWaiting = false;
     _notifyListeners();
   }
 
   bool get selectedWorkspaceDeleted {
     final workspaceId = selectedSession?.workspaceId;
-    if (workspaceId == null || _workspacePhase != WorkspaceListPhase.ready) {
+    if (workspaceId == null || _catalog.workspacePhase != WorkspaceListPhase.ready) {
       return false;
     }
-    return !_workspaces.any((workspace) => workspace.id == workspaceId);
+    return !_catalog.workspaces.any((workspace) => workspace.id == workspaceId);
   }
 
   Future<MobileWorkspace?> createWorkspaceFromDirectory({
@@ -1088,7 +1077,7 @@ class SessionController extends ChangeNotifier {
     }
     final root = canonicalRoot.trim();
     if (root.isEmpty) {
-      _workspaceErrorMessage = '没有选择工作区目录。';
+      _catalog.workspaceErrorMessage = '没有选择工作区目录。';
       _notifyListeners();
       return null;
     }
@@ -1105,15 +1094,15 @@ class SessionController extends ChangeNotifier {
       ),
     );
     if (created != null) {
-      _workspaces = [
+      _catalog.workspaces = [
         created,
-        ..._workspaces.where((workspace) => workspace.id != created.id),
+        ..._catalog.workspaces.where((workspace) => workspace.id != created.id),
       ];
-      _workspacePhase = WorkspaceListPhase.ready;
-      _workspaceErrorMessage = null;
+      _catalog.workspacePhase = WorkspaceListPhase.ready;
+      _catalog.workspaceErrorMessage = null;
       _notifyListeners();
     } else {
-      _workspaceErrorMessage = _errorMessage ?? '工作区创建失败，请重新选择目录。';
+      _catalog.workspaceErrorMessage = _errorMessage ?? '工作区创建失败，请重新选择目录。';
       _notifyListeners();
     }
     return created;
@@ -1139,14 +1128,14 @@ class SessionController extends ChangeNotifier {
     try {
       input.validate();
     } on RelayFailure catch (failure) {
-      _workspaceErrorMessage = failure.message;
+      _catalog.workspaceErrorMessage = failure.message;
       _notifyListeners();
       return null;
     }
     final normalizedName = name.trim();
     // workspace.create 是异步 Terminal 命令；显式暴露 settling 状态让页面禁用
     // 重复点击，并让回归测试能区分 pending 与已完成投影。
-    _workspaceSettling = true;
+    _catalog.workspaceSettling = true;
     _notifyListeners();
     try {
       final created = await _runAction<MobileWorkspace?>(
@@ -1161,8 +1150,8 @@ class SessionController extends ChangeNotifier {
                 'Relay 未返回工作区创建命令标识。',
               );
             }
-            _pendingWorkspaceCommandId = commandID;
-            _pendingWorkspaceId = state.workspaceId;
+            _catalog.pendingWorkspaceCommandId = commandID;
+            _catalog.pendingWorkspaceId = state.workspaceId;
             _notifyListeners();
             // Daemon 创建目录是异步的；有限次轮询避免网络异常时永久占住 UI。
             for (var attempt = 0; attempt < 40 && state.isPending; attempt++) {
@@ -1180,7 +1169,7 @@ class SessionController extends ChangeNotifier {
           var workspace = state.workspace;
           if (workspace == null) {
             await refreshWorkspaces();
-            workspace = _workspaces
+            workspace = _catalog.workspaces
                 .where((item) => item.id == state.workspaceId)
                 .firstOrNull;
           }
@@ -1190,23 +1179,23 @@ class SessionController extends ChangeNotifier {
               'Relay 已完成工作区创建，但未返回工作区。',
             );
           }
-          _workspaces = [
+          _catalog.workspaces = [
             workspace,
-            ..._workspaces.where((item) => item.id != workspace!.id),
+            ..._catalog.workspaces.where((item) => item.id != workspace!.id),
           ];
-          _workspacePhase = WorkspaceListPhase.ready;
-          _workspaceErrorMessage = null;
+          _catalog.workspacePhase = WorkspaceListPhase.ready;
+          _catalog.workspaceErrorMessage = null;
           return workspace;
         },
       );
       if (created == null && _errorMessage != null) {
-        _workspaceErrorMessage = _errorMessage;
+        _catalog.workspaceErrorMessage = _errorMessage;
       }
       return created;
     } finally {
-      _pendingWorkspaceCommandId = null;
-      _pendingWorkspaceId = null;
-      _workspaceSettling = false;
+      _catalog.pendingWorkspaceCommandId = null;
+      _catalog.pendingWorkspaceId = null;
+      _catalog.workspaceSettling = false;
       _notifyListeners();
     }
   }
@@ -1238,13 +1227,13 @@ class SessionController extends ChangeNotifier {
         ? const SessionComposerSessionState.empty()
         : composerStateFor(sourceSessionId);
     final sourceAttachments = List<AttachmentTransfer>.of(_attachments);
-    _pendingWorkspaceId = normalized;
-    _workspaceSettling = true;
-    _workspaceErrorMessage = null;
+    _catalog.pendingWorkspaceId = normalized;
+    _catalog.workspaceSettling = true;
+    _catalog.workspaceErrorMessage = null;
     _notifyListeners();
     try {
       MobileSession? target;
-      for (final session in _sessions) {
+      for (final session in _catalog.sessions) {
         if (session.workspaceId == normalized &&
             session.status == MobileSessionStatus.idle &&
             session.lastSequence <= 1) {
@@ -1269,7 +1258,7 @@ class SessionController extends ChangeNotifier {
       if (sourceSessionId != null && sourceSessionId != target.id) {
         if (sourceAttachments.any((item) => item.draft.isImage) &&
             _controls.imageLimits == null) {
-          _workspaceErrorMessage = '目标会话未声明图片接收能力，源草稿和图片已保留。';
+          _catalog.workspaceErrorMessage = '目标会话未声明图片接收能力，源草稿和图片已保留。';
           await _loadSelectedSession(sourceSessionId);
           return null;
         }
@@ -1289,8 +1278,8 @@ class SessionController extends ChangeNotifier {
       }
       return target;
     } finally {
-      _pendingWorkspaceId = null;
-      _workspaceSettling = false;
+      _catalog.pendingWorkspaceId = null;
+      _catalog.workspaceSettling = false;
       _notifyListeners();
     }
   }
@@ -1310,18 +1299,18 @@ class SessionController extends ChangeNotifier {
     final normalizedWorkspaceId = workspaceId.trim();
     final normalizedProvider = provider.trim();
     if (normalizedWorkspaceId.isEmpty || normalizedProvider.isEmpty) {
-      _workspaceErrorMessage = '工作区或 Provider 无效，无法创建会话。';
+      _catalog.workspaceErrorMessage = '工作区或 Provider 无效，无法创建会话。';
       _notifyListeners();
       return null;
     }
     if (normalizedProvider.toLowerCase() == 'dsh' &&
-        !_workspaces.any(
+        !_catalog.workspaces.any(
           (workspace) =>
               workspace.id == normalizedWorkspaceId && workspace.isDsh,
         )) {
       // UI 只能在 DSH Workspace detail 调用此路径。客户端提前拒绝错误归属，
       // Relay 仍会以 origin/home Terminal/capability fence 作为最终授权判断。
-      _workspaceErrorMessage = 'DSH 会话必须在已同步的 DSH 工作区内创建。';
+      _catalog.workspaceErrorMessage = 'DSH 会话必须在已同步的 DSH 工作区内创建。';
       _notifyListeners();
       return null;
     }
@@ -1335,12 +1324,12 @@ class SessionController extends ChangeNotifier {
           agentPresetId: agentPresetId,
         ),
       );
-      _sessions = [
+      _catalog.sessions = [
         created,
-        ..._sessions.where((item) => item.id != created.id),
+        ..._catalog.sessions.where((item) => item.id != created.id),
       ];
-      _phase = SessionListPhase.ready;
-      if (!_workspaces.any(
+      _catalog.phase = SessionListPhase.ready;
+      if (!_catalog.workspaces.any(
         (workspace) => workspace.id == created.workspaceId,
       )) {
         await refreshWorkspaces();
@@ -2438,7 +2427,7 @@ class SessionController extends ChangeNotifier {
           deviceId: deviceId!,
         ),
       );
-      _sessions = [child, ..._sessions.where((item) => item.id != child.id)];
+      _catalog.sessions = [child, ..._catalog.sessions.where((item) => item.id != child.id)];
       if (_selectedSessionId == sessionId) {
         final snapshot = await _relay.getSessionSnapshot(
           sessionId,
@@ -4367,9 +4356,9 @@ class SessionController extends ChangeNotifier {
             snapshot.session.status == MobileSessionStatus.streaming
         ? snapshot.session.copyWith(status: MobileSessionStatus.idle)
         : snapshot.session;
-    _sessions = [
+    _catalog.sessions = [
       session,
-      ..._sessions.where((item) => item.id != snapshot.session.id),
+      ..._catalog.sessions.where((item) => item.id != snapshot.session.id),
     ];
     // v0.8.6 A①：终态事实优先于本地超时提示——迟到的 daemon 看门狗事件或
     // Provider 终态到达时，按事件校正、清除本地"回合超时"标记。
@@ -4525,7 +4514,7 @@ class SessionController extends ChangeNotifier {
 
   MobileSession? _sessionById(String? sessionId) {
     if (sessionId == null) return null;
-    for (final session in _sessions) {
+    for (final session in _catalog.sessions) {
       if (session.id == sessionId) return session;
     }
     return null;
@@ -4681,10 +4670,10 @@ class SessionController extends ChangeNotifier {
     _quietReconcileTimer = null;
     _stopSessionEventTransport();
     _clearSelection();
-    _sessions = const [];
-    _phase = SessionListPhase.loading;
-    _workspaces = const [];
-    _workspacePhase = WorkspaceListPhase.loading;
+    _catalog.sessions = const [];
+    _catalog.phase = SessionListPhase.loading;
+    _catalog.workspaces = const [];
+    _catalog.workspacePhase = WorkspaceListPhase.loading;
     _capabilities = CapabilityMatrix.empty;
     _capabilitiesFetchedAt = null;
     _notifyListeners();
