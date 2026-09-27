@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yubi233/agent-sessions/internal/authz"
+	"github.com/yubi233/agent-sessions/internal/daemon"
 	"github.com/yubi233/agent-sessions/internal/domain"
 	"github.com/yubi233/agent-sessions/internal/id"
 	"github.com/yubi233/agent-sessions/internal/store"
@@ -28,6 +29,9 @@ type testEnv struct {
 // newTestEnv 打开隔离库并装配完整路由。
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	// -race/慢 CI 下，daemon 事件 outbox 的一次瞬态 500（SQLite 写竞争）按缺省
+	// 30s 退避会把重放推出测试等待窗；收紧测试进程的退避起点，生产口径不变。
+	daemon.SetRelayEventRetryBaseMSForTest(250)
 	path := filepath.Join(t.TempDir(), "relay.db")
 	db, err := store.Open(path)
 	if err != nil {

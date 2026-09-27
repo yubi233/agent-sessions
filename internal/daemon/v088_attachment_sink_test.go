@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
@@ -209,10 +210,14 @@ func TestV088AttachmentSinkFailClosedBranches(t *testing.T) {
 		t.Fatalf("marshal projection: %v", err)
 	}
 
-	var served []byte
+	// served 供 httptest handler goroutine 读取、测试 goroutine 切换用例载荷；
+	// 两侧无其他同步点，必须走 atomic（-race 抓到的真实竞争）。
+	var served atomic.Value // []byte
 	s, runner, fake, server := newAttachmentSinkFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(served)
+		if payload, ok := served.Load().([]byte); ok {
+			_, _ = w.Write(payload)
+		}
 	})
 	serverURL := server.URL
 	seedSessionDEK(t, s, sessionID, dekBytes)
@@ -246,7 +251,7 @@ func TestV088AttachmentSinkFailClosedBranches(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			served = tc.serving
+			served.Store(tc.serving)
 			err := runner.ConsumeCommand(context.Background(), sendWithRef(tc.refSHA, tc.refSize))
 			if err == nil {
 				t.Fatalf("%s 应 fail-closed 拒绝", tc.name)
@@ -268,13 +273,13 @@ func TestV088AttachmentSinkFailClosedBranches(t *testing.T) {
 	// DEK 缺失分支：未播种 DEK 的会话，生产 sink 必须直接失败（errSessionDEKUnavailable）。
 	// 用可达端点保证失败发生在 DEK 检查而非 HTTP 层。
 	loop := NewRelayLoop(s, &RelayClient{BaseURL: serverURL, AccessToken: "t"}, nil, FixtureEventEncoder{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	served = mustMarshal(t, AttachmentFetchProjection{
+	served.Store(mustMarshal(t, AttachmentFetchProjection{
 		AttachmentID: "att_x",
 		MimeType:     "image/png",
 		ByteSize:     1,
 		TotalChunks:  1,
 		Chunks:       [][]byte{chunkCiphertext},
-	})
+	}))
 	if _, err := loop.fetchAndOpenAttachment(context.Background(), "sess-no-dek", "att_x"); !errors.Is(err, errSessionDEKUnavailable) {
 		t.Fatalf("DEK 缺失应返回 errSessionDEKUnavailable，得到 %v", err)
 	}

@@ -1092,14 +1092,29 @@ func (s *Store) generationLocked() (string, error) {
 	return value, err
 }
 
-// relayEventRetry 常量定义事件 outbox 的重试上限与指数退避窗口。
-// base 30 秒、按 2 的幂增长、封顶 15 分钟；达到 maxRelayEventAttempts 后转入 failed
-// 长期保留，由 RequeueFailedRelayEvents 恢复入口重新入队，绝不静默删除。
+// 事件 outbox 重试上限与指数退避窗口：base 缺省 30 秒、按 2 的幂增长、封顶
+// 15 分钟；达到 maxRelayEventAttempts 后转入 failed 长期保留，由
+// RequeueFailedRelayEvents 恢复入口重新入队，绝不静默删除。
 const (
-	relayEventRetryBaseMS = int64(30 * time.Second / time.Millisecond)
-	relayEventRetryCapMS  = int64(15 * time.Minute / time.Millisecond)
-	maxRelayEventAttempts = 8
+	defaultRelayEventRetryBaseMS = int64(30 * time.Second / time.Millisecond)
+	relayEventRetryCapMS         = int64(15 * time.Minute / time.Millisecond)
+	maxRelayEventAttempts        = 8
 )
+
+// relayEventRetryBaseMS 是退避起点的运行期值。测试（尤其 -race/慢 CI 环境）可经
+// SetRelayEventRetryBaseMSForTest 收紧：否则一次瞬态 500（如 SQLite 写竞争）会把
+// 重放推到 30s 退避之外，测试的有限等待窗必然失败。生产不调用该钩子，口径不变。
+var relayEventRetryBaseMS = defaultRelayEventRetryBaseMS
+
+// SetRelayEventRetryBaseMSForTest 仅供测试收紧退避起点；ms<=0 视为恢复缺省。
+// 只影响 next_attempt_at 的排程，不改变重试上限、封顶与 failed 语义。
+func SetRelayEventRetryBaseMSForTest(ms int64) {
+	if ms <= 0 {
+		relayEventRetryBaseMS = defaultRelayEventRetryBaseMS
+		return
+	}
+	relayEventRetryBaseMS = ms
+}
 
 // relayEventBackoffMS 计算第 attempts 次失败后的退避毫秒数。
 func relayEventBackoffMS(attempts int) int64 {

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -574,15 +575,17 @@ func TestV089OutboxRetryClassificationMatrix(t *testing.T) {
 	}
 
 	// 可切换结果的上传端点：status 码 / 强制断连 / ctx 超时由调用方控制。
-	var status int
-	var dropConnection bool
+	// status/dropConnection 由测试 goroutine 切换、httptest handler goroutine 读取，
+	// 两侧无其他同步点，必须走 atomic（-race 抓到的真实竞争）。
+	var status atomic.Int32
+	var dropConnection atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if dropConnection {
+		if dropConnection.Load() {
 			// 直接断开：客户端得到网络层错误（RELAY_NETWORK 分类）。
 			panic(http.ErrAbortHandler)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
+		w.WriteHeader(int(status.Load()))
 		_, _ = io.WriteString(w, `{"code":"X"}`)
 	}))
 	defer server.Close()
@@ -616,7 +619,7 @@ func TestV089OutboxRetryClassificationMatrix(t *testing.T) {
 
 	// 1) 永久业务拒绝（4xx 除 429）→ failed/RELAY_REJECTED_PERMANENT，不占退避队列。
 	seed("evt-cls-poison")
-	status = http.StatusBadRequest
+	status.Store(int32(http.StatusBadRequest))
 	flushOne("evt-cls-poison")
 	if row := snapshotRow("evt-cls-poison"); row.Status != "failed" || row.LastError != relayEventPermanentReject {
 		t.Fatalf("400 must be permanent poison: %+v", row)
@@ -624,7 +627,7 @@ func TestV089OutboxRetryClassificationMatrix(t *testing.T) {
 
 	// 2) 429 → pending + 尝试记账 + 有界退避（限流可自愈）。
 	seed("evt-cls-429")
-	status = http.StatusTooManyRequests
+	status.Store(int32(http.StatusTooManyRequests))
 	flushOne("evt-cls-429")
 	if row := snapshotRow("evt-cls-429"); row.Status != "pending" || row.Attempts != 1 || row.NextAttemptAt <= 0 {
 		t.Fatalf("429 must stay pending with backoff: %+v", row)
@@ -632,7 +635,7 @@ func TestV089OutboxRetryClassificationMatrix(t *testing.T) {
 
 	// 3) 5xx → pending + 尝试记账（服务端瞬态故障）。
 	seed("evt-cls-5xx")
-	status = http.StatusInternalServerError
+	status.Store(int32(http.StatusInternalServerError))
 	flushOne("evt-cls-5xx")
 	if row := snapshotRow("evt-cls-5xx"); row.Status != "pending" || row.Attempts != 1 {
 		t.Fatalf("5xx must stay pending with attempts: %+v", row)
@@ -640,9 +643,9 @@ func TestV089OutboxRetryClassificationMatrix(t *testing.T) {
 
 	// 4) 网络断开 → pending + RELAY_NETWORK 脱敏分类。
 	seed("evt-cls-net")
-	dropConnection = true
+	dropConnection.Store(true)
 	flushOne("evt-cls-net")
-	dropConnection = false
+	dropConnection.Store(false)
 	if row := snapshotRow("evt-cls-net"); row.Status != "pending" || row.LastError != "RELAY_NETWORK" {
 		t.Fatalf("network error must be classified RELAY_NETWORK: %+v", row)
 	}

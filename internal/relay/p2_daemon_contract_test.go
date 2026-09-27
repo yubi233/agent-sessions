@@ -929,17 +929,28 @@ func TestP2RelayDaemonRestartReplaysCommittedEventOutbox(t *testing.T) {
 	go func() { recoveryDone <- recoveryLoop.RunWithRetry(recoveryCtx) }()
 	waitP2EventOutboxEmpty(t, reopened)
 
-	events, err := env.repo.ListEventsAfter(t.Context(), sessionID, 0)
-	if err != nil {
-		cancelRecovery()
-		<-recoveryDone
-		t.Fatalf("list replayed events: %v", err)
-	}
-	messageDeltas := 0
-	for _, event := range events {
-		if event.EventType == "message.delta" {
-			messageDeltas++
+	// 幂等重放断言带 5s 有界轮询：outbox 已排空而查询尚看不到事件的调度滞后
+	// （-race/满载偶发）不应误报；一旦看到 >=2 条立即判失败（重复入库才是
+	// 本用例要抓的缺陷）。超限时打印当前计数便于归因。
+	var messageDeltas int
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		events, err := env.repo.ListEventsAfter(t.Context(), sessionID, 0)
+		if err != nil {
+			cancelRecovery()
+			<-recoveryDone
+			t.Fatalf("list replayed events: %v", err)
 		}
+		messageDeltas = 0
+		for _, event := range events {
+			if event.EventType == "message.delta" {
+				messageDeltas++
+			}
+		}
+		if messageDeltas >= 1 || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 	if messageDeltas != 1 {
 		cancelRecovery()
@@ -1149,7 +1160,9 @@ func waitP2TransportDrop(t *testing.T, transport *p2DropCommittedResponseTranspo
 }
 
 func newP2RecoveryLoop(local *daemon.Store, baseURL, token string, runner *daemon.SessionRunner, client *http.Client) *daemon.RelayLoop {
-	loop := daemon.NewRelayLoop(local, &daemon.RelayClient{BaseURL: baseURL, AccessToken: token, HTTPClient: client}, runner, daemon.FixtureEventEncoder{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// Logger 用默认 stderr：go test 仅在失败时输出，正好用于归因偶发的
+	// 上传 500 / 网络错误（此前 io.Discard 会把 500 的 body 证据吞掉）。
+	loop := daemon.NewRelayLoop(local, &daemon.RelayClient{BaseURL: baseURL, AccessToken: token, HTTPClient: client}, runner, daemon.FixtureEventEncoder{}, slog.Default())
 	loop.DaemonVersion = "p2-recovery-fixture"
 	loop.Hostname = "p2-recovery-host"
 	loop.Platform = "test"
@@ -1266,7 +1279,8 @@ func waitP2LocalCommandResult(t *testing.T, local *daemon.Store, commandID, expe
 
 func waitP2EventOutboxEmpty(t *testing.T, local *daemon.Store) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// 8s：-race 与满载下，单次瞬态 5xx + 退避重排需要额外余量（v0.9.7 同类时序窗口径）。
+	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		events, err := local.PendingRelayEvents()
 		if err == nil && len(events) == 0 {
@@ -1542,13 +1556,44 @@ func opaqueFixtureEnvelope(ciphertext string) map[string]any {
 	}
 }
 
+// sseRecorder 是并发安全的响应记录器：SSE handler 在独立 goroutine 持续写入，
+// 测试 goroutine 需要轮询已到达的事件帧；httptest.ResponseRecorder 内部的
+// bytes.Buffer 非并发安全（-race 全量抓到的真实竞争），写入与读取必须统一持锁。
+// 只实现 SSE 路径实际用到的接口面（Header/Write/WriteHeader/Flush）。
+type sseRecorder struct {
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	head http.Header
+}
+
+func newSSERecorder() *sseRecorder { return &sseRecorder{head: http.Header{}} }
+
+func (r *sseRecorder) Header() http.Header { return r.head }
+
+func (r *sseRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Write(p)
+}
+
+func (r *sseRecorder) WriteHeader(statusCode int) {}
+
+// Flush 实现 http.Flusher（gin SSE 路径会断言并调用）；帧写入已由 Write 持锁。
+func (r *sseRecorder) Flush() {}
+
+func (r *sseRecorder) body() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.String()
+}
+
 func streamDaemonOnce(t *testing.T, env *testEnv, token string, after int64) string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/v1/daemon/commands/stream?after_delivery_seq="+strconv.FormatInt(after, 10), nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+token)
-	recorder := httptest.NewRecorder()
+	recorder := newSSERecorder()
 	done := make(chan struct{})
 	go func() {
 		env.router.ServeHTTP(recorder, req)
@@ -1556,7 +1601,7 @@ func streamDaemonOnce(t *testing.T, env *testEnv, token string, after int64) str
 	}()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		body := recorder.Body.String()
+		body := recorder.body()
 		if after > 0 || strings.Contains(body, "event: command") {
 			cancel()
 			<-done
@@ -1566,7 +1611,7 @@ func streamDaemonOnce(t *testing.T, env *testEnv, token string, after int64) str
 	}
 	cancel()
 	<-done
-	return recorder.Body.String()
+	return recorder.body()
 }
 
 // streamAccountUntil 只用于 account SSE 的 replay 断言。它使用可取消请求，不以任意 sleep 作为
@@ -1577,7 +1622,7 @@ func streamAccountUntil(t *testing.T, env *testEnv, token, expected string) stri
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/v1/events?after_seq=0", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+token)
-	recorder := httptest.NewRecorder()
+	recorder := newSSERecorder()
 	done := make(chan struct{})
 	go func() {
 		env.router.ServeHTTP(recorder, req)
@@ -1585,7 +1630,7 @@ func streamAccountUntil(t *testing.T, env *testEnv, token, expected string) stri
 	}()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		body := recorder.Body.String()
+		body := recorder.body()
 		if strings.Contains(body, expected) {
 			cancel()
 			<-done
@@ -1595,7 +1640,7 @@ func streamAccountUntil(t *testing.T, env *testEnv, token, expected string) stri
 	}
 	cancel()
 	<-done
-	return recorder.Body.String()
+	return recorder.body()
 }
 
 func initP2GitWorkspace(t *testing.T, root string) {

@@ -42,7 +42,7 @@ func TestV06DeviceRevocationClosesActiveDaemonSSE(t *testing.T) {
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/v1/daemon/commands/stream?after_delivery_seq=0", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+terminal.AccessToken)
-	recorder := httptest.NewRecorder()
+	recorder := newSSERecorder()
 	done := make(chan struct{})
 	go func() {
 		env.router.ServeHTTP(recorder, req)
@@ -52,13 +52,13 @@ func TestV06DeviceRevocationClosesActiveDaemonSSE(t *testing.T) {
 	// 等待首条投递写出（证明流已建立）。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(recorder.Body.String(), "event: command") {
+		if strings.Contains(recorder.body(), "event: command") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(recorder.Body.String(), "event: command") {
-		t.Fatalf("stream did not deliver initial command: %s", recorder.Body.String())
+	if !strings.Contains(recorder.body(), "event: command") {
+		t.Fatalf("stream did not deliver initial command: %s", recorder.body())
 	}
 
 	// 撤销设备：流必须在远小于客户端超时的时间内被服务端关闭。
