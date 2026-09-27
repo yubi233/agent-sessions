@@ -250,13 +250,18 @@ type permissionCall struct {
 func newFakeHandle(id string) *fakeHandle {
 	h := &fakeHandle{id: id, events: make(chan adapter.Event, 16), done: make(chan struct{})}
 	// fixture：首个事件是 turn_started 并携带 instance_id，随后是 message_delta。
+	// close(h.events) 必须与 emit 的发送在同一把 mu 下互斥：v0.8.5 后异步 send 的
+	// emit 可能晚于 Dispose 到达，裸 close 会与之构成数据竞争（-race 在 V089 用例
+	// 抓到）甚至 "send on closed channel" panic。
 	go func() {
-		defer close(h.events)
 		h.emit(adapter.Event{Type: adapter.EventTurnStarted, Seq: 1,
 			Payload: map[string]any{"instance_id": id}})
 		h.emit(adapter.Event{Type: adapter.EventMessageDelta, Seq: 2,
 			Payload: map[string]any{"text": "fixture delta"}})
 		<-h.done
+		h.mu.Lock()
+		close(h.events)
+		h.mu.Unlock()
 	}()
 	return h
 }
@@ -384,6 +389,12 @@ func (h *fakeHandle) CallExtension(ctx context.Context, method string, params ma
 }
 
 func (h *fakeHandle) emit(ev adapter.Event) {
+	// 与 close(h.events) 互斥（同一把 mu）：emit 持锁期间 close 不可能发生，
+	// select 的发送分支因此永远不会命中已关闭通道（否则会 panic）。done 分支
+	// 必须保留——它是"阻塞中撤防"的逃生口：一次性预检 done 再裸发送，会在
+	// 缓冲写满且无人消费时死锁（V086 看门狗用例依赖该语义）。
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	select {
 	case h.events <- ev:
 	case <-h.done:

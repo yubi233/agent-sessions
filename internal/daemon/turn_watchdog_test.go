@@ -206,10 +206,10 @@ func TestV086TurnWatchdogResetByStreamingEvents(t *testing.T) {
 	}
 
 	// 终态事件撤防：之后的长沉默不再触发看门狗。
-	handle.mu.Lock()
+	// emit 现已内部持 handle.mu（与 close(events) 互斥），外部不得再包一层锁
+	// （非重入互斥锁会自死锁）。
 	handle.emit(adapter.Event{Type: adapter.EventTurnCompleted, Seq: 500,
 		Payload: map[string]any{"instance_id": "s1", "stop_reason": "end_turn"}})
-	handle.mu.Unlock()
 	waitDisarmed(t, runner, "s1")
 	if sink.hasWatchdogTerminal() {
 		t.Fatal("终态撤防后看门狗不得再触发")

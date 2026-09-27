@@ -12,30 +12,51 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/adapter"
 )
 
+// syncBuffer 是并发安全的日志缓冲：daemon 事件泵 goroutine 经 slog 写入、
+// 测试 goroutine 经 waitForSummary 轮询读取；bytes.Buffer 本身非并发安全，
+// 两侧必须持同一把锁（-race 在 V087 摘要用例抓到的真实竞争）。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // newV087SummaryRunner 建一台带捕获日志的 runner（断言摘要 Info 的内容与次数）。
-func newV087SummaryRunner(t *testing.T) (*SessionRunner, *fakeAdapter, *bytes.Buffer) {
+func newV087SummaryRunner(t *testing.T) (*SessionRunner, *fakeAdapter, *syncBuffer) {
 	t.Helper()
 	s, err := OpenStore(filepath.Join(t.TempDir(), "daemon.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	var buf bytes.Buffer
+	buf := &syncBuffer{}
 	fake := newFakeAdapter("opencode")
 	runner := NewSessionRunner(s, map[string]adapter.Adapter{"opencode": fake},
-		slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { _ = runner.Close(context.Background()) })
-	return runner, fake, &buf
+	return runner, fake, buf
 }
 
 // waitForSummary 轮询日志缓冲直到谓词命中或超时，返回当前全文。
-func waitForSummary(t *testing.T, buf *bytes.Buffer, predicate func(string) bool) string {
+func waitForSummary(t *testing.T, buf *syncBuffer, predicate func(string) bool) string {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
