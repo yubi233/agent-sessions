@@ -10,6 +10,7 @@ import '../ui/pairing_scanner.dart';
 import '../ui/recent_sessions_screens.dart';
 import '../ui/screens.dart';
 import '../ui/session_info_screens.dart';
+import '../ui/session_home_screens.dart';
 import '../ui/session_screens.dart';
 import '../ui/settings_screens.dart';
 import '../ui/terminal_status_screens.dart';
