@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-当前仓库包含 Go Relay/Daemon、Vue 只读客户端、Flutter Android 客户端、协议/密码学向量与 SQLite 本地基线。v0.4 已完成 P0 事实/ADR/测试契约与 P1 设计系统基线；P2 已实现受限 Relay-Daemon REST/SSE fixture 切片，仍不能把 fixture、局部 CLI 或历史报告表述为完整远程控制能力。
+当前仓库包含 Go Relay/Daemon、Vue 只读客户端、Flutter Android 客户端、协议/密码学向量与 SQLite 本地基线。迭代已推进到 v0.9.7（2026-09 收尾）：v0.9.6 交付 DSH 历史默认隔离与显式接续入口；v0.9.7 完成桥可用性预检与补丁入库（`tools/dsh-bridge-patches/`）、CI 静态门与协议生成物漂移 job、无人值守运行与数据生命周期收口，CI 恢复绿色。当前口径仍以本地/受限真实链路为主，不能把 fixture、局部 CLI 或历史报告表述为完整远程控制能力；逐版本事实以[项目文档](docs/zh/项目文档.md)为准。
 
 以下文档是当前实现和后续迭代的事实来源：
 
@@ -15,13 +15,11 @@
 - [测试套件索引](docs/test/测试套件索引.json)：唯一测试 ID 归属、依赖和真实上游 gate 约束。
 - [基础验收用例](docs/test/基础验收用例.json)：跨项目关键用户旅程用例。
 - [架构决策记录](docs/adr/)：协议、安全、会话和适配器等不可随意改变的设计决策。
-- [v0.1 迭代计划](docs/zh/迭代计划/迭代计划v0.1.md)：Android 完整会话控制、Delegation 与发布门禁的本轮范围。
-- [v0.2 迭代计划](docs/zh/迭代计划/迭代计划v0.2.md)：Android 会话能力对齐 Happy Mobile，以及 OpenCode 真实 transport。
-- [v0.1 实施记录](docs/zh/实施记录/06-v0.1-Android完整会话控制.md)：分阶段 todo、测试矩阵、命令证据和提交记录。
-- [Happy Mobile 对比与 OpenCode 验证](docs/zh/实施记录/07-HappyMobile功能对比与OpenCode验证.md)：固定上游版本的功能矩阵、真实模型 smoke 与 Provider transport 缺口。
-- [v0.2 实施记录](docs/zh/实施记录/08-v0.2-Android会话能力对齐Happy.md)：会话快捷操作、文件浏览、composer 控制面与 transport 兑现。
-- [v0.4 迭代计划](docs/zh/迭代计划/迭代计划v0.4.md)：Happy 核心行为复刻、跨端 Apple HIG 启发 UI 与分阶段 gate。
-- [v0.4 实施记录](docs/zh/实施记录/10-v0.4-Happy核心复刻与Apple风格UI.md)：当前阶段 TODO、事实结论、命令证据与残余风险。
+- [v0.9.5 迭代计划](docs/zh/迭代计划/迭代计划v0.9.5.md)：DSH 会话接续完整化——全局会话续聊、增量同步与历史导入。
+- [实施记录 35（v0.9.5）](docs/zh/实施记录/35-v0.9.5-DSH会话接续完整化.md)：真实模型续聊旅程与残余风险。
+- [实施记录 36（v0.9.6）](docs/zh/实施记录/36-DSH历史默认隔离与同源去重.md)：DSH 历史默认隔离、origin/visibility 与同源去重。
+- [v0.9.7 迭代计划](docs/zh/迭代计划/迭代计划v0.9.7.md)：长期稳定运行硬化。
+- [实施记录 37（v0.9.7）](docs/zh/实施记录/37-v0.9.7-长期稳定运行硬化.md)：桥可用性预检、CI 静态门与稳定性演练。
 
 ## 目标边界
 
