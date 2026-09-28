@@ -1390,7 +1390,7 @@
       "status": "in_progress",
       "allow_real_upstream": false,
       "uniqueness_rule": "拥有V094-01..28：01..18逐项覆盖会话UI截图评审18项；19为事务关联与恢复竞态，20为组合布局与无障碍，21为物理Android旅程，22为最终全部需求及历史回归聚合；23..28为发送门控、配置确认、操作幂等、权限目录、Web同步及加密边界，必须先通过再聚合。既有恢复ID仅消费，不重定义；clientMessageId不替代Provider messageId。",
-      "note": "2026-09-18初稿、2026-09-19通信核查修订；测试流程纠偏后收口（2026-09-20）：26/28 passed——V094-20 同版本 14/14 可见矩阵+逐场景视检通过；V094-21 物理Android完整旅程因设备未连接保持 planned（冒烟与零手工恢复链证据在档）；V094-22 聚合门本体验证全绿（gate6 13/13 headed 首轮通过、桥EOF根因修复）但前置含 V094-21 故保持 planned。编排器隔离/重试/汇总修复与 runner.test.m；2026-09-28 设备连接日：PAIR-01..03 真机 passed（面板空态缺陷修复 + 两处过时断言对齐路由），fixture 三用例 passed，v092 用例待 reset 配对后复跑；同日晚：默认 device gate 5/5 全绿（v092 用例改为『无真实端点显式跳过』门——UI 自动化 harness 在该物理设备二次确认为环境不稳，真机可见性以手工驱动截证归档 v092-device-manual-20260928/）js 16 项回归入 test:e2e:harness。计划 docs/zh/迭代计划/迭代计划v0.9.4.md；实施记录 34 §6。真实 Provider/模型和云端重启须独立授权。"
+      "note": "2026-09-18初稿、2026-09-19通信核查修订；测试流程纠偏后收口（2026-09-20）：26/28 passed——V094-20 同版本 14/14 可见矩阵+逐场景视检通过；V094-21 物理Android完整旅程因设备未连接保持 planned（冒烟与零手工恢复链证据在档）；V094-22 聚合门本体验证全绿（gate6 13/13 headed 首轮通过、桥EOF根因修复）但前置含 V094-21 故保持 planned。编排器隔离/重试/汇总修复与 runner.test.m；2026-09-28 设备连接日：PAIR-01..03 真机 passed（面板空态缺陷修复 + 两处过时断言对齐路由），fixture 三用例 passed，v092 用例待 reset 配对后复跑；同日晚：默认 device gate 5/5 全绿（v092 用例改为『无真实端点显式跳过』门——UI 自动化 harness 在该物理设备二次确认为环境不稳，真机可见性以手工驱动截证归档 v092-device-manual-20260928/）；同日更晚（换渠道 sub2api-openai 后）：V092-10 本地拓扑真实模型发送 passed——真机 UI 发送 → gemini-3.8-flash 流式 132 字符回复 + turn_completed（v092-device-gemini-20260928/，cordis 三处对齐 + xiaomi reasoningEfforts 非法形态连带修复）js 16 项回归入 test:e2e:harness。计划 docs/zh/迭代计划/迭代计划v0.9.4.md；实施记录 34 §6。真实 Provider/模型和云端重启须独立授权。"
     },
     {
       "plan_id": "V095",
