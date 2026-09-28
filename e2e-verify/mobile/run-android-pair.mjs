@@ -29,7 +29,8 @@
 //   --no-stack              不拉起隔离栈（已手工拉起并注入 AGENT_SESSIONS_OWNER_PAIRING=on 时）
 //   --diagnostic            输出两台设备的 Flutter 原始输出（不落盘）
 //   --test-timeout-ms <ms>  每个 flutter run 的上限（默认 30 分钟）
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -97,6 +98,7 @@ export function parsePairArgs(argv, env = process.env) {
     stateDir: resolve(ROOT, env.OWN06_STATE_DIR || ".task/own06"),
     keepStack: false,
     noStack: false,
+    stackOnly: false,
     diagnostic: false,
     testTimeoutMs: positiveInteger(
       env.OWN06_TEST_TIMEOUT_MS || String(DEFAULT_TEST_TIMEOUT_MS),
@@ -125,6 +127,7 @@ export function parsePairArgs(argv, env = process.env) {
     else if (arg === "--state-dir") args.stateDir = resolve(ROOT, takeValue(arg));
     else if (arg === "--keep-stack") args.keepStack = true;
     else if (arg === "--no-stack") args.noStack = true;
+    else if (arg === "--stack-only") args.stackOnly = true;
     else if (arg === "--diagnostic") args.diagnostic = true;
     else if (arg === "--test-timeout-ms") args.testTimeoutMs = positiveInteger(takeValue(arg), arg);
     else if (arg === "--help" || arg === "-h") args.help = true;
@@ -213,11 +216,27 @@ async function detectLanIp() {
   return "";
 }
 
-async function relayApi(relayAddr, path, { method = "GET", token = "" } = {}) {
-  const response = await fetch(`http://${relayAddr}${path}`, {
-    method,
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+async function relayApi(relayAddr, path, { method = "GET", token = "", payload = null } = {}) {
+  // 防御性剥 scheme：调用方偶发传整 URL 时主机名会变成 "http:"（ENOTFOUND）。
+  const authority = relayAddr.replace(/^https?:\/\//, "");
+  let response;
+  try {
+    response = await fetch(`http://${authority}${path}`, {
+      method,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(payload ? { "Content-Type": "application/json" } : {}),
+      },
+      body: payload ? JSON.stringify(payload) : undefined,
+    });
+  } catch (error) {
+    // "fetch failed" 不带原因：透出底层 cause（ECONNREFUSED/ECONNRESET/代理…），
+    // 否则隔离栈问题只能靠猜。
+    const cause = error?.cause?.code ?? error?.cause?.message ?? error?.message;
+    throw new GateError(
+      `Relay 请求失败 ${method} http://${authority}${path}: ${cause}`,
+    );
+  }
   const text = await response.text();
   let body = null;
   try {
@@ -281,10 +300,180 @@ function stackEnv(args) {
   };
 }
 
+// relayEnv 是隔离 Relay 进程的环境：owner-pairing 总开关 + 能力矩阵探测用的
+// OpenCode URL/DSH 配置（与 start_relay 给 relayctl 的透传口径一致）。
+function relayEnv(args) {
+  const env = {
+    ...process.env,
+    AGENT_SESSIONS_OWNER_PAIRING: "on",
+    AGENT_SESSIONS_OPENCODE_URL: `http://127.0.0.1:${args.opencodePort}`,
+  };
+  if (process.env.AGENT_SESSIONS_DSH_BIN) {
+    env.AGENT_SESSIONS_DSH_BIN = process.env.AGENT_SESSIONS_DSH_BIN;
+  }
+  if (!process.env.AGENT_SESSIONS_DSH_CONFIG && existsSync(join(ROOT, "cordis.yml"))) {
+    env.AGENT_SESSIONS_DSH_CONFIG = join(ROOT, "cordis.yml");
+  }
+  return env;
+}
+
+// startIsolatedRelay 自管隔离 Relay 进程（pid/日志都在隔离 state-dir 下）。
+// 不走 restart.sh/relayctl.sh 的 Relay 生命周期：它们的 pid 文件是 clone 级共享
+// （.task/relay.pid），一个 clone 只允许一个 Relay 实例——隔离栈必须与主栈
+// （soak，8787）并存，故此处独立拉起、独立收停（2026-09-29 预检实证的冲突）。
+async function startIsolatedRelay(args) {
+  // 端口预检：残留监听会让新进程 bind 失败、readyz 却被旧进程应答——必须
+  // 先确认端口空闲再 spawn（残留时给出明确处置指引而非神秘失败）。
+  try {
+    const stale = await fetch(`http://127.0.0.1:${args.relayPort}/readyz`);
+    if (stale.ok || stale.status) {
+      throw new GateError(
+        `端口 ${args.relayPort} 已被监听（上次运行残留？）——` +
+          `kill $(cat ${join(args.stateDir, "relay.pid")}) 或换 --relay-port 后重试`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof GateError) throw error;
+    // 连接失败 = 端口空闲，继续。
+  }
+  const bin = join(args.stateDir, "relay");
+  const built = await runCommand("go", ["build", "-o", bin, "./apps/relay"], {
+    cwd: ROOT,
+    timeoutMs: 120_000,
+  });
+  if (built.code !== 0) {
+    throw new GateError(`隔离 Relay 构建失败：${(built.stderr || "").slice(-400)}`);
+  }
+  const log = openSync(join(args.stateDir, "relay.log"), "a");
+  const child = spawn(
+    bin,
+    ["--addr", `127.0.0.1:${args.relayPort}`, "--db", join(args.stateDir, "relay.db")],
+    { cwd: ROOT, env: relayEnv(args), stdio: ["ignore", log, log], detached: true },
+  );
+  child.unref();
+  writeFileSync(join(args.stateDir, "relay.pid"), String(child.pid), "utf8");
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new GateError(
+        `隔离 Relay 启动即退出（code=${child.exitCode}）——见 ${args.stateDir}/relay.log`,
+      );
+    }
+    try {
+      const ready = await fetch(`http://127.0.0.1:${args.relayPort}/readyz`);
+      if (ready.ok) {
+        // readyz 应答 + 子进程存活双确认，避免把残留进程误判为自己。
+        try {
+          process.kill(child.pid, 0);
+          return child.pid;
+        } catch {
+          throw new GateError("隔离 Relay readyz 通过但子进程已退出——端口竞争");
+        }
+      }
+    } catch (error) {
+      if (error instanceof GateError) throw error;
+      // 尚未就绪，继续等待。
+    }
+    await new Promise((resolveSleep) => setTimeout(resolveSleep, 1_000));
+  }
+  throw new GateError("隔离 Relay readyz 超时（30s）");
+}
+
+// stopIsolatedRelay 按 pid 文件收停隔离 Relay；只杀自己记录的 pid。
+function stopIsolatedRelay(args) {
+  const pidFile = join(args.stateDir, "relay.pid");
+  if (!existsSync(pidFile)) return;
+  const pid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return; // 进程已不存在。
+  }
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0); // 仍在 → 等待。
+    } catch {
+      return; // 已退出。
+    }
+    // 同步等待 200ms（Node 无内置 sync sleep；Atomics.wait 阻塞当前线程）。
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // 已退出。
+  }
+}
+
+// bootstrapIsolatedOwner 在隔离库上完成首 owner 注册与 Terminal 配对，返回
+// {ownerToken, daemonToken}。restart.sh 的 local-dev 自动配对硬性依赖
+// WITH_RELAY=true（ensure_daemon_token 分支），--no-relay 下直接拒绝——编排器
+// 自管 Relay 后这部分也自己来（隔离库全新，register 未关闭即首 owner）。
+async function bootstrapIsolatedOwner(args) {
+  // relayApi 的地址参数口径是 host:port（不带 scheme）。
+  const base = `127.0.0.1:${args.relayPort}`;
+  await relayApi(base, "/readyz");
+  const password = `own06-${crypto.randomUUID()}`;
+  const registered = await relayApi(base, "/v1/auth/register", {
+    method: "POST",
+    payload: { email: "own06-isolated@example.invalid", password },
+  });
+  if (registered.status !== 201) {
+    throw new GateError(
+      `隔离库首 owner 注册失败（HTTP ${registered.status}）：${JSON.stringify(registered.body).slice(0, 200)}`,
+    );
+  }
+  const ownerToken = registered.body.access_token;
+  if (!ownerToken) {
+    throw new GateError("注册响应缺 access_token");
+  }
+  writeFileSync(join(args.stateDir, "local-owner-token"), ownerToken, "utf8");
+
+  const pairing = await relayApi(base, "/v1/pairing/requests", {
+    method: "POST",
+    token: ownerToken,
+    payload: {
+      role: "terminal",
+      display_name: "OWN06 Isolated Terminal",
+      platform: "local",
+      identity_public_key: "own06-terminal-identity-public-key",
+      encryption_public_key: "own06-terminal-encryption-public-key",
+    },
+  });
+  if (pairing.status !== 201) {
+    throw new GateError(
+      `隔离 Terminal 配对请求失败（HTTP ${pairing.status}）：${JSON.stringify(pairing.body).slice(0, 200)}`,
+    );
+  }
+  const approved = await relayApi(
+    base,
+    `/v1/pairing/requests/${pairing.body.id}/approve`,
+    { method: "POST", token: ownerToken },
+  );
+  if (approved.status !== 200) {
+    throw new GateError(
+      `隔离 Terminal 配对批准失败（HTTP ${approved.status}）：${JSON.stringify(approved.body).slice(0, 200)}`,
+    );
+  }
+  const daemonToken = approved.body?.tokens?.access_token;
+  if (!daemonToken) {
+    throw new GateError("Terminal 配对批准响应缺令牌");
+  }
+  writeFileSync(join(args.stateDir, "local-daemon-token"), daemonToken, "utf8");
+  return { ownerToken, daemonToken };
+}
+
 async function startPairStack(args) {
   // 隔离世界确定性：旅程状态目录整体重建（只含本旅程的进程/DB/日志）。
   rmSync(args.stateDir, { recursive: true, force: true });
   mkdirSync(args.stateDir, { recursive: true });
+  // 1) 隔离 Relay 先行（独立 pid 文件，见 startIsolatedRelay 注释）。
+  await startIsolatedRelay(args);
+  // 2) 首 owner + Terminal 配对（编排器自办，令牌落 stateDir 供 --no-stack 复用）。
+  const { ownerToken, daemonToken } = await bootstrapIsolatedOwner(args);
+  // 3) restart.sh 以 --no-relay + env 令牌只管隔离 daemon（OpenCode 4196）。
   const started = await runCommand(
     "bash",
     [
@@ -294,6 +483,7 @@ async function startPairStack(args) {
       args.stateDir,
       "--relay-addr",
       `127.0.0.1:${args.relayPort}`,
+      "--no-relay",
       "--no-flutter",
       "--no-web",
       "--no-admin",
@@ -302,7 +492,10 @@ async function startPairStack(args) {
     ],
     {
       cwd: ROOT,
-      env: stackEnv(args),
+      env: {
+        ...stackEnv(args),
+        AGENT_SESSIONS_DAEMON_TOKEN: daemonToken,
+      },
       timeoutMs: STACK_READY_TIMEOUT_MS,
     },
   );
@@ -311,23 +504,16 @@ async function startPairStack(args) {
       `隔离栈启动失败：${(started.stderr || started.stdout || "").slice(-800)}`,
     );
   }
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    try {
-      const ready = await fetch(`http://127.0.0.1:${args.relayPort}/readyz`);
-      if (ready.ok) break;
-    } catch {
-      // 尚未就绪，继续等待。
+  // daemon 进程存活（hello/心跳随后自然发生；旅程用例会对执行侧事实断言）。
+  const daemonPidFile = join(args.stateDir, "daemon.pid");
+  const daemonDeadline = Date.now() + 30_000;
+  while (!existsSync(daemonPidFile)) {
+    if (Date.now() > daemonDeadline) {
+      throw new GateError("隔离 daemon pid 文件未出现（restart.sh 未拉起 daemon）");
     }
     await new Promise((resolveSleep) => setTimeout(resolveSleep, 1_000));
   }
-  const tokenFile = join(args.stateDir, "local-owner-token");
-  if (!existsSync(tokenFile)) {
-    throw new GateError(
-      "隔离栈未产出终端 owner 令牌（local-owner-token）——local-dev pairing 未完成",
-    );
-  }
-  return readFileSync(tokenFile, "utf8").trim();
+  return ownerToken;
 }
 
 async function stopPairStack(args) {
@@ -336,6 +522,8 @@ async function stopPairStack(args) {
     ["./restart.sh", "stop", "--state-dir", args.stateDir],
     { cwd: ROOT, env: stackEnv(args), timeoutMs: 60_000 },
   );
+  // restart.sh 对本栈无 relay-owned 标记（--no-relay），隔离 Relay 由编排器收停。
+  stopIsolatedRelay(args);
 }
 
 function startLanBridge(args) {
@@ -415,6 +603,53 @@ async function main() {
       process.stdout.write(`${usage()}\n`);
       return;
     }
+    if (args.stackOnly) {
+      // 设备日预检：只验证「隔离栈自拉 + owner-pairing 开关生效 + 审批通道
+      // 可用 + LAN 桥起停」，不要求任何设备在场——把设备日才可能暴露的
+      // 编排缺陷提前到现在清掉。
+      // 进入即标记：startPairStack 半途失败也必须走 teardown（否则隔离
+      // Relay 残留占端口，下一次运行 bind 失败——2026-09-29 预检实证）。
+      stackManaged = true;
+      ownerToken = await startPairStack(args);
+      process.stdout.write("[own06-pair][stack-only] 隔离栈就绪，探测开关…\n");
+      const probe = await relayApi(`127.0.0.1:${args.relayPort}`, "/v1/owner-pairing/requests", {
+        method: "POST",
+        payload: {
+          display_name: "OWN06-PREFLIGHT-PROBE",
+          platform: "preflight",
+          identity_public_key: "preflight-identity",
+          encryption_public_key: "preflight-encryption",
+        },
+      });
+      if (probe.status !== 201) {
+        throw new GateError(
+          `owner-pairing 开关探测失败（HTTP ${probe.status}，期望 201）——` +
+            `AGENT_SESSIONS_OWNER_PAIRING 未传播到隔离 Relay 或路由缺失：${JSON.stringify(probe.body).slice(0, 200)}`,
+          { status: "failed", failureClass: "product_defect" },
+        );
+      }
+      const pendingList = await relayApi(`127.0.0.1:${args.relayPort}`, "/v1/pairing/requests", {
+        token: ownerToken,
+      });
+      if (pendingList.status !== 200) {
+        throw new GateError(
+          `终端 owner 令牌读取 pending 清单失败（HTTP ${pendingList.status}）——审批泵不可用`,
+          { status: "failed", failureClass: "product_defect" },
+        );
+      }
+      bridgeChild = startLanBridge(args);
+      await new Promise((resolveBridge) => setTimeout(resolveBridge, 2_000));
+      if (bridgeChild.exitCode !== null) {
+        throw new GateError("relay-lan-bridge 启动即退出——端口被占用或 python 不可用");
+      }
+      process.stdout.write(
+        "[own06-pair][stack-only] 预检通过：隔离栈/开关/审批通道/LAN 桥全部可用\n",
+      );
+      status = "passed";
+      failureClass = null;
+      remainingRisk = "stack-only 预检：未覆盖设备侧旅程（OWN-06 执行时仍需真机调参）";
+      return;
+    }
     const { adbPath } = findAndroidAdb();
     const connected = await listConnectedDevices(adbPath);
     devices = selectPairDevices(connected, {
@@ -437,8 +672,10 @@ async function main() {
     process.stdout.write(`[own06-pair] RELAY_BASE_URL=${relayBaseUrl}\n`);
 
     if (!args.noStack) {
-      ownerToken = await startPairStack(args);
+      // 进入即标记：startPairStack 半途失败也必须走 teardown（否则隔离
+      // Relay 残留占端口，下一次运行 bind 失败——2026-09-29 预检实证）。
       stackManaged = true;
+      ownerToken = await startPairStack(args);
       process.stdout.write("[own06-pair] 隔离栈已就绪（owner-pairing=on）\n");
     } else {
       const tokenFile = join(args.stateDir, "local-owner-token");
@@ -575,7 +812,9 @@ async function main() {
       report: {
         timestamp,
         ...report,
-        gate_kind: "android_two_device_owner_pairing_journey",
+        gate_kind: args?.stackOnly
+          ? "own06_isolated_stack_preflight"
+          : "android_two_device_owner_pairing_journey",
         real_device: Boolean(devices.approver && devices.joiner),
         simulated_device: false,
         device_mode: "two_physical_android",
@@ -585,7 +824,7 @@ async function main() {
         push_called: false,
         background_recovery_tested: false,
         network_switch_tested: false,
-        test_ids: ["OWN-06"],
+        test_ids: [args?.stackOnly ? "OWN-06-PREFLIGHT" : "OWN-06"],
         integration_tests: [APPROVER_TEST, JOINER_TEST],
         fixture_revision: null,
         lan_ip_recorded: Boolean(lanIp),
