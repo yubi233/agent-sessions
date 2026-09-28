@@ -59,6 +59,10 @@ func mapError(err error) (int, protocol.APIError) {
 		return http.StatusConflict, protocol.NewError(protocol.ErrProtocolUnsupported, "daemon protocol unsupported")
 	case errors.Is(err, domain.ErrScopeDenied):
 		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "resource scope denied")
+	case errors.Is(err, domain.ErrOwnerPairingDisabled):
+		return http.StatusForbidden, protocol.NewError(protocol.ErrScopeDenied, "owner pairing disabled")
+	case errors.Is(err, domain.ErrOwnerPairingPending):
+		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "owner pairing already pending")
 	case errors.Is(err, domain.ErrBootstrapCompleted):
 		return http.StatusConflict, protocol.NewError(protocol.ErrInvalidRequest, "owner bootstrap already completed")
 	case errors.Is(err, domain.ErrAccountExists):

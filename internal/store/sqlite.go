@@ -238,9 +238,11 @@ func (r *sqliteRepo) PairingByID(ctx context.Context, id string) (PairingRow, er
 	var p PairingRow
 	var expires int64
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT id,account_id,role,status,display_name,identity_public_key,encryption_public_key,platform,expires_at
+		`SELECT id,account_id,role,status,display_name,identity_public_key,encryption_public_key,platform,expires_at,
+		 COALESCE(claim_access_token,''),COALESCE(claim_refresh_token,'')
 		 FROM pairing_requests WHERE id=?`, id).
-		Scan(&p.ID, &p.AccountID, &p.Role, &p.Status, &p.DisplayName, &p.IdentityPublicKey, &p.EncryptionPublicKey, &p.Platform, &expires); err != nil {
+		Scan(&p.ID, &p.AccountID, &p.Role, &p.Status, &p.DisplayName, &p.IdentityPublicKey, &p.EncryptionPublicKey, &p.Platform, &expires,
+			&p.ClaimAccessToken, &p.ClaimRefreshToken); err != nil {
 		return PairingRow{}, err
 	}
 	p.ExpiresAt = time.UnixMilli(expires)
@@ -1939,4 +1941,53 @@ func (r *sqliteRepo) SessionUsageSummary(ctx context.Context, accountID, session
 		out.DecodeThroughput = &value
 	}
 	return out, nil
+}
+
+// ListPendingPairings 返回账号下全部 pending 配对请求（v0.10.0 owner 配对页）。
+func (r *sqliteRepo) ListPendingPairings(ctx context.Context, accountID string) ([]PairingRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id,account_id,role,status,display_name,identity_public_key,encryption_public_key,platform,expires_at
+		 FROM pairing_requests WHERE account_id=? AND status='pending' ORDER BY expires_at`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PairingRow{}
+	for rows.Next() {
+		var p PairingRow
+		var expires int64
+		if err := rows.Scan(
+			&p.ID, &p.AccountID, &p.Role, &p.Status, &p.DisplayName, &p.IdentityPublicKey,
+			&p.EncryptionPublicKey, &p.Platform, &expires,
+		); err != nil {
+			return nil, err
+		}
+		p.ExpiresAt = time.UnixMilli(expires)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// UpdatePairingClaim 写入 owner 批准后待新设备领取的令牌对（ADR-017）。
+func (r *sqliteRepo) UpdatePairingClaim(ctx context.Context, pairingID, accessToken, refreshToken string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE pairing_requests SET claim_access_token=?, claim_refresh_token=? WHERE id=?`,
+		accessToken, refreshToken, pairingID)
+	return err
+}
+
+// CountPendingOwnerPairings 返回账号下 pending 的 owner 配对请求数（单 pending 约束）。
+func (r *sqliteRepo) CountPendingOwnerPairings(ctx context.Context, accountID string) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pairing_requests WHERE account_id=? AND role='android_owner' AND status='pending'`,
+		accountID).Scan(&n)
+	return n, err
+}
+
+// FirstAccountID 返回单租户库中的唯一账号 ID（无账号时 sql.ErrNoRows）。
+func (r *sqliteRepo) FirstAccountID(ctx context.Context) (string, error) {
+	var id string
+	err := r.db.QueryRowContext(ctx, `SELECT id FROM accounts ORDER BY id LIMIT 1`).Scan(&id)
+	return id, err
 }

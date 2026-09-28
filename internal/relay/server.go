@@ -80,6 +80,9 @@ func newServerWithPresence(db *sql.DB, logger *slog.Logger, signatureRequired bo
 	repo := store.NewRepository(db)
 	auth := domain.NewAuthService(repo)
 	pairing := domain.NewPairingService(repo)
+	// v0.10.0（ADR-017）：owner 配对加入总开关，默认 off；显式开启后新设备
+	// 可经未认证创建端点发起配对、由现役 owner 批准为第二个 active owner。
+	pairing.OwnerPairingEnabled = os.Getenv("AGENT_SESSIONS_OWNER_PAIRING") == "on"
 	sessions := domain.NewSessionService(repo)
 	// v0.1 只注入 deterministic mock dispatcher；真实 Provider 需专属凭据与授权后另行装配。
 	delegations := domain.NewDelegationService(repo, daemon.NewDeterministicDelegationDispatcher())

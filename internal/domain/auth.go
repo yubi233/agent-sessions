@@ -102,18 +102,36 @@ func (s *AuthService) BootstrapInitialOwnerDevice(ctx context.Context, bootstrap
 		if err != nil {
 			return err
 		}
-		if count > 0 {
-			return ErrRegistrationClosed
-		}
-		// 不可登录的内部账号：用于保持既有单租户授权/审计边界，不作为移动端凭据。
-		if err := tx.CreateAccount(
-			ctx,
-			accountID,
-			accountID+"@local.agent-sessions.invalid",
-			authz.HashPassword(authz.RandomToken()),
-			s.now(),
-		); err != nil {
-			return err
+		if count == 0 {
+			// 全新 Relay：建账号 + 首个 owner（既有语义）。
+			if err := tx.CreateAccount(
+				ctx,
+				accountID,
+				accountID+"@local.agent-sessions.invalid",
+				authz.HashPassword(authz.RandomToken()),
+				s.now(),
+			); err != nil {
+				return err
+			}
+		} else {
+			// v0.10.0（ADR-017 D3）：存量库撤销最后一个 owner 后重新开放
+			// bootstrap——在既有（唯一）账号上重建 owner 设备，回到首部署
+			// 语义；仍存在 active owner 时维持注册关闭（防抢占）。
+			acct, aerr := tx.FirstAccountID(ctx)
+			if aerr != nil {
+				return aerr
+			}
+			accountID = acct
+			owner.AccountID = acct
+			devices, derr := tx.ListDevices(ctx, acct)
+			if derr != nil {
+				return derr
+			}
+			for _, candidate := range devices {
+				if candidate.Role == RoleAndroidOwner && candidate.Status == DeviceActive {
+					return ErrRegistrationClosed
+				}
+			}
 		}
 		if err := tx.CreateDevice(ctx, toDeviceRow(owner)); err != nil {
 			return err
@@ -123,7 +141,11 @@ func (s *AuthService) BootstrapInitialOwnerDevice(ctx context.Context, bootstrap
 			return err
 		}
 		tokens = issued
-		return tx.AppendAudit(ctx, accountID, "device.bootstrap_owner", `{"role":"android_owner","mode":"device"}`)
+		mode := "device"
+		if count > 0 {
+			mode = "device_reopened"
+		}
+		return tx.AppendAudit(ctx, accountID, "device.bootstrap_owner", `{"role":"android_owner","mode":"`+mode+`"}`)
 	})
 	if err != nil {
 		return Device{}, TokenPair{}, err

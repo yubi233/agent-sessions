@@ -2,9 +2,11 @@ package domain
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/yubi233/agent-sessions/internal/authz"
@@ -23,6 +25,9 @@ const (
 type PairingService struct {
 	repo store.Repository
 	now  func() time.Time
+	// OwnerPairingEnabled 是 owner 配对加入的总开关（v0.10.0，ADR-017；
+	// env AGENT_SESSIONS_OWNER_PAIRING，默认 off）。关闭时创建端点返回稳定错误。
+	OwnerPairingEnabled bool
 }
 
 // NewPairingService 构造配对服务。
@@ -163,7 +168,15 @@ func (s *PairingService) ApprovePairing(ctx context.Context, owner AuthSubject, 
 		if !claimed {
 			return ErrPairingAlreadyHandled
 		}
-		return tx.CreateDevice(ctx, toDeviceRow(dev))
+		if err := tx.CreateDevice(ctx, toDeviceRow(dev)); err != nil {
+			return err
+		}
+		// owner 配对（ADR-017）：批准即签发令牌对写入 claim 列，新设备凭
+		// pairing_id 领取；不撤销任何既有设备（多 owner 并存的硬不变量）。
+		if p.Role == RoleAndroidOwner {
+			return s.approveOwnerPairingInTx(ctx, tx, p.AccountID, pairingID, dev.ID)
+		}
+		return nil
 	})
 	if errors.Is(err, ErrPairingAlreadyHandled) {
 		// 并发批准的输家读取赢家提交的设备，维持重复批准的幂等响应。
@@ -542,10 +555,109 @@ func toPairingRow(p PairingRequest) store.PairingRow {
 	}
 }
 
+// PairingRequestFromRow 供传输层把配对行投影为域对象（owner 配对视图需要
+// 附加比对码等派生字段）。
+func PairingRequestFromRow(r store.PairingRow) PairingRequest {
+	return fromPairingRow(r)
+}
+
 func fromPairingRow(r store.PairingRow) PairingRequest {
 	return PairingRequest{
 		ID: r.ID, AccountID: r.AccountID, Role: r.Role, Status: r.Status,
 		DisplayName: r.DisplayName, IdentityPublicKey: r.IdentityPublicKey,
 		EncryptionPublicKey: r.EncryptionPublicKey, Platform: r.Platform, ExpiresAt: r.ExpiresAt,
 	}
+}
+
+// ── v0.10.0（ADR-017）：owner 配对加入 ─────────────────────────────────
+// 新 Android 设备以第二个 active owner 加入，既有设备零变化（硬不变量）。
+// 与恢复码接管的互斥替换语义并存、互不替代。
+
+// OwnerPairingCompareCode 由新设备公钥材料派生 6 位数字比对码。
+// 双端可独立计算（新设备持自己的公钥；owner 从配对行读公钥），
+// 用于人工核对「批准的确实是眼前的设备」。
+func OwnerPairingCompareCode(identityPublicKey, encryptionPublicKey string) string {
+	sum := sha256.Sum256([]byte("owner-pairing:" + identityPublicKey + ":" + encryptionPublicKey))
+	n := (uint64(sum[0])<<56 | uint64(sum[1])<<48 | uint64(sum[2])<<40 | uint64(sum[3])<<32 |
+		uint64(sum[4])<<24 | uint64(sum[5])<<16 | uint64(sum[6])<<8 | uint64(sum[7])) % 1000000
+	return fmt.Sprintf("%06d", n)
+}
+
+// CreateOwnerPairingRequest 创建 owner 配对请求（ADR-017）。
+// 前置：总开关开启（OwnerPairingEnabled，env AGENT_SESSIONS_OWNER_PAIRING）；
+// 单账号同时最多 1 个 pending owner 请求；TTL 10 分钟；审计 pairing.created。
+// 与既有 terminal 配对共用存储与批准/轮询端点，role 区分语义。
+func (s *PairingService) CreateOwnerPairingRequest(ctx context.Context, d Device) (PairingRequest, string, error) {
+	if !s.OwnerPairingEnabled {
+		return PairingRequest{}, "", ErrOwnerPairingDisabled
+	}
+	if d.Role != RoleAndroidOwner || validateDeviceKeys(d) != nil || d.DisplayName == "" {
+		return PairingRequest{}, "", ErrPairingAlreadyHandled
+	}
+	pending, err := s.repo.CountPendingOwnerPairings(ctx, d.AccountID)
+	if err != nil {
+		return PairingRequest{}, "", err
+	}
+	if pending > 0 {
+		return PairingRequest{}, "", ErrOwnerPairingPending
+	}
+	p := PairingRequest{
+		ID:                  id.New("pair"),
+		AccountID:           d.AccountID,
+		Role:                RoleAndroidOwner,
+		Status:              PairingPending,
+		DisplayName:         d.DisplayName,
+		IdentityPublicKey:   d.IdentityPublicKey,
+		EncryptionPublicKey: d.EncryptionPublicKey,
+		Platform:            d.Platform,
+		ExpiresAt:           s.now().Add(10 * time.Minute),
+	}
+	if err := s.repo.CreatePairingRequest(ctx, toPairingRow(p)); err != nil {
+		return PairingRequest{}, "", err
+	}
+	_ = s.repo.AppendAudit(ctx, d.AccountID, "pairing.created", `{"role":"android_owner"}`)
+	return p, OwnerPairingCompareCode(d.IdentityPublicKey, d.EncryptionPublicKey), nil
+}
+
+// OwnerPairingStatus 新设备轮询配对状态；批准后返回待领取的令牌对。
+// 令牌在批准事务内签发并存于配对行（claim 列），重复轮询返回同一对。
+func (s *PairingService) OwnerPairingStatus(ctx context.Context, pairingID string) (PairingRequest, *TokenPair, error) {
+	p, err := s.repo.PairingByID(ctx, pairingID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PairingRequest{}, nil, ErrPairingNotFound
+		}
+		return PairingRequest{}, nil, err
+	}
+	if p.Role != RoleAndroidOwner {
+		return PairingRequest{}, nil, ErrPairingNotFound
+	}
+	if p.Status == PairingPending && s.now().After(p.ExpiresAt) {
+		_ = s.repo.SetPairingStatus(ctx, pairingID, PairingExpired)
+		p.Status = PairingExpired
+	}
+	if p.Status != PairingApproved {
+		return fromPairingRow(p), nil, nil
+	}
+	if p.ClaimAccessToken == "" || p.ClaimRefreshToken == "" {
+		return fromPairingRow(p), nil, nil
+	}
+	tokens := &TokenPair{
+		AccountID:    p.AccountID,
+		AccessToken:  p.ClaimAccessToken,
+		RefreshToken: p.ClaimRefreshToken,
+	}
+	return fromPairingRow(p), tokens, nil
+}
+
+// approveOwnerPairingInTx 在批准事务内为 owner 角色请求签发令牌对并写入
+// claim 列（与 terminal 路径的区别：owner 设备的令牌必须可在批准后立即
+// 被 pairing_id 领取——新设备此时没有任何其他凭据）。
+func (s *PairingService) approveOwnerPairingInTx(ctx context.Context, tx store.Repository, accountID, pairingID, deviceID string) error {
+	auth := &AuthService{repo: tx, now: s.now}
+	tokens, err := auth.issuePairWithRepo(ctx, tx, accountID, deviceID, RoleAndroidOwner)
+	if err != nil {
+		return err
+	}
+	return tx.UpdatePairingClaim(ctx, pairingID, tokens.AccessToken, tokens.RefreshToken)
 }

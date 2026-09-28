@@ -40,6 +40,9 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		pub.POST("/auth/refresh", a.handleRefresh)
 		// 恢复入口故意不要求现有 bearer：丢失 owner 设备时仍可用恢复码恢复控制权。
 		pub.POST("/recovery-codes/restore", a.handleRestore)
+		// v0.10.0（ADR-017）：owner 配对加入——创建/轮询；总开关默认关闭。
+		pub.POST("/owner-pairing/requests", a.handleCreateOwnerPairing)
+		pub.GET("/owner-pairing/requests/:id", a.handleOwnerPairingStatus)
 
 		auth := v1.Group("")
 		auth.Use(a.RequireAuth())
@@ -97,6 +100,7 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		owner.Use(a.RequireAuth(), a.RequireOwner())
 		owner.POST("/pairing/bootstrap", a.handleBootstrapOwner)
 		// 配对读取会返回待配对设备公钥，只能由 key-admin owner 查看。
+		owner.GET("/pairing/requests", a.handleListPairings)
 		owner.GET("/pairing/requests/:id", a.handleGetPairing)
 		owner.POST("/pairing/requests/:id/approve", a.handleApprovePairing)
 		owner.POST("/pairing/requests/:id/cancel", a.handleCancelPairing)
@@ -1770,14 +1774,21 @@ type pairingView struct {
 	EncryptionPublicKey string `json:"encryption_public_key"`
 	Platform            string `json:"platform,omitempty"`
 	ExpiresAt           string `json:"expires_at"`
+	// v0.10.0（ADR-017）：owner 配对请求的 6 位比对码（公钥材料派生），
+	// 供 owner 与新设备人工核对；terminal 请求留空。
+	CompareCode string `json:"compare_code,omitempty"`
 }
 
 func newPairingView(pairing domain.PairingRequest) pairingView {
-	return pairingView{
+	v := pairingView{
 		ID: pairing.ID, Role: pairing.Role, Status: pairing.Status, DisplayName: pairing.DisplayName,
 		IdentityPublicKey: pairing.IdentityPublicKey, EncryptionPublicKey: pairing.EncryptionPublicKey,
 		Platform: pairing.Platform, ExpiresAt: pairing.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
+	if pairing.Role == domain.RoleAndroidOwner {
+		v.CompareCode = domain.OwnerPairingCompareCode(pairing.IdentityPublicKey, pairing.EncryptionPublicKey)
+	}
+	return v
 }
 
 type terminalView struct {

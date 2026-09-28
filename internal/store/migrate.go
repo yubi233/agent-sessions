@@ -416,6 +416,15 @@ var migrations = []string{
 	// 上报的事实快照（版本、失败原因、模型目录安全元数据），供 /v1/capabilities
 	// 在 Relay 自身探测失败时采用执行侧事实；空串表示旧 Daemon 未上报（保持既有口径）。
 	`ALTER TABLE terminals ADD COLUMN provider_facts_json TEXT NOT NULL DEFAULT '';`,
+	// v0.10.0 P1（ADR-017 owner 配对加入）：
+	//   - claim token 列：owner 批准后签发的令牌对存放于配对行，新设备凭
+	//     pairing_id（能力凭据，一次性展示）领取；additive 默认空串；
+	//   - 单 pending 约束：单账号同时最多 1 个 pending 的 owner 配对请求
+	//     （部分唯一索引；存量行 role 均为 terminal 不命中，升级安全）。
+	`ALTER TABLE pairing_requests ADD COLUMN claim_access_token TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE pairing_requests ADD COLUMN claim_refresh_token TEXT NOT NULL DEFAULT '';`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS pairing_owner_pending_idx
+		ON pairing_requests(account_id) WHERE role='android_owner' AND status='pending';`,
 }
 
 // Open 打开 SQLite 并执行迁移。WAL + 外键是权威存储的固定配置。

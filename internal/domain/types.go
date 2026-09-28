@@ -48,6 +48,9 @@ var (
 	ErrReadOnlyDevice        = errors.New("read-only device")
 	ErrBootstrapCompleted    = errors.New("bootstrap already completed")
 	ErrLastOwner             = errors.New("last owner cannot be revoked")
+	// v0.10.0（ADR-017 owner 配对加入）：总开关关闭 / 单 pending 约束的稳定错误。
+	ErrOwnerPairingDisabled = errors.New("owner pairing disabled")
+	ErrOwnerPairingPending  = errors.New("owner pairing already pending")
 )
 
 // Account 是账号聚合根；密码只用于校验账号，不派生正文密钥。
