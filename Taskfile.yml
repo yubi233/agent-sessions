@@ -791,6 +791,11 @@ tasks:
       - task: test:android:harness
       - node e2e-verify/mobile/run-android-device.mjs {{.CLI_ARGS}}
 
+  mon:
+    desc: 本地栈一键监控（进程/健康/终端心跳/DSH 桥/数据尺寸/outbox/备份/日志错误；--watch N 循环刷新）
+    cmds:
+      - bash tools/stack_monitor.sh {{.CLI_ARGS}}
+
   docs:verify:
     cmds:
       - python3 tools/docs_verify.py
