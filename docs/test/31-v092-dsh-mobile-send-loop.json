@@ -1,289 +1,290 @@
 {
-  "suite": "V092",
-  "plan_id": "V092",
-  "description": "v0.9.2 DSH 移动端发送闭环：能力事实源（执行侧为准）与会话生命周期（resume 而非 start）修正。来源：docs/zh/迭代计划/迭代计划v0.9.2.md。口径分层：V092-01..05 为 local_test/fixture_data（其中 V092-01 为 real_upstream 只读探针）；V092-06..08 为本地集成/Flutter；V092-09/10 必须 real_device=true、headless=false，不得用 AVD、headless、fixture Relay 或命令调度结果替代手机 UI 结论。",
-  "environment": {
-    "local": "隔离 SQLite、Go 假桥（internal/adapter/dsh）与 runner fixture（internal/daemon）；不启动真实 Provider、不发送 prompt",
-    "live_bridge": "AGENT_SESSIONS_DSH_LIVE=1 的真实 DSH ACP 桥子进程（握手/生命周期，不发 prompt，不消耗 token）",
-    "flutter": "apps/mobile 本地 flutter test（单 worker）与 macOS 可见窗口 fixture（headless=false）",
-    "web": "@agent-sessions/web / Admin headed Playwright（系统 Chrome，real_browser=true）",
-    "cloud": "https://39.106.135.11（自签证书，TLS 指纹钉扎；AGENT_SESSIONS_ACC_TLS_FINGERPRINT）",
-    "device": "USB 真机 d723617（23113RKC6C，Android 15 / API 35）",
-    "evidence": "e2e-verify/reports/<timestamp>/V092-ATTRIB/（脱敏报告，不含 token、正文、终端/工作区 ID 原文）"
+ "suite": "V092",
+ "plan_id": "V092",
+ "description": "v0.9.2 DSH 移动端发送闭环：能力事实源（执行侧为准）与会话生命周期（resume 而非 start）修正。来源：docs/zh/迭代计划/迭代计划v0.9.2.md。口径分层：V092-01..05 为 local_test/fixture_data（其中 V092-01 为 real_upstream 只读探针）；V092-06..08 为本地集成/Flutter；V092-09/10 必须 real_device=true、headless=false，不得用 AVD、headless、fixture Relay 或命令调度结果替代手机 UI 结论。",
+ "environment": {
+  "local": "隔离 SQLite、Go 假桥（internal/adapter/dsh）与 runner fixture（internal/daemon）；不启动真实 Provider、不发送 prompt",
+  "live_bridge": "AGENT_SESSIONS_DSH_LIVE=1 的真实 DSH ACP 桥子进程（握手/生命周期，不发 prompt，不消耗 token）",
+  "flutter": "apps/mobile 本地 flutter test（单 worker）与 macOS 可见窗口 fixture（headless=false）",
+  "web": "@agent-sessions/web / Admin headed Playwright（系统 Chrome，real_browser=true）",
+  "cloud": "https://39.106.135.11（自签证书，TLS 指纹钉扎；AGENT_SESSIONS_ACC_TLS_FINGERPRINT）",
+  "device": "USB 真机 d723617（23113RKC6C，Android 15 / API 35）",
+  "evidence": "e2e-verify/reports/<timestamp>/V092-ATTRIB/（脱敏报告，不含 token、正文、终端/工作区 ID 原文）"
+ },
+ "verification": {
+  "real_browser": false,
+  "real_browser_headed": true,
+  "real_visible_flutter": true,
+  "real_model": false,
+  "real_upstream": false,
+  "fixture_data": true,
+  "local_test": true,
+  "headless": false,
+  "note": "P0/P1/P2/P4 完成；P3 完成（headed 真实浏览器 12/12、统一回归入口、真机发送闭环、T7 state-dir 单实例锁、握手超时可配置）。**V092-09 真机通过**：手机 UI 完成新建会话→切换模型→发送→Assistant 回复与「已完成」终态，Relay 侧 9 条事件完整往返并有用量记录。本轮共修复 4 类真实缺陷：Relay→Daemon 投递契约、多 Daemon 实例命令竞争、Android gate 作用域、本地 Relay 未传 DSH 配置导致目录顶替。真机证据：real_device=true、headless=false、local_test=true；每跳均有日志/数据库/截图三级证据。 **2026-09-17 云端形态增量**：T6-B 窗口内完成云端凭据恢复（30 天 terminal 令牌 + 恢复码生产同源写入）与真机 owner 接管；V092-09 云端 passed、V092-10 云端 partial（见各自 evidence）。关键修复：模型目录双源对齐（tools/sync_model_catalog.py）消除了 403 FreeTierError；同轮暴露「事件投递吞吐」与「resume 后上下文投影」两个新缺陷。",
+  "real_device": true
+ },
+ "cases": [
+  {
+   "id": "V092-01",
+   "title": "云端 /v1/capabilities 的 DSH 可用性归因可复现、可解释",
+   "status": "passed",
+   "phase": "P0",
+   "category": "能力事实源归因",
+   "priority": "P0",
+   "test_layer": "targeted_diagnostic",
+   "precondition": "云端 ECS 部署与测试账号可用；只读令牌（本地 600 权限文件，不进入仓库）；TLS 指纹来自 deploy/acceptance.env。",
+   "steps": [
+    "以指纹钉扎 HTTPS 登录测试账号，取得只读令牌",
+    "GET /v1/capabilities，读取 dsh 的 available/version 与 start 能力 reason",
+    "GET /v1/terminals、/v1/workspaces、/v1/sessions，按 sha256 前 12 位脱敏盘点",
+    "把 dsh 不可用的原因与部署形态（scratch 单二进制、无 node、无 DSH 检出）对齐"
+   ],
+   "expected": "dsh available=false 且 reason 可解释为进程内探测失败（未找到 node 运行时）；探针只做 GET，不修改服务端业务状态、不输出 token。",
+   "cleanup": [
+    "不写入服务端；报告落在 e2e-verify/reports/<ts>/V092-ATTRIB/，凭据不入库"
+   ],
+   "evidence": [
+    "passed：e2e-verify/real/v092-cloud-capabilities-probe.mjs → e2e-verify/reports/2026-09-16T04-00-32-953Z/V092-ATTRIB/cloud-capabilities-probe.json（dsh available=false，reason=\"未找到 node 运行时: exec: \\\"node\\\": executable file not found in $PATH\"）"
+   ]
   },
-  "verification": {
-    "real_browser": false,
-    "real_browser_headed": true,
-    "real_visible_flutter": true,
-    "real_model": false,
-    "real_upstream": false,
-    "fixture_data": true,
-    "local_test": true,
-    "headless": false,
-    "note": "P0/P1/P2/P4 完成；P3 完成（headed 真实浏览器 12/12、统一回归入口、真机发送闭环、T7 state-dir 单实例锁、握手超时可配置）。**V092-09 真机通过**：手机 UI 完成新建会话→切换模型→发送→Assistant 回复与「已完成」终态，Relay 侧 9 条事件完整往返并有用量记录。本轮共修复 4 类真实缺陷：Relay→Daemon 投递契约、多 Daemon 实例命令竞争、Android gate 作用域、本地 Relay 未传 DSH 配置导致目录顶替。真机证据：real_device=true、headless=false、local_test=true；每跳均有日志/数据库/截图三级证据。 **2026-09-17 云端形态增量**：T6-B 窗口内完成云端凭据恢复（30 天 terminal 令牌 + 恢复码生产同源写入）与真机 owner 接管；V092-09 云端 passed、V092-10 云端 partial（见各自 evidence）。关键修复：模型目录双源对齐（tools/sync_model_catalog.py）消除了 403 FreeTierError；同轮暴露「事件投递吞吐」与「resume 后上下文投影」两个新缺陷。",
-    "real_device": true
+  {
+   "id": "V092-02",
+   "title": "Daemon 进程内 Detect / 版本门 / 执行侧三者判定一致",
+   "status": "passed",
+   "phase": "P0",
+   "category": "进程内事实源",
+   "priority": "P0",
+   "test_layer": "integration",
+   "precondition": "假桥注入（internal/adapter/dsh）与 runner fixture（internal/daemon）可用；live 分支需要真实 DSH 检出与 node。",
+   "steps": [
+    "让传输层创建失败（等价云端 scratch 无 node），断言 Detect 返回 fail-closed 矩阵而非错误",
+    "用同一 Adapter 代码在本机执行侧做真实握手（AGENT_SESSIONS_DSH_LIVE=1），断言 Version 与模型目录非空",
+    "注入版本越界的桥握手，断言 Start 拒绝并携带版本值、不写 instance 映射",
+    "运行复现矩阵入口并核对 10 条用例全部 passed"
+   ],
+   "expected": "同一份 Adapter 代码在 Relay 进程与执行侧 Daemon 进程得到相反结论，证明能力事实源在进程内；版本门拒绝路径不伪造会话建立。",
+   "cleanup": [
+    "关闭假桥与真实桥子进程；临时 SQLite 随测试目录回收"
+   ],
+   "evidence": [
+    "passed：e2e-verify/real/v092-attribution-matrix.mjs --live → e2e-verify/reports/2026-09-16T04-36-52-300Z/V092-ATTRIB/attribution-matrix.json（10/10 passed）",
+    "passed：TestV092DetectIsPerProcessFact、TestV092LiveExecutionSideDetect（V092_LIVE_SUMMARY provider=dsh version=0.0.1 model_groups=1）、TestV092AttribVersionGateRejectionIsExplicit"
+   ]
   },
-  "cases": [
-    {
-      "id": "V092-01",
-      "title": "云端 /v1/capabilities 的 DSH 可用性归因可复现、可解释",
-      "status": "passed",
-      "phase": "P0",
-      "category": "能力事实源归因",
-      "priority": "P0",
-      "test_layer": "targeted_diagnostic",
-      "precondition": "云端 ECS 部署与测试账号可用；只读令牌（本地 600 权限文件，不进入仓库）；TLS 指纹来自 deploy/acceptance.env。",
-      "steps": [
-        "以指纹钉扎 HTTPS 登录测试账号，取得只读令牌",
-        "GET /v1/capabilities，读取 dsh 的 available/version 与 start 能力 reason",
-        "GET /v1/terminals、/v1/workspaces、/v1/sessions，按 sha256 前 12 位脱敏盘点",
-        "把 dsh 不可用的原因与部署形态（scratch 单二进制、无 node、无 DSH 检出）对齐"
-      ],
-      "expected": "dsh available=false 且 reason 可解释为进程内探测失败（未找到 node 运行时）；探针只做 GET，不修改服务端业务状态、不输出 token。",
-      "cleanup": [
-        "不写入服务端；报告落在 e2e-verify/reports/<ts>/V092-ATTRIB/，凭据不入库"
-      ],
-      "evidence": [
-        "passed：e2e-verify/real/v092-cloud-capabilities-probe.mjs → e2e-verify/reports/2026-09-16T04-00-32-953Z/V092-ATTRIB/cloud-capabilities-probe.json（dsh available=false，reason=\"未找到 node 运行时: exec: \\\"node\\\": executable file not found in $PATH\"）"
-      ]
-    },
-    {
-      "id": "V092-02",
-      "title": "Daemon 进程内 Detect / 版本门 / 执行侧三者判定一致",
-      "status": "passed",
-      "phase": "P0",
-      "category": "进程内事实源",
-      "priority": "P0",
-      "test_layer": "integration",
-      "precondition": "假桥注入（internal/adapter/dsh）与 runner fixture（internal/daemon）可用；live 分支需要真实 DSH 检出与 node。",
-      "steps": [
-        "让传输层创建失败（等价云端 scratch 无 node），断言 Detect 返回 fail-closed 矩阵而非错误",
-        "用同一 Adapter 代码在本机执行侧做真实握手（AGENT_SESSIONS_DSH_LIVE=1），断言 Version 与模型目录非空",
-        "注入版本越界的桥握手，断言 Start 拒绝并携带版本值、不写 instance 映射",
-        "运行复现矩阵入口并核对 10 条用例全部 passed"
-      ],
-      "expected": "同一份 Adapter 代码在 Relay 进程与执行侧 Daemon 进程得到相反结论，证明能力事实源在进程内；版本门拒绝路径不伪造会话建立。",
-      "cleanup": [
-        "关闭假桥与真实桥子进程；临时 SQLite 随测试目录回收"
-      ],
-      "evidence": [
-        "passed：e2e-verify/real/v092-attribution-matrix.mjs --live → e2e-verify/reports/2026-09-16T04-36-52-300Z/V092-ATTRIB/attribution-matrix.json（10/10 passed）",
-        "passed：TestV092DetectIsPerProcessFact、TestV092LiveExecutionSideDetect（V092_LIVE_SUMMARY provider=dsh version=0.0.1 model_groups=1）、TestV092AttribVersionGateRejectionIsExplicit"
-      ]
-    },
-    {
-      "id": "V092-03",
-      "title": "能力事实源修正后：移动端可见性与执行侧一致（Relay 不再误判 dsh）",
-      "status": "passed",
-      "phase": "P1",
-      "category": "能力事实源修正",
-      "priority": "P0",
-      "test_layer": "integration",
-      "precondition": "Relay 进程自身无法执行 DSH（无 node）时，账号下存在已上报执行侧事实的在线 Terminal。",
-      "steps": [
-        "在隔离 Relay 中登记一个上报 dsh 可用的在线 Terminal",
-        "GET /v1/capabilities，断言 dsh available=true 且事实来源标注为 terminal",
-        "让该 Terminal 上报 dsh 不可用，重复请求，断言回到 fail-closed 且不伪造成可用",
-        "让 Relay 进程自身探测成功（localdev 形态），断言优先采用本进程事实"
-      ],
-      "expected": "每个 Provider 的可用性有唯一、可解释的事实来源；Relay 自身探测失败不会覆盖执行侧的成功，执行侧的失败也不会被 Relay 伪造成可用。",
-      "cleanup": [
-        "删除临时 Terminal 与账号，关闭 httptest Relay"
-      ],
-      "evidence": [
-        "passed：internal/relay/v092_provider_facts_contract_test.go（TestV092CapabilitiesAdoptTerminalFactsAfterHello / TestV092CapabilitiesIgnoreFactsFromOfflineTerminal / TestV092CapabilitiesFollowHeartbeatFactRefresh / TestV092HelloRejectsMalformedProviderFacts / TestV092CapabilitiesPreferRelayWhenRelayCanExecute）",
-        "passed：internal/domain/provider_facts_test.go（合并规则 6 条：Relay 优先、采用执行侧、两侧不可用 fail-closed、绝不伪造可用、最新观测择优且顺序无关、执行侧独有 Provider）",
-        "passed：internal/daemon/provider_facts_test.go（采集器：首轮前不上报、TTL 内不重复探测、失败事实照常上报、nil 采集器安全、kind 稳定排序）",
-        "passed：apps/mobile/test/capability_controller_test.dart（facts_source 解析与门控不受新字段影响）",
-        "passed（云端实测，2026-09-16）：部署 v0.9.2 relay 镜像（agent-sessions/relay:v092-365a1fb）到 ECS 并恢复既有终端令牌后，云端 GET /v1/capabilities 返回 dsh available=true、version=0.0.1、unsupported_count=0 —— 修复前同一端点必然 fail-closed（未找到 node 运行时）。报告 e2e-verify/reports/2026-09-16T08-12-01-078Z/V092-ATTRIB/cloud-capabilities-probe.json。"
-      ]
-    },
-    {
-      "id": "V092-04",
-      "title": "会话视图模型目录与执行侧一致（云端 DSH 模型选择器可用）",
-      "status": "passed",
-      "phase": "P1",
-      "category": "能力事实源修正",
-      "priority": "P0",
-      "test_layer": "integration",
-      "precondition": "执行侧上报表述携带模型目录摘要。",
-      "steps": [
-        "由执行侧上报含模型分组/默认项的目录事实",
-        "GET /v1/capabilities，断言 model_select 的 options/model_groups/default 与上报一致",
-        "上报目录为空时断言移动端得到显式不可用原因（不猜测模型）",
-        "移动端 capability matrix 解析回归：source 字段缺失时保持向后兼容"
-      ],
-      "expected": "模型目录来源单一且可追溯；缺目录时 fail-closed 而不是回退到编译期白名单。",
-      "cleanup": [
-        "清理临时 Terminal 与账号"
-      ],
-      "evidence": [
-        "passed：internal/relay/v092_provider_facts_contract_test.go（model_select 的 default/options/model_groups 全部与执行侧上报一致）",
-        "passed：internal/httpapi/daemon.go providerFactsToDomain（默认模型必须落在目录内，否则整体拒绝；模型 value 缺失/超长一律拒绝）"
-      ]
-    },
-    {
-      "id": "V092-05",
-      "title": "Detect 失败后受控重探测可恢复（无需重启进程）",
-      "status": "passed",
-      "phase": "P1",
-      "category": "受控重探测",
-      "priority": "P1",
-      "test_layer": "unit",
-      "precondition": "适配器具受控 re-probe 路径，触发条件集中且可注入测试。",
-      "steps": [
-        "首次 Detect 失败（传输层失败与握手失败两形态）",
-        "环境修复后按受控条件触发重探测，断言能力恢复且 Version/目录刷新",
-        "未满足触发条件时断言不重探（spawn 次数不增加）",
-        "并发请求期间断言 single-flight，不重复 spawn"
-      ],
-      "expected": "失败可自愈，同时不退化为每请求重探；成功缓存仍保持零成本命中。",
-      "cleanup": [
-        "关闭假桥"
-      ],
-      "evidence": [
-        "passed：internal/adapter/dsh/v092_detect_cache_test.go（TestV092ReprobeRecoversAfterTransportFailure：冷却窗口内不重探、到期后自动恢复；TestV092ReprobeRecoversAfterHandshakeFailure：新失败原因实时覆盖旧原因；TestV092DetectCacheHitsAreFree：成功快照零成本命中；TestV092ReprobeCooldownEnv：冷却配置语义）",
-        "passed：e2e-verify/real/v092-attribution-matrix.mjs（P0 期作为 L3 现状证据，P1 后转为 C2 契约钉扎）"
-      ]
-    },
-    {
-      "id": "V092-06",
-      "title": "Daemon 重启后发送前自动恢复 = resume，保留原 instance",
-      "status": "passed",
-      "phase": "P2",
-      "category": "会话生命周期",
-      "priority": "P0",
-      "test_layer": "integration",
-      "precondition": "store 中已存在 instance 映射，内存句柄已随进程退出释放。",
-      "steps": [
-        "启动会话并记录 Provider instance id",
-        "模拟 Daemon 重启（新 runner、同一 store）",
-        "在移动端发送前自动恢复路径触发恢复，断言走 session.resume 且 instance 不变",
-        "断言不产生新的 Provider 实例（adapter.Start 未被调用）"
-      ],
-      "expected": "恢复延续原实例、历史不丢；不再出现「start 新建实例覆盖映射」的断链。",
-      "cleanup": [
-        "关闭 runner 与临时 SQLite"
-      ],
-      "evidence": [
-        "passed：internal/daemon/v092_lifecycle_contract_test.go（TestV092ResumeFailureClassesAreDistinguishable 无映射分支；TestV092ResumeConcurrentIsSerialized 并发恢复保留原 instance-1 且恢复后 send 立即可用；TestV092AttribRestartResumePreservesInstance 流式恢复不触发 adapter.Start）",
-        "passed：apps/mobile/test/session_send_auto_start_test.dart（stopped 会话发送前自动恢复走 resume、不再 start；resume 报告本机无实例时才回退 start）",
-        "passed：apps/mobile/test/session_screens_test.dart（停止后发送自动恢复的命令计数与队列清空语义）"
-      ]
-    },
-    {
-      "id": "V092-07",
-      "title": "无句柄/无映射/投影不一致的显式错误与恢复路径",
-      "status": "passed",
-      "phase": "P2",
-      "category": "错误可见性",
-      "priority": "P0",
-      "test_layer": "integration",
-      "precondition": "可区分 local_state_missing（有映射无句柄）、无映射、provider 不可用与版本门拒绝。",
-      "steps": [
-        "分别构造无映射、有映射无句柄、投影为 idle 但无句柄三种状态",
-        "触发发送，断言得到稳定且可区分的错误与可见终态",
-        "断言不可恢复时不伪造成成功、不静默停留在生成中",
-        "移动端断言错误文案来源与 daemon 事实一致"
-      ],
-      "expected": "四类失败互相可区分，用户能看到可操作原因（重启会话/恢复会话/等 Provider 可用）。",
-      "cleanup": [
-        "关闭 runner 与临时 SQLite"
-      ],
-      "evidence": [
-        "passed：internal/daemon/v092_lifecycle_contract_test.go（三类失败可区分：无映射/自报成功无句柄 → ErrSessionInstanceMissing（LOCAL_STATE_MISSING）；adapter 显式失败保持真实失败类别并保留诊断细节；失败不写成功唤醒结果）",
-        "passed：internal/daemon/runner.go 统一错误归口（v0.9.2 P2：resume 自报成功但未交出/没有可用句柄 → ErrSessionInstanceMissing）",
-        "passed：apps/mobile/lib/state/session_controller.dart 恢复判定（仅当错误面指向本机实例缺失才回退 start；其余失败浮出真实原因）",
-        "**真机复核（2026-09-16）**：手机时间线精确呈现桥返回的错误原因（含模型路由名与 JSON-RPC 错误码），证明「不可恢复时给出稳定可区分的错误、不伪装成功」在真机 UI 上成立。"
-      ]
-    },
-    {
-      "id": "V092-08",
-      "title": "并发/重复 start 幂等；桥异常退出可见终态",
-      "status": "passed",
-      "phase": "P2",
-      "category": "幂等与终态",
-      "priority": "P1",
-      "test_layer": "integration",
-      "precondition": "消费既有 DCM-03/04、ADPT-DSH-07/08 语义，不重定义。",
-      "steps": [
-        "重复提交 start，断言旧句柄被回收且不产生双事件流",
-        "并发触发同一会话恢复，断言 single-flight",
-        "让桥异常退出后发送，断言可见失败终态且映射不被改写",
-        "abort 后继续发送，断言终态可预期"
-      ],
-      "expected": "重复与并发不写入互相矛盾的状态；异常退出有终态、不悬挂。",
-      "cleanup": [
-        "关闭 runner 与假桥"
-      ],
-      "evidence": [
-        "passed：internal/daemon/v092_lifecycle_contract_test.go（TestV092BridgeExitKeepsMappingAndClosesTurn：桥异常退出后映射不变且失败以 turn_completed 收口；TestV092RepeatedStartReclaimsHandle：重复 start 回收旧句柄并覆盖映射，DCM-03 语义保留）",
-        "passed：internal/daemon/v092_attrib_matrix_test.go（TestV092AttribBridgeExitVisibleFailure 可见失败链）"
-      ]
-    },
-    {
-      "id": "V092-09",
-      "title": "云端手机 DSH 首条发送闭环与终态（真机）",
-      "status": "passed",
-      "phase": "P3",
-      "category": "真机闭环",
-      "priority": "P0",
-      "test_layer": "e2e_real_device",
-      "precondition": "云端终端凭据已按 T6-B 恢复；Android 真机 USB 在线；手机已登录并绑定该账号。",
-      "steps": [
-        "真机进入 DSH 会话页面，断言 composer 可发送（Provider 可用）",
-        "发送首条消息，断言进入生成中并最终到达终态",
-        "刷新页面后仍能看到消息与终态",
-        "报告必须标记 real_device=true、headless=false 并附脱敏证据"
-      ],
-      "expected": "手机 UI → Relay → Daemon → DSH 桥全链路闭环，首条发送有终态且可复核。",
-      "cleanup": [
-        "不在云端留下测试正文；不重置 SQLite、不改终端绑定"
-      ],
-      "evidence": [
-        "**真机通过（2026-09-16 R14，headed/real_device）**：在真机上以手机 UI 完成「创建会话 → 选择模型 → 发送 → 得到完成终态」的完整闭环。",
-        "① 新建 DSH 会话：session.start delivery 39/41 succeeded，会话 idle；",
-        "② 会话页模型行显示当前目录的 default，并在模型选择器中切换到 openai 组的 GPT-5.5（列表需向上滚动才露出底部条目）；",
-        "③ 输入消息并点发送：session.send delivery 42 **succeeded**、error_code 为空；",
-        "④ **手机时间线显示 Assistant 回复气泡「Reply」与「✓ 已完成」终态**（截图 e2e-verify 目录外的现场证据，时间戳 13:53）；",
-        "⑤ Relay 侧会话事件 9 条完整往返：session.created → user.message → turn.phase×2 → message.delta → message.completed → turn.phase×2 → turn.completed；",
-        "⑥ 用量记录证明真实计费调用：provider=dsh、model=gpt-5.5、input_tokens=2246、output_tokens=29。",
-        "**结论：手机 UI → Relay → Daemon(runner) → DSH ACP 桥 → 上游 LLM → 流式回包 → 手机时间线** 全链路闭环成立（G1/G2/G3/G4 全部验证）。",
-        "前置修复（本轮迭代中依次定位并修复，均已回归钉扎）：Relay→Daemon 投递契约（session_id/envelope）、多 Daemon 实例命令竞争（T7 单实例锁）、本地 Relay 未传 DSH 配置导致模型目录被缺省配置顶替（startRelay 默认注入已固化）。",
-        "**云端形态通过（2026-09-17，阿里云 ECS + USB 真机 d723617）**：T6-B 窗口内按序完成——helper 重发 terminal 令牌（-ttl 720h，克服 24h 默认 TTL 与 SSH 窗口不确定）→ 经生产同源领域路径（PairingService.GenerateRecoveryCode）为云端账号补发一次性恢复码 → 手机走「使用恢复码接管」完成 owner 接管（旧 owner 撤销、新 owner 建立，recovery_codes 被消费）→ 手机进入 DSH 工作区页，显示 4 个工作区与在线终端 V_YANBINYE-MB6。",
-        "① 首条发送曾被 provider 拒绝：403 FreeTierError（OpenCode 免费池只允许官方客户端调用），因为 cordis.yml 的桥默认模型是 opencode-zen/nemotron-3-ultra-free；",
-        "② 根因是「默认模型双源」：~/.dsh/settings.yaml 的 agent-default-model（goat/deepseek/deepseek-v4.1-flash）与 cordis.yml 的 acp-agent.config.provider/model 是两个不同的配置键、消费方不同（客户端/网关 vs acp-demo 桥插件），不存在自动同步；",
-        "③ 用 tools/sync_model_catalog.py（settings.yaml → cordis.yml，行级定点改写保留注释）对齐并重启 daemon 后，新建会话模型行显示「DeepSeek V4.1 Flash」，发送后手机时间线出现 Assistant 回复「收到,V092 cloud ping reply OK — 链路正常,无待处理事项」与「已完成」终态；",
-        "④ 服务端证据：daemon 出箱 message.completed + turn.completed（terminal_status=idle）全部 delivered；daemon 日志 terminal=turn_completed；",
-        "⑤ 观察：终态在手机 UI 上需要一次视图切换才收敛（实时投影滞后），已并入 V092-10 的发现项。"
-      ]
-    },
-    {
-      "id": "V092-10",
-      "title": "云端 Daemon 重启后手机继续发送（resume 路径，真机）",
-      "status": "passed",
-      "phase": "P3",
-      "category": "真机闭环",
-      "priority": "P0",
-      "test_layer": "e2e_real_device",
-      "precondition": "V092-09 已通过；可在受控窗口重启 daemon 进程。",
-      "steps": [
-        "重启 daemon 进程（保留 state-dir 与映射）",
-        "手机对同一会话再次发送，断言自动恢复走 resume 且保留原 instance",
-        "断言时间线历史未丢失、无新实例断链",
-        "报告标记 real_device=true、headless=false"
-      ],
-      "expected": "重启后手机无需手工操作即可继续发送，恢复语义与 Daemon 一致（T3）。",
-      "cleanup": [
-        "恢复 daemon 单一实例运行态"
-      ],
-      "evidence": [
-        "依赖 V092-09 的成功终态；同样只需渠道可用即可复跑。本仓库侧 resume 契约与回归均已就绪（internal/daemon/v092_lifecycle_contract_test.go、apps/mobile/test/session_send_auto_start_test.dart）。",
-        "**云端形态部分通过（2026-09-17）**：daemon 重启后在同一会话再次发送，Relay 侧命令链路按期望走 resume → start → send：session.resume(completed) → session.start(completed) → session.send(completed)；手机时间线保住了重启前的历史（V092-09 的回复仍在），回合以 turn_completed 收尾。",
-        "未满足的断言（partial 阶段记录，2026-09-17）：① 未做到零手工（首条 send 以 local_state_missing 失败需重试）；② 事件投递吞吐不足（16779 delta 约 16 条/秒、出箱积压 13832）；③ resume 后 system-reminder 被投影成「你」的消息。三项均为真实缺陷，转入 v0.9.3 定位。",
-        "**改判 passed（2026-09-18，经 v0.9.3 V093-04 收口）**：三项缺陷在 v0.9.3 全部修复并通过真机验证——① 客户端根因加固（send 终态回执窗口 30s + 恢复可见性 + 重试上限，commit 7189581）与 ②③（批量上传 commit cee8800 起、桥投影过滤 af59c49）落地后，真机（本地拓扑 real_device=true、headless=false、23113RKC6C）复测：daemon 进程级重启后首条发送以 local_state_missing 失败，客户端 7.5 秒内零手工自动完成 resume→start→send#recovered→turn_completed（真实模型回复），时间线历史保留、UI 自动收敛。报告 e2e-verify/reports/v093-device/v093-04-report.json；命令链 relay_commands：send(failed)→resume(succeeded)→start(succeeded)→send(succeeded)。",
-        "T1/T3/T4 裁决口径满足（客户端自动完成、resume 优先、可见且限次）。残余观察：云端（阿里云拓扑）复测受重启窗口约束未在 v0.9.3 执行，作为后续受控窗口任务；熄屏-离线门控交互列为观察项（实施记录 33 §7）。"
-      ]
-    }
-  ]
+  {
+   "id": "V092-03",
+   "title": "能力事实源修正后：移动端可见性与执行侧一致（Relay 不再误判 dsh）",
+   "status": "passed",
+   "phase": "P1",
+   "category": "能力事实源修正",
+   "priority": "P0",
+   "test_layer": "integration",
+   "precondition": "Relay 进程自身无法执行 DSH（无 node）时，账号下存在已上报执行侧事实的在线 Terminal。",
+   "steps": [
+    "在隔离 Relay 中登记一个上报 dsh 可用的在线 Terminal",
+    "GET /v1/capabilities，断言 dsh available=true 且事实来源标注为 terminal",
+    "让该 Terminal 上报 dsh 不可用，重复请求，断言回到 fail-closed 且不伪造成可用",
+    "让 Relay 进程自身探测成功（localdev 形态），断言优先采用本进程事实"
+   ],
+   "expected": "每个 Provider 的可用性有唯一、可解释的事实来源；Relay 自身探测失败不会覆盖执行侧的成功，执行侧的失败也不会被 Relay 伪造成可用。",
+   "cleanup": [
+    "删除临时 Terminal 与账号，关闭 httptest Relay"
+   ],
+   "evidence": [
+    "passed：internal/relay/v092_provider_facts_contract_test.go（TestV092CapabilitiesAdoptTerminalFactsAfterHello / TestV092CapabilitiesIgnoreFactsFromOfflineTerminal / TestV092CapabilitiesFollowHeartbeatFactRefresh / TestV092HelloRejectsMalformedProviderFacts / TestV092CapabilitiesPreferRelayWhenRelayCanExecute）",
+    "passed：internal/domain/provider_facts_test.go（合并规则 6 条：Relay 优先、采用执行侧、两侧不可用 fail-closed、绝不伪造可用、最新观测择优且顺序无关、执行侧独有 Provider）",
+    "passed：internal/daemon/provider_facts_test.go（采集器：首轮前不上报、TTL 内不重复探测、失败事实照常上报、nil 采集器安全、kind 稳定排序）",
+    "passed：apps/mobile/test/capability_controller_test.dart（facts_source 解析与门控不受新字段影响）",
+    "passed（云端实测，2026-09-16）：部署 v0.9.2 relay 镜像（agent-sessions/relay:v092-365a1fb）到 ECS 并恢复既有终端令牌后，云端 GET /v1/capabilities 返回 dsh available=true、version=0.0.1、unsupported_count=0 —— 修复前同一端点必然 fail-closed（未找到 node 运行时）。报告 e2e-verify/reports/2026-09-16T08-12-01-078Z/V092-ATTRIB/cloud-capabilities-probe.json。"
+   ]
+  },
+  {
+   "id": "V092-04",
+   "title": "会话视图模型目录与执行侧一致（云端 DSH 模型选择器可用）",
+   "status": "passed",
+   "phase": "P1",
+   "category": "能力事实源修正",
+   "priority": "P0",
+   "test_layer": "integration",
+   "precondition": "执行侧上报表述携带模型目录摘要。",
+   "steps": [
+    "由执行侧上报含模型分组/默认项的目录事实",
+    "GET /v1/capabilities，断言 model_select 的 options/model_groups/default 与上报一致",
+    "上报目录为空时断言移动端得到显式不可用原因（不猜测模型）",
+    "移动端 capability matrix 解析回归：source 字段缺失时保持向后兼容"
+   ],
+   "expected": "模型目录来源单一且可追溯；缺目录时 fail-closed 而不是回退到编译期白名单。",
+   "cleanup": [
+    "清理临时 Terminal 与账号"
+   ],
+   "evidence": [
+    "passed：internal/relay/v092_provider_facts_contract_test.go（model_select 的 default/options/model_groups 全部与执行侧上报一致）",
+    "passed：internal/httpapi/daemon.go providerFactsToDomain（默认模型必须落在目录内，否则整体拒绝；模型 value 缺失/超长一律拒绝）"
+   ]
+  },
+  {
+   "id": "V092-05",
+   "title": "Detect 失败后受控重探测可恢复（无需重启进程）",
+   "status": "passed",
+   "phase": "P1",
+   "category": "受控重探测",
+   "priority": "P1",
+   "test_layer": "unit",
+   "precondition": "适配器具受控 re-probe 路径，触发条件集中且可注入测试。",
+   "steps": [
+    "首次 Detect 失败（传输层失败与握手失败两形态）",
+    "环境修复后按受控条件触发重探测，断言能力恢复且 Version/目录刷新",
+    "未满足触发条件时断言不重探（spawn 次数不增加）",
+    "并发请求期间断言 single-flight，不重复 spawn"
+   ],
+   "expected": "失败可自愈，同时不退化为每请求重探；成功缓存仍保持零成本命中。",
+   "cleanup": [
+    "关闭假桥"
+   ],
+   "evidence": [
+    "passed：internal/adapter/dsh/v092_detect_cache_test.go（TestV092ReprobeRecoversAfterTransportFailure：冷却窗口内不重探、到期后自动恢复；TestV092ReprobeRecoversAfterHandshakeFailure：新失败原因实时覆盖旧原因；TestV092DetectCacheHitsAreFree：成功快照零成本命中；TestV092ReprobeCooldownEnv：冷却配置语义）",
+    "passed：e2e-verify/real/v092-attribution-matrix.mjs（P0 期作为 L3 现状证据，P1 后转为 C2 契约钉扎）"
+   ]
+  },
+  {
+   "id": "V092-06",
+   "title": "Daemon 重启后发送前自动恢复 = resume，保留原 instance",
+   "status": "passed",
+   "phase": "P2",
+   "category": "会话生命周期",
+   "priority": "P0",
+   "test_layer": "integration",
+   "precondition": "store 中已存在 instance 映射，内存句柄已随进程退出释放。",
+   "steps": [
+    "启动会话并记录 Provider instance id",
+    "模拟 Daemon 重启（新 runner、同一 store）",
+    "在移动端发送前自动恢复路径触发恢复，断言走 session.resume 且 instance 不变",
+    "断言不产生新的 Provider 实例（adapter.Start 未被调用）"
+   ],
+   "expected": "恢复延续原实例、历史不丢；不再出现「start 新建实例覆盖映射」的断链。",
+   "cleanup": [
+    "关闭 runner 与临时 SQLite"
+   ],
+   "evidence": [
+    "passed：internal/daemon/v092_lifecycle_contract_test.go（TestV092ResumeFailureClassesAreDistinguishable 无映射分支；TestV092ResumeConcurrentIsSerialized 并发恢复保留原 instance-1 且恢复后 send 立即可用；TestV092AttribRestartResumePreservesInstance 流式恢复不触发 adapter.Start）",
+    "passed：apps/mobile/test/session_send_auto_start_test.dart（stopped 会话发送前自动恢复走 resume、不再 start；resume 报告本机无实例时才回退 start）",
+    "passed：apps/mobile/test/session_screens_test.dart（停止后发送自动恢复的命令计数与队列清空语义）"
+   ]
+  },
+  {
+   "id": "V092-07",
+   "title": "无句柄/无映射/投影不一致的显式错误与恢复路径",
+   "status": "passed",
+   "phase": "P2",
+   "category": "错误可见性",
+   "priority": "P0",
+   "test_layer": "integration",
+   "precondition": "可区分 local_state_missing（有映射无句柄）、无映射、provider 不可用与版本门拒绝。",
+   "steps": [
+    "分别构造无映射、有映射无句柄、投影为 idle 但无句柄三种状态",
+    "触发发送，断言得到稳定且可区分的错误与可见终态",
+    "断言不可恢复时不伪造成成功、不静默停留在生成中",
+    "移动端断言错误文案来源与 daemon 事实一致"
+   ],
+   "expected": "四类失败互相可区分，用户能看到可操作原因（重启会话/恢复会话/等 Provider 可用）。",
+   "cleanup": [
+    "关闭 runner 与临时 SQLite"
+   ],
+   "evidence": [
+    "passed：internal/daemon/v092_lifecycle_contract_test.go（三类失败可区分：无映射/自报成功无句柄 → ErrSessionInstanceMissing（LOCAL_STATE_MISSING）；adapter 显式失败保持真实失败类别并保留诊断细节；失败不写成功唤醒结果）",
+    "passed：internal/daemon/runner.go 统一错误归口（v0.9.2 P2：resume 自报成功但未交出/没有可用句柄 → ErrSessionInstanceMissing）",
+    "passed：apps/mobile/lib/state/session_controller.dart 恢复判定（仅当错误面指向本机实例缺失才回退 start；其余失败浮出真实原因）",
+    "**真机复核（2026-09-16）**：手机时间线精确呈现桥返回的错误原因（含模型路由名与 JSON-RPC 错误码），证明「不可恢复时给出稳定可区分的错误、不伪装成功」在真机 UI 上成立。"
+   ]
+  },
+  {
+   "id": "V092-08",
+   "title": "并发/重复 start 幂等；桥异常退出可见终态",
+   "status": "passed",
+   "phase": "P2",
+   "category": "幂等与终态",
+   "priority": "P1",
+   "test_layer": "integration",
+   "precondition": "消费既有 DCM-03/04、ADPT-DSH-07/08 语义，不重定义。",
+   "steps": [
+    "重复提交 start，断言旧句柄被回收且不产生双事件流",
+    "并发触发同一会话恢复，断言 single-flight",
+    "让桥异常退出后发送，断言可见失败终态且映射不被改写",
+    "abort 后继续发送，断言终态可预期"
+   ],
+   "expected": "重复与并发不写入互相矛盾的状态；异常退出有终态、不悬挂。",
+   "cleanup": [
+    "关闭 runner 与假桥"
+   ],
+   "evidence": [
+    "passed：internal/daemon/v092_lifecycle_contract_test.go（TestV092BridgeExitKeepsMappingAndClosesTurn：桥异常退出后映射不变且失败以 turn_completed 收口；TestV092RepeatedStartReclaimsHandle：重复 start 回收旧句柄并覆盖映射，DCM-03 语义保留）",
+    "passed：internal/daemon/v092_attrib_matrix_test.go（TestV092AttribBridgeExitVisibleFailure 可见失败链）"
+   ]
+  },
+  {
+   "id": "V092-09",
+   "title": "云端手机 DSH 首条发送闭环与终态（真机）",
+   "status": "passed",
+   "phase": "P3",
+   "category": "真机闭环",
+   "priority": "P0",
+   "test_layer": "e2e_real_device",
+   "precondition": "云端终端凭据已按 T6-B 恢复；Android 真机 USB 在线；手机已登录并绑定该账号。",
+   "steps": [
+    "真机进入 DSH 会话页面，断言 composer 可发送（Provider 可用）",
+    "发送首条消息，断言进入生成中并最终到达终态",
+    "刷新页面后仍能看到消息与终态",
+    "报告必须标记 real_device=true、headless=false 并附脱敏证据"
+   ],
+   "expected": "手机 UI → Relay → Daemon → DSH 桥全链路闭环，首条发送有终态且可复核。",
+   "cleanup": [
+    "不在云端留下测试正文；不重置 SQLite、不改终端绑定"
+   ],
+   "evidence": [
+    "**真机通过（2026-09-16 R14，headed/real_device）**：在真机上以手机 UI 完成「创建会话 → 选择模型 → 发送 → 得到完成终态」的完整闭环。",
+    "① 新建 DSH 会话：session.start delivery 39/41 succeeded，会话 idle；",
+    "② 会话页模型行显示当前目录的 default，并在模型选择器中切换到 openai 组的 GPT-5.5（列表需向上滚动才露出底部条目）；",
+    "③ 输入消息并点发送：session.send delivery 42 **succeeded**、error_code 为空；",
+    "④ **手机时间线显示 Assistant 回复气泡「Reply」与「✓ 已完成」终态**（截图 e2e-verify 目录外的现场证据，时间戳 13:53）；",
+    "⑤ Relay 侧会话事件 9 条完整往返：session.created → user.message → turn.phase×2 → message.delta → message.completed → turn.phase×2 → turn.completed；",
+    "⑥ 用量记录证明真实计费调用：provider=dsh、model=gpt-5.5、input_tokens=2246、output_tokens=29。",
+    "**结论：手机 UI → Relay → Daemon(runner) → DSH ACP 桥 → 上游 LLM → 流式回包 → 手机时间线** 全链路闭环成立（G1/G2/G3/G4 全部验证）。",
+    "前置修复（本轮迭代中依次定位并修复，均已回归钉扎）：Relay→Daemon 投递契约（session_id/envelope）、多 Daemon 实例命令竞争（T7 单实例锁）、本地 Relay 未传 DSH 配置导致模型目录被缺省配置顶替（startRelay 默认注入已固化）。",
+    "**云端形态通过（2026-09-17，阿里云 ECS + USB 真机 d723617）**：T6-B 窗口内按序完成——helper 重发 terminal 令牌（-ttl 720h，克服 24h 默认 TTL 与 SSH 窗口不确定）→ 经生产同源领域路径（PairingService.GenerateRecoveryCode）为云端账号补发一次性恢复码 → 手机走「使用恢复码接管」完成 owner 接管（旧 owner 撤销、新 owner 建立，recovery_codes 被消费）→ 手机进入 DSH 工作区页，显示 4 个工作区与在线终端 V_YANBINYE-MB6。",
+    "① 首条发送曾被 provider 拒绝：403 FreeTierError（OpenCode 免费池只允许官方客户端调用），因为 cordis.yml 的桥默认模型是 opencode-zen/nemotron-3-ultra-free；",
+    "② 根因是「默认模型双源」：~/.dsh/settings.yaml 的 agent-default-model（goat/deepseek/deepseek-v4.1-flash）与 cordis.yml 的 acp-agent.config.provider/model 是两个不同的配置键、消费方不同（客户端/网关 vs acp-demo 桥插件），不存在自动同步；",
+    "③ 用 tools/sync_model_catalog.py（settings.yaml → cordis.yml，行级定点改写保留注释）对齐并重启 daemon 后，新建会话模型行显示「DeepSeek V4.1 Flash」，发送后手机时间线出现 Assistant 回复「收到,V092 cloud ping reply OK — 链路正常,无待处理事项」与「已完成」终态；",
+    "④ 服务端证据：daemon 出箱 message.completed + turn.completed（terminal_status=idle）全部 delivered；daemon 日志 terminal=turn_completed；",
+    "⑤ 观察：终态在手机 UI 上需要一次视图切换才收敛（实时投影滞后），已并入 V092-10 的发现项。"
+   ]
+  },
+  {
+   "id": "V092-10",
+   "title": "云端 Daemon 重启后手机继续发送（resume 路径，真机）",
+   "status": "passed",
+   "phase": "P3",
+   "category": "真机闭环",
+   "priority": "P0",
+   "test_layer": "e2e_real_device",
+   "precondition": "V092-09 已通过；可在受控窗口重启 daemon 进程。",
+   "steps": [
+    "重启 daemon 进程（保留 state-dir 与映射）",
+    "手机对同一会话再次发送，断言自动恢复走 resume 且保留原 instance",
+    "断言时间线历史未丢失、无新实例断链",
+    "报告标记 real_device=true、headless=false"
+   ],
+   "expected": "重启后手机无需手工操作即可继续发送，恢复语义与 Daemon 一致（T3）。",
+   "cleanup": [
+    "恢复 daemon 单一实例运行态"
+   ],
+   "evidence": [
+    "依赖 V092-09 的成功终态；同样只需渠道可用即可复跑。本仓库侧 resume 契约与回归均已就绪（internal/daemon/v092_lifecycle_contract_test.go、apps/mobile/test/session_send_auto_start_test.dart）。",
+    "**云端形态部分通过（2026-09-17）**：daemon 重启后在同一会话再次发送，Relay 侧命令链路按期望走 resume → start → send：session.resume(completed) → session.start(completed) → session.send(completed)；手机时间线保住了重启前的历史（V092-09 的回复仍在），回合以 turn_completed 收尾。",
+    "未满足的断言（partial 阶段记录，2026-09-17）：① 未做到零手工（首条 send 以 local_state_missing 失败需重试）；② 事件投递吞吐不足（16779 delta 约 16 条/秒、出箱积压 13832）；③ resume 后 system-reminder 被投影成「你」的消息。三项均为真实缺陷，转入 v0.9.3 定位。",
+    "**改判 passed（2026-09-18，经 v0.9.3 V093-04 收口）**：三项缺陷在 v0.9.3 全部修复并通过真机验证——① 客户端根因加固（send 终态回执窗口 30s + 恢复可见性 + 重试上限，commit 7189581）与 ②③（批量上传 commit cee8800 起、桥投影过滤 af59c49）落地后，真机（本地拓扑 real_device=true、headless=false、23113RKC6C）复测：daemon 进程级重启后首条发送以 local_state_missing 失败，客户端 7.5 秒内零手工自动完成 resume→start→send#recovered→turn_completed（真实模型回复），时间线历史保留、UI 自动收敛。报告 e2e-verify/reports/v093-device/v093-04-report.json；命令链 relay_commands：send(failed)→resume(succeeded)→start(succeeded)→send(succeeded)。",
+    "T1/T3/T4 裁决口径满足（客户端自动完成、resume 优先、可见且限次）。残余观察：云端（阿里云拓扑）复测受重启窗口约束未在 v0.9.3 执行，作为后续受控窗口任务；熄屏-离线门控交互列为观察项（实施记录 33 §7）。",
+    "**云端拓扑复测（2026-09-28，阿里云 ECS + 隧道 daemon + USB 真机 d723617，real_device=true、headless=false）**：云端 Relay 升级 v092-365a1fb → v097-bffe550 后，本机 daemon（全新 state-dir）经 SSH 隧道连云端，手机经生产公网 TLS 恢复码接管 owner。① 手机 UI 发送 → daemon local_state_missing → 客户端零手工自动恢复，Relay 命令链实证 resume(succeeded) → start(succeeded) → send（序号 7-9）；② daemon 进程级重启后 hello+启动清扫成功重新上线（本日两处云端缺陷修复后无历史重放）；③ send 以渠道 400 insufficient credits 收口，错误如实回传手机时间线「发送失败 · DAEMON_EXECUTION_FAILED」——错误可见性契约在云端成立；④ 误触 abort 亦正确 fail-closed（local_state_missing）。**结论：自动恢复链 passed（云端拓扑）；真实模型回复 blocked——goat 渠道欠费（400 insufficient credits），需充值或换渠道后补一次发送取证。云端侧附带收获：修复投递重放不过滤终态命令（59456e1）与存量库 sessions.display_name 静默漏迁移（bffe550）两个真实缺陷。**"
+   ]
+  }
+ ]
 }
