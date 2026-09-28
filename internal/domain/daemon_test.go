@@ -111,3 +111,95 @@ func TestDaemonResolveEchoesAuthorityWhenCommandAlreadyExpired(t *testing.T) {
 		t.Fatalf("重复提交未收敛: err=%v receipt=%+v", err, again)
 	}
 }
+
+// 契约（v0.9.7 收口，2026-09-28 云端复测实证）：投递重放只覆盖仍未终态的命令。
+// daemon 侧投递游标随 state-dir 丢失（全新目录重连）时，历史终态命令不得再投递——
+// v0.9.5 起 resume 的持久化根双源定位可让陈旧 session.send 从全新 daemon 真实执行，
+// 重放即重执行（云端实证：09-17 的 failed send 被重放并再次触达模型渠道）。
+func TestListDeliveriesSkipsTerminalCommandsOnReplay(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	svc := NewDaemonService(repo)
+	const accountID = "acct-daemon-replay-skip"
+	const deviceID = "dev-daemon-replay-skip"
+	const terminalID = "term-daemon-replay-skip"
+	const projectID = "proj-daemon-replay-skip"
+	const workspaceID = "ws-daemon-replay-skip"
+	if err := repo.CreateAccount(ctx, accountID, "daemon-replay@example.test", []byte("hash"), time.Now()); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	if err := repo.CreateDevice(ctx, store.DeviceRow{
+		ID: deviceID, AccountID: accountID, Role: RoleTerminal, Status: "active",
+		DisplayName: "replay terminal", Platform: "test",
+		IdentityPublicKey: "identity", EncryptionPublicKey: "encryption",
+	}); err != nil {
+		t.Fatalf("create device: %v", err)
+	}
+	if err := repo.UpsertDaemonTerminal(ctx, store.TerminalRow{
+		ID: terminalID, DeviceID: deviceID, AccountID: accountID, Status: "online",
+		Hostname: "replay-host", Platform: "test", ProtocolVersion: 1,
+		DaemonVersion: "fixture", CapabilitiesJSON: "[]", LastHeartbeatUnixMS: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("create terminal: %v", err)
+	}
+	if err := repo.CreateProject(ctx, store.ProjectRow{ID: projectID, AccountID: accountID, Fingerprint: "replay-fp"}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	if err := repo.CreateWorkspace(ctx, store.WorkspaceRow{
+		ID: workspaceID, ProjectID: projectID, TerminalID: terminalID,
+		CanonicalRoot: "/fixture/replay", Status: "active",
+	}); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	sessions := NewSessionService(repo)
+	session, err := sessions.CreateSession(ctx, accountID, workspaceID, "fixture")
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	// 一条 pending（必须照常投递）与一条 failed（终态，重放必须跳过）。
+	pendingID := id.New("cmd-replay-pending")
+	if err := repo.CreateCommand(ctx, store.CommandRow{
+		ID: pendingID, AccountID: accountID, SessionID: session.ID, Kind: "session.send",
+		Status: "pending", ScopeHash: hashScope(accountID, session.ID),
+		IdempotencyKey: "replay-pending-command", LeaseEpoch: 1,
+		TargetTerminalID: terminalID, CiphertextJSON: "{}",
+	}); err != nil {
+		t.Fatalf("create pending command: %v", err)
+	}
+	failedID := id.New("cmd-replay-failed")
+	if err := repo.CreateCommand(ctx, store.CommandRow{
+		ID: failedID, AccountID: accountID, SessionID: session.ID, Kind: "session.send",
+		Status: CommandFailed, ScopeHash: hashScope(accountID, session.ID),
+		IdempotencyKey: "replay-failed-command", LeaseEpoch: 1,
+		TargetTerminalID: terminalID, CiphertextJSON: "{}",
+	}); err != nil {
+		t.Fatalf("create failed command: %v", err)
+	}
+	pendingDelivery, err := repo.CreateDaemonDelivery(ctx, store.DaemonDeliveryRow{TerminalID: terminalID, CommandID: pendingID})
+	if err != nil {
+		t.Fatalf("create pending delivery: %v", err)
+	}
+	if _, err := repo.CreateDaemonDelivery(ctx, store.DaemonDeliveryRow{TerminalID: terminalID, CommandID: failedID}); err != nil {
+		t.Fatalf("create failed delivery: %v", err)
+	}
+
+	// 游标 0（全新 daemon 重连形态）：只允许看到未终态命令的投递。
+	terminal, deliveries, err := svc.ListDeliveries(ctx, accountID, deviceID, RoleTerminal, 0)
+	if err != nil {
+		t.Fatalf("list deliveries: %v", err)
+	}
+	if terminal.ID != terminalID {
+		t.Fatalf("terminal=%q want %q", terminal.ID, terminalID)
+	}
+	if len(deliveries) != 1 || deliveries[0].CommandID != pendingID {
+		t.Fatalf("重放必须跳过终态命令: got %+v, want only %q", deliveries, pendingID)
+	}
+	// 游标越过 pending 后为空。
+	if _, deliveries, err = svc.ListDeliveries(ctx, accountID, deviceID, RoleTerminal, pendingDelivery.DeliverySeq); err != nil {
+		t.Fatalf("list deliveries after cursor: %v", err)
+	}
+	if len(deliveries) != 0 {
+		t.Fatalf("游标之后的重放应为空: %+v", deliveries)
+	}
+}

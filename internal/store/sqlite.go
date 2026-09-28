@@ -1193,10 +1193,17 @@ func (r *sqliteRepo) DaemonDeliveryByCommandID(ctx context.Context, commandID st
 }
 
 func (r *sqliteRepo) ListDaemonDeliveriesAfter(ctx context.Context, terminalID string, afterDeliverySeq int64) ([]DaemonDeliveryRow, error) {
+	// 重放只覆盖仍未终态的命令（v0.9.7 收口）：daemon 侧投递游标随 state-dir
+	// 丢失（全新目录重连）时，历史终态命令不得再投递。v0.9.5 起 resume 的
+	// 持久化根双源定位可让陈旧 session.send 从全新 daemon 真实执行，重放即
+	// 重执行（2026-09-28 云端复测首跑实证：09-17 的 failed send 被重放并再次
+	// 触达模型渠道）。pending/accepted/running 仍照常投递。
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT terminal_id,delivery_seq,command_id,ack_kind,result_status,error_code,created_at_unix_ms,updated_at_unix_ms
-		 FROM daemon_command_deliveries
-		 WHERE terminal_id=? AND delivery_seq>? ORDER BY delivery_seq`, terminalID, afterDeliverySeq)
+		`SELECT d.terminal_id,d.delivery_seq,d.command_id,d.ack_kind,d.result_status,d.error_code,d.created_at_unix_ms,d.updated_at_unix_ms
+		 FROM daemon_command_deliveries d
+		 JOIN commands c ON c.id = d.command_id
+		 WHERE d.terminal_id=? AND d.delivery_seq>? AND c.status IN ('pending','accepted','running')
+		 ORDER BY d.delivery_seq`, terminalID, afterDeliverySeq)
 	if err != nil {
 		return nil, err
 	}
