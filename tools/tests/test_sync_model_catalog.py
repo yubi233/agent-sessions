@@ -172,3 +172,16 @@ class SyncModelCatalogTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_render_block_restores_boolean_effort_keys(self):
+        """档位键 off: 被安全载入读成 False 后，render_block 必须还原为 off:
+        （2026-09-28 云端实证：false: 键会让桥 schema 拒绝、启动即崩）。"""
+        from tools.sync_model_catalog import render_block
+        block = render_block(
+            {"reasoningEfforts": {False: "none", "low": "low", "high": "high"}},
+            base_indent=10,
+            list_item=False,
+        )
+        joined = "\n".join(block)
+        self.assertNotIn("false:", joined)
+        self.assertIn("off: none", joined)

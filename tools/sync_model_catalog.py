@@ -146,6 +146,11 @@ def render_scalar_line(raw, key_line, value):
 def render_block(obj, base_indent, list_item):
     """把一个 dict 渲染成 YAML 行（首行按列表项处理），缩进对齐 cordis.yml 风格。"""
     dumped = yaml.safe_dump(obj, allow_unicode=True, sort_keys=False, default_flow_style=False)
+    # YAML 1.1 布尔键陷阱（2026-09-28 云端实证）：档位键 `off:` 会被 safe_load
+    # 读成 False，safe_dump 回写成 `false:` —— 桥的 reasoningEfforts schema
+    # 只接受 off|minimal|low|medium|high|xhigh|max，布尔键会让桥启动即崩。
+    # 这里把布尔键还原为档位枚举键（off 是唯一与布尔撞名的合法档位）。
+    dumped = re.sub(r"^([ \-]*)false:", r"\1off:", dumped, flags=re.M)
     out = []
     for i, raw in enumerate(dumped.rstrip("\n").splitlines()):
         pad = " " * base_indent
