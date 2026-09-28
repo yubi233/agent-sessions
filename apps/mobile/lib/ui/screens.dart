@@ -394,6 +394,17 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
   final _requestIdController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    // v0.10.0（ADR-017）：进入配对页即拉取待处理清单——新设备的加入请求
+    //（附比对码）自动呈现，批准无需在两台设备间手工誊写请求 ID。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(appControllerProvider).refreshPendingPairings();
+    });
+  }
+
+  @override
   void dispose() {
     _requestIdController.dispose();
     super.dispose();
@@ -434,9 +445,25 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
             label: const Text('读取配对请求'),
           ),
           const SizedBox(height: AppSpacing.xxl),
-          Text('待处理请求', style: Theme.of(context).textTheme.titleMedium),
+          Row(
+            children: [
+              Expanded(
+                child: Text('待处理请求', style: Theme.of(context).textTheme.titleMedium),
+              ),
+              // v0.10.0（ADR-017）：pending 清单可手动刷新（进入页面已自动拉取一次）。
+              TextButton.icon(
+                key: const Key('pairing-refresh-button'),
+                onPressed: app.isBusy
+                    ? null
+                    : () => ref.read(appControllerProvider).refreshPendingPairings(),
+                icon: const Icon(Icons.refresh),
+                label: const Text('刷新'),
+              ),
+            ],
+          ),
           const SizedBox(height: AppSpacing.sm),
-          if (app.pairings.isEmpty) const _EmptyState(text: '尚未读取配对请求。'),
+          if (app.pairings.isEmpty)
+            const _EmptyState(text: '暂无待处理的配对请求。'),
           for (final request in app.pairings)
             _PairingRequestTile(request: request, app: app),
         ],

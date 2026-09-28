@@ -324,6 +324,18 @@ class AppController extends ChangeNotifier {
     });
   }
 
+  /// v0.10.0（ADR-017）：拉取服务端待处理配对清单并入缓存。
+  /// 不清空既有记录——已批准/取消的本地视图保留，pending 由服务端口径覆盖。
+  Future<void> refreshPendingPairings() async {
+    await _run(() async {
+      _requireOwner();
+      final requests = await _relay.listPairings();
+      for (final request in requests) {
+        _pairings[request.id] = request;
+      }
+    });
+  }
+
   Future<void> approvePairing(String requestId) async {
     await _run(() async {
       _requireOwner();

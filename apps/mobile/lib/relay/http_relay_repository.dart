@@ -234,7 +234,14 @@ class HttpRelayRepository implements RelayRepository, SessionHistoryRepository {
   }
 
   @override
-  @override
+  Future<List<PairingRequest>> listPairings() async {
+    final response = await _authenticatedSend('GET', '/v1/pairing/requests');
+    return _asList(
+      response.data,
+      wrappedKey: 'pairings',
+    ).map(PairingRequest.fromJson).toList(growable: false);
+  }
+
   @override
   Future<OwnerPairingTicket> createOwnerPairing(OwnerPairingInput input) async {
     final response = await _send(
@@ -264,7 +271,6 @@ class HttpRelayRepository implements RelayRepository, SessionHistoryRepository {
     );
   }
 
-  @override
   @override
   Future<OwnerPairingPoll> pollOwnerPairing(String pairingId) async {
     final response = await _send('GET', '/v1/owner-pairing/requests/$pairingId');

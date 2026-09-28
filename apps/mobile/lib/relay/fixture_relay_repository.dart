@@ -316,6 +316,11 @@ class FixtureRelayRepository implements RelayRepository, SessionHistoryRepositor
       (throw const RelayFailure(RelayFailureKind.protocol, '找不到配对请求。'));
 
   @override
+  Future<List<PairingRequest>> listPairings() async => _pairings.values
+      .where((request) => request.status == PairingStatus.pending)
+      .toList(growable: false);
+
+  @override
   Future<Device> approvePairing(String requestId) async {
     final request = await getPairing(requestId);
     if (request.status != PairingStatus.pending) {
@@ -373,6 +378,15 @@ class FixtureRelayRepository implements RelayRepository, SessionHistoryRepositor
       expiresAt: _clock().add(const Duration(minutes: 10)),
     );
     _fixtureOwnerPolls = 0;
+    // 与真实 Relay 对齐：加入请求对批准端可见（配对页清单 + 比对码核对）。
+    _pairings['owner-pairing-fixture'] = PairingRequest(
+      id: 'owner-pairing-fixture',
+      status: PairingStatus.pending,
+      role: DeviceRole.androidOwner,
+      displayName: input.displayName,
+      expiresAt: _fixtureOwnerPairing!.expiresAt,
+      compareCode: '123456',
+    );
     return _fixtureOwnerPairing!;
   }
 

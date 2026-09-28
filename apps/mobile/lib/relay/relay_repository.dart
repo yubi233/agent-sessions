@@ -62,6 +62,10 @@ abstract interface class RelayRepository {
 
   Future<PairingRequest> getPairing(String requestId);
 
+  /// v0.10.0（ADR-017）：owner 拉取待处理配对清单——批准端进入配对页即可看到
+  /// 新设备的加入请求（附比对码），无需在新旧设备间手工誊写请求 ID。
+  Future<List<PairingRequest>> listPairings();
+
   Future<Device> approvePairing(String requestId);
 
   Future<void> cancelPairing(String requestId);

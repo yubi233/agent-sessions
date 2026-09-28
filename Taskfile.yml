@@ -778,6 +778,7 @@ tasks:
     cmds:
       - node --test e2e-verify/mobile/android.test.mjs
       - node --test e2e-verify/mobile/android-device.test.mjs
+      - node --test e2e-verify/mobile/android-pair.test.mjs
 
   test:android:e2e:
     desc: 后续 Android AVD integration diagnostic（不属于本轮 v0.1 gate）
@@ -790,6 +791,11 @@ tasks:
     cmds:
       - task: test:android:harness
       - node e2e-verify/mobile/run-android-device.mjs {{.CLI_ARGS}}
+
+  test:android:pair:
+    desc: OWN-06 双机真机配对旅程（自拉隔离栈；需两台已授权物理设备，主栈不受影响）
+    cmds:
+      - node e2e-verify/mobile/run-android-pair.mjs {{.CLI_ARGS}}
 
   mon:
     desc: 本地栈一键监控（进程/健康/终端心跳/DSH 桥/数据尺寸/outbox/备份/日志错误；--watch N 循环刷新）

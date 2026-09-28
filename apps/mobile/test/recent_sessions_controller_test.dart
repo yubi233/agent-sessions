@@ -422,6 +422,9 @@ class _ListOverridingRelay implements RelayRepository {
       _delegate.getPairing(requestId);
 
   @override
+  Future<List<PairingRequest>> listPairings() => _delegate.listPairings();
+
+  @override
   Future<Device> approvePairing(String requestId) =>
       _delegate.approvePairing(requestId);
 

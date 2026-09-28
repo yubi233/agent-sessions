@@ -139,4 +139,44 @@ void main() {
       find.byKey(const Key('pairing-owner-confirm-dialog')),
     );
   });
+
+  testWidgets('配对页自动呈现待处理的 owner 加入请求（无需手工誊写请求 ID）', (tester) async {
+    tester.view.physicalSize = const Size(900, 2000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final harness = MobileAppHarness(
+      scannerBuilder: buildPairingScannerFixture,
+    );
+    await tester.pumpWidget(harness.build());
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('device-connect-submit')),
+    );
+    await tester.tap(find.byKey(const Key('device-connect-submit')));
+    await _waitForVisible(
+      tester,
+      find.byKey(const Key('session-home-screen')),
+    );
+
+    // 新设备侧发起加入请求（fixture 会把它登记进 pending 清单）。
+    await harness.relay.createOwnerPairing(
+      const OwnerPairingInput(
+        displayName: '自动可见的新手机',
+        platform: 'android',
+        identityPublicKey: 'join-identity-auto',
+        encryptionPublicKey: 'join-encryption-auto',
+      ),
+    );
+
+    // 批准端进入配对页：清单自动拉取，请求与比对码无需手工加载即呈现。
+    final homeContext = tester.element(
+      find.byKey(const Key('session-home-screen')),
+    );
+    GoRouter.of(homeContext).go('/pairing');
+    await _waitForVisible(
+      tester,
+      find.text('自动可见的新手机'),
+    );
+    expect(find.textContaining('比对码 123456'), findsWidgets);
+  });
 }
