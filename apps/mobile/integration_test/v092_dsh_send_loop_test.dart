@@ -30,9 +30,24 @@ void main() {
   // 初始化 integration binding（必须调用；本用例不需要额外的 surface 控制）。
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  // 真实端点门（2026-09-28）：本用例必须经 --dart-define 注入真实
+  // RELAY_BASE_URL 才有意义（默认 gate 无参数时 fixture/无网形态下必然
+  // 失败）。显式跳过而非误报，注入后仍按 real 口径执行全部断言。
+  final injectedRelayBase = const String.fromEnvironment('RELAY_BASE_URL');
+  final injectedRun = injectedRelayBase.trim().isNotEmpty;
+
   testWidgets('V092-09：真机经真实 Relay 连接并可见 DSH 工作区（执行侧事实驱动可用性）', (
     tester,
   ) async {
+    if (!injectedRun) {
+      markTestSkipped(
+        '本用例必须以 --dart-define=RELAY_BASE_URL=<真实可达 Relay> 注入运行'
+        '（本地经 relay-lan-bridge / 云端为生产端点）；默认 gate 显式跳过，'
+        '不以无网形态误报。真机可见性现场证据见'
+        ' e2e-verify/reports/v092-device-manual-20260928/',
+      );
+      return;
+    }
     // 启动完整应用（真实 provider 图；relay 由 --dart-define 决定）。
     // main() 是异步入口（要读安全存储、构造真实 provider 图、发起首个网络请求）。
     // 在 testWidgets 里直接调用会留下未完成的 Future，框架报 "did not complete"；
