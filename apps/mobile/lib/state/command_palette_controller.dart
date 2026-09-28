@@ -44,6 +44,10 @@ class CommandPaletteController extends ChangeNotifier {
   CommandPaletteController._(this._sessionController) {
     // 订阅会话变化，面板打开期间会话列表/选中状态变化时自动重建索引。
     _sessionController.addListener(_onSessionChanged);
+    // 构造即建索引：面板通常在会话初始化完成后才首次打开，此后不再有
+    // 会话通知——不建索引时空查询永远显示空列表（2026-09-28 真机 gate
+    // 首跑实证：面板打开后"输入关键字开始搜索"，与"空查询显示全部"矛盾）。
+    filter(_query);
   }
 
   final SessionController _sessionController;

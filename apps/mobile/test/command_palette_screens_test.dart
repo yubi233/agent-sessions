@@ -106,9 +106,17 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('command-palette-input')), findsOneWidget);
-      // 未输入时索引为空，展示引导空态。
-      expect(find.byKey(const Key('command-palette-empty')), findsOneWidget);
-      expect(find.text('输入关键字开始搜索'), findsOneWidget);
+      // 构造即建索引（2026-09-28 真机 gate 修复）：未输入时显示全部已登记命令，
+      // 与 filter 的"空查询显示全部"语义一致；打开时空列表属体验缺陷。
+      expect(find.byKey(const Key('command-palette-results')), findsOneWidget);
+      expect(find.byKey(const Key('command-palette-empty')), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('command-palette-results')),
+          matching: find.text('设置'),
+        ),
+        findsOneWidget,
+      );
 
       // 输入'设置'过滤出导航命令。
       await tester.enterText(

@@ -21,11 +21,13 @@ void main() {
     expect(find.byKey(const Key('login-email')), findsNothing);
     expect(find.byKey(const Key('register-email')), findsNothing);
     await _tapVisible(tester, find.byKey(const Key('device-connect-submit')));
-    await _waitForVisible(tester, find.byKey(const Key('owner-ready-state')));
+    // v0.8.1 起认证成功后 router 重定向到 /home（DSH 主页），W1 中间页不再停留
+    // （与 w1_auth_pairing_flow 同一归因，2026-09-28 真机 gate）。
+    await _waitForVisible(tester, find.byKey(const Key('session-home-screen')));
 
     // 只推进已知路由动画时长；可见截图由独立 flutter run fixture 负责，避免干扰测试宿主退出。
     await tester.pump(const Duration(milliseconds: 500));
-    expect(find.byKey(const Key('owner-ready-state')), findsOneWidget);
+    expect(find.byKey(const Key('session-home-screen')), findsOneWidget);
   });
 }
 
