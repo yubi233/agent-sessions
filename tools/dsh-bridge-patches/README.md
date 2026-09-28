@@ -51,14 +51,8 @@ stderr 干净（证据：实施记录 37）。
 
 ## 换机路径映射
 
-检出根变化时（例如 `/Users/旧用户名/code/deepseek-harness` → 新根），bin 的
-`$HOME` 公式会自动跟随新家目录；如检出不在 `~/code/deepseek-harness`，用
-`AGENT_SESSIONS_DSH_BIN` 指向实际入口，并更新产品 `cordis.yml` 内的插件绝对路径：
-
-```bash
-new_root=/Users/<新用户>/code/deepseek-harness
-sed -i '' "s|/Users/yubi/code/deepseek-harness|$new_root|g" \
-  /Users/yubi/code/agentProject/agent-sessions/cordis.yml
-```
-
+检出约定位于 `~/code/deepseek-harness`：桥 bin 的 `$HOME` 公式（`bridgeHomeFallbackBin`）
+与 restart.sh 的运行时组合重写（`prepare_runtime_cordis`，把 cordis.yml 里任意历史
+`/Users/<用户>/code/deepseek-harness` 路径按当前 `$HOME` 重写后注入）都会自动跟随新家目录，
+**换机零手工**。检出不在约定位置时用 `AGENT_SESSIONS_DSH_BIN` 指向实际入口。
 随后按上文「最小重建链」重建产物，并跑 `restart.sh restart` 验证桥预检通过。

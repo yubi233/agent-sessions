@@ -1270,10 +1270,23 @@ check_dsh_bridge_preflight() {
   # 桥入口：env 优先；未设时按 $HOME 公式回退（与 bridge.go bridgeHomeFallbackBin
   # 同一约定：检出位于 ~/code/deepseek-harness；产品代码不再内置用户名字面量）。
   candidates+=("${AGENT_SESSIONS_DSH_BIN:-$HOME/code/deepseek-harness/packages/examples/acp-demo/lib/bin.js}")
-  # 组合文件：restart.sh 注入产品根 cordis.yml（1275-1277 行同一优先级）。
-  candidates+=("${AGENT_SESSIONS_DSH_CONFIG:-$ROOT_DIR/cordis.yml}")
-  # 产品组合引用的全部插件绝对路径（name: '/…/lib/index.js'）。
-  local config="${AGENT_SESSIONS_DSH_CONFIG:-$ROOT_DIR/cordis.yml}"
+  # 组合文件：与 start_daemon 同一优先级——env 显式指定优先；否则用产品根
+  # cordis.yml 的运行时重写版（prepare_runtime_cordis 按 $HOME 修正检出路径），
+  # 保证预检校验的就是 daemon 实际注入的组合。
+  local config="${AGENT_SESSIONS_DSH_CONFIG:-}"
+  if [[ -z "$config" ]]; then
+    if [[ -f "$ROOT_DIR/cordis.yml" ]]; then
+      prepare_runtime_cordis || return 1
+      config="$RUNTIME_DSH_CONFIG"
+    else
+      # 无产品组合：保持 fail-fast（v0.9.7 阶段 0.3 语义），指向模板指引。
+      echo "dsh bridge preflight: 产品组合缺失：$ROOT_DIR/cordis.yml" >&2
+      echo "  修复指引: cp cordis.yml.example cordis.yml 并按文件头注释补齐渠道与凭据" >&2
+      return 1
+    fi
+  fi
+  candidates+=("$config")
+  # 组合引用的全部插件绝对路径（name: '/…/lib/index.js'；运行时重写后必为绝对）。
   if [[ -f "$config" ]]; then
     while IFS= read -r plugin; do
       [[ -n "$plugin" ]] && candidates+=("$plugin")
@@ -1290,6 +1303,22 @@ check_dsh_bridge_preflight() {
     echo "  修复指引: tools/dsh-bridge-patches/README.md（重建链 + 冒烟验收）" >&2
     return 1
   fi
+}
+
+# v0.9.7 阶段 5：cordis.yml 换机即断收口。生成运行时组合：把检出路径
+# （任意用户家目录下的 deepseek-harness 检出，历史用户名不匹配当前机器也一致
+# 重写）替换为当前 $HOME 下的约定检出根 ~/code/deepseek-harness，其余内容逐字
+# 保留（端点/凭据/模型目录不动）。生成到 STATE_DIR 下不污染仓库根。
+prepare_runtime_cordis() {
+  local src="$ROOT_DIR/cordis.yml"
+  local dst="$STATE_DIR/cordis.runtime.yml"
+  RUNTIME_DSH_CONFIG="$dst"
+  # 已是当前 HOME 的路径则逐字拷贝；历史 HOME（/Users/<其他用户>）重写。
+  if ! sed "s|/Users/[^/]*/code/deepseek-harness|$HOME/code/deepseek-harness|g" "$src" > "$dst"; then
+    echo "dsh: 运行时组合生成失败（$src -> $dst）" >&2
+    return 1
+  fi
+  return 0
 }
 
 start_daemon() {
@@ -1310,8 +1339,12 @@ start_daemon() {
   if [[ -n "${AGENT_SESSIONS_DSH_CONFIG:-}" ]]; then args+=(AGENT_SESSIONS_DSH_CONFIG="$AGENT_SESSIONS_DSH_CONFIG"); fi
   # 本地个人 LLM 组合优先：仓库根的 cordis.yml（dsh-happy-init 生成，gitignore，见
   # b139f5e）承载 opencode-go 等第三方端点与凭据挂载；缺省时才回落 daemon 内置示例。
+  # v0.9.7 阶段 5（换机即断收口）：注入前按当前 $HOME 重写检出路径到运行时组合——
+  # Cordis loader 的 name 字段只接受真实路径字符串（!!js/tilde/env 插值均在 include
+  # 应用阶段失败，2026-09-28 冒烟实证），路径参数化只能由入口侧生成。
   if [[ -z "${AGENT_SESSIONS_DSH_CONFIG:-}" && -f "$ROOT_DIR/cordis.yml" ]]; then
-    args+=(AGENT_SESSIONS_DSH_CONFIG="$ROOT_DIR/cordis.yml")
+    prepare_runtime_cordis || return 1
+    args+=(AGENT_SESSIONS_DSH_CONFIG="$RUNTIME_DSH_CONFIG")
   fi
   if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_ROOT:-}" ]]; then args+=(AGENT_SESSIONS_DSH_PERSIST_ROOT="$AGENT_SESSIONS_DSH_PERSIST_ROOT"); fi
   if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_COMPRESSION:-}" ]]; then args+=(AGENT_SESSIONS_DSH_PERSIST_COMPRESSION="$AGENT_SESSIONS_DSH_PERSIST_COMPRESSION"); fi

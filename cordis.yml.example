@@ -3,8 +3,11 @@
 # 用法：`cp cordis.yml.example cordis.yml` 后按需修改。产品根 cordis.yml 含个人
 # 端点与渠道，属本地文件（.gitignore），不入库；本模板保持与生产组合相同的插件
 # 结构，新机器上补齐三件事即可运行：
-#   1. 把全部 `/absolute/path/to/deepseek-harness/...` 替换为本机检出绝对路径
-#      （检出要求见 tools/dsh-bridge-patches/README.md 的重建链）；
+#   1. 检出路径：插件 name 字段写本机 deepseek-harness 检出的绝对路径。restart.sh
+#      启动 daemon 前会按当前 $HOME 自动把检出路径重写到运行时组合
+#      （约定检出位于 ~/code/deepseek-harness）——换机/换用户名零手工。
+#      注意：Cordis loader 的 name 字段只接受真实路径字符串，!!js/~/ $VAR
+#      插值均不支持（2026-09-28 冒烟实证），参数化由入口侧生成而非本文件内表达式。
 #   2. llm.providers 中的渠道与模型目录按需增删（缺省仅 OpenCode Zen 免费池，
 #      公开端点，可直接使用）；
 #   3. 渠道 API key 写入 $DSH_HOME/.credentials.yaml（credentials-local 插件从

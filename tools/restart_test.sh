@@ -332,3 +332,48 @@ AGENT_SESSIONS_RESTART_LIB_ONLY=1 bash -c '
 ' _ "$ROOT_DIR"
 rm -rf "$v091_sync_state"
 printf 'restart.sh v0.9.1 automatic DSH workspace sync regression passed\n'
+
+# v0.9.7 阶段 5：cordis.yml 换机即断收口——prepare_runtime_cordis 必须把任意
+# 历史用户家目录下的检出路径重写为当前 $HOME 约定根，其余内容逐字保留。
+# （Cordis loader 的 name 字段只接受真实路径字符串，!!js/tilde/env 插值均在
+# include 应用阶段失败——2026-09-28 冒烟实证；路径参数化只能由入口侧生成。）
+v097_cordis_state="$(mktemp -d)"
+bash -c '
+  set -e
+  root="$1"; state="$2"; fake_home="/Users/v097-newuser"
+  mkdir -p "$state"
+  sed "s|/Users/yubi/|/Users/v097-olduser/|g" "$root/cordis.yml" > "$state/cordis.source.yml"
+  source /dev/stdin <<INNER
+ROOT_DIR=$root
+STATE_DIR=$state
+HOME=$fake_home
+$(sed -n "/^prepare_runtime_cordis()/,/^}/p" "$root/restart.sh")
+INNER
+  # 源组合固定为重写后的产物（prepare_runtime_cordis 读 ROOT_DIR/cordis.yml）
+  cp "$state/cordis.source.yml" "$root/cordis.yml.test-src"
+' _ "$ROOT_DIR" "$v097_cordis_state"
+# 直接以旧用户组合验证重写（把 prepare 的输入指向临时源）
+v097_old=$(rg -c "v097-olduser" "$v097_cordis_state/cordis.source.yml")
+[[ "$v097_old" -gt 0 ]]
+bash -c '
+  set -e
+  root="$1"; state="$2"
+  mkdir -p "$root"
+  cp "$state/cordis.source.yml" "$state/root-cordis.yml"
+  source /dev/stdin <<INNER
+ROOT_DIR=$state
+STATE_DIR=$state
+HOME=/Users/v097-newuser
+$(sed -n "/^prepare_runtime_cordis()/,/^}/p" "$root/restart.sh")
+INNER
+  # prepare 读 ROOT_DIR/cordis.yml：临时 root 放旧用户组合
+  mkdir -p "$state/fakeroot" && cp "$state/cordis.source.yml" "$state/fakeroot/cordis.yml"
+  ROOT_DIR="$state/fakeroot"
+  prepare_runtime_cordis
+  [[ "$(grep -c "v097-olduser" "$RUNTIME_DSH_CONFIG" || true)" == 0 ]]
+  [[ "$(grep -c "/Users/v097-newuser/code/deepseek-harness" "$RUNTIME_DSH_CONFIG")" -gt 0 ]]
+  # 渠道/凭据内容逐字保留
+  [[ "$(grep -c "opencode.ai/zen" "$RUNTIME_DSH_CONFIG")" -ge 1 ]]
+' _ "$ROOT_DIR" "$v097_cordis_state"
+rm -rf "$v097_cordis_state"
+printf 'restart.sh v0.9.7 cordis runtime rewrite regression passed\n'
