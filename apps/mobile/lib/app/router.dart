@@ -26,7 +26,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     refreshListenable: controller,
     redirect: (context, state) {
       final location = state.matchedLocation;
-      final isPublicRoute = location == '/connect' || location == '/recovery';
+      // /pair-with-relay（ADR-017）：新设备配对页必须在未认证态可达。
+      final isPublicRoute =
+          location == '/connect' || location == '/recovery' || location == '/pair-with-relay';
       if (controller.phase == AppAuthPhase.booting) {
         return location == '/connect' ? null : '/connect';
       }
@@ -57,6 +59,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/recovery-code',
         builder: (context, state) => const RecoveryCodeScreen(),
+      ),
+      GoRoute(
+        path: '/pair-with-relay',
+        builder: (context, state) => const OwnerPairingScreen(),
       ),
       GoRoute(
         path: '/home',

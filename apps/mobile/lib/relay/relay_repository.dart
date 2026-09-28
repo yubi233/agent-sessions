@@ -71,6 +71,12 @@ abstract interface class RelayRepository {
 
   Future<RecoveryResult> restoreWithRecoveryCode(RecoveryCodeInput input);
 
+  /// v0.10.0（ADR-017）：owner 配对加入——创建请求（未认证 + 服务端开关门控）。
+  Future<OwnerPairingTicket> createOwnerPairing(OwnerPairingInput input);
+
+  /// 轮询配对状态；approved 时携带待写入安全存储的令牌对。
+  Future<OwnerPairingPoll> pollOwnerPairing(String pairingId);
+
   /// 会话列表只返回 Relay 白名单元数据；标题等展示字段只能来自已解密缓存或 deterministic fixture。
   Future<List<MobileSession>> listSessions();
 

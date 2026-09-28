@@ -209,6 +209,7 @@ class PairingRequest {
     required this.role,
     required this.displayName,
     this.expiresAt,
+    this.compareCode,
   });
 
   factory PairingRequest.fromJson(Map<String, dynamic> json) => PairingRequest(
@@ -219,6 +220,8 @@ class PairingRequest {
     expiresAt: json['expires_at'] is String
         ? DateTime.tryParse(json['expires_at'] as String)
         : null,
+    // v0.10.0（ADR-017）：owner 配对请求的 6 位比对码（公钥材料派生）。
+    compareCode: (json['compare_code'] as String?),
   );
 
   final String id;
@@ -226,6 +229,7 @@ class PairingRequest {
   final DeviceRole role;
   final String displayName;
   final DateTime? expiresAt;
+  final String? compareCode;
 }
 
 /// 相机扫描与手动输入共用同一 payload；解析失败时不会把任意字符串发给 Relay。
@@ -318,4 +322,53 @@ class WrappedContentDEK {
 
   /// wrapped 载荷原始字节：sender_pub(32) || nonce(12) || AES-256-GCM(dek)。
   final Uint8List wrappedBytes;
+}
+
+/// v0.10.0（ADR-017 owner 配对加入）：新设备发起的配对请求输入。
+/// 公钥来自本机身份库的持久身份（createOrRead），批准后服务端把该公钥
+/// 绑定为新的 owner 设备。
+class OwnerPairingInput {
+  const OwnerPairingInput({
+    required this.displayName,
+    required this.platform,
+    required this.identityPublicKey,
+    required this.encryptionPublicKey,
+  });
+
+  final String displayName;
+  final String platform;
+  final String identityPublicKey;
+  final String encryptionPublicKey;
+}
+
+/// 配对请求创建结果：pairing_id 是领取凭据，compare_code 供双端人工核对。
+class OwnerPairingTicket {
+  const OwnerPairingTicket({
+    required this.pairingId,
+    required this.compareCode,
+    required this.expiresAt,
+  });
+
+  final String pairingId;
+  final String compareCode;
+  final DateTime expiresAt;
+}
+
+/// 配对轮询结果：pending 等待批准；approved 携带待写入安全存储的令牌对。
+class OwnerPairingPoll {
+  const OwnerPairingPoll({
+    required this.status,
+    this.displayName,
+    this.deviceId,
+    this.accessToken,
+    this.refreshToken,
+  });
+
+  final String status;
+  final String? displayName;
+  final String? deviceId;
+  final String? accessToken;
+  final String? refreshToken;
+
+  bool get approved => status == 'approved' && accessToken != null;
 }

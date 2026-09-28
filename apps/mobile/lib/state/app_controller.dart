@@ -43,6 +43,11 @@ class AppController extends ChangeNotifier {
   String? _boundDeviceId;
   List<Device> _devices = const [];
   final Map<String, PairingRequest> _pairings = {};
+  // v0.10.0（ADR-017）：owner 配对加入的请求凭据与最新轮询结果。
+  OwnerPairingTicket? _ownerPairingTicket;
+  OwnerPairingPoll? _ownerPairingPoll;
+  OwnerPairingTicket? get ownerPairingTicket => _ownerPairingTicket;
+  OwnerPairingPoll? get ownerPairingPoll => _ownerPairingPoll;
   bool _needsOwnerBootstrap = false;
   bool _requiresRecovery = false;
   bool _busy = false;
@@ -240,6 +245,73 @@ class AppController extends ChangeNotifier {
   }
 
   /// 扫码得到 request id 后读取请求；服务端才决定其是否属于当前账号与 owner。
+  // ── v0.10.0（ADR-017）：owner 配对加入 ─────────────────────────────
+
+  /// 新设备创建 owner 配对请求（未认证端点，需现役 owner 批准）。
+  Future<void> createOwnerPairingRequest({
+    String displayName = '配对的 Android 控制端',
+  }) async {
+    await _run(() async {
+      // 配对绑定的是本机持久身份的公钥；批准后该身份即成为 owner 设备。
+      final keys = await _identityStore.createOrRead();
+      _ownerPairingTicket = await _relay.createOwnerPairing(OwnerPairingInput(
+        displayName: displayName.trim().isEmpty
+            ? '配对的 Android 控制端'
+            : displayName.trim(),
+        platform: 'android',
+        identityPublicKey: keys.identityPublicKey,
+        encryptionPublicKey: keys.encryptionPublicKey,
+      ));
+      _ownerPairingPoll = null;
+    });
+  }
+
+  /// 轮询配对状态；批准时校验绑定并落安全存储，进入已认证主页态。
+  Future<OwnerPairingPoll> pollOwnerPairingOnce() async {
+    final ticket = _ownerPairingTicket;
+    if (ticket == null) {
+      throw const RelayFailure.validation('尚未创建配对请求。');
+    }
+    OwnerPairingPoll? poll;
+    await _run(() async {
+      final result = await _relay.pollOwnerPairing(ticket.pairingId);
+      poll = result;
+      _ownerPairingPoll = result;
+      if (!result.approved) {
+        return;
+      }
+      final tokens = AuthTokens(
+        accessToken: result.accessToken!,
+        refreshToken: result.refreshToken!,
+        // owner 访问令牌 TTL 15 分钟；refresh 轮换由既有刷新链路接管。
+        expiresAt: DateTime.now().add(const Duration(minutes: 15)),
+        deviceId: result.deviceId,
+      );
+      final device = Device(
+        id: result.deviceId!,
+        role: DeviceRole.androidOwner,
+        status: DeviceStatus.active,
+        displayName:
+            result.displayName ?? '配对的 Android 控制端',
+        platform: 'android',
+        lastSeen: DateTime.now(),
+      );
+      _validateDeviceTokenBinding(device, tokens);
+      await _bindAcceptedDevice(device, tokens: tokens);
+      _devices = [device];
+      await _identityStore.markOwnerBootstrapComplete(true);
+      _needsOwnerBootstrap = false;
+      _requiresRecovery = false;
+      _phase = AppAuthPhase.authenticated;
+    });
+    return poll ?? const OwnerPairingPoll(status: 'pending');
+  }
+
+  void discardOwnerPairing() {
+    _ownerPairingTicket = null;
+    _ownerPairingPoll = null;
+  }
+
   Future<void> loadPairingRequest(String requestId) async {
     await _run(() async {
       _requireOwner();

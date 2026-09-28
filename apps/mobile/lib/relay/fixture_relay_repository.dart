@@ -303,6 +303,8 @@ class FixtureRelayRepository implements RelayRepository, SessionHistoryRepositor
       role: input.role,
       displayName: input.displayName,
       expiresAt: _clock().add(const Duration(minutes: 10)),
+      // owner 配对（ADR-017）：fixture 固定比对码供 widget 测试断言。
+      compareCode: input.role == DeviceRole.androidOwner ? '123456' : null,
     );
     _pairings[request.id] = request;
     return request;
@@ -358,6 +360,45 @@ class FixtureRelayRepository implements RelayRepository, SessionHistoryRepositor
     }
     // fixture 仅提供稳定测试值；真实实现不会把该明文写入日志、缓存或数据库。
     return 'RECOVERY-FIXTURE-0001';
+  }
+
+  OwnerPairingTicket? _fixtureOwnerPairing;
+  int _fixtureOwnerPolls = 0;
+
+  @override
+  Future<OwnerPairingTicket> createOwnerPairing(OwnerPairingInput input) async {
+    _fixtureOwnerPairing = OwnerPairingTicket(
+      pairingId: 'owner-pairing-fixture',
+      compareCode: '123456',
+      expiresAt: _clock().add(const Duration(minutes: 10)),
+    );
+    _fixtureOwnerPolls = 0;
+    return _fixtureOwnerPairing!;
+  }
+
+  @override
+  Future<OwnerPairingPoll> pollOwnerPairing(String pairingId) async {
+    _fixtureOwnerPolls += 1;
+    // fixture 行为：第二次轮询起视为已批准（widget 测试驱动批准流）。
+    final approved = _fixtureOwnerPolls >= 2;
+    if (approved) {
+      final owner = _devices.firstWhere(
+        (d) => d.role == DeviceRole.androidOwner,
+        orElse: () => Device(
+          id: 'owner-pairing-fixture', role: DeviceRole.androidOwner,
+          status: DeviceStatus.active, displayName: '配对的 Android 控制端',
+          platform: 'android', lastSeen: _clock(),
+        ),
+      );
+      return OwnerPairingPoll(
+        status: 'approved',
+        deviceId: owner.id,
+        accessToken: 'fixture-owner-pairing-access',
+        refreshToken: 'fixture-owner-pairing-refresh',
+        displayName: owner.displayName,
+      );
+    }
+    return const OwnerPairingPoll(status: 'pending');
   }
 
   @override

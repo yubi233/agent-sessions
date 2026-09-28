@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -82,6 +84,12 @@ class _ConnectDeviceScreenState extends ConsumerState<ConnectDeviceScreen> {
                 onPressed: app.isBusy ? null : () => context.go('/recovery'),
                 icon: const Icon(Icons.key_outlined),
                 label: const Text('使用恢复码接管'),
+              ),
+              TextButton.icon(
+                key: const Key('owner-pairing-link'),
+                onPressed: app.isBusy ? null : () => context.go('/pair-with-relay'),
+                icon: const Icon(Icons.add_link_outlined),
+                label: const Text('配对到已有 Relay'),
               ),
             ],
           ),
@@ -456,6 +464,40 @@ class _PairingRequestTile extends StatelessWidget {
   final PairingRequest request;
   final AppController app;
 
+  // owner 配对（ADR-017）：批准即授予完全控制权——先弹比对码核对确认，
+  // 防止把请求批准给眼前之外的设备。
+  Future<void> _confirmAndApprove(
+    BuildContext context,
+    AppController app,
+    PairingRequest request,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('pairing-owner-confirm-dialog'),
+        title: const Text('批准 owner 设备？'),
+        content: Text(
+          '「${request.displayName}」将获得与本机完全相同的控制权。\n\n'
+          '请核对新设备屏幕上的比对码为 ${request.compareCode ?? '(无)'} 后再批准。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const Key('pairing-owner-confirm-submit'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('批准'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && context.mounted) {
+      await app.approvePairing(request.id);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final canDecide = request.status == PairingStatus.pending && !app.isBusy;
@@ -489,6 +531,14 @@ class _PairingRequestTile extends StatelessWidget {
                       '${request.role.wireValue} · ${request.status.wireValue}',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
+                    // v0.10.0（ADR-017）：owner 配对请求必须核对比对码后才批准。
+                    if (request.compareCode != null) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      Text(
+                        '比对码 ${request.compareCode}——请与新设备屏幕核对一致后再批准。',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -546,7 +596,9 @@ class _PairingRequestTile extends StatelessWidget {
                 child: FilledButton.icon(
                   key: Key('pairing-approve-${request.id}'),
                   onPressed: canDecide
-                      ? () => app.approvePairing(request.id)
+                      ? (request.compareCode != null
+                          ? () => _confirmAndApprove(context, app, request)
+                          : () => app.approvePairing(request.id))
                       : null,
                   icon: const Icon(Icons.check),
                   label: const Text('批准'),
@@ -806,4 +858,139 @@ class _EmptyState extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// v0.10.0（ADR-017 owner 配对加入）：新设备配对页。
+/// 生成配对请求 → 展示比对码与请求 ID → 轮询等待现役 owner 批准 →
+/// 领取令牌进入已认证主页。过期/取消/拒绝三态如实呈现，绝不静默重试。
+class OwnerPairingScreen extends ConsumerStatefulWidget {
+  const OwnerPairingScreen({super.key});
+
+  @override
+  ConsumerState<OwnerPairingScreen> createState() => _OwnerPairingScreenState();
+}
+
+class _OwnerPairingScreenState extends ConsumerState<OwnerPairingScreen> {
+  final _displayNameController = TextEditingController(text: '配对的 Android 控制端');
+  Timer? _pollTimer;
+  int _pollCount = 0;
+  String? _terminalError;
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _displayNameController.dispose();
+    super.dispose();
+  }
+
+  void _startPolling() {
+    // 轮询节奏 2s；总窗 10 分钟（与服务端 TTL 对齐后由过期态收敛）。
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+      final app = ref.read(appControllerProvider);
+      if (app.phase == AppAuthPhase.authenticated) {
+        timer.cancel();
+        if (mounted) context.go('/home');
+        return;
+      }
+      _pollCount += 1;
+      if (_pollCount > 300) {
+        timer.cancel();
+        if (mounted) {
+          setState(() => _terminalError = '等待批准超时，请重新发起配对。');
+        }
+      }
+      try {
+        await app.pollOwnerPairingOnce();
+        if (mounted) setState(() {});
+      } catch (_) {
+        // 轮询失败（网络抖动）不打断等待；连续失败由上限收敛。
+      }
+    });
+  }
+
+  Future<void> _generate() async {
+    final app = ref.read(appControllerProvider);
+    await app.createOwnerPairingRequest(
+      displayName: _displayNameController.text,
+    );
+    if (!mounted) return;
+    setState(() {});
+    _startPolling();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = ref.watch(appControllerProvider);
+    final ticket = app.ownerPairingTicket;
+    final poll = app.ownerPairingPoll;
+    final waiting = ticket != null &&
+        (poll == null || poll.status == 'pending');
+    return _StatusScaffold(
+      title: '配对到已有 Relay',
+      errorMessage: _terminalError ?? app.errorMessage,
+      child: _ScrollableCenter(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('配对到已有 Relay', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: AppSpacing.md),
+              const Text(
+                '在已连接的手机（owner）的「二维码配对」页批准本设备的加入请求。'
+                '批准前请核对两台设备上显示的比对码一致。',
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              TextField(
+                key: const Key('owner-pairing-display-name'),
+                controller: _displayNameController,
+                decoration: const InputDecoration(labelText: '设备名称'),
+                textInputAction: TextInputAction.done,
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              if (ticket == null)
+                FilledButton.icon(
+                  key: const Key('owner-pairing-create'),
+                  onPressed: app.isBusy ? null : _generate,
+                  icon: const Icon(Icons.link_outlined),
+                  label: const Text('生成配对请求'),
+                )
+              else ...[
+                Container(
+                  key: const Key('owner-pairing-compare-code'),
+                  padding: const EdgeInsets.all(AppSpacing.lg),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(AppRadius.card),
+                  ),
+                  child: Column(children: [
+                    Text('比对码', style: Theme.of(context).textTheme.labelLarge),
+                    const SizedBox(height: AppSpacing.sm),
+                    Text(
+                      ticket.compareCode,
+                      style: Theme.of(context).textTheme.displaySmall,
+                    ),
+                  ]),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Text('配对请求 ID：${ticket.pairingId}'),
+                const SizedBox(height: AppSpacing.lg),
+                if (waiting)
+                  const Column(children: [
+                    CircularProgressIndicator(key: Key('owner-pairing-waiting')),
+                    SizedBox(height: AppSpacing.md),
+                    Text('等待已连接手机批准…'),
+                  ])
+                else
+                  Text(poll?.status == 'expired'
+                      ? '配对请求已过期，请重新生成。'
+                      : '配对请求已取消或被拒绝。'),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

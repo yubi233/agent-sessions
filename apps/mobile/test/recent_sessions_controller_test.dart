@@ -437,6 +437,14 @@ class _ListOverridingRelay implements RelayRepository {
       _delegate.restoreWithRecoveryCode(input);
 
   @override
+  Future<OwnerPairingTicket> createOwnerPairing(OwnerPairingInput input) =>
+      _delegate.createOwnerPairing(input);
+
+  @override
+  Future<OwnerPairingPoll> pollOwnerPairing(String pairingId) =>
+      _delegate.pollOwnerPairing(pairingId);
+
+  @override
   Future<MobileSession> createSession(CreateMobileSessionInput input) =>
       _delegate.createSession(input);
 

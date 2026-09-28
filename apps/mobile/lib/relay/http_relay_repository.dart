@@ -234,6 +234,55 @@ class HttpRelayRepository implements RelayRepository, SessionHistoryRepository {
   }
 
   @override
+  @override
+  @override
+  Future<OwnerPairingTicket> createOwnerPairing(OwnerPairingInput input) async {
+    final response = await _send(
+      'POST',
+      '/v1/owner-pairing/requests',
+      data: {
+        'display_name': input.displayName,
+        'platform': input.platform,
+        'identity_public_key': input.identityPublicKey,
+        'encryption_public_key': input.encryptionPublicKey,
+      },
+    );
+    final body = _asMap(response.data);
+    final pairingId = body['pairing_id'];
+    final compareCode = body['compare_code'];
+    final expiresAt = body['expires_at'];
+    if (pairingId is! String || pairingId.isEmpty) {
+      throw const RelayFailure(RelayFailureKind.protocol, '配对响应缺少 pairing_id。');
+    }
+    if (compareCode is! String || compareCode.isEmpty) {
+      throw const RelayFailure(RelayFailureKind.protocol, '配对响应缺少比对码。');
+    }
+    return OwnerPairingTicket(
+      pairingId: pairingId,
+      compareCode: compareCode,
+      expiresAt: DateTime.tryParse(expiresAt is String ? expiresAt : '') ?? DateTime.now().add(const Duration(minutes: 10)),
+    );
+  }
+
+  @override
+  @override
+  Future<OwnerPairingPoll> pollOwnerPairing(String pairingId) async {
+    final response = await _send('GET', '/v1/owner-pairing/requests/$pairingId');
+    final body = _asMap(response.data);
+    final status = body['status'];
+    if (status is! String || status.isEmpty) {
+      throw const RelayFailure(RelayFailureKind.protocol, '配对状态响应格式错误。');
+    }
+    return OwnerPairingPoll(
+      status: status,
+      displayName: body['display_name'] is String ? body['display_name'] as String : null,
+      deviceId: body['device_id'] is String ? body['device_id'] as String : null,
+      accessToken: body['access_token'] is String ? body['access_token'] as String : null,
+      refreshToken: body['refresh_token'] is String ? body['refresh_token'] as String : null,
+    );
+  }
+
+  @override
   Future<RecoveryResult> restoreWithRecoveryCode(
     RecoveryCodeInput input,
   ) async {
