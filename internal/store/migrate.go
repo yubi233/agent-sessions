@@ -459,6 +459,13 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	// v0.9.7 收口（2026-09-28 云端升级实证）：sessions.display_name 的编号迁移
+	// 位于列表中段，索引键版本记录在「历史版本号已记录」的存量库上会跳过它
+	// （阿里云库 schema_migrations 0-71 全记录但该列缺失）。ensure 层兜底修复。
+	if err := ensureTableColumn(db, "sessions", "display_name", `ALTER TABLE sessions ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := ensureSessionEventTerminalStatusColumn(db); err != nil {
 		db.Close()
 		return nil, err

@@ -66,3 +66,45 @@ func TestMigrateToleratesPreExistingAddColumn(t *testing.T) {
 		t.Fatalf("second migration must be idempotent: %v", err)
 	}
 }
+
+// 回归（v0.9.7 收口，2026-09-28 阿里云升级实证）：版本号已全部记录、但
+// sessions.display_name 列缺失的存量库（编号迁移中段插入被索引键跳过的形态）
+// 必须在 Open 时由 ensure 层补齐，否则 v0.9.4 起的会话投影查询直接 500。
+func TestOpenHealsSessionDisplayNameOnVersionRecordedLegacyDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	// 第一步：正常 Open 建出与当前代码一致的全量 schema（含 display_name）。
+	full, err := Open(path)
+	if err != nil {
+		t.Fatalf("open full db: %v", err)
+	}
+	if err := full.Close(); err != nil {
+		t.Fatalf("close full db: %v", err)
+	}
+
+	// 第二步：模拟阿里云存量形态——schema_migrations 全量记录在案，但
+	// sessions.display_name 缺失（历史编号索引被中段插入迁移占用）。
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := raw.Exec(`ALTER TABLE sessions DROP COLUMN display_name`); err != nil {
+		t.Fatalf("drop display_name: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	// 第三步：再次 Open 必须由 ensure 层把列补回来。
+	healed, err := Open(path)
+	if err != nil {
+		t.Fatalf("open healed db: %v", err)
+	}
+	defer healed.Close()
+	var hasDisplayName int
+	if err := healed.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('sessions') WHERE name='display_name'`).Scan(&hasDisplayName); err != nil {
+		t.Fatalf("probe display_name: %v", err)
+	}
+	if hasDisplayName != 1 {
+		t.Fatalf("sessions.display_name 未被 ensure 层补齐（存量版本记录形态）")
+	}
+}
