@@ -17,6 +17,9 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,6 +130,8 @@ func (l *RelayLoop) startSchedulers(ctx context.Context) {
 	// v0.9.7 阶段 3.1：outbox 终态行清理（启动即清一次 + 每 24h 周期）。
 	// delivered 只增不删曾让 daemon.db 累积到 649MB（实施记录 37 §核查）。
 	go l.compactionLoop(ctx)
+	// v0.10.0（ADR-017 §6）：owner 配对加入后的会话 DEK 批量补 wrap 对账。
+	go l.dekWrapReconcileLoop(ctx)
 	if l.Logger != nil {
 		l.Logger.Info("relay command scheduler started", "normal_workers", 1, "control_workers", 1)
 	}
@@ -166,6 +171,49 @@ func (l *RelayLoop) compactionLoop(ctx context.Context) {
 				"stale_generation_commands", summary.StaleGenerationCmds)
 		}
 		timer.Reset(relayOutboxCompactInterval)
+	}
+}
+
+// dekWrapReconcileInterval 是 DEK 补 wrap 对账的运行周期（ADR-017 §6）：
+// 缺省 1 分钟；AGENT_SESSIONS_DEK_WRAP_RECONCILE_MS 可覆盖（测试收紧窗口），
+// 非法或 <=0 时回退缺省。
+func dekWrapReconcileInterval() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("AGENT_SESSIONS_DEK_WRAP_RECONCILE_MS"))
+	if raw == "" {
+		return time.Minute
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return time.Minute
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// dekWrapReconcileLoop 周期拉取待补清单并逐条补 wrap。首次延迟 10s，避开与
+// hello/SSE 建连争抢；失败只告警不退出——补 wrap 是新设备的可用性收口而非
+// 正确性前提（读取端 fail-closed，清单下个周期仍在）。
+func (l *RelayLoop) dekWrapReconcileLoop(ctx context.Context) {
+	interval := dekWrapReconcileInterval()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if l.Client != nil && l.Store != nil {
+			manager := NewSessionDEKManager(l.Store, l.Client)
+			published, err := manager.ReconcileOwnerDEKWraps(ctx)
+			if err != nil {
+				if l.Logger != nil {
+					l.Logger.Warn("dek wrap reconcile failed", "error", err)
+				}
+			} else if published > 0 && l.Logger != nil {
+				l.Logger.Info("dek wrap reconcile published wraps", "count", published)
+			}
+		}
+		timer.Reset(interval)
 	}
 }
 

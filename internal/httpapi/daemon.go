@@ -467,6 +467,36 @@ func (a *API) handleDaemonOwnerEncryptionKey(c *gin.Context) {
 	writeOK(c, ownerKeyView{EncryptionPublicKey: key, DeviceID: deviceID})
 }
 
+// dekWrapPendingView 是待补 wrap 清单的一行投影（v0.10.0 ADR-017 §6）：
+// daemon 对账循环据此用本机会话 DEK 为 recipient 补 wrap 后 PUT content-dek。
+type dekWrapPendingView struct {
+	SessionID           string `json:"session_id"`
+	DeviceID            string `json:"device_id"`
+	EncryptionPublicKey string `json:"encryption_public_key"`
+	DEKID               string `json:"dek_id"`
+}
+
+// handleDaemonPendingDEKWraps 返回账号内 active owner 设备缺失的 DEK wrap 清单。
+// GET 幂等只读不签名（与 owner-key GET 同口径）；补 wrap 的写路径仍走签名 PUT。
+func (a *API) handleDaemonPendingDEKWraps(c *gin.Context) {
+	subj := subject(c)
+	rows, err := a.Repo.ListPendingOwnerDEKWraps(c.Request.Context(), subj.AccountID)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	views := make([]dekWrapPendingView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, dekWrapPendingView{
+			SessionID:           row.SessionID,
+			DeviceID:            row.DeviceID,
+			EncryptionPublicKey: row.EncryptionPublicKey,
+			DEKID:               row.DEKID,
+		})
+	}
+	writeOK(c, gin.H{"pending": views})
+}
+
 // handleDaemonPutContentDEK 是 Daemon 鉴权的会话内容 DEK 登记端点（ADR-016 §3.1）。
 // 归属与幂等校验在 domain（home Terminal、recipient active owner、异 id 拒绝）。
 func (a *API) handleDaemonPutContentDEK(c *gin.Context) {

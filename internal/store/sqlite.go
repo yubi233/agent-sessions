@@ -1985,6 +1985,44 @@ func (r *sqliteRepo) CountPendingOwnerPairings(ctx context.Context, accountID st
 	return n, err
 }
 
+// ListPendingOwnerDEKWraps 返回 active owner 设备缺失的会话 DEK wrap 清单
+// （v0.10.0 ADR-017 §6）：active android_owner 设备 × 有 DEK 的会话，凡该设备
+// 在 device_key_wraps 无对应行的组合即为待补。daemon 按清单逐条补 wrap 后，
+// 同一查询自然收敛为空（幂等对账口径）。
+func (r *sqliteRepo) ListPendingOwnerDEKWraps(ctx context.Context, accountID string) ([]DEKWrapPendingRow, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT s.id, d.id, d.encryption_public_key, s.content_dek_id
+		 FROM sessions s
+		 JOIN devices d
+		   ON d.account_id = s.account_id
+		  AND d.role = 'android_owner'
+		  AND d.status = 'active'
+		  AND d.encryption_public_key <> ''
+		 WHERE s.account_id = ?
+		   AND s.content_dek_id <> ''
+		   AND NOT EXISTS (
+		     SELECT 1 FROM device_key_wraps w
+		      WHERE w.dek_id = s.content_dek_id
+		        AND w.recipient_device_id = d.id
+		   )
+		 ORDER BY s.id, d.id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DEKWrapPendingRow{}
+	for rows.Next() {
+		var row DEKWrapPendingRow
+		if err := rows.Scan(
+			&row.SessionID, &row.DeviceID, &row.EncryptionPublicKey, &row.DEKID,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // FirstAccountID 返回单租户库中的唯一账号 ID（无账号时 sql.ErrNoRows）。
 func (r *sqliteRepo) FirstAccountID(ctx context.Context) (string, error) {
 	var id string

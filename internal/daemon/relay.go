@@ -573,6 +573,43 @@ func (c *RelayClient) FetchOwnerEncryptionKey(ctx context.Context, sessionID str
 	return out, nil
 }
 
+// PendingDEKWrap 是待补 wrap 清单的一行投影（v0.10.0 ADR-017 §6）。
+type PendingDEKWrap struct {
+	SessionID           string `json:"session_id"`
+	DeviceID            string `json:"device_id"`
+	EncryptionPublicKey string `json:"encryption_public_key"`
+	DEKID               string `json:"dek_id"`
+}
+
+// FetchPendingDEKWraps 经 dek-wraps/pending 端点获取 active owner 设备缺失的
+// 会话 DEK wrap 清单（ADR-017 §6：owner 配对加入后由 daemon 批量补 wrap）。
+// GET 幂等只读不签名（与 owner-key GET 同口径）。
+func (c *RelayClient) FetchPendingDEKWraps(ctx context.Context) ([]PendingDEKWrap, error) {
+	if strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.AccessToken) == "" {
+		return nil, errors.New("relay base URL or daemon credential missing")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/daemon/dek-wraps/pending", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	response, err := c.restClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, readRelayHTTPError(response)
+	}
+	var out struct {
+		Pending []PendingDEKWrap `json:"pending"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Pending, nil
+}
+
 // PublishContentDEK 把会话 DEK 的 wrapped 载荷上行到 Relay（ADR-016 §3.1）。
 func (c *RelayClient) PublishContentDEK(ctx context.Context, sessionID, dekID string, wrapped []byte, recipientDeviceID string) error {
 	body := map[string]any{

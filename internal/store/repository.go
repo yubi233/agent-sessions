@@ -47,6 +47,9 @@ type Repository interface {
 	UpdatePairingClaim(ctx context.Context, pairingID, accessToken, refreshToken string) error
 	// CountPendingOwnerPairings 返回账号下 pending 的 owner 配对请求数（单 pending 约束）。
 	CountPendingOwnerPairings(ctx context.Context, accountID string) (int, error)
+	// ListPendingOwnerDEKWraps 返回 active owner 设备缺失的会话 DEK wrap 清单
+	//（v0.10.0 ADR-017 §6：owner 配对加入后由 daemon 批量补 wrap）。
+	ListPendingOwnerDEKWraps(ctx context.Context, accountID string) ([]DEKWrapPendingRow, error)
 	// FirstAccountID 返回单租户库中的唯一账号 ID（无账号时 sql.ErrNoRows）。
 	FirstAccountID(ctx context.Context) (string, error)
 
@@ -380,6 +383,16 @@ type KeyWrapRow struct {
 	SenderDeviceID    string
 	WrappedDEK        []byte
 	CreatedAt         time.Time
+}
+
+// DEKWrapPendingRow 是待补 wrap 的投影（v0.10.0 ADR-017 §6）：某 active
+// android_owner 设备对某会话 DEK 还没有自己的 device_key_wraps 行，由 daemon
+// 按设备 encryption_public_key 补 wrap 后上行。
+type DEKWrapPendingRow struct {
+	SessionID           string
+	DeviceID            string
+	EncryptionPublicKey string
+	DEKID               string
 }
 
 // RecoveryRow 是 recovery_codes 表的行投影。

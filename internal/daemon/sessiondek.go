@@ -63,19 +63,24 @@ func (m *SessionDEKManager) fetchOwnerEncryptionKey(ctx context.Context, session
 	return m.client.FetchOwnerEncryptionKey(ctx, sessionID)
 }
 
-// publishWrappedDEK 用临时 X25519 密钥对 wrap DEK 并上行。
+// publishWrappedDEK 用临时 X25519 密钥对 wrap DEK 并上行给会话 owner。
 // wrapped_dek 载荷 = sender_pub(32) || nonce(12) || aes-gcm(dek)，对 Relay 不透明。
 func (m *SessionDEKManager) publishWrappedDEK(ctx context.Context, sessionID string, dek []byte) error {
 	owner, err := m.fetchOwnerEncryptionKey(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	ownerKeyB64, ownerDeviceID := owner.EncryptionPublicKey, owner.DeviceID
-	ownerPubBytes, err := crypto.DecodePublic(ownerKeyB64)
-	if err != nil || len(ownerPubBytes) != 32 {
-		return errors.New("owner encryption public key 无效")
+	return m.publishWrappedDEKFor(ctx, sessionID, dek, owner.EncryptionPublicKey, owner.DeviceID)
+}
+
+// publishWrappedDEKFor 是 wrap 上行的通用形态：recipient 为任意 active owner
+// 设备（v0.10.0 ADR-017 §6 批量补 wrap 与首 wrap 共用同一条载荷格式）。
+func (m *SessionDEKManager) publishWrappedDEKFor(ctx context.Context, sessionID string, dek []byte, recipientPubB64, recipientDeviceID string) error {
+	recipientPubBytes, err := crypto.DecodePublic(recipientPubB64)
+	if err != nil || len(recipientPubBytes) != 32 {
+		return errors.New("recipient encryption public key 无效")
 	}
-	ownerPub, err := ecdh.X25519().NewPublicKey(ownerPubBytes)
+	recipientPub, err := ecdh.X25519().NewPublicKey(recipientPubBytes)
 	if err != nil {
 		return err
 	}
@@ -83,7 +88,7 @@ func (m *SessionDEKManager) publishWrappedDEK(ctx context.Context, sessionID str
 	if err != nil {
 		return err
 	}
-	nonce, wrapped, err := crypto.WrapDEK(sender, ownerPub, dek)
+	nonce, wrapped, err := crypto.WrapDEK(sender, recipientPub, dek)
 	if err != nil {
 		return err
 	}
@@ -92,7 +97,48 @@ func (m *SessionDEKManager) publishWrappedDEK(ctx context.Context, sessionID str
 	payload = append(payload, sender.PublicKey().Bytes()...)
 	payload = append(payload, nonce...)
 	payload = append(payload, wrapped...)
-	return m.client.PublishContentDEK(ctx, sessionID, sessionDEKID(sessionID), payload, ownerDeviceID)
+	return m.client.PublishContentDEK(ctx, sessionID, sessionDEKID(sessionID), payload, recipientDeviceID)
+}
+
+// ReconcileOwnerDEKWraps 是 owner 配对加入后的 DEK 补 wrap 对账（v0.10.0
+// ADR-017 §6）：拉取 Relay 的待补清单，逐会话用本机 DEK 为新设备补 wrap 上行。
+// 本机没有该会话 DEK（daemon 未处理过的会话）时跳过——该行留在服务端清单里，
+// 不影响其它行；整个调用幂等，补完的行在下一次清单查询中自然消失。
+func (m *SessionDEKManager) ReconcileOwnerDEKWraps(ctx context.Context) (int, error) {
+	if m == nil || m.store == nil {
+		return 0, errors.New("session DEK manager 未就绪")
+	}
+	if m.client == nil {
+		return 0, nil
+	}
+	pending, err := m.client.FetchPendingDEKWraps(ctx)
+	if err != nil {
+		return 0, err
+	}
+	published := 0
+	for _, row := range pending {
+		if strings.TrimSpace(row.SessionID) == "" || strings.TrimSpace(row.EncryptionPublicKey) == "" {
+			continue
+		}
+		if strings.TrimSpace(row.DEKID) != "" && row.DEKID != sessionDEKID(row.SessionID) {
+			// 清单里的 DEK id 与本机派生口径不一致：fail-closed 跳过，不盲目 wrap。
+			continue
+		}
+		existing, err := m.store.Get(sessionDEKLocalStateKey + row.SessionID)
+		if err != nil || len(existing) < 32 {
+			continue
+		}
+		dek, err := base64.RawStdEncoding.DecodeString(existing)
+		if err != nil || len(dek) < 32 {
+			continue
+		}
+		if err := m.publishWrappedDEKFor(ctx, row.SessionID, dek, row.EncryptionPublicKey, row.DeviceID); err != nil {
+			// 单行失败不阻断整批（下个对账周期重试）。
+			continue
+		}
+		published++
+	}
+	return published, nil
 }
 
 // sessionDEKID 派生会话 DEK 的稳定 id（Relay device_key_wraps 主键）。

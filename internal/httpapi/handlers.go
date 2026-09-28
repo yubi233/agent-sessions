@@ -150,6 +150,9 @@ func (a *API) RegisterRoutes(router *gin.Engine, logger *slog.Logger, presence *
 		daemon.PUT("/sessions/:id/content-dek", a.handleDaemonPutContentDEK)
 		// v0.8.5 §3.2 / ADR-016：home Terminal 获取会话 owner 公钥（wrap DEK 用）。
 		daemon.GET("/sessions/:id/owner-key", a.handleDaemonOwnerEncryptionKey)
+		// v0.10.0（ADR-017 §6）：owner 配对加入后待补的会话 DEK wrap 清单；
+		// daemon 对账循环拉取并逐条补 wrap（幂等，补完自然为空）。
+		daemon.GET("/dek-wraps/pending", a.handleDaemonPendingDEKWraps)
 
 		// Usage（ADR-010）：Terminal 上传白名单计数，账号只读聚合摘要。
 		daemon.POST("/usage/events", a.handleUsageUpload)
