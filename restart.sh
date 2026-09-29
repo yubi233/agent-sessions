@@ -1481,6 +1481,8 @@ start_relay() {
   fi
   if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_ROOT:-}" ]]; then relay_probe_env+=(AGENT_SESSIONS_DSH_PERSIST_ROOT="$AGENT_SESSIONS_DSH_PERSIST_ROOT"); fi
   if [[ -n "${AGENT_SESSIONS_DSH_PERSIST_COMPRESSION:-}" ]]; then relay_probe_env+=(AGENT_SESSIONS_DSH_PERSIST_COMPRESSION="$AGENT_SESSIONS_DSH_PERSIST_COMPRESSION"); fi
+  # v0.10.0（ADR-017）：owner 配对开关透传给 Relay（默认 off；受控运维窗口显式 on）。
+  relay_probe_env+=(AGENT_SESSIONS_OWNER_PAIRING="${AGENT_SESSIONS_OWNER_PAIRING:-off}")
   if ! env "${relay_probe_env[@]}" RELAY_ADDR="$RELAY_ADDR" RELAY_DB_PATH="$RELAY_DB_PATH" "$ROOT_DIR/tools/relayctl.sh" up; then
     return 1
   fi

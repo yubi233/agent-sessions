@@ -24,7 +24,7 @@ while true; do
   if [[ ! -f "$pause_flag" ]]; then
     if ! curl -fsS -m 3 http://127.0.0.1:8787/readyz >/dev/null 2>&1; then
       echo "[supervisor] $(date '+%F %T') readyz 不健康，执行 start" >&2
-      (cd "$root" && ./restart.sh start --no-flutter --no-opencode) >&2 || true
+      (cd "$root" && AGENT_SESSIONS_OWNER_PAIRING=on ./restart.sh start --no-flutter --no-opencode) >&2 || true
     fi
     if [[ -x "$adb_bin" ]]; then
       while IFS= read -r serial; do
@@ -54,7 +54,7 @@ while true; do
       fi
       daemon_token_now=$(cat "$daemon_token_file" 2>/dev/null || true)
       if [[ -n "$daemon_token_now" ]]; then
-        (cd "$root" && AGENT_SESSIONS_DAEMON_TOKEN="$daemon_token_now"           ./restart.sh start --state-dir "$daemon_state_dir" --no-relay --no-flutter           --no-web --no-admin --no-opencode --no-local-dev-pairing) >&2 || true
+        (cd "$root" && AGENT_SESSIONS_DAEMON_TOKEN="$daemon_token_now" AGENT_SESSIONS_OWNER_PAIRING=on           ./restart.sh start --state-dir "$daemon_state_dir" --no-relay --no-flutter           --no-web --no-admin --no-opencode --no-local-dev-pairing) >&2 || true
       fi
     fi
   fi
