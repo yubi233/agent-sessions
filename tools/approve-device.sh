@@ -151,15 +151,24 @@ approve_one() {
   case "$ans" in
     y|Y)
       local res
-      res=$(curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -X POST -H "Authorization: Bearer $TOKEN" \
-        "$RELAY/v1/pairing/requests/$id/approve" -w "\n%{http_code}" --max-time 10)
+      # approve 前令牌可能恰好在「轮询 200 → 人工核对比对码」的几十秒里过期
+      # （access TTL 短）：401 时自愈重签/轮换一次再重试，不把失败甩给用户。
+      try_approve() {
+        curl -s ${CURL_TLS[@]+"${CURL_TLS[@]}"} -X POST -H "Authorization: Bearer $TOKEN" \
+          "$RELAY/v1/pairing/requests/$id/approve" -w $'\n%{http_code}' --max-time 10
+      }
+      res=$(try_approve)
+      if [[ "${res##*$'\n'}" == "401" ]] && renew_token; then
+        echo "（令牌已过期，自愈后重试批准…）"
+        res=$(try_approve)
+      fi
       local code="${res##*$'\n'}"
       if [[ "$code" == "200" ]]; then
         echo "✓ 已批准：$name 现在是第二台 owner 设备（手机将自动进入主页）"
         if (( CLOUD == 1 )); then cross_assert_two_owners || true; fi
         return 0
       fi
-      echo "✗ 批准失败（HTTP $code）：${res%$'\n'*}"
+      echo "✗ 批准失败（HTTP ${code}）：${res%$'\n'*}"
       return 1
       ;;
     n|N)

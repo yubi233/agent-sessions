@@ -115,7 +115,7 @@ PY
     exit 1
     ;;
   *)
-    echo "✗ bootstrap 失败（HTTP $HTTP_OUT）：$(cat "$WORKDIR/resp.json")"; exit 1 ;;
+    echo "✗ bootstrap 失败（HTTP ${HTTP_OUT}）：$(cat "$WORKDIR/resp.json")"; exit 1 ;;
 esac
 
 if ! creds_ok; then echo "✗ bootstrap 后自校验未通过"; exit 1; fi
