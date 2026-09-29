@@ -8,6 +8,14 @@
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# v0.10.0：daemon 令牌滚动续期与保活（24h TTL 无刷新机制致每 24h 必死——
+# token.go 已知设计局限；此处用 reissue 工具周期重签 720h 长效 token 实现
+# 「至少一个月」连续运行：每 6 天轮换，单 token 30 天兜底）。
+daemon_state_dir="$root/.task/restart"
+daemon_token_file="$daemon_state_dir/local-daemon-token"
+daemon_device="dev_1790369304036_322f5a9f278142dd"
+daemon_token_max_age_s=$((6 * 24 * 3600))  # 6 天轮换（token 本体 30 天）
+daemon_bin_marker="daemon.bin"
 pause_flag="$root/.task/restart/supervisor.paused"
 interval="${AGENT_SESSIONS_SUPERVISOR_INTERVAL:-60}"
 adb_bin="${AGENT_SESSIONS_ADB:-$(command -v adb || echo /Users/yubi/Library/Android/sdk/platform-tools/adb)}"
@@ -26,6 +34,28 @@ while true; do
             && echo "[supervisor] $(date '+%F %T') 已为 $serial 补挂 reverse 8787" >&2
         fi
       done < <("$adb_bin" devices 2>/dev/null | awk '$2=="device"{print $1}')
+    fi
+  fi
+  # v0.10.0：daemon 保活——进程不在（401 退出等）时用长效 token 拉起；
+  # token 文件超过 6 天则先滚动重签（reissue 720h，永不逼近 24h 死线）。
+  if [[ ! -f "$pause_flag" ]]; then
+    if ! pgrep -f "$daemon_bin_marker" >/dev/null 2>&1; then
+      echo "[supervisor] $(date '+%F %T') daemon 不在场，执行令牌检查与拉起" >&2
+      token_file_mtime=$(stat -f %m "$daemon_token_file" 2>/dev/null || echo 0)
+      now_s=$(date +%s)
+      token_age=$(( now_s - token_file_mtime ))
+      if (( token_age > daemon_token_max_age_s )) || (( token_file_mtime == 0 )); then
+        new_token=$(cd "$root" && go run ./e2e-verify/helpers/reissue-terminal-token           -db "$daemon_state_dir/relay.db" -device "$daemon_device" -ttl 720h 2>/dev/null | tail -1)
+        if [[ -n "$new_token" ]]; then
+          printf '%s' "$new_token" > "$daemon_token_file"
+          chmod 600 "$daemon_token_file"
+          echo "[supervisor] $(date '+%F %T') daemon token 已滚动重签（720h）" >&2
+        fi
+      fi
+      daemon_token_now=$(cat "$daemon_token_file" 2>/dev/null || true)
+      if [[ -n "$daemon_token_now" ]]; then
+        (cd "$root" && AGENT_SESSIONS_DAEMON_TOKEN="$daemon_token_now"           ./restart.sh start --state-dir "$daemon_state_dir" --no-relay --no-flutter           --no-web --no-admin --no-opencode --no-local-dev-pairing) >&2 || true
+      fi
     fi
   fi
   sleep "$interval"
