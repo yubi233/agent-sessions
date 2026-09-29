@@ -370,5 +370,12 @@ class OwnerPairingPoll {
   final String? accessToken;
   final String? refreshToken;
 
-  bool get approved => status == 'approved' && accessToken != null;
+  // 批准且领取载荷完整：device_id/双令牌缺一即视为未就绪。服务端旧版
+  // （v0100b-5bed33b 实测）轮询响应缺 device_id 时，宽松判定会让下游
+  // `deviceId!` 空断言崩溃（OWN-06 云端实证）——在模型层收口。
+  bool get approved =>
+      status == 'approved' &&
+      accessToken != null &&
+      refreshToken != null &&
+      deviceId != null;
 }

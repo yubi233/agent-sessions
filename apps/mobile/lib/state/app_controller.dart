@@ -277,6 +277,14 @@ class AppController extends ChangeNotifier {
       final result = await _relay.pollOwnerPairing(ticket.pairingId);
       poll = result;
       _ownerPairingPoll = result;
+      if (result.status == 'approved' && !result.approved) {
+        // 服务端已批准但领取载荷不完整（典型：云端 Relay 版本过旧，轮询
+        // 响应缺 device_id）——明确报版本问题，不让用户误以为请求被拒绝。
+        throw const RelayFailure(
+          RelayFailureKind.protocol,
+          '批准响应不完整（缺 device_id 或令牌）：云端 Relay 版本过旧，需部署 v0100c 及以上。',
+        );
+      }
       if (!result.approved) {
         return;
       }
