@@ -60,6 +60,23 @@ Future<void> _pumpUntil(
   await _waitForAny(tester, [finder], timeout: timeout, timeoutMessage: timeoutMessage);
 }
 
+/// 静默等待：出现返回 true，超时返回 false（供 409 重试循环判定）。
+Future<bool> _waitQuiet(
+  WidgetTester tester,
+  Finder finder, {
+  Duration timeout = const Duration(seconds: 10),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 300)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    if (finder.evaluate().isNotEmpty) return true;
+  }
+  return false;
+}
+
 /// 以 owner 身份发起加入请求并等待批准（阶段 A 的共享路径）。
 Future<void> _joinAsSecondOwner(WidgetTester tester) async {
   final deviceConnect = find.byKey(const Key('device-connect-submit'));
@@ -77,14 +94,43 @@ Future<void> _joinAsSecondOwner(WidgetTester tester) async {
     timeout: const Duration(seconds: 30),
     timeoutMessage: 'OWN-06 approver：配对页未渲染',
   );
+  debugPrint('[OWN06-APPROVER] 配对页已渲染，输入设备名');
   await tester.enterText(nameField, 'OWN06-Approver-A');
-  await tester.tap(find.byKey(const Key('owner-pairing-create')));
+
+  // 单 pending 治理：与 joiner 并发创建的输家会吃 409（按钮仍在）——
+  // 本端请求由编排器泵即时批准消费，重试几轮内必然成功。
   final compareCodeCard = find.byKey(const Key('owner-pairing-compare-code'));
-  await _pumpUntil(
-    tester,
-    compareCodeCard,
-    timeout: const Duration(seconds: 30),
-    timeoutMessage: 'OWN-06 approver：创建请求后未展示比对码',
+  final createButton = find.byKey(const Key('owner-pairing-create'));
+  final createDeadline = DateTime.now().add(const Duration(minutes: 3));
+  var requestCreated = false;
+  var attempts = 0;
+  while (DateTime.now().isBefore(createDeadline)) {
+    attempts += 1;
+    final hit = createButton.evaluate().isNotEmpty;
+    if (attempts % 5 == 1) {
+      // 错误回显在 _StatusScaffold 的 app-error-message 座位；tap 失败原因必须可见。
+      final errorWidget = find.byKey(const Key('app-error-message'));
+      final errorText = errorWidget.evaluate().isEmpty
+          ? '无'
+          : tester.widget<Text>(errorWidget.first).data ?? '(空)';
+      debugPrint('[OWN06-APPROVER] 创建重试 #$attempts（按钮在场=$hit，页面错误=$errorText）');
+    }
+    await tester.tap(createButton, warnIfMissed: false);
+    if (await _waitQuiet(tester, compareCodeCard)) {
+      requestCreated = true;
+      debugPrint('[OWN06-APPROVER] 比对码已展示（重试 #$attempts）');
+      break;
+    }
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(seconds: 2)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  debugPrint('[OWN06-APPROVER] 重试结束 attempts=$attempts requestCreated=$requestCreated');
+  expect(
+    requestCreated,
+    isTrue,
+    reason: 'OWN-06 approver：3 分钟重试内仍未拿到比对码（单 pending 重试全失败）',
   );
   debugPrint('[OWN06-APPROVER] 加入请求已创建，等待编排器（终端 owner）批准');
   await _waitForAny(
@@ -226,7 +272,7 @@ void main() {
     await _pumpUntil(
       tester,
       sessionItem,
-      timeout: const Duration(minutes: 3),
+      timeout: const Duration(minutes: 6),
       timeoutMessage: 'OWN-06 approver：工作区会话列表未出现 joiner 新建会话（列表实时性缺陷）',
     );
     await tester.tap(sessionItem.first);

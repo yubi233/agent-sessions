@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import { baseReport, writeReport } from "../lib/report.mjs";
 import {
   findAndroidAdb,
+  findAndroidTools,
   listConnectedDevices,
   runCommand,
   summarizeFlutterMachineOutput,
@@ -82,6 +83,7 @@ export function parsePairArgs(argv, env = process.env) {
   const args = {
     approverId: env.ANDROID_APPROVER_ID || "",
     joinerId: env.ANDROID_JOINER_ID || "",
+    joinerAvd: env.OWN06_JOINER_AVD || "",
     lanIp: env.OWN06_LAN_IP || "",
     relayPort: positiveInteger(
       env.OWN06_RELAY_PORT || String(DEFAULT_RELAY_PORT),
@@ -120,6 +122,7 @@ export function parsePairArgs(argv, env = process.env) {
     };
     if (arg === "--approver-id") args.approverId = takeValue(arg);
     else if (arg === "--joiner-id") args.joinerId = takeValue(arg);
+    else if (arg === "--joiner-avd") args.joinerAvd = takeValue(arg);
     else if (arg === "--lan-ip") args.lanIp = takeValue(arg);
     else if (arg === "--relay-port") args.relayPort = positiveInteger(takeValue(arg), arg);
     else if (arg === "--lan-port") args.lanPort = positiveInteger(takeValue(arg), arg);
@@ -247,19 +250,45 @@ async function relayApi(relayAddr, path, { method = "GET", token = "", payload =
   return { status: response.status, body };
 }
 
+// createOwnerAuth：owner 令牌的 401 自愈封装——访问令牌 15 分钟过期，
+// 长旅程（审批泵 12 分钟窗 + 末尾交叉断言）必须能拿刷新令牌重签。
+function createOwnerAuth(relayAddr, initialAccess, refreshToken) {
+  let access = initialAccess;
+  return {
+    async api(path, opts = {}) {
+      let res = await relayApi(relayAddr, path, { ...opts, token: access });
+      if (res.status === 401 && refreshToken) {
+        const refreshed = await relayApi(relayAddr, "/v1/auth/refresh", {
+          method: "POST",
+          payload: { refresh_token: refreshToken },
+        });
+        if (refreshed.status !== 200 || !refreshed.body?.access_token) {
+          throw new GateError(
+            `owner 访问令牌过期且刷新失败（HTTP ${refreshed.status}）`,
+          );
+        }
+        access = refreshed.body.access_token;
+        res = await relayApi(relayAddr, path, { ...opts, token: access });
+      }
+      return res;
+    },
+  };
+}
+
 // 审批泵：以终端 owner 令牌轮询 pending 清单，只批准 approver 的请求
 //（joiner 的请求必须由 approver 手机以 UI 批准——这是 OWN-06 被测路径）。
-export async function pumpApprovalOnce(relayAddr, token, displayName) {
-  const list = await relayApi(relayAddr, "/v1/pairing/requests", { token });
+export async function pumpApprovalOnce(auth, displayName) {
+  const list = await auth.api("/v1/pairing/requests");
   if (list.status !== 200) return { approved: false, reason: `list ${list.status}` };
   const pending = (list.body?.pairings ?? []).find(
     (pairing) => pairing.status === "pending" && pairing.display_name === displayName,
   );
-  if (!pending) return { approved: false, reason: "not_found" };
-  const approved = await relayApi(
-    relayAddr,
+  if (!pending) {
+    return { approved: false, reason: "not_found" };
+  }
+  const approved = await auth.api(
     `/v1/pairing/requests/${pending.id}/approve`,
-    { method: "POST", token },
+    { method: "POST" },
   );
   if (approved.status !== 200) {
     return { approved: false, reason: `approve ${approved.status}` };
@@ -267,8 +296,8 @@ export async function pumpApprovalOnce(relayAddr, token, displayName) {
   return { approved: true, pairingId: pending.id, compareCode: pending.compare_code ?? "" };
 }
 
-export async function assertTwoActiveOwners(relayAddr, token) {
-  const devices = await relayApi(relayAddr, "/v1/devices", { token });
+export async function assertTwoActiveOwners(auth) {
+  const devices = await auth.api("/v1/devices");
   if (devices.status !== 200) {
     throw new GateError(`服务端设备清单读取失败（${devices.status}）`, {
       status: "failed",
@@ -429,7 +458,10 @@ async function bootstrapIsolatedOwner(args) {
   if (!ownerToken) {
     throw new GateError("注册响应缺 access_token");
   }
+  const ownerRefresh = registered.body.refresh_token;
+  if (!ownerRefresh) throw new GateError("注册响应缺 refresh_token");
   writeFileSync(join(args.stateDir, "local-owner-token"), ownerToken, "utf8");
+  writeFileSync(join(args.stateDir, "local-owner-refresh"), ownerRefresh, "utf8");
 
   const pairing = await relayApi(base, "/v1/pairing/requests", {
     method: "POST",
@@ -462,7 +494,7 @@ async function bootstrapIsolatedOwner(args) {
     throw new GateError("Terminal 配对批准响应缺令牌");
   }
   writeFileSync(join(args.stateDir, "local-daemon-token"), daemonToken, "utf8");
-  return { ownerToken, daemonToken };
+  return { ownerToken, ownerRefresh, daemonToken };
 }
 
 async function startPairStack(args) {
@@ -472,7 +504,7 @@ async function startPairStack(args) {
   // 1) 隔离 Relay 先行（独立 pid 文件，见 startIsolatedRelay 注释）。
   await startIsolatedRelay(args);
   // 2) 首 owner + Terminal 配对（编排器自办，令牌落 stateDir 供 --no-stack 复用）。
-  const { ownerToken, daemonToken } = await bootstrapIsolatedOwner(args);
+  const { ownerToken, ownerRefresh, daemonToken } = await bootstrapIsolatedOwner(args);
   // 3) restart.sh 以 --no-relay + env 令牌只管隔离 daemon（OpenCode 4196）。
   const started = await runCommand(
     "bash",
@@ -513,7 +545,7 @@ async function startPairStack(args) {
     }
     await new Promise((resolveSleep) => setTimeout(resolveSleep, 1_000));
   }
-  return ownerToken;
+  return { ownerToken, ownerRefresh };
 }
 
 async function stopPairStack(args) {
@@ -524,6 +556,74 @@ async function stopPairStack(args) {
   );
   // restart.sh 对本栈无 relay-owned 标记（--no-relay），隔离 Relay 由编排器收停。
   stopIsolatedRelay(args);
+}
+
+// startAvdJoiner 启动指定 AVD 作为加入端（用户授权的演练形态）。返回
+// {serial, state:"device"}；等待 sys.boot_completed=1。AVD 天然免 ADB 授权。
+async function startAvdJoiner(adbPath, avdName) {
+  const { emulatorPath } = findAndroidTools();
+  const log = openSync("/tmp/own06-avd.log", "a");
+  const child = spawn(
+    emulatorPath,
+    ["-avd", avdName, "-no-window", "-no-snapshot", "-no-audio", "-no-boot-anim", "-wipe-data"],
+    { cwd: ROOT, stdio: ["ignore", log, log], detached: true },
+  );
+  child.unref();
+  const deadline = Date.now() + 300_000;
+  while (Date.now() < deadline) {
+    const devices = await listConnectedDevices(adbPath);
+    const emu = devices.find(
+      (device) => device.serial.startsWith("emulator-") && device.state === "device",
+    );
+    if (emu) {
+      const boot = await runCommand(
+        adbPath,
+        ["-s", emu.serial, "shell", "getprop", "sys.boot_completed"],
+        { timeoutMs: 5_000 },
+      );
+      if (boot.stdout.trim() === "1") return emu;
+    }
+    await new Promise((resolveSleep) => setTimeout(resolveSleep, 3_000));
+  }
+  throw new GateError(`AVD ${avdName} 300s 内未完成启动——见 /tmp/own06-avd.log`);
+}
+
+// seedDSHWorkspaces 触发 daemon 的 DSH 工作区扫描并等待结果（发送链路前提：
+// 加入端 UI 的工作区列表必须有可选工作区）。已存在工作区时幂等直通。
+async function seedDSHWorkspaces(auth) {
+  const list = await auth.api("/v1/workspaces");
+  if (list.status === 200) {
+    const existing = list.body?.workspaces?.length ?? 0;
+    if (existing > 0) return existing;
+  }
+  const sync = await auth.api("/v1/workspaces/sync-dsh", {
+    method: "POST",
+    payload: {},
+  });
+  // 200（同步完成）或 202（异步受理，轮询 command 结果）都算触发成功。
+  if (sync.status !== 200 && sync.status !== 202) {
+    throw new GateError(`sync-dsh 触发失败（HTTP ${sync.status}）`);
+  }
+  const commandId = sync.body?.command_id;
+  if (!commandId) throw new GateError("sync-dsh 响应缺 command_id");
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    const state = await auth.api(`/v1/workspaces/sync-dsh/${commandId}`);
+    if (state.status === 200 && state.body?.status === "succeeded") break;
+    if (state.status === 200 && state.body?.status === "failed") {
+      throw new GateError("sync-dsh 失败：隔离 daemon 未发现 DSH 工作区");
+    }
+    if (Date.now() > deadline) {
+      throw new GateError("sync-dsh 结果轮询超时（120s）");
+    }
+    await new Promise((resolveSleep) => setTimeout(resolveSleep, 2_000));
+  }
+  const after = await auth.api("/v1/workspaces");
+  const count = after.body?.workspaces?.length ?? 0;
+  if (count === 0) {
+    throw new GateError("同步后仍无 DSH 工作区——发送链路前提缺失");
+  }
+  return count;
 }
 
 function startLanBridge(args) {
@@ -591,6 +691,7 @@ async function main() {
   let bridgeChild = null;
   let stackManaged = false;
   let ownerToken = "";
+  let ownerRefresh = "";
   let devices = { approver: null, joiner: null };
   let approverSummary = null;
   let joinerSummary = null;
@@ -610,7 +711,9 @@ async function main() {
       // 进入即标记：startPairStack 半途失败也必须走 teardown（否则隔离
       // Relay 残留占端口，下一次运行 bind 失败——2026-09-29 预检实证）。
       stackManaged = true;
-      ownerToken = await startPairStack(args);
+      const stackBoot = await startPairStack(args);
+      ownerToken = stackBoot.ownerToken;
+      ownerRefresh = stackBoot.ownerRefresh;
       process.stdout.write("[own06-pair][stack-only] 隔离栈就绪，探测开关…\n");
       const probe = await relayApi(`127.0.0.1:${args.relayPort}`, "/v1/owner-pairing/requests", {
         method: "POST",
@@ -628,9 +731,11 @@ async function main() {
           { status: "failed", failureClass: "product_defect" },
         );
       }
-      const pendingList = await relayApi(`127.0.0.1:${args.relayPort}`, "/v1/pairing/requests", {
-        token: ownerToken,
-      });
+      const pendingList = await createOwnerAuth(
+        `127.0.0.1:${args.relayPort}`,
+        ownerToken,
+        ownerRefresh,
+      ).api("/v1/pairing/requests");
       if (pendingList.status !== 200) {
         throw new GateError(
           `终端 owner 令牌读取 pending 清单失败（HTTP ${pendingList.status}）——审批泵不可用`,
@@ -651,38 +756,71 @@ async function main() {
       return;
     }
     const { adbPath } = findAndroidAdb();
-    const connected = await listConnectedDevices(adbPath);
-    devices = selectPairDevices(connected, {
-      approverId: args.approverId,
-      joinerId: args.joinerId,
-    });
-    process.stdout.write(
-      `[own06-pair] approver=${devices.approver.serial} joiner=${devices.joiner.serial}\n`,
-    );
-    await ensureDeviceReady(adbPath, devices.approver.serial, 60_000);
-    await ensureDeviceReady(adbPath, devices.joiner.serial, 60_000);
-
-    lanIp = args.lanIp || (await detectLanIp());
-    if (!lanIp) {
-      throw new GateError(
-        "无法自动探测 LAN IP；请用 --lan-ip 指定真机可达的本机地址",
+    let joinerBaseUrl = "";
+    let approverBaseUrl = "";
+    if (args.joinerAvd) {
+      // 用户授权的演练形态：approver = 恰好一台物理真机；joiner = 本地 AVD。
+      const connected = await listConnectedDevices(adbPath);
+      const physical = connected.filter(
+        (device) =>
+          !device.serial.startsWith("emulator-") && device.state === "device",
       );
+      const approver = args.approverId
+        ? physical.find((device) => device.serial === args.approverId)
+        : physical.length === 1
+          ? physical[0]
+          : null;
+      if (!approver) {
+        throw new GateError(
+          `--joiner-avd 模式需要恰好一台物理设备作 approver（当前 ${physical.length} 台）或用 --approver-id 指定`,
+        );
+      }
+      devices = { approver, joiner: null };
+      await ensureDeviceReady(adbPath, devices.approver.serial, 60_000);
+      lanIp = args.lanIp || (await detectLanIp());
+      if (!lanIp) {
+        throw new GateError("无法自动探测 LAN IP；请用 --lan-ip 指定");
+      }
+      approverBaseUrl = `http://${lanIp}:${args.lanPort}`;
+    } else {
+      const connected = await listConnectedDevices(adbPath);
+      devices = selectPairDevices(connected, {
+        approverId: args.approverId,
+        joinerId: args.joinerId,
+      });
+      await ensureDeviceReady(adbPath, devices.approver.serial, 60_000);
+      await ensureDeviceReady(adbPath, devices.joiner.serial, 60_000);
+      lanIp = args.lanIp || (await detectLanIp());
+      if (!lanIp) {
+        throw new GateError(
+          "无法自动探测 LAN IP；请用 --lan-ip 指定真机可达的本机地址",
+        );
+      }
+      approverBaseUrl = `http://${lanIp}:${args.lanPort}`;
+      joinerBaseUrl = approverBaseUrl;
     }
-    const relayBaseUrl = `http://${lanIp}:${args.lanPort}`;
-    process.stdout.write(`[own06-pair] RELAY_BASE_URL=${relayBaseUrl}\n`);
+    process.stdout.write(
+      `[own06-pair] approver=${devices.approver.serial}\n`,
+    );
 
     if (!args.noStack) {
       // 进入即标记：startPairStack 半途失败也必须走 teardown（否则隔离
       // Relay 残留占端口，下一次运行 bind 失败——2026-09-29 预检实证）。
       stackManaged = true;
-      ownerToken = await startPairStack(args);
+      const stackBoot = await startPairStack(args);
+      ownerToken = stackBoot.ownerToken;
+      ownerRefresh = stackBoot.ownerRefresh;
       process.stdout.write("[own06-pair] 隔离栈已就绪（owner-pairing=on）\n");
     } else {
       const tokenFile = join(args.stateDir, "local-owner-token");
+      const refreshFile = join(args.stateDir, "local-owner-refresh");
       if (!existsSync(tokenFile)) {
         throw new GateError("--no-stack 模式需要已存在的 local-owner-token");
       }
       ownerToken = readFileSync(tokenFile, "utf8").trim();
+      ownerRefresh = existsSync(refreshFile)
+        ? readFileSync(refreshFile, "utf8").trim()
+        : "";
     }
     bridgeChild = startLanBridge(args);
     await new Promise((resolveBridge) => setTimeout(resolveBridge, 2_000));
@@ -690,33 +828,46 @@ async function main() {
       throw new GateError("relay-lan-bridge 启动即退出——端口被占用或 python 不可用");
     }
 
+    // owner 令牌自愈：长旅程必须能拿刷新令牌重签（访问令牌 15 分钟过期）。
+    const ownerAuth = createOwnerAuth(`127.0.0.1:${args.relayPort}`, ownerToken, ownerRefresh);
+
+    // 残留治理：清理上轮旅程遗留的 pending owner 请求——单 pending 治理下，
+    // 陈旧请求会让本轮双端创建全部 409（--no-stack 复用世界时的关键清理）。
+    const stalePending = await ownerAuth.api("/v1/pairing/requests");
+    for (const pairing of stalePending.body?.pairings ?? []) {
+      if (pairing.status === "pending" && pairing.role === "android_owner") {
+        await ownerAuth.api(`/v1/pairing/requests/${pairing.id}/cancel`, {
+          method: "POST",
+        });
+        process.stdout.write(
+          `[own06-pair] 已清理遗留 pending：${pairing.display_name}\n`,
+        );
+      }
+    }
+
+    // 发送链路前提：隔离栈必须有可选的 DSH 工作区（daemon 扫描幂等）。
+    const workspaceCount = await seedDSHWorkspaces(ownerAuth);
+    process.stdout.write(
+      `[own06-pair] DSH 工作区就绪：${workspaceCount} 个\n`,
+    );
+
     const flutter = process.env.FLUTTER_BIN || "flutter";
     let approverDone = false;
     const approverRun = runCommand(
       flutter,
-      pairFlutterArgs(APPROVER_TEST, devices.approver.serial, relayBaseUrl),
+      pairFlutterArgs(APPROVER_TEST, devices.approver.serial, approverBaseUrl),
       { cwd: MOBILE_ROOT, timeoutMs: args.testTimeoutMs },
     ).then((result) => {
       approverDone = true;
       return result;
     });
-    // joiner 错后 30s：降低同项目并发 Gradle 构建的锁竞争。
-    await new Promise((resolveStagger) => setTimeout(resolveStagger, 30_000));
-    const joinerRun = runCommand(
-      flutter,
-      pairFlutterArgs(JOINER_TEST, devices.joiner.serial, relayBaseUrl),
-      { cwd: MOBILE_ROOT, timeoutMs: args.testTimeoutMs },
-    );
 
-    // 审批泵：只批 approver 的请求；joiner 由 approver 手机 UI 批准。
+    // 审批泵：只批 approver 的请求。顺序化——approver 加入成功后才启动
+    // joiner，消除单 pending 名额竞争（2026-09-29 run11/17 实证的双端死锁）。
     const pumpDeadline = Date.now() + APPROVAL_PUMP_TIMEOUT_MS;
     let approverPaired = false;
     while (Date.now() < pumpDeadline && !approverPaired && !approverDone) {
-      const pump = await pumpApprovalOnce(
-        `127.0.0.1:${args.relayPort}`,
-        ownerToken,
-        APPROVER_DISPLAY_NAME,
-      );
+      const pump = await pumpApprovalOnce(ownerAuth, APPROVER_DISPLAY_NAME);
       if (pump.approved) {
         approverPaired = true;
         process.stdout.write(
@@ -726,6 +877,23 @@ async function main() {
         await new Promise((resolvePump) => setTimeout(resolvePump, 2_000));
       }
     }
+
+    if (args.joinerAvd) {
+      process.stdout.write(`[own06-pair] 启动 AVD joiner：${args.joinerAvd}\n`);
+      devices.joiner = await startAvdJoiner(adbPath, args.joinerAvd);
+      // AVD 的宿主别名是 10.0.2.2（NAT 网关即宿主机）。
+      joinerBaseUrl = `http://10.0.2.2:${args.lanPort}`;
+    }
+    const joinerSerial = devices.joiner.serial;
+    process.stdout.write(
+      `[own06-pair] joiner=${joinerSerial} base=${joinerBaseUrl}\n`,
+    );
+
+    const joinerRun = runCommand(
+      flutter,
+      pairFlutterArgs(JOINER_TEST, devices.joiner.serial, joinerBaseUrl),
+      { cwd: MOBILE_ROOT, timeoutMs: args.testTimeoutMs },
+    );
 
     const approverResult = await approverRun;
     approverSummary = summarizeFlutterMachineOutput(
@@ -751,10 +919,7 @@ async function main() {
       joinerSummary.test_failed === 0;
 
     // 服务端交叉断言：双 active owner 设备行（不撤销 + 加入成功的事实收口）。
-    serverCrossCheck = await assertTwoActiveOwners(
-      `127.0.0.1:${args.relayPort}`,
-      ownerToken,
-    );
+    serverCrossCheck = await assertTwoActiveOwners(ownerAuth);
 
     if (!bothPassed) {
       status = "failed";
@@ -775,6 +940,16 @@ async function main() {
   } finally {
     if (bridgeChild && bridgeChild.exitCode === null) {
       bridgeChild.kill("SIGTERM");
+    }
+    if (devices.joiner && devices.joiner.serial.startsWith("emulator-")) {
+      try {
+        const { adbPath: adbForAvd } = findAndroidAdb();
+        await runCommand(adbForAvd, ["-s", devices.joiner.serial, "emu", "kill"], {
+          timeoutMs: 15_000,
+        });
+      } catch {
+        // AVD 收停失败不掩盖旅程结果。
+      }
     }
     if (args && stackManaged && !args.keepStack) {
       try {
@@ -815,9 +990,14 @@ async function main() {
         gate_kind: args?.stackOnly
           ? "own06_isolated_stack_preflight"
           : "android_two_device_owner_pairing_journey",
-        real_device: Boolean(devices.approver && devices.joiner),
+        real_device: Boolean(devices.approver),
         simulated_device: false,
-        device_mode: "two_physical_android",
+        device_mode: args?.stackOnly
+          ? "stack_preflight"
+          : args?.joinerAvd
+            ? "physical_approver+avd_joiner"
+            : "two_physical_android",
+        joiner_avd: args?.joinerAvd || null,
         host_platform: process.platform,
         visible_device: true,
         real_provider_called: status === "passed",

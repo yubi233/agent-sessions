@@ -116,49 +116,39 @@ test("pairFlutterArgs 注入 RELAY_BASE_URL 且绑定指定 serial", () => {
 
 test("pumpApprovalOnce 只批准指定 displayName 的 pending 请求", async () => {
   const calls = [];
-  const fakeFetch = async (url, options = {}) => {
-    calls.push({ url, method: options.method ?? "GET" });
-    if (url.endsWith("/v1/pairing/requests") && (options.method ?? "GET") === "GET") {
+  const fakeApi = async (path, options = {}) => {
+    calls.push({ path, method: options.method ?? "GET" });
+    if (path === "/v1/pairing/requests" && (options.method ?? "GET") === "GET") {
       return {
         status: 200,
-        text: async () =>
-          JSON.stringify({
-            pairings: [
-              { id: "p-joiner", status: "pending", display_name: "OWN06-Joiner-B" },
-              { id: "p-approver", status: "pending", display_name: "OWN06-Approver-A", compare_code: "654321" },
-              { id: "p-done", status: "approved", display_name: "OWN06-Approver-A" },
-            ],
-          }),
+        body: {
+          pairings: [
+            { id: "p-joiner", status: "pending", display_name: "OWN06-Joiner-B" },
+            { id: "p-approver", status: "pending", display_name: "OWN06-Approver-A", compare_code: "654321" },
+            { id: "p-done", status: "approved", display_name: "OWN06-Approver-A" },
+          ],
+        },
       };
     }
-    return { status: 200, text: async () => JSON.stringify({ ok: 1 }) };
+    return { status: 200, body: { ok: 1 } };
   };
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = fakeFetch;
-  try {
-    const result = await pumpApprovalOnce("127.0.0.1:8797", "token", "OWN06-Approver-A");
-    assert.equal(result.approved, true);
-    assert.equal(result.pairingId, "p-approver");
-    assert.equal(result.compareCode, "654321");
-    const approveCalls = calls.filter((call) => call.method === "POST");
-    assert.equal(approveCalls.length, 1);
-    assert.match(approveCalls[0].url, /p-approver\/approve$/);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const result = await pumpApprovalOnce(
+    { api: fakeApi },
+    "OWN06-Approver-A",
+  );
+  assert.equal(result.approved, true);
+  assert.equal(result.pairingId, "p-approver");
+  assert.equal(result.compareCode, "654321");
+  const approveCalls = calls.filter((call) => call.method === "POST");
+  assert.equal(approveCalls.length, 1);
+  assert.match(approveCalls[0].path, /p-approver\/approve$/);
 });
 
 test("pumpApprovalOnce 清单不含目标时保持 not_found 不误批", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({
-    status: 200,
-    text: async () => JSON.stringify({ pairings: [] }),
-  });
-  try {
-    const result = await pumpApprovalOnce("127.0.0.1:8797", "token", "OWN06-Approver-A");
-    assert.equal(result.approved, false);
-    assert.equal(result.reason, "not_found");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const result = await pumpApprovalOnce(
+    { api: async () => ({ status: 200, body: { pairings: [] } }) },
+    "OWN06-Approver-A",
+  );
+  assert.equal(result.approved, false);
+  assert.equal(result.reason, "not_found");
 });

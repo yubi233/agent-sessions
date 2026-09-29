@@ -58,6 +58,23 @@ Future<void> _pumpUntil(
   await _waitForAny(tester, [finder], timeout: timeout, timeoutMessage: timeoutMessage);
 }
 
+/// 静默等待：出现返回 true，超时返回 false（供 409 重试循环判定）。
+Future<bool> _waitQuiet(
+  WidgetTester tester,
+  Finder finder, {
+  Duration timeout = const Duration(seconds: 10),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 300)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    if (finder.evaluate().isNotEmpty) return true;
+  }
+  return false;
+}
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -94,26 +111,44 @@ void main() {
       timeoutMessage: 'OWN-06 joiner：配对页未渲染',
     );
     await tester.enterText(nameField, 'OWN06-Joiner-B');
-    await tester.tap(find.byKey(const Key('owner-pairing-create')));
 
-    // 阶段三：比对码展示（6 位数字）——批准前双端核对的 ADR-017 契约。
+    // 阶段三：比对码展示（6 位数字）。单 pending 治理下，与 approver 并发创建
+    // 的输家会吃 409（按钮仍在 = ticket 为 null）——周期性重试创建直到赢家
+    // 请求被消费。批准端先被编排器批准，因此本端重试几轮内必然成功。
     final compareCodeCard = find.byKey(const Key('owner-pairing-compare-code'));
-    await _pumpUntil(
-      tester,
-      compareCodeCard,
-      timeout: const Duration(seconds: 30),
-      timeoutMessage: 'OWN-06 joiner：创建请求后未展示比对码（服务端开关未开或请求被拒）',
+    final pairingCreateButton = find.byKey(const Key('owner-pairing-create'));
+    final createDeadline = DateTime.now().add(const Duration(minutes: 3));
+    var requestCreated = false;
+    while (DateTime.now().isBefore(createDeadline)) {
+      await tester.tap(pairingCreateButton, warnIfMissed: false);
+      if (await _waitQuiet(tester, compareCodeCard)) {
+        requestCreated = true;
+        break;
+      }
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(seconds: 2)),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(
+      requestCreated,
+      isTrue,
+      reason: 'OWN-06 joiner：3 分钟重试内仍未拿到比对码'
+          '（服务端开关未开或单 pending 重试全失败）',
     );
-    final codeText = tester
-        .widget<Text>(
-          find.descendant(
-            of: compareCodeCard,
-            matching: find.byWidgetPredicate(
-              (widget) => widget is Text && (widget.data ?? '').isNotEmpty,
-            ),
+    // 卡片内有两个非空 Text（「比对码」标签 + 数值本体）——取数值即最后一个。
+    final codeCandidates = find
+        .descendant(
+          of: compareCodeCard,
+          matching: find.byWidgetPredicate(
+            (widget) => widget is Text && (widget.data ?? '').isNotEmpty,
           ),
         )
-        .data!;
+        .evaluate()
+        .toList();
+    final codeText = codeCandidates.isEmpty
+        ? ''
+        : (codeCandidates.last.widget as Text).data ?? '';
     debugPrint('[OWN06-JOINER] 比对码：$codeText');
     expect(
       RegExp(_compareCodePattern).hasMatch(codeText),
