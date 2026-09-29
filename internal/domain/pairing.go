@@ -168,8 +168,41 @@ func (s *PairingService) ApprovePairing(ctx context.Context, owner AuthSubject, 
 		if !claimed {
 			return ErrPairingAlreadyHandled
 		}
-		if err := tx.CreateDevice(ctx, toDeviceRow(dev)); err != nil {
-			return err
+		// 同 identity 已有设备则复用（OWN-06 云端实证：同机撤销后重新配对
+		// 会以同一 identity 公钥再入，直接 CreateDevice 撞
+		// devices_account_identity_public_key 唯一索引 → 500）。批准是现役
+		// owner 的显式信任决策：active 幂等返回；revoked 原地复激活并撤销其
+		// 旧令牌族（设备行/审计/投影保留）。均为同事务，与状态认领原子。
+		reused := false
+		rows, derr := tx.ListDevices(ctx, p.AccountID)
+		if derr != nil {
+			return derr
+		}
+		for _, row := range rows {
+			if row.IdentityPublicKey != p.IdentityPublicKey {
+				continue
+			}
+			if row.Status == DeviceActive {
+				dev = fromDeviceRow(row)
+			} else {
+				if err := tx.ReactivateDevice(ctx, row.ID, dev.DisplayName, dev.Platform); err != nil {
+					return err
+				}
+				if err := tx.RevokeTokenFamiliesByDevice(ctx, row.ID); err != nil {
+					return err
+				}
+				row.Status = DeviceActive
+				row.DisplayName = dev.DisplayName
+				row.Platform = dev.Platform
+				dev = fromDeviceRow(row)
+			}
+			reused = true
+			break
+		}
+		if !reused {
+			if err := tx.CreateDevice(ctx, toDeviceRow(dev)); err != nil {
+				return err
+			}
 		}
 		// owner 配对（ADR-017）：批准即签发令牌对写入 claim 列，新设备凭
 		// pairing_id 领取；不撤销任何既有设备（多 owner 并存的硬不变量）。

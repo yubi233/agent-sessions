@@ -20,6 +20,13 @@ type Repository interface {
 	DeviceByID(ctx context.Context, id string) (DeviceRow, error)
 	ListDevices(ctx context.Context, accountID string) ([]DeviceRow, error)
 	SetDeviceStatus(ctx context.Context, id, status string) error
+	// ReactivateDevice 撤销后的设备凭同 identity 重新配对时原地复激活
+	// （devices_account_identity_public_key 唯一索引下的复用路径）；
+	// display_name/platform 以新配对请求为准，公钥不变。
+	ReactivateDevice(ctx context.Context, id, displayName, platform string) error
+	// RevokeTokenFamiliesByDevice 撤销设备的全部令牌族（复激活前清掉旧
+	// refresh，防撤销前泄露的令牌在复激活后复活）。
+	RevokeTokenFamiliesByDevice(ctx context.Context, deviceID string) error
 	UpdateBootstrapDevice(ctx context.Context, d DeviceRow) (bool, error)
 
 	// 令牌 family 与 access token

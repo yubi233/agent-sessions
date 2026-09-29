@@ -106,6 +106,21 @@ func (r *sqliteRepo) SetDeviceStatus(ctx context.Context, id, status string) err
 	return err
 }
 
+// ReactivateDevice 原地复激活撤销设备（OWN-06 云端实证：同机撤销后重新配对，
+// identity 唯一索引禁止再造同钥行）。
+func (r *sqliteRepo) ReactivateDevice(ctx context.Context, id, displayName, platform string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE devices SET status='active', display_name=?, platform=? WHERE id=?`,
+		displayName, platform, id)
+	return err
+}
+
+// RevokeTokenFamiliesByDevice 按设备撤销全部令牌族。
+func (r *sqliteRepo) RevokeTokenFamiliesByDevice(ctx context.Context, deviceID string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE token_families SET revoked=1 WHERE device_id=?`, deviceID)
+	return err
+}
+
 // UpdateBootstrapDevice 只允许初始 owner 写入一次公钥，防止已配对设备被静默换钥。
 func (r *sqliteRepo) UpdateBootstrapDevice(ctx context.Context, d DeviceRow) (bool, error) {
 	result, err := r.db.ExecContext(ctx,

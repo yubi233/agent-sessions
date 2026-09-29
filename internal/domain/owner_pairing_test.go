@@ -205,3 +205,76 @@ func TestOwnerPairingRevokeAndBootstrapReopen(t *testing.T) {
 		t.Fatal("重开放必须签发令牌")
 	}
 }
+
+// OWN-06 云端实证（阶段 4）：同机撤销后重新配对——批准不得撞
+// devices_account_identity_public_key 唯一索引（云端 v0100c 实测 500
+// internal error），应原地复激活设备并重签 claim 令牌；复激活时旧令牌族
+// 全部作废（防撤销前泄露的令牌复活）。
+func TestOwnerPairingRejoinAfterRevoke(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	setupOwnerPairingAccount(t, repo)
+	svc := NewPairingService(repo)
+	svc.OwnerPairingEnabled = true
+
+	if err := repo.CreateDevice(ctx, store.DeviceRow{
+		ID: opExisting, AccountID: opAcct, Role: RoleAndroidOwner,
+		Status: DeviceActive, DisplayName: "日常机", Platform: "android",
+		IdentityPublicKey: "existing-identity", EncryptionPublicKey: "existing-encryption",
+	}); err != nil {
+		t.Fatalf("create existing owner device: %v", err)
+	}
+	owner := AuthSubject{AccountID: opAcct, DeviceID: opExisting, Role: RoleAndroidOwner, DeviceOK: true}
+
+	p1, _, err := svc.CreateOwnerPairingRequest(ctx, ownerPairingDevice())
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	dev1, err := svc.ApprovePairing(ctx, owner, p1.ID)
+	if err != nil {
+		t.Fatalf("first approve: %v", err)
+	}
+	if err := svc.RevokeDevice(ctx, owner, dev1.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	// 同 identity 重新发起并批准：必须走复激活路径成功。
+	p2, _, err := svc.CreateOwnerPairingRequest(ctx, ownerPairingDevice())
+	if err != nil {
+		t.Fatalf("rejoin create: %v", err)
+	}
+	dev2, err := svc.ApprovePairing(ctx, owner, p2.ID)
+	if err != nil {
+		t.Fatalf("rejoin approve（复激活路径）: %v", err)
+	}
+	if dev2.ID != dev1.ID {
+		t.Fatalf("同 identity 重新加入必须复用原设备行: got %s want %s", dev2.ID, dev1.ID)
+	}
+	row, err := repo.DeviceByID(ctx, dev2.ID)
+	if err != nil || row.Status != DeviceActive {
+		t.Fatalf("复激活后设备应为 active: %+v err=%v", row, err)
+	}
+
+	// 第二轮 claim 令牌完整且 device_id 正确回填。
+	status, tokens, err := svc.OwnerPairingStatus(ctx, p2.ID)
+	if err != nil || status.Status != PairingApproved || tokens == nil || tokens.DeviceID != dev1.ID {
+		t.Fatalf("重join轮询应返回完整领取载荷: %+v tokens=%+v err=%v", status, tokens, err)
+	}
+
+	// 第一轮签发的旧令牌族必须已随复激活作废。
+	oldRow, err := repo.PairingByID(ctx, p1.ID)
+	if err != nil {
+		t.Fatalf("read old pairing: %v", err)
+	}
+	familyID, _, ok := splitRefreshToken(oldRow.ClaimRefreshToken)
+	if !ok {
+		t.Fatalf("旧 claim refresh 形状非法: %q", oldRow.ClaimRefreshToken)
+	}
+	tf, err := repo.TokenFamilyByID(ctx, familyID)
+	if err != nil {
+		t.Fatalf("read old token family: %v", err)
+	}
+	if !tf.Revoked {
+		t.Fatal("复激活必须撤销设备旧令牌族")
+	}
+}
