@@ -208,8 +208,36 @@ void main() {
     );
 
     // 阶段七：发送最小消息（real_model 一次最小调用）并等待回合收口。
-    await tester.enterText(composerInput, '请只回复：OK');
-    await tester.tap(find.byKey(const Key('session-composer-primary-action')));
+    // 会话刚 start 时 composer 可能短暂 blocked（lease/start 链路收尾）——
+    // 等 blocked-reason 消失、发送后确认乐观回显在投影里，未出现则重试发送。
+    final blockedReason = find.byKey(const Key('session-composer-blocked-reason'));
+    final sendDeadline = DateTime.now().add(const Duration(minutes: 3));
+    var sendAccepted = false;
+    while (DateTime.now().isBefore(sendDeadline) && !sendAccepted) {
+      if (blockedReason.evaluate().isNotEmpty) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(seconds: 2)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        continue;
+      }
+      await tester.enterText(composerInput, '请只回复：OK');
+      await tester.tap(find.byKey(const Key('session-composer-primary-action')));
+      // 发送被接受的投影事实：乐观回显节点或 canonical user 节点携带发送文本
+      //（AVD 帧调度下瞬态回显可能错过，canonical 投影是稳定事实）。
+      if (await _waitQuiet(
+        tester,
+        find.text('请只回复：OK'),
+        timeout: const Duration(seconds: 12),
+      )) {
+        sendAccepted = true;
+      }
+    }
+    expect(
+      sendAccepted,
+      isTrue,
+      reason: 'OWN-06 joiner：3 分钟内发送未被接受（无乐观回显）——composer 状态见 blocked-reason',
+    );
     debugPrint('[OWN06-JOINER] 消息已发送，等待回合收口');
 
     final stopButton = find.byKey(const Key('session-stop-button'));

@@ -77,6 +77,15 @@ Future<bool> _waitQuiet(
   return false;
 }
 
+/// 读取座位 key 下首个 Text 文本（座位可能是 Container 包裹）。
+String _readSeatText(WidgetTester tester, String seatKey) {
+  final seat = find.byKey(Key(seatKey));
+  if (seat.evaluate().isEmpty) return '无';
+  final texts = find.descendant(of: seat, matching: find.byType(Text)).evaluate();
+  if (texts.isEmpty) return '(空)';
+  return (texts.last.widget as Text).data ?? '(空)';
+}
+
 /// 以 owner 身份发起加入请求并等待批准（阶段 A 的共享路径）。
 Future<void> _joinAsSecondOwner(WidgetTester tester) async {
   final deviceConnect = find.byKey(const Key('device-connect-submit'));
@@ -133,11 +142,33 @@ Future<void> _joinAsSecondOwner(WidgetTester tester) async {
     reason: 'OWN-06 approver：3 分钟重试内仍未拿到比对码（单 pending 重试全失败）',
   );
   debugPrint('[OWN06-APPROVER] 加入请求已创建，等待编排器（终端 owner）批准');
-  await _waitForAny(
-    tester,
-    [find.byKey(const Key('session-home-screen'))],
-    timeout: const Duration(minutes: 8),
-    timeoutMessage: 'OWN-06 approver：8 分钟内未被终端 owner 批准（编排器审批泵失败？）',
+  final approvedDeadline = DateTime.now().add(const Duration(minutes: 8));
+  var approved = false;
+  var probeRound = 0;
+  while (DateTime.now().isBefore(approvedDeadline)) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(seconds: 15)),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    probeRound += 1;
+    if (find.byKey(const Key('session-home-screen')).evaluate().isNotEmpty) {
+      approved = true;
+      break;
+    }
+    final errorText = _readSeatText(tester, 'app-error-message');
+    final waitingSpinner = find
+        .byKey(const Key('owner-pairing-waiting'))
+        .evaluate()
+        .isNotEmpty;
+    debugPrint(
+      '[OWN06-APPROVER] 批准等待探针 #$probeRound'
+      '（轮询中=$waitingSpinner，页面错误=$errorText）',
+    );
+  }
+  expect(
+    approved,
+    isTrue,
+    reason: 'OWN-06 approver：8 分钟内未被终端 owner 批准（编排器审批泵失败？）',
   );
   debugPrint('[OWN06-APPROVER] 本机已加入为 owner');
 }
@@ -268,12 +299,45 @@ void main() {
         break;
       }
     }
+    // 会话列表不保证 SSE 自动刷新——周期性退出详情页重进（触发重新拉取）。
     final sessionItem = _firstWithKeyPrefix('dsh-workspace-session-');
-    await _pumpUntil(
-      tester,
-      sessionItem,
-      timeout: const Duration(minutes: 6),
-      timeoutMessage: 'OWN-06 approver：工作区会话列表未出现 joiner 新建会话（列表实时性缺陷）',
+    final listDeadline = DateTime.now().add(const Duration(minutes: 8));
+    var sessionVisible = false;
+    while (DateTime.now().isBefore(listDeadline)) {
+      if (sessionItem.evaluate().isNotEmpty) {
+        sessionVisible = true;
+        break;
+      }
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(seconds: 20)),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      if (sessionItem.evaluate().isNotEmpty) {
+        sessionVisible = true;
+        break;
+      }
+      // 退出详情页（回工作区列表）再进入，触发会话列表重新拉取。
+      final back = find.byKey(const Key('dsh-workspace-detail-back'));
+      if (back.evaluate().isNotEmpty) {
+        await tester.tap(back, warnIfMissed: false);
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+      for (final prefix in const [
+        'dsh-workspace-expand-',
+        'dsh-workspace-select-',
+      ]) {
+        final target = _firstWithKeyPrefix(prefix);
+        if (target.evaluate().isNotEmpty) {
+          await tester.tap(target.first, warnIfMissed: false);
+          await tester.pump(const Duration(milliseconds: 300));
+          break;
+        }
+      }
+    }
+    expect(
+      sessionVisible,
+      isTrue,
+      reason: 'OWN-06 approver：8 分钟内（含周期性重进刷新）未出现 joiner 新建会话',
     );
     await tester.tap(sessionItem.first);
     final chatView = find.byKey(const Key('session-chat-view'));

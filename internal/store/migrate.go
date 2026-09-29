@@ -423,6 +423,7 @@ var migrations = []string{
 	//     （部分唯一索引；存量行 role 均为 terminal 不命中，升级安全）。
 	`ALTER TABLE pairing_requests ADD COLUMN claim_access_token TEXT NOT NULL DEFAULT '';`,
 	`ALTER TABLE pairing_requests ADD COLUMN claim_refresh_token TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE pairing_requests ADD COLUMN claim_device_id TEXT NOT NULL DEFAULT '';`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS pairing_owner_pending_idx
 		ON pairing_requests(account_id) WHERE role='android_owner' AND status='pending';`,
 }

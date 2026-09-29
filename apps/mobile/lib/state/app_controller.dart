@@ -296,10 +296,21 @@ class AppController extends ChangeNotifier {
         platform: 'android',
         lastSeen: DateTime.now(),
       );
-      _validateDeviceTokenBinding(device, tokens);
-      await _bindAcceptedDevice(device, tokens: tokens);
+      try {
+        _validateDeviceTokenBinding(device, tokens);
+        await _bindAcceptedDevice(device, tokens: tokens);
+        await _identityStore.markOwnerBootstrapComplete(true);
+      } on RelayFailure {
+        rethrow;
+      } catch (error) {
+        // 领取（claim）是配对旅程的终点，绑定失败被通用文案吞掉会让用户
+        // 卡在「等待批准」假象里（v0.10.0 OWN-06 实证）——原样透出。
+        throw RelayFailure(
+          RelayFailureKind.protocol,
+          '配对令牌领取失败：$error',
+        );
+      }
       _devices = [device];
-      await _identityStore.markOwnerBootstrapComplete(true);
       _needsOwnerBootstrap = false;
       _requiresRecovery = false;
       _phase = AppAuthPhase.authenticated;
@@ -547,8 +558,10 @@ class AppController extends ChangeNotifier {
       await action();
     } on RelayFailure catch (failure) {
       _errorMessage = failure.message;
-    } catch (_) {
-      _errorMessage = '操作未完成，请稍后重试。';
+    } catch (error) {
+      // 无信息的通用兜底会掩盖真实故障（v0.10.0 OWN-06 claim 环节实证），
+      // 至少保留异常类型与文本供用户/诊断区分。
+      _errorMessage = '操作未完成，请稍后重试。（$error）';
     } finally {
       _setBusy(false);
     }

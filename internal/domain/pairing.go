@@ -644,6 +644,7 @@ func (s *PairingService) OwnerPairingStatus(ctx context.Context, pairingID strin
 	}
 	tokens := &TokenPair{
 		AccountID:    p.AccountID,
+		DeviceID:     p.ClaimDeviceID,
 		AccessToken:  p.ClaimAccessToken,
 		RefreshToken: p.ClaimRefreshToken,
 	}
@@ -659,5 +660,5 @@ func (s *PairingService) approveOwnerPairingInTx(ctx context.Context, tx store.R
 	if err != nil {
 		return err
 	}
-	return tx.UpdatePairingClaim(ctx, pairingID, tokens.AccessToken, tokens.RefreshToken)
+	return tx.UpdatePairingClaim(ctx, pairingID, tokens.AccessToken, tokens.RefreshToken, deviceID)
 }

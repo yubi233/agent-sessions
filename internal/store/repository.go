@@ -44,7 +44,7 @@ type Repository interface {
 	// ListPendingPairings 返回账号下全部 pending 配对请求（v0.10.0 owner 配对页）。
 	ListPendingPairings(ctx context.Context, accountID string) ([]PairingRow, error)
 	// UpdatePairingClaim 写入 owner 批准后待新设备领取的令牌对（ADR-017）。
-	UpdatePairingClaim(ctx context.Context, pairingID, accessToken, refreshToken string) error
+	UpdatePairingClaim(ctx context.Context, pairingID, accessToken, refreshToken, deviceID string) error
 	// CountPendingOwnerPairings 返回账号下 pending 的 owner 配对请求数（单 pending 约束）。
 	CountPendingOwnerPairings(ctx context.Context, accountID string) (int, error)
 	// ListPendingOwnerDEKWraps 返回 active owner 设备缺失的会话 DEK wrap 清单
@@ -374,6 +374,7 @@ type PairingRow struct {
 	// v0.10.0（ADR-017 owner 配对）：owner 批准后签发、待新设备领取的令牌对。
 	ClaimAccessToken  string
 	ClaimRefreshToken string
+	ClaimDeviceID     string
 }
 
 // KeyWrapRow 是 device_key_wraps 表的行投影。

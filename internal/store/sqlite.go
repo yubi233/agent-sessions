@@ -239,10 +239,10 @@ func (r *sqliteRepo) PairingByID(ctx context.Context, id string) (PairingRow, er
 	var expires int64
 	if err := r.db.QueryRowContext(ctx,
 		`SELECT id,account_id,role,status,display_name,identity_public_key,encryption_public_key,platform,expires_at,
-		 COALESCE(claim_access_token,''),COALESCE(claim_refresh_token,'')
+		 COALESCE(claim_access_token,''),COALESCE(claim_refresh_token,''),COALESCE(claim_device_id,'')
 		 FROM pairing_requests WHERE id=?`, id).
 		Scan(&p.ID, &p.AccountID, &p.Role, &p.Status, &p.DisplayName, &p.IdentityPublicKey, &p.EncryptionPublicKey, &p.Platform, &expires,
-			&p.ClaimAccessToken, &p.ClaimRefreshToken); err != nil {
+			&p.ClaimAccessToken, &p.ClaimRefreshToken, &p.ClaimDeviceID); err != nil {
 		return PairingRow{}, err
 	}
 	p.ExpiresAt = time.UnixMilli(expires)
@@ -1968,11 +1968,12 @@ func (r *sqliteRepo) ListPendingPairings(ctx context.Context, accountID string) 
 	return out, rows.Err()
 }
 
-// UpdatePairingClaim 写入 owner 批准后待新设备领取的令牌对（ADR-017）。
-func (r *sqliteRepo) UpdatePairingClaim(ctx context.Context, pairingID, accessToken, refreshToken string) error {
+// UpdatePairingClaim 写入 owner 批准后待新设备领取的令牌对与设备 id（ADR-017）。
+// device_id 是领取（claim）响应的必要字段：新设备的 token 必须绑定其设备行。
+func (r *sqliteRepo) UpdatePairingClaim(ctx context.Context, pairingID, accessToken, refreshToken, deviceID string) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE pairing_requests SET claim_access_token=?, claim_refresh_token=? WHERE id=?`,
-		accessToken, refreshToken, pairingID)
+		`UPDATE pairing_requests SET claim_access_token=?, claim_refresh_token=?, claim_device_id=? WHERE id=?`,
+		accessToken, refreshToken, deviceID, pairingID)
 	return err
 }
 
